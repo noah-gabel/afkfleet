@@ -11,6 +11,8 @@
 //!   desired state, their agent and their last reported state (P11.1, P10.5).
 //! - [`modes`]: the modes, what a bot does while it's online; the built-in
 //!   ones seeded with fixed IDs (P11.1).
+//! - [`server_settings`]: the servers' settings, what every bot on one
+//!   Minecraft server shares: its conflict texts (P11.9; ADR-0020, S76).
 //! - [`chat`]: the bots' chat log, what they received and what their modes
 //!   sent; append-only (P11.1, P10.8).
 //! - [`retention`]: what the retention task deletes, in a transaction of
@@ -94,6 +96,7 @@ pub mod qr;
 pub mod reconcile;
 pub mod recovery_codes;
 pub mod retention;
+pub mod server_settings;
 pub mod session_grants;
 pub mod sessions;
 pub mod store;

@@ -99,11 +99,15 @@ use fleet_api_types::mfa::{
     CODE_MAX_CHARS, MfaConfirmRequest, MfaConfirmResponse, MfaEnrollResponse, MfaResetResponse,
 };
 use fleet_api_types::modes::{CreateModeRequest, ModePage, ModeResponse, UpdateModeRequest};
+use fleet_api_types::server_settings::{
+    CreateServerSettingsRequest, ServerSettingsPage, ServerSettingsResponse,
+    UpdateServerSettingsRequest,
+};
 use fleet_api_types::sessions::SessionPage;
 use fleet_api_types::users::{UserPage, UserPatchRequest, UserResponse};
 use fleet_api_types::{
     AccountId, BotId, ErrorCode, ErrorResponse, InviteId, LinkFlowId, ModeId, PageQuery,
-    SecretText, SessionId, UserId,
+    SecretText, ServerSettingsId, SessionId, UserId,
 };
 use reqwest::{Method, Url};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -947,6 +951,49 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         let url = self.server.api(&["bots", &id.to_string(), segment]);
         let answer = self.authed(Method::POST, url, Some(body)).await?;
         expect_json_of(answer, &[200, 202])
+    }
+
+    // ---- The servers' settings (Plan.md P11.9) ----
+
+    /// One page of the servers' settings, newest first (200).
+    pub(crate) async fn server_settings(
+        self: &Arc<Self>,
+        query: &PageQuery<ServerSettingsId>,
+    ) -> Result<ServerSettingsPage, ClientError> {
+        let url = with_page(self.server.api(&["server-settings"]), query);
+        let answer = self.authed(Method::GET, url, None).await?;
+        expect_json(answer, 200)
+    }
+
+    /// A server's new settings through `POST /server-settings` (201).
+    pub(crate) async fn create_server_settings(
+        self: &Arc<Self>,
+        request: &CreateServerSettingsRequest,
+    ) -> Result<ServerSettingsResponse, ClientError> {
+        let url = self.server.api(&["server-settings"]);
+        let answer = self.authed(Method::POST, url, Some(json(request))).await?;
+        expect_json(answer, 201)
+    }
+
+    /// The settings `id` edited through `PUT /server-settings/{id}` (200).
+    pub(crate) async fn update_server_settings(
+        self: &Arc<Self>,
+        id: ServerSettingsId,
+        request: &UpdateServerSettingsRequest,
+    ) -> Result<ServerSettingsResponse, ClientError> {
+        let url = self.server.api(&["server-settings", &id.to_string()]);
+        let answer = self.authed(Method::PUT, url, Some(json(request))).await?;
+        expect_json(answer, 200)
+    }
+
+    /// The settings `id` deleted through `DELETE /server-settings/{id}` (204).
+    pub(crate) async fn delete_server_settings(
+        self: &Arc<Self>,
+        id: ServerSettingsId,
+    ) -> Result<(), ClientError> {
+        let url = self.server.api(&["server-settings", &id.to_string()]);
+        let answer = self.authed(Method::DELETE, url, None).await?;
+        expect_empty(answer, 204)
     }
 
     // ---- Modes (Plan.md P11.4) ----

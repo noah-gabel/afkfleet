@@ -75,6 +75,7 @@ use fleet_server::ports::mfa::{MfaReads, MfaWrites};
 use fleet_server::ports::modes::{ModeReads, ModeWrites};
 use fleet_server::ports::page::{Page, PageLimit};
 use fleet_server::ports::retention::{RetentionBatch, RetentionReads};
+use fleet_server::ports::server_settings::{ServerSettingsReads, ServerSettingsWrites};
 use fleet_server::ports::sessions::{NewSession, SessionReads, SessionWrites};
 use fleet_server::ports::store::{Store, StoreError, UnauditedWrite, WriteTx};
 use fleet_server::ports::tokens::TokenHash;
@@ -318,6 +319,10 @@ impl WriteTx for FailingTx {
         self.inner.modes()
     }
 
+    fn server_settings(&mut self) -> &mut dyn ServerSettingsWrites {
+        self.inner.server_settings()
+    }
+
     fn chat(&mut self) -> &mut dyn ChatWrites {
         if matches!(self.script, Script::AppendNothing) {
             self
@@ -508,6 +513,10 @@ impl Store for FailingCommits {
 
     fn modes(&self) -> &dyn ModeReads {
         self.inner.modes()
+    }
+
+    fn server_settings(&self) -> &dyn ServerSettingsReads {
+        self.inner.server_settings()
     }
 
     fn chat(&self) -> &dyn ChatReads {

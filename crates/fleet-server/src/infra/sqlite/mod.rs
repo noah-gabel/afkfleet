@@ -70,6 +70,7 @@ mod login_attempts;
 mod mfa;
 mod modes;
 mod retention;
+mod server_settings;
 mod sessions;
 mod store;
 mod users;

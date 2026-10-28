@@ -61,6 +61,7 @@ pub mod login;
 pub mod mfa;
 pub mod modes;
 pub mod retention;
+pub mod server_settings;
 pub mod session_tokens;
 pub mod users;
 pub mod vault;

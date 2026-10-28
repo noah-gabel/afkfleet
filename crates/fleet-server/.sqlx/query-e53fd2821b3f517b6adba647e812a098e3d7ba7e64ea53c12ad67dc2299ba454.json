@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE server_settings SET conflict_texts = '[\"b\",\"a\"]' WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "e53fd2821b3f517b6adba647e812a098e3d7ba7e64ea53c12ad67dc2299ba454"
+}

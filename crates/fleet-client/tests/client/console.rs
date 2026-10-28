@@ -1576,3 +1576,108 @@ async fn leave_asks_for_the_password_again_and_gives_up_the_grant() {
     );
     server.stop().await;
 }
+
+// --- The servers' settings (P11.9; ADR-0020, S77) ---------------------------------------------
+
+/// `new-server` asks for the password again once and creates the settings;
+/// `servers` lists them as a line, the server as its key and the texts as a
+/// count, never a text.
+#[tokio::test]
+async fn new_server_asks_for_the_password_again_once_and_servers_lists_it() {
+    let server = Server::start().await;
+    let (owner, code) = owner_and_code(&server).await;
+    let (client, _) = server.client();
+    let mut terminal = Scripted::new(
+        &[PASSWORD, &code, PASSWORD],
+        &[
+            r#"new-server {"server": "MC.example.com", "conflict_texts": ["A text never shown", "Two"]}"#,
+            "servers",
+        ],
+    );
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    assert_eq!(terminal.secrets.len(), 0, "the step-up asked once");
+    let stored = owner
+        .server_settings(&PageQuery {
+            before: None,
+            limit: None,
+        })
+        .await
+        .unwrap();
+    let id = stored.items[0].id;
+    let line = format!("server {id} mc.example.com:25565 texts 2 version 1");
+    assert_eq!(
+        terminal.said.iter().filter(|said| **said == line).count(),
+        2,
+        "{}",
+        terminal.text()
+    );
+    assert!(
+        !terminal.text().contains("never shown"),
+        "{}",
+        terminal.text()
+    );
+    server.stop().await;
+}
+
+/// `edit-server` and `delete-server` write after one step-up, and JSON that
+/// isn't server settings is said so, never repeated.
+#[tokio::test]
+async fn edit_server_and_delete_server_write_and_bad_json_is_never_repeated() {
+    let server = Server::start().await;
+    let (owner, code) = owner_and_code(&server).await;
+    step_up(&owner).await;
+    let created = owner
+        .create_server_settings(
+            &serde_json::from_value(serde_json::json!({
+                "server": "mc.example.com",
+                "conflict_texts": ["One"],
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let id = created.id;
+    let (client, _) = server.client();
+    let edit = format!(
+        r#"edit-server {id} {{"version": 1, "server": "mc.example.com", "conflict_texts": ["One", "Two"]}}"#
+    );
+    let delete = format!("delete-server {id}");
+    let mut terminal = Scripted::new(
+        &[PASSWORD, &code, PASSWORD],
+        &[
+            r#"new-server {"server": "a secret-looking server", "texts": []}"#,
+            &edit,
+            &delete,
+        ],
+    );
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    assert_eq!(terminal.secrets.len(), 0, "the step-up asked once");
+    let text = terminal.text();
+    assert!(text.contains("not server settings' JSON"), "{text}");
+    assert!(!text.contains("secret-looking"), "{text}");
+    assert!(
+        text.contains(&format!(
+            "server {id} mc.example.com:25565 texts 2 version 2"
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("server settings {id} deleted")),
+        "{text}"
+    );
+    let left = owner
+        .server_settings(&PageQuery {
+            before: None,
+            limit: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(left.items, []);
+    server.stop().await;
+}

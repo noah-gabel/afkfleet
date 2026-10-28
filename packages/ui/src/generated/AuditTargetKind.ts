@@ -6,4 +6,4 @@
  * record others, so code that branches on one always keeps a default
  * branch.
  */
-export type AuditTargetKind = "user" | "account" | "bot" | "agent" | "mode" | "session" | "invite" | "enrollment_token";
+export type AuditTargetKind = "user" | "account" | "bot" | "agent" | "mode" | "session" | "invite" | "enrollment_token" | "server_settings";

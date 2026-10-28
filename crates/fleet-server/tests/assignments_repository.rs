@@ -22,17 +22,19 @@ use fleet_core::account::{AccountKind, AccountStatus};
 use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::authz::Role;
 use fleet_core::bot::{BotAccount, FailReason, LastReport, LastState};
-use fleet_core::id::{AccountId, AgentId, BotId, UserId};
+use fleet_core::disconnect::ConflictTexts;
+use fleet_core::id::{AccountId, AgentId, BotId, ServerSettingsId, UserId};
 use fleet_core::mode::ModePreset;
 use fleet_core::placement::McIdentity;
-use fleet_core::value::{AgentName, McUuid, Username};
+use fleet_core::value::{AgentName, McUuid, ServerAddress, ServerKey, Username};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::accounts::{AccountCredential, DeletedAccount, McAccount};
 use fleet_server::ports::agents::NewAgent;
 use fleet_server::ports::audit::NewAuditEntry;
 use fleet_server::ports::bots::{NewBot, ReleaseRecord, UnreadableBot};
 use fleet_server::ports::page::{Page, PageLimit};
-use fleet_server::ports::store::Store;
+use fleet_server::ports::server_settings::NewServerSettings;
+use fleet_server::ports::store::{Store, StoreError};
 use fleet_server::ports::users::{NewUser, PasswordHash};
 use secrecy::SecretString;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -641,6 +643,159 @@ async fn a_bot_whose_row_doesnt_read_back_is_unreadable_and_the_others_read(
             column: "server_address",
             rowid: fleet.unreadable[0].rowid,
         }]
+    );
+}
+
+// --- The servers' conflict texts (ADR-0020, S76, R132) -----------------------------------
+
+impl Setup {
+    /// Puts bot `bot` on `server`.
+    async fn on_server(&self, bot: BotId, server: &str) {
+        let server: ServerAddress = server.parse().unwrap();
+        self.write(async |tx| tx.bots().set_server(bot, &server).await.unwrap())
+            .await;
+    }
+
+    /// Gives `server` the conflict texts `texts` in row `n`.
+    async fn settings(&self, n: u8, server: &str, texts: &[&str]) -> ServerSettingsId {
+        let id = ServerSettingsId::new_v7(at(T0 + i64::from(n)), [n; 10]).unwrap();
+        let settings = NewServerSettings {
+            id,
+            server: ServerKey::from(&server.parse::<ServerAddress>().unwrap()),
+            conflict_texts: ConflictTexts::try_new(texts).unwrap(),
+            created_at: at(T0),
+        };
+        self.write(async |tx| tx.server_settings().insert(&settings).await.unwrap())
+            .await;
+        id
+    }
+
+    /// The rowid of the settings `id`.
+    async fn settings_rowid(&self, id: ServerSettingsId) -> i64 {
+        let id = id.to_string();
+        sqlx::query_scalar!(
+            r#"SELECT rowid AS "rowid!: i64" FROM server_settings WHERE id = ?"#,
+            id
+        )
+        .fetch_one(self.db.read_pool())
+        .await
+        .unwrap()
+    }
+}
+
+/// The fleet reads every server's texts in its own snapshot, and a bot's
+/// server finds them however its address is written.
+#[sqlx::test(migrations = false)]
+async fn the_fleet_reads_every_servers_texts(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    setup
+        .settings(1, "mc.example.com", &["Already connected"])
+        .await;
+    setup
+        .settings(2, "[2001:db8::1]:25566", &["One", "Two"])
+        .await;
+
+    let fleet = setup.db.bots().fleet().await.unwrap();
+
+    assert_eq!(
+        fleet
+            .server_texts
+            .of(&"mc.example.com:25565".parse().unwrap()),
+        Some(ConflictTexts::try_new(&["Already connected"]).unwrap())
+    );
+    assert_eq!(
+        fleet
+            .server_texts
+            .of(&"[2001:db8::1]:25566".parse().unwrap()),
+        Some(ConflictTexts::try_new(&["One", "Two"]).unwrap())
+    );
+    assert_eq!(fleet.server_texts.readable.len(), 2);
+    assert!(fleet.server_texts.unreadable.is_empty());
+}
+
+/// A bot whose server's row has texts that don't read back is unreadable,
+/// naming that row, and left alone; a bot on another server reads (R132).
+#[sqlx::test(migrations = false)]
+async fn a_bot_whose_servers_texts_dont_read_back_is_unreadable_and_the_others_read(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let (_, broken) = setup.bot(1, false).await;
+    let (_, fine) = setup.bot(2, false).await;
+    setup.on_server(broken, "mc.example.com").await;
+    setup.on_server(fine, "play.example.com").await;
+    let row = setup.settings(1, "mc.example.com:25565", &["One"]).await;
+    let id = row.to_string();
+    sqlx::query!(
+        r#"UPDATE server_settings SET conflict_texts = '["b","a"]' WHERE id = ?"#,
+        id
+    )
+    .execute(setup.db.write_pool())
+    .await
+    .unwrap();
+
+    let fleet = setup.db.bots().fleet().await.unwrap();
+
+    assert_eq!(
+        fleet
+            .bots
+            .iter()
+            .map(|record| record.bot.id)
+            .collect::<Vec<_>>(),
+        [fine]
+    );
+    assert_eq!(
+        fleet.unreadable,
+        [UnreadableBot {
+            bot: broken,
+            agent: None,
+            identity: Some(McIdentity::offline(&"AfkBot1".parse().unwrap())),
+            table: "server_settings",
+            column: "conflict_texts",
+            rowid: setup.settings_rowid(row).await,
+        }]
+    );
+    assert_eq!(
+        fleet.server_texts.of(&"mc.example.com".parse().unwrap()),
+        None
+    );
+}
+
+/// A row whose server doesn't read back fails the whole read: its bots
+/// can't be told, and empty texts would fail open (R132).
+#[sqlx::test(migrations = false)]
+async fn a_settings_row_whose_server_doesnt_read_back_fails_the_whole_read(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    setup.bot(1, false).await;
+    let row = setup.settings(1, "mc.example.com", &["One"]).await;
+    let id = row.to_string();
+    sqlx::query!(
+        "UPDATE server_settings SET server = 'mc.example.com' WHERE id = ?",
+        id
+    )
+    .execute(setup.db.write_pool())
+    .await
+    .unwrap();
+
+    let read = setup.db.bots().fleet().await;
+
+    assert!(
+        matches!(
+            read,
+            Err(StoreError::Corrupt {
+                table: "server_settings",
+                column: "server",
+                ..
+            })
+        ),
+        "{read:?}"
     );
 }
 

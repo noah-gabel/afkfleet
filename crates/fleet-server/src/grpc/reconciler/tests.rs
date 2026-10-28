@@ -11,12 +11,12 @@ use fleet_core::bot::{
     BotAccount, BotSnapshot, BotState, DesiredRunState, LastReport, LastState, PauseReason,
     StickyState,
 };
-use fleet_core::disconnect::ConflictKind;
+use fleet_core::disconnect::{ConflictKind, ConflictTexts};
 use fleet_core::id::{AccountId, AgentId, BotId, RequestId};
 use fleet_core::mode::ModeDefinition;
 use fleet_core::pki::CertFingerprint;
 use fleet_core::placement::{DetachReason, McIdentity, UnassignReason, Unplaced};
-use fleet_core::value::{AgentCapacity, AgentName};
+use fleet_core::value::{AgentCapacity, AgentName, ServerAddress, ServerKey};
 use fleet_proto::control::{
     AgentMessage, BotEvent, BotEventKind, KEEPALIVE_INTERVAL, KEEPALIVE_TIMEOUT,
     RECONNECT_DELAY_MAX, ServerMessage, WELCOME_TIMEOUT, Welcome,
@@ -828,6 +828,116 @@ async fn a_failed_read_skips_the_pass_and_the_next_one_catches_up() {
 
     assert_eq!(skipped.map(|_| ()), None);
     assert_eq!(reconciled(stream.next().await), []);
+    running.stop().await;
+}
+
+// --- Conflict texts (ADR-0020, S74, S76, R132) -------------------------------------------
+
+fn texts(entries: &[&str]) -> ConflictTexts {
+    ConflictTexts::try_new(entries).unwrap()
+}
+
+fn server_key(address: &str) -> ServerKey {
+    ServerKey::from(&address.parse::<ServerAddress>().unwrap())
+}
+
+impl Store {
+    /// Gives `server` the conflict texts `entries`.
+    fn texts(&self, server: &str, entries: &[&str]) {
+        self.state()
+            .fleet
+            .server_texts
+            .readable
+            .insert(server_key(server), texts(entries));
+    }
+}
+
+/// A bot's spec carries its server's texts, the row keyed with the default
+/// port the bot's address leaves out (S74).
+#[tokio::test(start_paused = true)]
+async fn a_bots_spec_carries_its_servers_conflict_texts() {
+    let registry = registry();
+    let store = Store::with(vec![on(1, 1), on(2, 1)], &[1]);
+    store.change(bot(2), |record| {
+        record.bot.server = Some("other.example.com".parse().unwrap());
+    });
+    store.texts("play.example.com:25565", &["Already connected"]);
+    let mut stream = connect(&registry, 1, 5, vec![online(1), online(2)], 8);
+    let running = start(&registry, &store, 8);
+
+    let Some(ServerMessage::Reconcile(assignments)) = stream.next().await else {
+        panic!("a reconcile");
+    };
+
+    let of = |n| {
+        assignments
+            .iter()
+            .find(|assignment| assignment.spec.id == bot(n))
+            .map(|assignment| assignment.spec.conflict_texts.clone())
+    };
+    assert_eq!(of(1), Some(texts(&["Already connected"])));
+    assert_eq!(
+        of(2),
+        Some(ConflictTexts::default()),
+        "a server without settings"
+    );
+    running.stop().await;
+}
+
+/// A change of its server's texts reaches a running bot as an `Update` in
+/// its session, and their delete as an `Update` without texts.
+#[tokio::test(start_paused = true)]
+async fn a_change_of_its_servers_texts_reaches_a_running_bot_as_an_update() {
+    let (_registry, store, mut stream, running) = running_bot().await;
+
+    store.texts("play.example.com", &["Already connected"]);
+    running.hints.changed(Change::Store);
+    let Some(ServerMessage::Update(changed)) = stream.next().await else {
+        panic!("an update");
+    };
+    store.state().fleet.server_texts.readable.clear();
+    running.hints.changed(Change::Store);
+    let Some(ServerMessage::Update(deleted)) = stream.next().await else {
+        panic!("an update");
+    };
+
+    assert_eq!(changed.conflict_texts, texts(&["Already connected"]));
+    assert_eq!(deleted.conflict_texts, ConflictTexts::default());
+    running.stop().await;
+}
+
+/// A bot whose row lost its server keeps the server of the spec last sent,
+/// and gets that server's texts; while that server's texts don't read back,
+/// nothing is sent, the last spec kept (R132).
+#[tokio::test(start_paused = true)]
+async fn the_fallback_server_brings_its_own_texts_and_an_unreadable_row_sends_nothing() {
+    let (_registry, store, mut stream, running) = running_bot().await;
+    store.texts("play.example.com", &["Already connected"]);
+    store.change(bot(1), |record| record.bot.server = None);
+
+    running.hints.changed(Change::Store);
+    let Some(ServerMessage::Update(fallback)) = stream.next().await else {
+        panic!("an update");
+    };
+    {
+        let mut state = store.state();
+        state.fleet.server_texts.readable.clear();
+        state
+            .fleet
+            .server_texts
+            .unreadable
+            .insert(server_key("play.example.com"), 1);
+    }
+    running.hints.changed(Change::Store);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let quiet = stream.queued.try_recv();
+
+    assert_eq!(fallback.server, "play.example.com".parse().unwrap());
+    assert_eq!(fallback.conflict_texts, texts(&["Already connected"]));
+    assert!(
+        quiet.is_err(),
+        "nothing while the row doesn't read: {quiet:?}"
+    );
     running.stop().await;
 }
 

@@ -507,6 +507,33 @@ audit_actions! {
     /// batches themselves commit without an entry, in the store's retention
     /// batch (R57).
     RETENTION_PURGE = "retention.purge";
+
+    /// An Admin or the Owner gave a server settings, after a step-up
+    /// (P11.9; ADR-0020, U54, S78), through `POST /server-settings`.
+    /// Outcome: Success. Actor and IP: the user's. Target: the settings.
+    /// Metadata: `server_host` and `server_port` (the server's key, the
+    /// port always there) and `texts` (how many conflict texts). Never a
+    /// text. A create refused before it's written (the cap, a server that
+    /// has settings already) is no entry.
+    SERVER_SETTINGS_CREATE = "server_settings.create";
+
+    /// An Admin or the Owner changed a server's settings, after a step-up
+    /// (P11.9; ADR-0020, S77, S78), through `PUT /server-settings/{id}`.
+    /// Outcome: Success. Actor and IP: the user's. Target: the settings.
+    /// Metadata: `version` (the one the edit wrote), `server_host` and
+    /// `server_port`, `previous_server_host` and `previous_server_port`
+    /// (only when the server changed), `texts` and `previous_texts` (how
+    /// many conflict texts after and before) and `texts_changed`. Never a
+    /// text. An edit that changes nothing is no entry; a refused one is no
+    /// entry either.
+    SERVER_SETTINGS_UPDATE = "server_settings.update";
+
+    /// An Admin or the Owner deleted a server's settings, after a step-up
+    /// (P11.9; ADR-0020, S78), through `DELETE /server-settings/{id}`.
+    /// Outcome: Success. Actor and IP: the user's. Target: the settings.
+    /// Metadata: `version` (the one deleted), `server_host`, `server_port`
+    /// and `texts`. Never a text. A refused delete is no entry.
+    SERVER_SETTINGS_DELETE = "server_settings.delete";
 }
 
 /// For reading rows back. Code that records an entry uses the listed

@@ -29,6 +29,7 @@ use fleet_core::value::ServerAddress;
 
 use super::accounts::ListedAccount;
 use super::page::Page;
+use super::server_settings::ServerTexts;
 use super::store::StoreError;
 
 /// A stored bot.
@@ -138,6 +139,8 @@ pub struct Fleet {
     /// agent without one isn't here. What a bot's agent shows changes with
     /// it (ADR-0020, R37).
     pub agent_expiry: BTreeMap<AgentId, DateTime<Utc>>,
+    /// Every server's conflict texts (ADR-0020, S76).
+    pub server_texts: ServerTexts,
 }
 
 /// Who may see which bot, read in one read transaction (ADR-0020, S30):

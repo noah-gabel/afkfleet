@@ -82,6 +82,7 @@ pub mod open;
 pub mod openapi;
 pub mod page;
 pub mod secret;
+pub mod server_settings;
 pub mod sessions;
 pub mod text;
 pub mod time;
@@ -90,7 +91,8 @@ pub mod users;
 
 pub use error::{ErrorBody, ErrorCode, ErrorResponse, FieldError};
 pub use ids::{
-    AccountId, BotId, EnrollmentTokenId, InviteId, LinkFlowId, ModeId, SessionId, UserId,
+    AccountId, BotId, EnrollmentTokenId, InviteId, LinkFlowId, ModeId, ServerSettingsId, SessionId,
+    UserId,
 };
 pub use int::{SafeInt, SafeIntError};
 pub use open::{Open, OpenEnum};

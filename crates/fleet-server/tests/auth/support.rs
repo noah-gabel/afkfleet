@@ -17,12 +17,15 @@ use chrono::{DateTime, Utc};
 use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::auth::{InviteTtl, LockoutPolicy, NewPassword, SessionPolicy};
 use fleet_core::authz::{Actor, CommandAllowlist, GrantLevel, Role};
-use fleet_core::id::{AccountId, AgentId, BotId, InviteId, ModeId, SessionId, UserId};
+use fleet_core::id::{
+    AccountId, AgentId, BotId, InviteId, ModeId, ServerSettingsId, SessionId, UserId,
+};
 use fleet_core::mode::ModeName;
 use fleet_core::pki::CertFingerprint;
 use fleet_core::system::Clock as _;
-use fleet_core::value::{AgentName, Username};
+use fleet_core::value::{AgentName, ServerKey, Username};
 use fleet_server::app::agents::AgentService;
+use fleet_server::app::audit::AuditService;
 use fleet_server::app::auth::TokenService;
 use fleet_server::app::bots::{BotService, ChatWait};
 use fleet_server::app::challenges::{ChallengeUser, Challenges, SetupPurpose};
@@ -72,6 +75,10 @@ use fleet_server::ports::page::Page;
 use fleet_server::ports::passwords::{HashError, Passwords, VerifyError};
 use fleet_server::ports::reconcile::{Change, Reconcile};
 use fleet_server::ports::retention::{RetentionBatch, RetentionReads};
+use fleet_server::ports::server_settings::{
+    NewServerSettings, ServerSettingsChange, ServerSettingsReads, ServerSettingsWrites,
+    StoredServerSettings, WriteServerSettingsError,
+};
 use fleet_server::ports::sessions::{
     LiveSince, Session, SessionReads, SessionWithUser, SessionWrites,
 };
@@ -436,8 +443,9 @@ impl HookedStore {
     }
 
     /// Makes the next write transaction's `ModeWrites::update` and
-    /// `ModeWrites::delete` answer that they matched no row, as no real one
-    /// can after its own re-read found it.
+    /// `ModeWrites::delete`, and its `ServerSettingsWrites::update` and
+    /// `ServerSettingsWrites::delete`, answer that they matched no row, as no
+    /// real one can after its own re-read found it.
     pub(crate) fn lose_next_mode_write(&self) {
         *self.lose_mode_update.lock().unwrap() = true;
     }
@@ -611,6 +619,10 @@ impl WriteTx for HookedTx {
         self.inner.modes()
     }
 
+    fn server_settings(&mut self) -> &mut dyn ServerSettingsWrites {
+        self.inner.server_settings()
+    }
+
     fn chat(&mut self) -> &mut dyn ChatWrites {
         self.inner.chat()
     }
@@ -642,8 +654,9 @@ impl WriteTx for HookedTx {
     }
 }
 
-/// A write transaction whose mode updates and deletes match no row: a bug
-/// a store could have, which a write must never answer as a success.
+/// A write transaction whose mode and server-settings updates and deletes
+/// match no row: a bug a store could have, which a write must never answer
+/// as a success.
 struct LosingTx {
     inner: Box<dyn WriteTx>,
 }
@@ -695,6 +708,10 @@ impl WriteTx for LosingTx {
     }
 
     fn modes(&mut self) -> &mut dyn ModeWrites {
+        self
+    }
+
+    fn server_settings(&mut self) -> &mut dyn ServerSettingsWrites {
         self
     }
 
@@ -751,6 +768,49 @@ impl ModeWrites for LosingTx {
     }
 
     async fn delete(&mut self, _id: ModeId) -> Result<bool, StoreError> {
+        Ok(false)
+    }
+}
+
+#[async_trait]
+impl ServerSettingsWrites for LosingTx {
+    async fn find(
+        &mut self,
+        id: ServerSettingsId,
+    ) -> Result<Option<StoredServerSettings>, StoreError> {
+        self.inner.server_settings().find(id).await
+    }
+
+    async fn count(&mut self) -> Result<u32, StoreError> {
+        self.inner.server_settings().count().await
+    }
+
+    async fn server_taken(
+        &mut self,
+        server: &ServerKey,
+        except: Option<ServerSettingsId>,
+    ) -> Result<bool, StoreError> {
+        self.inner
+            .server_settings()
+            .server_taken(server, except)
+            .await
+    }
+
+    async fn insert(
+        &mut self,
+        settings: &NewServerSettings,
+    ) -> Result<(), WriteServerSettingsError> {
+        self.inner.server_settings().insert(settings).await
+    }
+
+    async fn update(
+        &mut self,
+        _change: &ServerSettingsChange,
+    ) -> Result<bool, WriteServerSettingsError> {
+        Ok(false)
+    }
+
+    async fn delete(&mut self, _id: ServerSettingsId) -> Result<bool, StoreError> {
         Ok(false)
     }
 }
@@ -1050,6 +1110,10 @@ impl Store for HookedStore {
         &self.modes
     }
 
+    fn server_settings(&self) -> &dyn ServerSettingsReads {
+        self.inner.server_settings()
+    }
+
     fn chat(&self) -> &dyn ChatReads {
         self.inner.chat()
     }
@@ -1310,11 +1374,9 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
             &settings.allowlist,
             (&hints, &heard),
         ),
+        server_settings: server_settings_service(&clock, &random, &hooked, &hints),
         events: live_events.clone(),
-        audit: fleet_server::app::audit::AuditService::new(
-            Arc::new(clock.clone()),
-            Arc::new(hooked.clone()),
-        ),
+        audit: AuditService::new(Arc::new(clock.clone()), Arc::new(hooked.clone())),
     });
     let app = app(state, &clock);
     insert_alice(&db, alice, alice_hash).await;
@@ -1451,6 +1513,22 @@ fn mode_service(
     .with_allowlist(allowlist.clone())
     .with_reconcile(Arc::clone(hints) as Arc<dyn Reconcile>)
     .with_live_hints(Arc::clone(heard) as Arc<dyn LiveHints>)
+}
+
+/// The servers' settings over the hooked store, hinting `hints` after each
+/// write (P11.9).
+fn server_settings_service(
+    clock: &ManualClock,
+    random: &SeededRandom,
+    hooked: &HookedStore,
+    hints: &Arc<Hinted>,
+) -> fleet_server::app::server_settings::ServerSettingsService {
+    fleet_server::app::server_settings::ServerSettingsService::new(
+        Arc::new(clock.clone()),
+        Arc::new(random.clone()),
+        Arc::new(hooked.clone()),
+    )
+    .with_reconcile(Arc::clone(hints) as Arc<dyn Reconcile>)
 }
 
 /// Stores Alice, a Member, with `hash`.

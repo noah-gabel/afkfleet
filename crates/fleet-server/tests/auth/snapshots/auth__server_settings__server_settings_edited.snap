@@ -1,0 +1,18 @@
+---
+source: crates/fleet-server/tests/auth/server_settings.rs
+expression: "redacted(&edited.body, &[(id.to_string(), \"the settings\")])"
+---
+{
+  "conflict_texts": [
+    {
+      "lines": [
+        "Kicked: duplicate"
+      ]
+    }
+  ],
+  "created_at": "[T0]",
+  "id": "[the settings]",
+  "server": "mc.example.com:25570",
+  "updated_at": "[T0+60s]",
+  "version": 2
+}

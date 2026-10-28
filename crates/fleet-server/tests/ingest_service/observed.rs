@@ -19,6 +19,7 @@ use fleet_server::ports::login_attempts::{LoginAttemptReads, LoginAttemptWrites}
 use fleet_server::ports::mfa::{MfaReads, MfaWrites};
 use fleet_server::ports::modes::{ModeReads, ModeWrites};
 use fleet_server::ports::retention::{RetentionBatch, RetentionReads};
+use fleet_server::ports::server_settings::{ServerSettingsReads, ServerSettingsWrites};
 use fleet_server::ports::sessions::{SessionReads, SessionWrites};
 use fleet_server::ports::store::{Store, StoreError, UnauditedWrite, WriteTx};
 use fleet_server::ports::users::{UserReads, UserWrites};
@@ -95,6 +96,10 @@ impl WriteTx for ObservedTx {
 
     fn modes(&mut self) -> &mut dyn ModeWrites {
         self.inner.modes()
+    }
+
+    fn server_settings(&mut self) -> &mut dyn ServerSettingsWrites {
+        self.inner.server_settings()
     }
 
     fn chat(&mut self) -> &mut dyn ChatWrites {
@@ -177,6 +182,10 @@ impl Store for ObservedStore {
 
     fn modes(&self) -> &dyn ModeReads {
         self.inner.modes()
+    }
+
+    fn server_settings(&self) -> &dyn ServerSettingsReads {
+        self.inner.server_settings()
     }
 
     fn chat(&self) -> &dyn ChatReads {

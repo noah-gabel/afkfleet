@@ -224,7 +224,8 @@ dev-managed-agent dir=(justfile_directory() / "target" / "dev-agent") $AFKFLEET_
 # S71); a user without 2FA sets it up in `just dev-app` first. `server` is dev-server's API.
 # A console for dev-server's bot, mode and admin endpoints: bots, bot, offline, server, mode,
 # start, stop, chat, command, history, modes, new-mode, edit-mode, delete-mode, events, users,
-# audit, agents, release, held, shared, leave, quit. `events` runs over fleet-client's own
+# audit, agents, release, held, shared, leave, servers, new-server, edit-server, delete-server,
+# quit. `events` runs over fleet-client's own
 # socket, so it works over https too and never sees a ticket or a token (ADR-0020, R80).
 [no-exit-message]
 dev-bots username server="http://127.0.0.1:8080":

@@ -232,6 +232,12 @@ define_id!(
     /// hash. Like every ID it isn't a secret.
     EnrollmentTokenId
 );
+define_id!(
+    /// Identifies one server's settings (ADR-0020, S76): the row an Admin
+    /// edits, keyed by its server's [`crate::value::ServerKey`]. A row made
+    /// again after a delete gets a new ID, so a stale edit can't reach it.
+    ServerSettingsId
+);
 
 #[cfg(test)]
 mod tests {
@@ -392,6 +398,7 @@ mod tests {
         assert_trait_mints_like_the_constructor(RequestId::new_v7);
         assert_trait_mints_like_the_constructor(ChatRequestId::new_v7);
         assert_trait_mints_like_the_constructor(EnrollmentTokenId::new_v7);
+        assert_trait_mints_like_the_constructor(ServerSettingsId::new_v7);
     }
 
     #[test]
@@ -408,6 +415,7 @@ mod tests {
         assert_round_trips(RequestId::new_v7);
         assert_round_trips(ChatRequestId::new_v7);
         assert_round_trips(EnrollmentTokenId::new_v7);
+        assert_round_trips(ServerSettingsId::new_v7);
     }
 
     #[test]

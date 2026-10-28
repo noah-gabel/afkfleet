@@ -94,6 +94,7 @@ pub mod pki;
 pub mod placement;
 pub mod resilience;
 pub mod retention;
+pub mod server_settings;
 pub mod system;
 pub mod text;
 pub mod time;

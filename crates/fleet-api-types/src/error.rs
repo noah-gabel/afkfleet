@@ -111,6 +111,9 @@ pub enum ErrorCode {
     /// A release of an agent that's still enabled: only a disabled agent's
     /// bots are released (409; ADR-0020, S49).
     AgentNotDisabled,
+    /// An edit of a server's settings that changed since the caller read
+    /// them: its `version` is stale. Load them again (409; ADR-0020, S77).
+    ServerSettingsChanged,
 }
 
 impl ErrorCode {
@@ -165,6 +168,9 @@ impl ErrorCode {
             Self::AgentNotDisabled => {
                 "Only a disabled agent's bots can be released. Disable the agent first."
             }
+            Self::ServerSettingsChanged => {
+                "These settings changed since you opened them. Load them again to see the change."
+            }
         }
     }
 }
@@ -199,6 +205,7 @@ impl OpenEnum for ErrorCode {
         Self::ModeInUse,
         Self::TooManyConnections,
         Self::AgentNotDisabled,
+        Self::ServerSettingsChanged,
     ];
 
     fn as_str(self) -> &'static str {
@@ -231,6 +238,7 @@ impl OpenEnum for ErrorCode {
             Self::ModeInUse => "mode_in_use",
             Self::TooManyConnections => "too_many_connections",
             Self::AgentNotDisabled => "agent_not_disabled",
+            Self::ServerSettingsChanged => "server_settings_changed",
         }
     }
 }
@@ -345,10 +353,11 @@ mod tests {
             ErrorCode::ModeInUse => 25,
             ErrorCode::TooManyConnections => 26,
             ErrorCode::AgentNotDisabled => 27,
+            ErrorCode::ServerSettingsChanged => 28,
         }
     }
 
-    const CODES: usize = 28;
+    const CODES: usize = 29;
 
     #[test]
     fn all_lists_every_code_exactly_once() {
@@ -485,6 +494,11 @@ mod tests {
         ErrorCode::AgentNotDisabled,
         "agent_not_disabled",
         "Only a disabled agent's bots can be released. Disable the agent first."
+    )]
+    #[case(
+        ErrorCode::ServerSettingsChanged,
+        "server_settings_changed",
+        "These settings changed since you opened them. Load them again to see the change."
     )]
     #[case(
         ErrorCode::TooManyConnections,

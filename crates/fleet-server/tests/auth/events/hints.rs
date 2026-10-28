@@ -263,6 +263,18 @@ const LABELS: &[(&str, &str)] = &[
         "retention.purge",
         "nothing: deleted chat is fetched, not pushed (S42); the summary of rows no socket shows",
     ),
+    (
+        "server_settings.create",
+        "nothing: a server's settings are in no frame (S78); the reconciler carries them, and what a bot then does comes as its report",
+    ),
+    (
+        "server_settings.update",
+        "nothing: a server's settings are in no frame (S78); the reconciler carries them, and what a bot then does comes as its report",
+    ),
+    (
+        "server_settings.delete",
+        "nothing: a server's settings are in no frame (S78); the reconciler carries them, and what a bot then does comes as its report",
+    ),
 ];
 
 /// What each audited write tells the live events sockets, so no new action

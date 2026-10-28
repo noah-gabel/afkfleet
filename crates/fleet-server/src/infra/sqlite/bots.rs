@@ -20,17 +20,18 @@ use fleet_core::bot::{BotAccount, DesiredRunState, LastReport, LastState};
 use fleet_core::id::{AccountId, AgentId, BotId, ModeId, UserId};
 use fleet_core::mode::ModeDefinition;
 use fleet_core::placement::McIdentity;
-use fleet_core::value::{McUsername, McUuid, ServerAddress};
+use fleet_core::value::{McUsername, McUuid, ServerAddress, ServerKey};
 use sqlx::SqliteConnection;
 
-use super::accounts;
 use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::store_error;
+use super::{accounts, server_settings};
 use crate::ports::bots::{
     Access, Bot, BotAccess, BotRecord, Fleet, GrantAccess, ListedBot, NewBot, ReleaseRecord,
     UnreadableBot, UserAccess,
 };
 use crate::ports::page::Page;
+use crate::ports::server_settings::ServerTexts;
 use crate::ports::store::StoreError;
 
 /// The tables, as errors name them.
@@ -510,6 +511,7 @@ where
 /// transaction one snapshot).
 pub(super) async fn fleet(pool: &sqlx::SqlitePool) -> Result<Fleet, StoreError> {
     let mut tx = pool.begin().await.map_err(store_error)?;
+    let server_texts = server_settings::texts_by_server(&mut tx).await?;
     let bot_rows = sqlx::query_as!(
         RecordRow,
         r#"SELECT b.rowid AS "rowid!: i64", b.id AS "id!", b.account_id AS "account_id!",
@@ -531,19 +533,7 @@ pub(super) async fn fleet(pool: &sqlx::SqlitePool) -> Result<Fleet, StoreError> 
     .fetch_all(&mut *tx)
     .await
     .map_err(store_error)?;
-    let mut bots = Vec::new();
-    let mut unreadable = Vec::new();
-    for row in &bot_rows {
-        match record_from_row(row) {
-            Ok(record) => bots.push(record),
-            Err(StoreError::Corrupt {
-                table,
-                column,
-                rowid,
-            }) => unreadable.push(unreadable_bot(row, table, column, rowid)?),
-            Err(other) => return Err(other),
-        }
-    }
+    let (bots, mut unreadable) = fleet_records(&bot_rows, &server_texts)?;
     let release_rows = sqlx::query_as!(
         ReleaseRow,
         r#"SELECT rowid AS "rowid!: i64", bot_id AS "bot_id!", agent_id AS "agent_id!",
@@ -601,7 +591,46 @@ pub(super) async fn fleet(pool: &sqlx::SqlitePool) -> Result<Fleet, StoreError> 
         unreadable,
         enabled_agents,
         agent_expiry,
+        server_texts,
     })
+}
+
+/// The fleet's bots from `rows`, and those that don't read back: a row of
+/// their own, or their server's texts (R132).
+fn fleet_records(
+    rows: &[RecordRow],
+    server_texts: &ServerTexts,
+) -> Result<(Vec<BotRecord>, Vec<UnreadableBot>), StoreError> {
+    let mut bots = Vec::new();
+    let mut unreadable = Vec::new();
+    for row in rows {
+        match record_from_row(row) {
+            Ok(record) => match unreadable_texts(server_texts, &record) {
+                // Left alone, as a bot whose mode doesn't read (S37, R132).
+                Some(rowid) => unreadable.push(unreadable_bot(
+                    row,
+                    "server_settings",
+                    "conflict_texts",
+                    rowid,
+                )?),
+                None => bots.push(record),
+            },
+            Err(StoreError::Corrupt {
+                table,
+                column,
+                rowid,
+            }) => unreadable.push(unreadable_bot(row, table, column, rowid)?),
+            Err(other) => return Err(other),
+        }
+    }
+    Ok((bots, unreadable))
+}
+
+/// The rowid of `record`'s server's settings when their texts don't read
+/// back.
+fn unreadable_texts(texts: &ServerTexts, record: &BotRecord) -> Option<i64> {
+    let server = record.bot.server.as_ref()?;
+    texts.unreadable.get(&ServerKey::from(server)).copied()
 }
 
 /// Who may see which bot (S30): every bot with its account's owner, every

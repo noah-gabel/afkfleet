@@ -527,7 +527,9 @@ mod tests {
     use core::task::Poll;
 
     use fleet_core::mc::SessionEvent;
+    use fleet_testkit::log_capture;
     use rstest::rstest;
+    use tracing::Level;
 
     use crate::events::{EventCounters, McEvents, bridge};
 
@@ -942,6 +944,50 @@ mod tests {
         );
     }
 
+    /// The refusal's one `warn`, with its fields (PR #78's review): a public
+    /// address names its class with an empty range, a private one its range.
+    #[tokio::test]
+    async fn a_refused_socket_logs_one_warn_naming_its_class_and_range() {
+        const TARGET: &str = "fleet_mc::connector::driver";
+        const REFUSED: &str = "the server's address is refused before dialling";
+        log_capture::install().unwrap();
+        let (sink, _events) = open();
+        let server: ServerAddress = "mc.example.com".parse().unwrap();
+        let policy = TargetPolicy::default();
+
+        let public = permitted(&policy, &server, &resolved(&server, "8.8.8.8:25565"), &sink);
+        let private = permitted(
+            &policy,
+            &server,
+            &resolved(&server, "192.168.1.10:25565"),
+            &sink,
+        );
+
+        assert!(!public && !private);
+        assert_eq!(log_capture::count_at(TARGET, Level::WARN, REFUSED), 2);
+        assert_eq!(
+            log_capture::count(TARGET, REFUSED),
+            2,
+            "no line at another level"
+        );
+        assert_eq!(
+            log_capture::count_at(
+                TARGET,
+                Level::WARN,
+                "server=mc.example.com socket=8.8.8.8:25565 class=public range= "
+            ),
+            1
+        );
+        assert_eq!(
+            log_capture::count_at(
+                TARGET,
+                Level::WARN,
+                "server=mc.example.com socket=192.168.1.10:25565 class=private range=rfc1918 "
+            ),
+            1
+        );
+    }
+
     #[tokio::test]
     async fn a_permitted_socket_leaves_the_session_going() {
         let (sink, mut events) = open();
@@ -997,6 +1043,21 @@ mod tests {
 
         assert_eq!(address.host, host);
         assert_eq!(address.port, port);
+    }
+
+    /// S74's premise (ADR-0020): an address without a port reaches azalea as
+    /// the one with the default port, so azalea's resolver tries the SRV
+    /// record for both alike, and the two share one server key.
+    #[test]
+    fn an_address_without_a_port_reaches_azalea_as_the_default_port() {
+        let bare = server_addr(&"mc.example.com".parse().unwrap());
+        let given = server_addr(&"mc.example.com:25565".parse().unwrap());
+
+        assert_eq!(
+            (bare.host.as_str(), bare.port),
+            (given.host.as_str(), given.port)
+        );
+        assert_eq!(bare.port, ServerAddress::DEFAULT_PORT);
     }
 
     #[test]

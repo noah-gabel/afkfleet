@@ -23,5 +23,6 @@ mod mfa;
 mod modes;
 mod refresh;
 mod relay;
+mod server_settings;
 mod support;
 mod tls;

@@ -109,6 +109,7 @@ use crate::app::login::LoginService;
 use crate::app::mfa::{MfaPorts, MfaService};
 use crate::app::modes::ModeService;
 use crate::app::retention::{RetentionService, RetentionTimings};
+use crate::app::server_settings::ServerSettingsService;
 use crate::app::session_tokens::{SessionTokenPorts, SessionTokenService};
 use crate::app::users::UserService;
 use crate::config::{HttpConfig, ServerConfig};
@@ -517,6 +518,7 @@ pub fn app_with(
         agents: fleet.agents,
         bots: fleet.bots,
         modes: fleet.modes,
+        server_settings: fleet.server_settings,
         events: live,
         audit,
     });
@@ -569,6 +571,8 @@ struct FleetServices {
     registry: AgentRegistry,
     agents: AgentService,
     modes: ModeService,
+    /// The servers' settings, which tell the reconciler after each write.
+    server_settings: ServerSettingsService,
     bots: BotService,
 }
 
@@ -594,6 +598,9 @@ fn fleet_services(
     // authorizes with (R113).
     let allowlist = &config.chat.command_allowlist;
     let modes = mode_service(clock, random, store, hints).with_allowlist(allowlist.clone());
+    let server_settings =
+        ServerSettingsService::new(Arc::clone(clock), Arc::clone(random), Arc::clone(store))
+            .with_reconcile(Arc::clone(&hints.reconcile));
     let bots = bot_service(config, clock, random, store, &registry, events, reconcile)
         .with_allowlist(allowlist.clone());
     FleetServices {
@@ -601,6 +608,7 @@ fn fleet_services(
         registry,
         agents,
         modes,
+        server_settings,
         bots,
     }
 }

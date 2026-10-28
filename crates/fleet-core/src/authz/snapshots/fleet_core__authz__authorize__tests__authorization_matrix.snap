@@ -249,6 +249,8 @@ EnrollAgent                ok     403    403
 DisableAgent               ok     ok     403
 ReleaseAgent               ok     ok     403
 ViewAuditLog               ok     ok     403
+ViewServerSettings         ok     ok     403
+ConfigureServerSettings    ok     ok     403
 
 ## Invites
 Rows: the role the invite gives. Columns: the actor's role.

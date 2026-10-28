@@ -187,6 +187,12 @@ audit_action_names! {
     /// The retention deleted what it no longer keeps: the server's own
     /// summary, every hour that deleted anything and at the stop.
     RetentionPurge = "retention.purge";
+    /// A server was given settings.
+    ServerSettingsCreate = "server_settings.create";
+    /// A server's settings were changed.
+    ServerSettingsUpdate = "server_settings.update";
+    /// A server's settings were deleted.
+    ServerSettingsDelete = "server_settings.delete";
 }
 
 /// The names as one string enum: written by hand, since utoipa's derive
@@ -229,6 +235,8 @@ pub enum AuditTargetKind {
     Invite,
     /// An agent's enrollment token.
     EnrollmentToken,
+    /// One server's settings.
+    ServerSettings,
 }
 
 impl OpenEnum for AuditTargetKind {
@@ -241,6 +249,7 @@ impl OpenEnum for AuditTargetKind {
         Self::Session,
         Self::Invite,
         Self::EnrollmentToken,
+        Self::ServerSettings,
     ];
 
     fn as_str(self) -> &'static str {
@@ -253,6 +262,7 @@ impl OpenEnum for AuditTargetKind {
             Self::Session => "session",
             Self::Invite => "invite",
             Self::EnrollmentToken => "enrollment_token",
+            Self::ServerSettings => "server_settings",
         }
     }
 }

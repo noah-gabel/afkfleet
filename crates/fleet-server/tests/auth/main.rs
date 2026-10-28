@@ -45,6 +45,7 @@ mod modes;
 mod password;
 mod refresh;
 mod register;
+mod server_settings;
 mod sessions;
 mod step_up;
 mod support;

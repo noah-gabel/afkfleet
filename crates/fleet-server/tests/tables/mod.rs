@@ -16,7 +16,7 @@ use sqlx::SqlitePool;
 
 /// Every table the migrations create; `event_batch_scope`'s
 /// `every_table_is_dumped` keeps it whole.
-pub(crate) const TABLES: [&str; 17] = [
+pub(crate) const TABLES: [&str; 18] = [
     "account_grants",
     "agent_certs",
     "agents",
@@ -31,6 +31,7 @@ pub(crate) const TABLES: [&str; 17] = [
     "recovery_codes",
     "releasing_bots",
     "rotated_refresh_tokens",
+    "server_settings",
     "sessions",
     "user_mfa",
     "users",
@@ -58,6 +59,7 @@ const SESSION: &str = "018bcfe5-6800-7cdc-8dcd-cdcdcdcd0001";
 const INVITE: &str = "018bcfe5-6800-7cdc-8dcd-cdcdcdcd0002";
 const TOKEN: &str = "018bcfe5-6800-7cdc-8dcd-cdcdcdcd0003";
 const GONE: &str = "018bcfe5-6800-7cdc-8dcd-cdcdcdcd0004";
+const SETTINGS: &str = "018bcfe5-6800-7cdc-8dcd-cdcdcdcd0005";
 const WHEN: &str = "2027-01-15T08:00:00.000Z";
 const LATER: &str = "2027-03-15T08:00:00.000Z";
 
@@ -168,6 +170,15 @@ async fn fill_fleet(pool: &SqlitePool, ids: &Ids) {
     .await
     .unwrap();
     sqlx::query!(
+        r#"INSERT INTO server_settings (id, server, conflict_texts, version, created_at, updated_at)
+         VALUES (?1, 'mc.example.com:25565', '["Already connected"]', 1, ?2, ?2)"#,
+        SETTINGS,
+        WHEN
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query!(
         "INSERT INTO chat_messages (bot_id, direction, kind, text, truncated, at)
          VALUES (?1, 'in', 'system', 'an older message', 0, ?2)",
         ids.held,
@@ -232,6 +243,10 @@ pub(crate) async fn dump(pool: &SqlitePool) -> BTreeMap<&'static str, Vec<String
         (
             "rotated_refresh_tokens",
             rows!("SELECT * FROM rotated_refresh_tokens ORDER BY rowid"),
+        ),
+        (
+            "server_settings",
+            rows!("SELECT * FROM server_settings ORDER BY rowid"),
         ),
         ("sessions", rows!("SELECT * FROM sessions ORDER BY rowid")),
         ("user_mfa", rows!("SELECT * FROM user_mfa ORDER BY rowid")),

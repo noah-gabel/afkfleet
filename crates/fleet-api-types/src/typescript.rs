@@ -48,6 +48,10 @@ use crate::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use crate::me::{MeResponse, PasswordChangeRequest};
 use crate::mfa::{MfaConfirmRequest, MfaConfirmResponse, MfaEnrollResponse, MfaResetResponse};
 use crate::modes::{CreateModeRequest, ModePage, ModeResponse, UpdateModeRequest};
+use crate::server_settings::{
+    CreateServerSettingsRequest, ServerSettingsPage, ServerSettingsResponse,
+    UpdateServerSettingsRequest,
+};
 use crate::sessions::SessionPage;
 use crate::users::{UserPage, UserPatchRequest, UserResponse};
 
@@ -220,7 +224,11 @@ fn write_api(config: &Config) -> Result<(), TypeScriptError> {
     EventTicketResponse::export_all(config).map_err(TypeScriptError::Export)?;
     EventMessage::export_all(config).map_err(TypeScriptError::Export)?;
     AuditPage::export_all(config).map_err(TypeScriptError::Export)?;
-    HeldGrantPage::export_all(config).map_err(TypeScriptError::Export)
+    HeldGrantPage::export_all(config).map_err(TypeScriptError::Export)?;
+    ServerSettingsPage::export_all(config).map_err(TypeScriptError::Export)?;
+    ServerSettingsResponse::export_all(config).map_err(TypeScriptError::Export)?;
+    CreateServerSettingsRequest::export_all(config).map_err(TypeScriptError::Export)?;
+    UpdateServerSettingsRequest::export_all(config).map_err(TypeScriptError::Export)
 }
 
 /// Writes the app's root IPC types, and every type they use.
