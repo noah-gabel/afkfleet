@@ -84,6 +84,13 @@ pub enum Permission {
     ReleaseAgent,
     /// Read the audit log (Admin+).
     ViewAuditLog,
+    /// See every server's settings: the conflict texts and the chat
+    /// formats every bot on a server shares (Admin+; ADR-0020, S75).
+    ViewServerSettings,
+    /// Create, change or delete a server's settings (Admin+, every write with
+    /// a step-up; ADR-0020, U54). A change reaches every user's bots on that
+    /// server, the Owner's too.
+    ConfigureServerSettings,
 
     // Invites (`ResourceContext::Invite`).
     /// Revoke an invite (the same rule as creating it).

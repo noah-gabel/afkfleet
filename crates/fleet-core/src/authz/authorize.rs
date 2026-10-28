@@ -129,6 +129,8 @@ fn account(
         | Permission::DisableAgent
         | Permission::ReleaseAgent
         | Permission::ViewAuditLog
+        | Permission::ViewServerSettings
+        | Permission::ConfigureServerSettings
         | Permission::RevokeInvite
         | Permission::ViewMode
         | Permission::UpdateMode { .. }
@@ -169,7 +171,11 @@ fn global(actor: &Actor, permission: Permission) -> Result<(), AuthzError> {
         | Permission::ViewAgents
         | Permission::DisableAgent
         | Permission::ReleaseAgent
-        | Permission::ViewAuditLog => actor.role >= Role::Admin,
+        | Permission::ViewAuditLog
+        // Server settings reach every user's bots on that server (ADR-0020,
+        // U54, S75).
+        | Permission::ViewServerSettings
+        | Permission::ConfigureServerSettings => actor.role >= Role::Admin,
         // An agent receives session tokens for the bots assigned to it, so
         // only the Owner decides which agents exist (ADR-0010).
         Permission::EnrollAgent => actor.role == Role::Owner,
@@ -231,6 +237,8 @@ fn invite(actor: &Actor, permission: Permission, role: Role) -> Result<(), Authz
         | Permission::DisableAgent
         | Permission::ReleaseAgent
         | Permission::ViewAuditLog
+        | Permission::ViewServerSettings
+        | Permission::ConfigureServerSettings
         | Permission::ViewMode
         | Permission::UpdateMode { .. }
         | Permission::DeleteMode
@@ -278,6 +286,8 @@ fn mode(
         | Permission::DisableAgent
         | Permission::ReleaseAgent
         | Permission::ViewAuditLog
+        | Permission::ViewServerSettings
+        | Permission::ConfigureServerSettings
         | Permission::RevokeInvite
         | Permission::SetRole { .. }
         | Permission::SetDisabled
@@ -346,6 +356,8 @@ fn user(actor: &Actor, permission: Permission, target: UserRef) -> Result<(), Au
         | Permission::DisableAgent
         | Permission::ReleaseAgent
         | Permission::ViewAuditLog
+        | Permission::ViewServerSettings
+        | Permission::ConfigureServerSettings
         | Permission::RevokeInvite
         | Permission::ViewMode
         | Permission::UpdateMode { .. }
@@ -396,6 +408,8 @@ fn personal(actor: &Actor, permission: Permission, owner: UserId) -> Result<(), 
         | Permission::DisableAgent
         | Permission::ReleaseAgent
         | Permission::ViewAuditLog
+        | Permission::ViewServerSettings
+        | Permission::ConfigureServerSettings
         | Permission::RevokeInvite
         | Permission::ViewMode
         | Permission::UpdateMode { .. }
@@ -525,7 +539,7 @@ mod tests {
     }
 
     /// How many variants [`Permission`] has.
-    const PERMISSION_VARIANTS: usize = 29;
+    const PERMISSION_VARIANTS: usize = 31;
 
     /// The variant's index, and the kind of context it applies to.
     ///
@@ -563,6 +577,8 @@ mod tests {
             Permission::ReleaseAgent => (26, Kind::Global),
             Permission::ReviewUserGrants => (27, Kind::User),
             Permission::LeaveAccount => (28, Kind::Account),
+            Permission::ViewServerSettings => (29, Kind::Global),
+            Permission::ConfigureServerSettings => (30, Kind::Global),
         }
     }
 
@@ -630,6 +646,11 @@ mod tests {
             ("DisableAgent", Permission::DisableAgent),
             ("ReleaseAgent", Permission::ReleaseAgent),
             ("ViewAuditLog", Permission::ViewAuditLog),
+            ("ViewServerSettings", Permission::ViewServerSettings),
+            (
+                "ConfigureServerSettings",
+                Permission::ConfigureServerSettings,
+            ),
             ("RevokeInvite", Permission::RevokeInvite),
             ("ViewMode", Permission::ViewMode),
             (
@@ -1379,6 +1400,26 @@ mod tests {
             ),
             expected
         );
+    }
+
+    #[rstest]
+    #[case::owner(Role::Owner, Ok(()))]
+    #[case::admin(Role::Admin, Ok(()))]
+    #[case::member(Role::Member, Err(Forbidden))]
+    fn admins_and_the_owner_read_and_write_server_settings(
+        #[case] role: Role,
+        #[case] expected: Result<(), AuthzError>,
+    ) {
+        for permission in [
+            Permission::ViewServerSettings,
+            Permission::ConfigureServerSettings,
+        ] {
+            assert_eq!(
+                authorize(&actor(role), permission, &ResourceContext::Global),
+                expected,
+                "{permission:?}"
+            );
+        }
     }
 
     #[test]

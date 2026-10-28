@@ -56,5 +56,8 @@ expression: names
   "mode.create",
   "mode.update",
   "mode.delete",
-  "retention.purge"
+  "retention.purge",
+  "server_settings.create",
+  "server_settings.update",
+  "server_settings.delete"
 ]

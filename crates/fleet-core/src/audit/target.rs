@@ -6,7 +6,8 @@ use uuid::Uuid;
 use super::AuditError;
 use super::name::{self, Dots};
 use crate::id::{
-    AccountId, AgentId, BotId, EnrollmentTokenId, InviteId, ModeId, SessionId, UserId,
+    AccountId, AgentId, BotId, EnrollmentTokenId, InviteId, ModeId, ServerSettingsId, SessionId,
+    UserId,
 };
 
 /// Defines [`AuditTarget`] from one list of variants, each with its ID type
@@ -78,6 +79,8 @@ audit_targets! {
     Invite(InviteId) = "invite";
     /// An agent's enrollment token (P10.3).
     EnrollmentToken(EnrollmentTokenId) = "enrollment_token";
+    /// One server's settings (P11.9; ADR-0020, S78).
+    ServerSettings(ServerSettingsId) = "server_settings";
 }
 
 /// A stored target type this version may not know: a name of `a`–`z`,
@@ -149,7 +152,7 @@ mod tests {
         )
     }
 
-    fn every_target() -> [AuditTarget; 8] {
+    fn every_target() -> [AuditTarget; 9] {
         let (random, at) = bytes();
         [
             AuditTarget::User(UserId::new_v7(at, random).unwrap()),
@@ -160,6 +163,7 @@ mod tests {
             AuditTarget::Session(SessionId::new_v7(at, random).unwrap()),
             AuditTarget::Invite(InviteId::new_v7(at, random).unwrap()),
             AuditTarget::EnrollmentToken(EnrollmentTokenId::new_v7(at, random).unwrap()),
+            AuditTarget::ServerSettings(ServerSettingsId::new_v7(at, random).unwrap()),
         ]
     }
 
@@ -177,7 +181,8 @@ mod tests {
                 "mode",
                 "session",
                 "invite",
-                "enrollment_token"
+                "enrollment_token",
+                "server_settings"
             ]
         );
     }

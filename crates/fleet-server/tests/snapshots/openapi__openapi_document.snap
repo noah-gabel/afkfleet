@@ -260,7 +260,10 @@ expression: answer.json()
           "mode.create",
           "mode.update",
           "mode.delete",
-          "retention.purge"
+          "retention.purge",
+          "server_settings.create",
+          "server_settings.update",
+          "server_settings.delete"
         ],
         "type": "string"
       },
@@ -384,7 +387,8 @@ expression: answer.json()
           "mode",
           "session",
           "invite",
-          "enrollment_token"
+          "enrollment_token",
+          "server_settings"
         ],
         "type": "string"
       },

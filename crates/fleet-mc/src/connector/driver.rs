@@ -1045,6 +1045,21 @@ mod tests {
         assert_eq!(address.port, port);
     }
 
+    /// S74's premise (ADR-0020): an address without a port reaches azalea as
+    /// the one with the default port, so azalea's resolver tries the SRV
+    /// record for both alike, and the two share one server key.
+    #[test]
+    fn an_address_without_a_port_reaches_azalea_as_the_default_port() {
+        let bare = server_addr(&"mc.example.com".parse().unwrap());
+        let given = server_addr(&"mc.example.com:25565".parse().unwrap());
+
+        assert_eq!(
+            (bare.host.as_str(), bare.port),
+            (given.host.as_str(), given.port)
+        );
+        assert_eq!(bare.port, ServerAddress::DEFAULT_PORT);
+    }
+
     #[test]
     fn the_deadline_is_the_timeout_after_the_start() {
         let started = std::time::Instant::now();
