@@ -504,6 +504,9 @@ key_file = "{key}"
 # 127.0.0.1:<port>, never localhost, which may resolve to ::1. Nothing else
 # private is listed (ADR-0019, S46, S69, R58).
 private_targets = ["127.0.0.1/32"]
+# It runs the user's real account, so no public address either (ADR-0020,
+# U50; PR #78's review).
+public_targets = false
 "#,
         heartbeat = toml_path(&dir.join("agent.alive")),
         url = plane.url,
@@ -1058,6 +1061,7 @@ mod tests {
                 cert_file: dir.join(AGENT).join("agent.crt"),
                 key_file: dir.join(AGENT).join("agent.key"),
                 private_targets: PrivateTargets::default(),
+                public_targets: true,
             };
             let path = dir.join("agent.toml");
             std::fs::write(&path, agent_toml(&dir, &plane)).unwrap();
@@ -1071,6 +1075,8 @@ mod tests {
             assert_eq!(loaded.url, plane.url);
             assert_eq!(loaded.key_file, plane.key_file);
             assert_eq!(config.heartbeat_file, dir.join("agent.alive"));
+            // It runs the user's real account: no public server (U50; PR #78's review).
+            assert!(!loaded.public_targets);
             assert_eq!(loaded.private_targets.networks().len(), 1);
             assert!(
                 loaded

@@ -83,8 +83,10 @@ pub enum ConnectFailure {
     /// Any other network error.
     Other,
     /// The managed agent's target check refused the resolved address before
-    /// dialling it: a never-dialled address, or a private one outside
-    /// `[control_plane] private_targets` (ADR-0019, S46, S69).
+    /// dialling it: a never-dialled address, a private one outside
+    /// `[control_plane] private_targets`, or a public one while
+    /// `[control_plane] public_targets` is false (ADR-0019, S46, S69;
+    /// ADR-0020, U50).
     Blocked,
 }
 

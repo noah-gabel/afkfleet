@@ -146,6 +146,7 @@ pub(crate) fn identity_files(
         cert_file: dir.join("agent.crt"),
         key_file: dir.join("agent.key"),
         private_targets: PrivateTargets::default(),
+        public_targets: true,
     };
     write_owner_only(&plane.ca_cert_file, ca.pem.as_bytes());
     write_owner_only(&plane.key_file, key.to_pem().as_bytes());

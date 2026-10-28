@@ -1,0 +1,30 @@
+# The managed agent's config for the definition of done's checks with a real
+# account (ADR-0020, U1, S72): `just dod-enroll` enrolls it with `just
+# dod-server`'s control plane on 127.0.0.1:7453, whose certificate names
+# localhost, 127.0.0.1 and ::1, and `just dod-agent` runs it. Only the user runs
+# them; the AI never does.
+#
+# The three files must be absolute paths, which a committed file can't hold for
+# every machine, so they aren't set here: both recipes pass
+# AFKFLEET_AGENT__CONTROL_PLANE__CA_CERT_FILE (dod-server's CA,
+# target/dod-run/pki/ca.crt) and AFKFLEET_AGENT__CONTROL_PLANE__CERT_FILE and
+# __KEY_FILE in target/dod-run/agent/; `just dod-agent` also passes the
+# heartbeat file, target/dod-run/agent/agent.alive, which `just dod-clean`
+# checks. They export AFKFLEET_AGENT__LOG__FILTER="info" too.
+
+name = "dod-agent"
+
+[log]
+format = "pretty"
+filter = "info"                          # the recipes export info too; chat is only at debug
+
+[control_plane]
+url = "https://127.0.0.1:7453"
+# The bot may dial `just dod-mc-up`'s server, which publishes only on
+# 127.0.0.1:25566: give the bot the server 127.0.0.1:25566, since `localhost`
+# may resolve to ::1, which isn't listed (ADR-0019, S46, S69).
+private_targets = ["127.0.0.1/32"]
+# The user's rule (ADR-0020, U50): no Minecraft account of theirs on a public
+# server yet, so this agent refuses every public address; the bot reads
+# "Blocked". M's 24-hour run decides whether this changes.
+public_targets = false

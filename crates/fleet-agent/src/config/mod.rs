@@ -15,9 +15,10 @@
 //! - **Standalone accounts are offline accounts** by construction: a bot
 //!   entry only has a `username`.
 //!
-//! Secrets never go in this file; Phase 10's keys only name files, and
+//! Secrets never go in this file; Phase 10's keys only name files,
 //! `[control_plane] private_targets` lists the private networks a managed
-//! agent's bots may dial.
+//! agent's bots may dial, and `public_targets` says whether they may dial
+//! public addresses.
 //!
 //! The loader, the generic error types and the `[log]` types come from
 //! fleet-startup (ADR-0015); this module re-exports them under their old
@@ -88,13 +89,17 @@ pub enum AgentMode {
 
 impl AgentMode {
     /// Which addresses its bots may dial: every one in standalone mode,
-    /// whose servers the operator names; public ones and the listed private
-    /// ones in managed mode, whose servers users set (ADR-0019, S46, S69).
+    /// whose servers the operator names; in managed mode, whose servers
+    /// users set, the listed private ones, and public ones unless
+    /// `public_targets` is false (ADR-0019, S46, S69; ADR-0020, U50).
     #[must_use]
     pub fn target_policy(&self) -> TargetPolicy {
         match self {
             Self::Standalone(_) => TargetPolicy::Unchecked,
-            Self::ControlPlane(plane) => TargetPolicy::Checked(plane.private_targets.clone()),
+            Self::ControlPlane(plane) => TargetPolicy::Checked {
+                private: plane.private_targets.clone(),
+                public: plane.public_targets,
+            },
         }
     }
 }
@@ -133,10 +138,13 @@ pub struct ControlPlaneConfig {
     pub cert_file: PathBuf,
     /// The agent's private key.
     pub key_file: PathBuf,
-    /// The private networks its bots may dial, empty by default: a public
-    /// address is always dialled, a never-class one never (ADR-0019, S46,
-    /// S69).
+    /// The private networks its bots may dial, empty by default; a
+    /// never-class address is never dialled (ADR-0019, S46, S69).
     pub private_targets: PrivateTargets,
+    /// `[control_plane] public_targets`: whether its bots may dial public
+    /// addresses, `true` when left out (ADR-0020, U50). The definition of done's
+    /// agent sets it to `false`.
+    pub public_targets: bool,
 }
 
 /// Loads the config from the file at `path`, then from `AFKFLEET_AGENT__…`

@@ -13,6 +13,8 @@
 //! - [`log_buffer`]: a writer for a log layer a test builds itself, for tests
 //!   of what that layer prints.
 //! - [`jail`]: figment's `Jail`, for the tests that load configs.
+//! - [`justfile`]: a strict reader of the justfile's recipes, for the tests
+//!   that load a config with exactly a recipe's exports (ADR-0020, R124).
 //! - [`system`]: a [`Clock`](fleet_core::system::Clock) that only moves when
 //!   the test moves it, and a seeded
 //!   [`SecureRandom`](fleet_core::system::SecureRandom), which is why this
@@ -22,6 +24,7 @@
 //! (CLAUDE.md, testing conventions).
 
 pub mod jail;
+pub mod justfile;
 pub mod log_buffer;
 pub mod log_capture;
 pub mod mc;

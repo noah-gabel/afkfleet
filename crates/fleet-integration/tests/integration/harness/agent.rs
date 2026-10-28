@@ -289,6 +289,7 @@ pub(crate) async fn enroll_files(
         cert_file: dir.join("agent.crt"),
         key_file: dir.join("agent.key"),
         private_targets: PrivateTargets::default(),
+        public_targets: true,
     };
     let name =
         AgentName::try_from(name).map_err(|_| EnrollError::of("the agent's name was refused"))?;

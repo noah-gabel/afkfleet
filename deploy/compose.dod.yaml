@@ -1,0 +1,58 @@
+# The Minecraft server of the definition of done's checks with a real account
+# (ADR-0020, U1, S72): `just dod-mc-up` starts it and `just dod-mc-down` removes
+# it with its world. Only the user runs them; the AI never does.
+#
+# Online mode with secure chat, as a public server has it, but on this PC only:
+# its game port is published on 127.0.0.1:25566 alone, beside `just mc-up`'s
+# 25565. Its own project and named volume, so the dev stack's recipes never
+# start or delete it. The world holds the player's name (the usercache and the
+# logs), so `dod-mc-down` deletes the volume too.
+#
+# RCON is enabled with a random password per start and its port isn't
+# published, as in compose.dev.yaml (fleet-integration's dod_kit test pins it):
+# the check confirms the bot with `docker compose --file
+# deploy/compose.dod.yaml exec minecraft rcon-cli list`, which prints only in
+# the user's terminal.
+#
+# The image and VERSION are compose.dev.yaml's, bumped with it (ADR-0003);
+# fleet-integration's `pins` test reads the first `image:` and `VERSION:`
+# lines, so the minecraft service stays first.
+name: afkfleet-dod
+
+services:
+  minecraft:
+    # Pinned tag and digest, the dev service's. Bump it deliberately (ADR-0003).
+    image: itzg/minecraft-server:2026.9.2-java25@sha256:de5d1b1a83eba576f6c8a688fac2a3523ce457724cdebc8ea48d7818b74cdf6e
+    environment:
+      EULA: "TRUE"
+      TYPE: VANILLA
+      # Must match the Minecraft version of the pinned azalea (ADR-0003).
+      VERSION: "26.1"
+      ONLINE_MODE: "TRUE"
+      ENFORCE_SECURE_PROFILE: "TRUE"
+      LEVEL_TYPE: minecraft:flat
+      VIEW_DISTANCE: "4"
+      SIMULATION_DISTANCE: "4"
+      SPAWN_PROTECTION: "0"
+      MODE: survival
+      DIFFICULTY: peaceful
+      ENABLE_AUTOPAUSE: "FALSE"
+      ENABLE_RCON: "TRUE"
+      MEMORY: 2G
+    ports:
+      - "127.0.0.1:25566:25565"
+    volumes:
+      - data:/data
+    # itzg's runner answers SIGTERM with `stop`, which saves the world and kicks
+    # every player with "Server closed"; Docker's default 10 s could kill it
+    # first. A fleet-agent test checks it's at least 30 s.
+    stop_grace_period: 60s
+    healthcheck:
+      test: mc-health
+      # The first start downloads the server jar.
+      start_period: 3m
+      interval: 5s
+      retries: 20
+
+volumes:
+  data:

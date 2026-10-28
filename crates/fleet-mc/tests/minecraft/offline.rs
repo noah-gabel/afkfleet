@@ -45,9 +45,11 @@ async fn slow_offline_server_scenario() {
         Some(SessionEvent::ConnectionFailed(ConnectFailure::Blocked))
     );
     within("the refusal's teardown", refused.disconnect()).await;
-    let connector = AzaleaConnector::new(&McConfig::default()).with_targets(TargetPolicy::Checked(
-        PrivateTargets::try_new(vec!["127.0.0.1/32".parse().unwrap()]).unwrap(),
-    ));
+    let connector =
+        AzaleaConnector::new(&McConfig::default()).with_targets(TargetPolicy::Checked {
+            private: PrivateTargets::try_new(vec!["127.0.0.1/32".parse().unwrap()]).unwrap(),
+            public: true,
+        });
 
     // 1. Join, and see the next player's join message.
     let (session, mut events) = connect(&connector, &server, bot(1), offline(NAME)).await;

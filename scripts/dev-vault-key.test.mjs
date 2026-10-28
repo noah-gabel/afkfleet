@@ -90,7 +90,7 @@ describe("the command", () => {
     assert.equal(run.status, 0, run.stderr);
     const key = readFileSync(file, "utf8").trimEnd();
     assert.ok(!run.stdout.includes(key) && !run.stderr.includes(key));
-    assert.equal(run.stdout, `created the dev vault key at ${file}\n`);
+    assert.equal(run.stdout, `created the vault key at ${file}\n`);
   });
 
   it("prints nothing when the key exists", () => {

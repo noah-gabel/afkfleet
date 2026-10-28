@@ -180,7 +180,7 @@ mc-down:
 dev-server $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dev-server" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=(justfile_directory() / "target" / "dev-server" / "vault-key-1") $AFKFLEET_SERVER__GRPC__CA_CERT_FILE=(justfile_directory() / "target" / "dev-server" / "pki" / "ca.crt") $AFKFLEET_SERVER__GRPC__CA_KEY_FILE=(justfile_directory() / "target" / "dev-server" / "pki" / "ca.key") $AFKFLEET_SERVER__GRPC__SERVER_CERT_FILE=(justfile_directory() / "target" / "dev-server" / "pki" / "server.crt") $AFKFLEET_SERVER__GRPC__SERVER_KEY_FILE=(justfile_directory() / "target" / "dev-server" / "pki" / "server.key"):
     node -e "require('node:fs').mkdirSync(require('node:path').dirname(process.argv[1]), { recursive: true })" "{{ AFKFLEET_SERVER__DATABASE__PATH }}"
     node scripts/dev-vault-key.mjs "{{ AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1 }}"
-    node scripts/dev-pki.mjs "{{ AFKFLEET_SERVER__GRPC__CA_CERT_FILE }}" "{{ AFKFLEET_SERVER__GRPC__CA_KEY_FILE }}" "{{ AFKFLEET_SERVER__GRPC__SERVER_CERT_FILE }}" "{{ AFKFLEET_SERVER__GRPC__SERVER_KEY_FILE }}"
+    node scripts/dev-pki.mjs deploy/dev/server.toml "{{ AFKFLEET_SERVER__GRPC__CA_CERT_FILE }}" "{{ AFKFLEET_SERVER__GRPC__CA_KEY_FILE }}" "{{ AFKFLEET_SERVER__GRPC__SERVER_CERT_FILE }}" "{{ AFKFLEET_SERVER__GRPC__SERVER_KEY_FILE }}"
     cargo run -p fleet-server --bin afkfleet-server -- serve --config deploy/dev/server.toml
 
 # An enrollment token from the server's host (ADR-0019, U3), for dev-server's database and
@@ -206,7 +206,7 @@ dev-enrollment-token $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "t
 # Enroll a dev agent with dev-server, its bundle on stdin.
 [no-exit-message]
 dev-enroll dir=(justfile_directory() / "target" / "dev-agent") $AFKFLEET_AGENT__CONTROL_PLANE__CA_CERT_FILE=(justfile_directory() / "target" / "dev-server" / "pki" / "ca.crt") $AFKFLEET_AGENT__CONTROL_PLANE__CERT_FILE=(dir / "agent.crt") $AFKFLEET_AGENT__CONTROL_PLANE__KEY_FILE=(dir / "agent.key"):
-    node scripts/dev-enroll.mjs "{{ dir }}"
+    node scripts/dev-enroll.mjs deploy/dev/agent.managed.toml "{{ dir }}"
 
 # No exit message: on Windows, Ctrl+C reaches just and PowerShell too, so just
 # would call a clean stop a failure. The agent logs its own errors and exit code.
@@ -332,6 +332,100 @@ app-build *args:
 # Render the desktop app's icon.ico from apps/desktop/src-tauri/icons/icon.svg (needs pnpm install).
 icons:
     node scripts/icons.mjs
+
+# --- The definition of done's checks with a real account (ADR-0020, U1, U33, U50-U52, S72) ---
+# Phase 11's first check and M's 24-hour run. THE USER ONLY: the AI never runs a dod-*
+# recipe, and never reads, lists or prints anything in target/dod-run/, which holds the
+# user's real account, sealed, next to the vault key that opens it, the PKI and the agent's
+# identity. Every path is a parameter under target/dod-run/; every binary is a release build
+# (`--release`, so a long run's exes never block debug builds) logging at info, so no chat
+# text is printed (chat is logged only at debug). Their own ports, so they run beside the
+# dev stack: HTTP 127.0.0.1:8090, gRPC 127.0.0.1:7453, Minecraft 127.0.0.1:25566. Nothing
+# secret is ever an argument: dod-owner asks for the password hidden, and dod-enroll reads
+# the bundle from stdin. The steps are README's "The DoD's first check".
+
+# The user only: start the DoD checks' online-mode Minecraft server and wait until it's healthy (needs Docker).
+dod-mc-up:
+    docker compose --file deploy/compose.dod.yaml up --detach --wait --wait-timeout 300 minecraft
+
+# The user only: remove the DoD checks' Minecraft server with its world, which holds the player's name.
+dod-mc-down:
+    docker compose --file deploy/compose.dod.yaml down --volumes
+
+# Exactly what dod-server, dod-owner, dod-enrollment-token, dod-enroll and dod-agent run, so
+# none of them builds while an enrollment token's 15 minutes run (PR #78's review). It touches
+# nothing in target/dod-run/; the first builds take minutes, and cargo shows its progress.
+# The user only: build the DoD checks' release server and agent before the stack starts.
+dod-build:
+    cargo build --release -p fleet-server --bin afkfleet-server
+    cargo build --release -p fleet-agent --bin afkfleet-agent
+
+# As dev-server, with deploy/dod/server.toml: Node creates the folder, the vault key when
+# it's missing (never overwritten, never printed) and the PKI with `pki init` when its files
+# are missing, for localhost, 127.0.0.1 and ::1 (never overwritten). [grpc] is on, on
+# 127.0.0.1:7453. No exit message: on Windows, Ctrl+C reaches just and PowerShell too.
+# The user only: run the DoD checks' server with deploy/dod/server.toml, its database, vault key and PKI in target/dod-run/.
+[no-exit-message]
+dod-server $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dod-run" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=(justfile_directory() / "target" / "dod-run" / "vault-key-1") $AFKFLEET_SERVER__GRPC__CA_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.crt") $AFKFLEET_SERVER__GRPC__CA_KEY_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.key") $AFKFLEET_SERVER__GRPC__SERVER_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "server.crt") $AFKFLEET_SERVER__GRPC__SERVER_KEY_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "server.key") $AFKFLEET_SERVER__LOG__FILTER="info":
+    node -e "require('node:fs').mkdirSync(require('node:path').dirname(process.argv[1]), { recursive: true })" "{{ AFKFLEET_SERVER__DATABASE__PATH }}"
+    node scripts/dev-vault-key.mjs "{{ AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1 }}"
+    node scripts/dev-pki.mjs --release deploy/dod/server.toml "{{ AFKFLEET_SERVER__GRPC__CA_CERT_FILE }}" "{{ AFKFLEET_SERVER__GRPC__CA_KEY_FILE }}" "{{ AFKFLEET_SERVER__GRPC__SERVER_CERT_FILE }}" "{{ AFKFLEET_SERVER__GRPC__SERVER_KEY_FILE }}"
+    cargo run --release -p fleet-server --bin afkfleet-server -- serve --config deploy/dod/server.toml
+
+# `user create-owner` with the password typed twice at the terminal, hidden; never an
+# argument. The same six paths as dod-server: deploy/dod/server.toml sets [grpc] bind, so
+# its validation needs them all, though create-owner reads no key (R126). No exit message:
+# the command prints its own error line and exit code.
+# The user only: create the Owner `username` in the DoD checks' database.
+[no-exit-message]
+dod-owner username $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dod-run" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=(justfile_directory() / "target" / "dod-run" / "vault-key-1") $AFKFLEET_SERVER__GRPC__CA_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.crt") $AFKFLEET_SERVER__GRPC__CA_KEY_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.key") $AFKFLEET_SERVER__GRPC__SERVER_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "server.crt") $AFKFLEET_SERVER__GRPC__SERVER_KEY_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "server.key") $AFKFLEET_SERVER__LOG__FILTER="info":
+    node -e "require('node:fs').mkdirSync(require('node:path').dirname(process.argv[1]), { recursive: true })" "{{ AFKFLEET_SERVER__DATABASE__PATH }}"
+    cargo run --release -p fleet-server --bin afkfleet-server -- user create-owner --config deploy/dod/server.toml --username "{{ username }}"
+
+# The bundle alone on stdout, so `$bundle = just dod-enrollment-token` takes it whole; its
+# expiry and the CA's fingerprint on stderr, with cargo's progress (not quiet: run dod-build
+# first, so no build waits while the token's 15 minutes run). Never print or paste the bundle anywhere else:
+# it's a secret for 15 minutes. The same six paths as dod-server (R126). No exit message:
+# the command prints its own error line and exit code.
+# The user only: create an enrollment token in the DoD checks' database and print its bundle.
+[no-exit-message]
+dod-enrollment-token $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dod-run" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=(justfile_directory() / "target" / "dod-run" / "vault-key-1") $AFKFLEET_SERVER__GRPC__CA_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.crt") $AFKFLEET_SERVER__GRPC__CA_KEY_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.key") $AFKFLEET_SERVER__GRPC__SERVER_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "server.crt") $AFKFLEET_SERVER__GRPC__SERVER_KEY_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "server.key") $AFKFLEET_SERVER__LOG__FILTER="info":
+    cargo run --release -p fleet-server --bin afkfleet-server -- agent create-enrollment-token --config deploy/dod/server.toml
+
+# `$bundle | just dod-enroll`: deploy/dod/agent.toml dials 127.0.0.1:7453 and pins
+# dod-server's CA; the key and certificate go into `dir`, owner-only, and are never
+# replaced. One line on purpose: every recipe line gets just's stdin, so an earlier line
+# could take the bundle. No exit message: the command prints its own lines and exit code.
+# The user only: enroll the DoD checks' agent with dod-server, its bundle on stdin.
+[no-exit-message]
+dod-enroll dir=(justfile_directory() / "target" / "dod-run" / "agent") $AFKFLEET_AGENT__CONTROL_PLANE__CA_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.crt") $AFKFLEET_AGENT__CONTROL_PLANE__CERT_FILE=(dir / "agent.crt") $AFKFLEET_AGENT__CONTROL_PLANE__KEY_FILE=(dir / "agent.key") $AFKFLEET_AGENT__LOG__FILTER="info":
+    node scripts/dev-enroll.mjs --release deploy/dod/agent.toml "{{ dir }}"
+
+# The identity dod-enroll left, with dod-server's CA; its heartbeat file, which dod-clean
+# checks, goes into `dir` too. Its bot dials only 127.0.0.1 (dod-mc-up's server), never a
+# public address (U50): the recipe exports public_targets false itself, as the log filter,
+# so a variable in the shell can't flip it (PR #78's review). No exit message: on Windows,
+# Ctrl+C reaches just and PowerShell too.
+# The user only: run the DoD checks' agent with deploy/dod/agent.toml against dod-server.
+[no-exit-message]
+dod-agent dir=(justfile_directory() / "target" / "dod-run" / "agent") $AFKFLEET_AGENT__CONTROL_PLANE__CA_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.crt") $AFKFLEET_AGENT__CONTROL_PLANE__CERT_FILE=(dir / "agent.crt") $AFKFLEET_AGENT__CONTROL_PLANE__KEY_FILE=(dir / "agent.key") $AFKFLEET_AGENT__RUNTIME__HEARTBEAT_FILE=(dir / "agent.alive") $AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS="false" $AFKFLEET_AGENT__LOG__FILTER="info":
+    cargo run --release -p fleet-agent --bin afkfleet-agent -- run --config deploy/dod/agent.toml
+
+# app-build first (the release exe), then the exe itself: a GUI app, so the recipe returns
+# once it starts (R125). Close every other afkfleet window first: a second start only
+# brings the first forward.
+# The user only: build and start the release app for the DoD checks' server.
+dod-app: app-build
+    @echo "Enter http://127.0.0.1:8090 as the server's address in the app."
+    target/release/afkfleet-desktop.exe
+
+# Only this repository's target/dod-run; it refuses while dod-server or dod-agent runs, or
+# a link in the way, each saying what to do, and never touches Docker (U52). No exit
+# message: the script prints its own lines.
+# The user only: delete target/dod-run/ once the DoD is finished (after unlinking the account in the app).
+[no-exit-message]
+dod-clean dir=(justfile_directory() / "target" / "dod-run"):
+    node scripts/dod-clean.mjs "{{ dir }}"
 
 # Frontend unit and component tests (Vitest), in every package that has them.
 ui-test:

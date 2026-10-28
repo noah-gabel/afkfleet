@@ -2,7 +2,7 @@
 //! [`classify`] sorts an IP address into never, private or public by [the
 //! table](super#the-table) in [`net`](super)'s header, and [`TargetPolicy`]
 //! decides with the agent's `[control_plane] private_targets`,
-//! [`PrivateTargets`].
+//! [`PrivateTargets`], and its `public_targets` (ADR-0020, U50).
 //!
 //! fleet-mc checks the socket it resolved, the one azalea dials, right
 //! before the bot connects; a refusal never dials. Standalone mode, whose
@@ -90,7 +90,8 @@ pub enum AddressClass {
     Never(Range),
     /// Dialled only inside [`PrivateTargets`].
     Private(Range),
-    /// Dialled.
+    /// Dialled, unless the policy refuses public addresses
+    /// (`[control_plane] public_targets = false`, ADR-0020, U50).
     Public,
 }
 
@@ -415,15 +416,24 @@ fn standing(network: &IpNet) -> Standing {
 pub enum TargetPolicy {
     /// Every address: standalone mode, whose servers the operator names.
     Unchecked,
-    /// Public addresses, and private ones inside the list; never the
-    /// never-class (managed mode).
-    Checked(PrivateTargets),
+    /// Managed mode: never the never-class, private addresses only inside
+    /// `private`, and public ones only while `public` holds (the agent's
+    /// `[control_plane] public_targets`, ADR-0020, U50).
+    Checked {
+        /// The private networks a bot may dial.
+        private: PrivateTargets,
+        /// Whether a bot may dial public addresses.
+        public: bool,
+    },
 }
 
-/// The strictest: checked, nothing private listed.
+/// The strictest: checked, nothing private listed, no public address.
 impl Default for TargetPolicy {
     fn default() -> Self {
-        Self::Checked(PrivateTargets::default())
+        Self::Checked {
+            private: PrivateTargets::default(),
+            public: false,
+        }
     }
 }
 
@@ -434,7 +444,8 @@ pub struct TargetRefusal {
 }
 
 impl TargetRefusal {
-    /// The address's class: never, or private and unlisted.
+    /// The address's class: never, private and unlisted, or public under a
+    /// policy that refuses public addresses.
     #[must_use]
     pub const fn class(&self) -> AddressClass {
         self.class
@@ -445,16 +456,21 @@ impl TargetPolicy {
     /// Whether a bot may dial `ip`.
     ///
     /// # Errors
-    /// [`TargetRefusal`] with the address's class when it's never-class, or
-    /// private outside the list.
+    /// [`TargetRefusal`] with the address's class when it's never-class,
+    /// private outside the list, or public while the policy refuses public
+    /// addresses.
     pub fn check(&self, ip: IpAddr) -> Result<(), TargetRefusal> {
-        let Self::Checked(listed) = self else {
+        let Self::Checked {
+            private: listed,
+            public,
+        } = self
+        else {
             return Ok(());
         };
         match classify(ip) {
-            AddressClass::Public => Ok(()),
+            AddressClass::Public if *public => Ok(()),
             AddressClass::Private(_) if listed.contains(ip) => Ok(()),
-            class @ (AddressClass::Never(_) | AddressClass::Private(_)) => {
+            class @ (AddressClass::Never(_) | AddressClass::Private(_) | AddressClass::Public) => {
                 Err(TargetRefusal { class })
             }
         }
@@ -919,7 +935,31 @@ mod tests {
         #[case] address: &str,
         #[case] outcome: Result<(), AddressClass>,
     ) {
-        let policy = TargetPolicy::Checked(targets(&["127.0.0.1/32", "100.64.0.0/10"]).unwrap());
+        let policy = TargetPolicy::Checked {
+            private: targets(&["127.0.0.1/32", "100.64.0.0/10"]).unwrap(),
+            public: true,
+        };
+
+        assert_eq!(
+            policy.check(ip(address)).map_err(|refused| refused.class()),
+            outcome
+        );
+    }
+
+    #[rstest]
+    #[case::public("8.8.8.8", Err(Public))]
+    #[case::public_v6("2606:4700::1111", Err(Public))]
+    #[case::listed_loopback("127.0.0.1", Ok(()))]
+    #[case::unlisted_lan("192.168.1.10", Err(Private(Range::Rfc1918)))]
+    #[case::metadata("169.254.169.254", Err(Never(Range::LinkLocal)))]
+    fn a_policy_without_public_targets_refuses_a_public_address_and_dials_the_listed_loopback(
+        #[case] address: &str,
+        #[case] outcome: Result<(), AddressClass>,
+    ) {
+        let policy = TargetPolicy::Checked {
+            private: targets(&["127.0.0.1/32"]).unwrap(),
+            public: false,
+        };
 
         assert_eq!(
             policy.check(ip(address)).map_err(|refused| refused.class()),
@@ -939,14 +979,21 @@ mod tests {
     #[case::loopback("127.0.0.1", Private(Range::Loopback))]
     #[case::lan("10.0.0.1", Private(Range::Rfc1918))]
     #[case::metadata("169.254.169.254", Never(Range::LinkLocal))]
+    #[case::public("8.8.8.8", Public)]
+    #[case::public_v6("2606:4700::1111", Public)]
     fn the_default_policy_is_the_strictest(#[case] address: &str, #[case] class: AddressClass) {
         let policy = TargetPolicy::default();
 
-        assert_eq!(policy, TargetPolicy::Checked(PrivateTargets::default()));
+        assert_eq!(
+            policy,
+            TargetPolicy::Checked {
+                private: PrivateTargets::default(),
+                public: false,
+            }
+        );
         assert_eq!(
             policy.check(ip(address)).map_err(|refused| refused.class()),
             Err(class)
         );
-        assert_eq!(policy.check(ip("8.8.8.8")), Ok(()));
     }
 }

@@ -195,6 +195,8 @@ pub(crate) struct RawControlPlane {
     /// The private networks the bots may dial (ADR-0019, S46, S69).
     #[serde(default)]
     pub(crate) private_targets: Vec<String>,
+    /// Whether the bots may dial public addresses (ADR-0020, U50).
+    pub(crate) public_targets: Option<bool>,
 }
 
 /// A count as a config number. A `usize` always fits into a `u64` on the
