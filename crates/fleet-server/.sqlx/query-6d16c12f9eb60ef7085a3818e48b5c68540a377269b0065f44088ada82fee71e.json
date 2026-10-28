@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT rowid AS \"rowid!: i64\", id AS \"id!\", server AS \"server!\",\n                  conflict_texts AS \"conflict_texts!\", version AS \"version!: i64\",\n                  created_at AS \"created_at!\", updated_at AS \"updated_at!\"\n           FROM server_settings\n           WHERE (? IS NULL OR id < ?)\n           ORDER BY id DESC\n           LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "server_settings",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "server_settings",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "server!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "server_settings",
+            "name": "server"
+          }
+        }
+      },
+      {
+        "name": "conflict_texts!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "server_settings",
+            "name": "conflict_texts"
+          }
+        }
+      },
+      {
+        "name": "version!: i64",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "server_settings",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "server_settings",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "updated_at!",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "server_settings",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6d16c12f9eb60ef7085a3818e48b5c68540a377269b0065f44088ada82fee71e"
+}

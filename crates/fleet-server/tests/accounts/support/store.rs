@@ -24,6 +24,7 @@ use fleet_server::ports::mfa::MfaReads;
 use fleet_server::ports::modes::ModeReads;
 use fleet_server::ports::page::Page;
 use fleet_server::ports::retention::{RetentionBatch, RetentionReads};
+use fleet_server::ports::server_settings::ServerSettingsReads;
 use fleet_server::ports::sessions::SessionReads;
 use fleet_server::ports::store::{Store, StoreError, WriteTx};
 use fleet_server::ports::users::UserReads;
@@ -219,6 +220,10 @@ impl Store for FlakyStore {
 
     fn modes(&self) -> &dyn ModeReads {
         self.inner.modes()
+    }
+
+    fn server_settings(&self) -> &dyn ServerSettingsReads {
+        self.inner.server_settings()
     }
 
     fn chat(&self) -> &dyn ChatReads {

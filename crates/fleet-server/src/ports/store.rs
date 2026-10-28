@@ -19,6 +19,7 @@ use super::login_attempts::{LoginAttemptReads, LoginAttemptWrites};
 use super::mfa::{MfaReads, MfaWrites};
 use super::modes::{ModeReads, ModeWrites};
 use super::retention::{RetentionBatch, RetentionReads};
+use super::server_settings::{ServerSettingsReads, ServerSettingsWrites};
 use super::sessions::{SessionReads, SessionWrites};
 use super::users::{UserReads, UserWrites};
 
@@ -116,6 +117,9 @@ pub trait Store: Send + Sync + fmt::Debug {
     /// The modes, read through the read connections.
     fn modes(&self) -> &dyn ModeReads;
 
+    /// The servers' settings, read through the read connections.
+    fn server_settings(&self) -> &dyn ServerSettingsReads;
+
     /// The bots' chat log, read through the read connections.
     fn chat(&self) -> &dyn ChatReads;
 
@@ -197,6 +201,9 @@ pub trait WriteTx: Send {
 
     /// The modes, read in this transaction.
     fn modes(&mut self) -> &mut dyn ModeWrites;
+
+    /// The servers' settings, read and written in this transaction.
+    fn server_settings(&mut self) -> &mut dyn ServerSettingsWrites;
 
     /// The bots' chat log, appended to in this transaction.
     fn chat(&mut self) -> &mut dyn ChatWrites;

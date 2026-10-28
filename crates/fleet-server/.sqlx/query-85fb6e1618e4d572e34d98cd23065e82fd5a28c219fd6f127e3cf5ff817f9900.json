@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO server_settings (id, server, conflict_texts, version, created_at, updated_at)\n         VALUES (?, ?, ?, 1, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "85fb6e1618e4d572e34d98cd23065e82fd5a28c219fd6f127e3cf5ff817f9900"
+}

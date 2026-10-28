@@ -72,6 +72,7 @@ use fleet_server::ports::page::Page;
 use fleet_server::ports::passwords::{HashError, Passwords, VerifyError};
 use fleet_server::ports::reconcile::{Change, Reconcile};
 use fleet_server::ports::retention::{RetentionBatch, RetentionReads};
+use fleet_server::ports::server_settings::{ServerSettingsReads, ServerSettingsWrites};
 use fleet_server::ports::sessions::{
     LiveSince, Session, SessionReads, SessionWithUser, SessionWrites,
 };
@@ -611,6 +612,10 @@ impl WriteTx for HookedTx {
         self.inner.modes()
     }
 
+    fn server_settings(&mut self) -> &mut dyn ServerSettingsWrites {
+        self.inner.server_settings()
+    }
+
     fn chat(&mut self) -> &mut dyn ChatWrites {
         self.inner.chat()
     }
@@ -696,6 +701,10 @@ impl WriteTx for LosingTx {
 
     fn modes(&mut self) -> &mut dyn ModeWrites {
         self
+    }
+
+    fn server_settings(&mut self) -> &mut dyn ServerSettingsWrites {
+        self.inner.server_settings()
     }
 
     fn chat(&mut self) -> &mut dyn ChatWrites {
@@ -1048,6 +1057,10 @@ impl Store for HookedStore {
 
     fn modes(&self) -> &dyn ModeReads {
         &self.modes
+    }
+
+    fn server_settings(&self) -> &dyn ServerSettingsReads {
+        self.inner.server_settings()
     }
 
     fn chat(&self) -> &dyn ChatReads {

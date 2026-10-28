@@ -11,11 +11,12 @@ use fleet_core::audit::{AuditAction, AuditTarget};
 use fleet_core::authz::{Actor, GrantLevel, Role};
 use fleet_core::bot::{DesiredRunState, LastReport};
 use fleet_core::id::{
-    AccountId, AgentId, BotId, EnrollmentTokenId, InviteId, ModeId, SessionId, UserId,
+    AccountId, AgentId, BotId, EnrollmentTokenId, InviteId, ModeId, ServerSettingsId, SessionId,
+    UserId,
 };
 use fleet_core::mode::ModeName;
 use fleet_core::pki::CertFingerprint;
-use fleet_core::value::{AgentName, McUsername, ServerAddress, Username};
+use fleet_core::value::{AgentName, McUsername, ServerAddress, ServerKey, Username};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 use tokio::sync::watch;
 
@@ -25,7 +26,7 @@ use super::{
     Database, accounts, agents, audit, enrollment_tokens, envelopes, grants, invites,
     login_attempts, mfa, sessions, users,
 };
-use super::{bots, chat, modes, retention};
+use super::{bots, chat, modes, retention, server_settings};
 use crate::ports::accounts::{
     AccountReads, AccountWrites, DeletedAccount, InsertAccountError, ListedAccount, McAccount,
 };
@@ -59,6 +60,10 @@ use crate::ports::modes::{
 use crate::ports::page::Page;
 use crate::ports::recovery_codes::RecoveryCodeHash;
 use crate::ports::retention::{AuditCut, AuditPurged, RetentionBatch, RetentionReads};
+use crate::ports::server_settings::{
+    NewServerSettings, ServerSettingsChange, ServerSettingsReads, ServerSettingsWrites,
+    StoredServerSettings, WriteServerSettingsError,
+};
 use crate::ports::sessions::{
     LiveSince, NewSession, RefreshLookup, Rotation, Session, SessionReads, SessionWithUser,
     SessionWrites,
@@ -453,6 +458,10 @@ impl WriteTx for SqliteWriteTx {
         self
     }
 
+    fn server_settings(&mut self) -> &mut dyn ServerSettingsWrites {
+        self
+    }
+
     fn chat(&mut self) -> &mut dyn ChatWrites {
         self
     }
@@ -823,6 +832,60 @@ impl BotWrites for SqliteWriteTx {
 }
 
 #[async_trait]
+impl ServerSettingsReads for Reads {
+    async fn find(&self, id: ServerSettingsId) -> Result<Option<StoredServerSettings>, StoreError> {
+        server_settings::find(&self.pool, id).await
+    }
+
+    async fn page(
+        &self,
+        page: Page<ServerSettingsId>,
+    ) -> Result<Vec<StoredServerSettings>, StoreError> {
+        server_settings::page(&self.pool, page).await
+    }
+}
+
+#[async_trait]
+impl ServerSettingsWrites for SqliteWriteTx {
+    async fn find(
+        &mut self,
+        id: ServerSettingsId,
+    ) -> Result<Option<StoredServerSettings>, StoreError> {
+        server_settings::find(&mut *self.tx, id).await
+    }
+
+    async fn count(&mut self) -> Result<u32, StoreError> {
+        server_settings::count(&mut self.tx).await
+    }
+
+    async fn server_taken(
+        &mut self,
+        server: &ServerKey,
+        except: Option<ServerSettingsId>,
+    ) -> Result<bool, StoreError> {
+        server_settings::server_taken(&mut self.tx, server, except).await
+    }
+
+    async fn insert(
+        &mut self,
+        settings: &NewServerSettings,
+    ) -> Result<(), WriteServerSettingsError> {
+        server_settings::insert(&mut self.tx, settings).await
+    }
+
+    async fn update(
+        &mut self,
+        change: &ServerSettingsChange,
+    ) -> Result<bool, WriteServerSettingsError> {
+        server_settings::update(&mut self.tx, change).await
+    }
+
+    async fn delete(&mut self, id: ServerSettingsId) -> Result<bool, StoreError> {
+        server_settings::delete(&mut self.tx, id).await
+    }
+}
+
+#[async_trait]
 impl ModeWrites for SqliteWriteTx {
     async fn find(&mut self, id: ModeId) -> Result<Option<StoredMode>, StoreError> {
         modes::find(&mut *self.tx, id).await
@@ -1189,6 +1252,10 @@ impl Store for Database {
     }
 
     fn modes(&self) -> &dyn ModeReads {
+        &self.reads
+    }
+
+    fn server_settings(&self) -> &dyn ServerSettingsReads {
         &self.reads
     }
 

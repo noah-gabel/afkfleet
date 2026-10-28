@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO server_settings (id, server, conflict_texts, version, created_at, updated_at)\n         VALUES (?1, 'mc.example.com:25565', '[\"Already connected\"]', 1, ?2, ?2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "4b10ca5caa6ecfa7a6e122bb75c94e14dd07a0f91f9dd6044130afec7552c9e8"
+}
