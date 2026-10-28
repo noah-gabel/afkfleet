@@ -12,6 +12,10 @@
 //! lines or what it looked for, so a run with a real secret can't print the
 //! secret. [`find`] looks with a predicate, for a value a plain substring
 //! would find where it isn't.
+//! [`count`] and [`count_at`] count a component's own lines, by target and
+//! (for `count_at`) level, for a test that checks one line's fields where
+//! the capture is already the process's subscriber, as fleet-mc's target
+//! refusal is (PR #78's review).
 //! nextest runs every test in a process of its own, so a test sees only its
 //! own logs.
 //!
@@ -103,6 +107,16 @@ pub fn count(target: &str, needle: &str) -> usize {
     lines()
         .iter()
         .filter(|line| line.target == target && line.text.contains(needle))
+        .count()
+}
+
+/// How many captured lines from `target` at `level` contain `needle`: for a
+/// test of the one line a refusal logs, and at which level.
+#[must_use]
+pub fn count_at(target: &str, level: Level, needle: &str) -> usize {
+    lines()
+        .iter()
+        .filter(|line| line.target == target && line.level == level && line.text.contains(needle))
         .count()
 }
 
@@ -252,6 +266,33 @@ mod tests {
         assert_eq!(
             found.unwrap_err().hits,
             BTreeMap::from([("capture_test_server".to_owned(), 1)])
+        );
+    }
+
+    #[test]
+    fn a_count_at_one_level_counts_only_that_targets_lines_at_that_level() {
+        install().unwrap();
+
+        tracing::warn!(target: "capture_test_count_at", field = "probe-at-4e19", "a warning");
+        tracing::debug!(target: "capture_test_count_at", field = "probe-at-4e19", "a detail");
+        tracing::warn!(target: "capture_test_count_at_other", field = "probe-at-4e19", "elsewhere");
+
+        assert_eq!(
+            count_at("capture_test_count_at", Level::WARN, "probe-at-4e19"),
+            1
+        );
+        assert_eq!(
+            count_at("capture_test_count_at", Level::DEBUG, "probe-at-4e19"),
+            1
+        );
+        assert_eq!(
+            count_at("capture_test_count_at", Level::ERROR, "probe-at-4e19"),
+            0
+        );
+        assert_eq!(
+            count_at("capture_test_count_at", Level::WARN, "field=probe-at-4e19 "),
+            1,
+            "fields read as name=value"
         );
     }
 
