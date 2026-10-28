@@ -39,15 +39,25 @@ pub struct StoredServerSettings {
     pub updated_at: DateTime<Utc>,
 }
 
+/// A server's settings row whose texts don't read back (ADR-0020, R132),
+/// as the reconciler logs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnreadableSettings {
+    /// The row's rowid.
+    pub rowid: i64,
+    /// The row's ID, when that much reads back.
+    pub id: Option<ServerSettingsId>,
+}
+
 /// Every server's conflict texts, read with the fleet in one snapshot
 /// (ADR-0020, S76, R132): what each bot's spec carries.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ServerTexts {
     /// The texts of each server whose row reads back.
     pub readable: HashMap<ServerKey, ConflictTexts>,
-    /// The servers whose row's texts don't read back, with the row's rowid:
-    /// their bots are left alone, never sent texts that fail open.
-    pub unreadable: HashMap<ServerKey, i64>,
+    /// The servers whose row's texts don't read back, with the row: their
+    /// bots are left alone, never sent texts that fail open.
+    pub unreadable: HashMap<ServerKey, UnreadableSettings>,
 }
 
 impl ServerTexts {
@@ -201,7 +211,10 @@ mod tests {
     fn server_texts() -> ServerTexts {
         ServerTexts {
             readable: HashMap::from([(key("mc.example.com"), texts(&["Already connected"]))]),
-            unreadable: HashMap::from([(key("broken.example.com"), 7)]),
+            unreadable: HashMap::from([(
+                key("broken.example.com"),
+                UnreadableSettings { rowid: 7, id: None },
+            )]),
         }
     }
 

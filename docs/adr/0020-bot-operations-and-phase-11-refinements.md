@@ -1608,7 +1608,7 @@ H6 and H7 are built after H4's merge, on the decisions below, with no new planni
 - **R135. H7's answers always carry `chat_formats`,** empty when none. Its requests require the field, so an older client gets a 400 rather than clearing formats it never showed.
 - **R136. H6's screens:**
   - **Where:** `features/servers/` under the admin layout's guard, which mirrors S75's two matrix rows.
-  - **The list:** every page is read (at most 100 rows, one page at `limit=100`).
+  - **The list:** every page is read at `limit=10`, at most 10 pages for its 100 rows. *(Corrected by PR #79's review, from one page at `limit=100`: a hundred rows at their caps answer about 6.5 MB, past fleet-client's 1 MiB answer cap, so this route's pages hold at most 10 rows.)*
   - **The editor:** react-hook-form's `useFieldArray`, a textarea per text, filled from the answer's lines joined by line breaks. A request is built from the form state, never by echoing an answer.
   - **Writes:** each goes through `useStepUpAction`. Delete asks first, as an account's Delete does. A 409 shows the server's text with "Load again".
 

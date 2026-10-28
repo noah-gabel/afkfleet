@@ -3,7 +3,8 @@
 //!
 //! - **Reading** (`GET /api/v1/server-settings`): `authorize()` asks
 //!   `ViewServerSettings` first (403 for a Member), then one page, newest
-//!   first.
+//!   first, of at most 10 rows, so a page of rows at their caps fits a
+//!   client's answer cap (`ServerSettingsPageQuery`).
 //! - **Creating** (`POST /api/v1/server-settings`, after a step-up): a
 //!   `CreateServerSettingsRequest`, whose every rule garde checked; the
 //!   server is keyed (S74) and the texts built by fleet-core.
@@ -27,15 +28,15 @@ use core::num::NonZeroU32;
 
 use fleet_api_types::server_settings::{
     ConflictTextResponse, CreateServerSettingsRequest, SERVER_TAKEN, ServerSettingsPage,
-    ServerSettingsResponse, UpdateServerSettingsRequest,
+    ServerSettingsPageQuery, ServerSettingsResponse, UpdateServerSettingsRequest,
 };
-use fleet_api_types::{BoundedText, ErrorResponse, FieldError, PageQuery};
+use fleet_api_types::{BoundedText, ErrorResponse, FieldError};
 use fleet_core::authz::{Permission, ResourceContext};
 use fleet_core::disconnect::ConflictTexts;
 use fleet_core::id::ServerSettingsId;
 use fleet_core::value::{ServerAddress, ServerKey};
 
-use super::{acting, page, timestamp};
+use super::{acting, timestamp};
 use crate::app::server_settings::{
     CreateServerSettingsError, DeleteServerSettingsError, ServerSettingsEdit,
     UpdateServerSettingsError,
@@ -44,6 +45,7 @@ use crate::http::error::ApiError;
 use crate::http::extractors::{AuthUser, SteppedUpUser, ValidJson, ValidPath, ValidQuery};
 use crate::http::rate_limit::ClientIp;
 use crate::http::router::AppState;
+use crate::ports::page::{Page, PageLimit};
 use crate::ports::server_settings::StoredServerSettings;
 
 /// `GET /api/v1/server-settings`: every server's settings, newest first.
@@ -52,13 +54,13 @@ use crate::ports::server_settings::StoredServerSettings;
     path = "/api/v1/server-settings",
     operation_id = "list_server_settings",
     tag = "server-settings",
-    params(PageQuery<ServerSettingsId>),
+    params(ServerSettingsPageQuery),
     responses(
         (status = 200, description = "One page of the servers' settings, newest first.", body = ServerSettingsPage),
         (status = 400, description = "A query that doesn't parse.", body = ErrorResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
         (status = 403, description = "Only Admins and the Owner read the servers' settings.", body = ErrorResponse),
-        (status = 422, description = "A `limit` outside 1 to 100.", body = ErrorResponse),
+        (status = 422, description = "A `limit` outside 1 to 10.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
             headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
         (status = "default", description = "Any other answer the server gives, in the error envelope.", body = ErrorResponse),
@@ -67,10 +69,10 @@ use crate::ports::server_settings::StoredServerSettings;
 pub(crate) async fn list(
     user: AuthUser,
     State(state): State<AppState>,
-    ValidQuery(query): ValidQuery<PageQuery<ServerSettingsId>>,
+    ValidQuery(query): ValidQuery<ServerSettingsPageQuery>,
 ) -> Result<Json<ServerSettingsPage>, ApiError> {
     user.require(Permission::ViewServerSettings, &ResourceContext::Global)?;
-    let listed = state.server_settings.list(page(&query)?).await?;
+    let listed = state.server_settings.list(settings_page(&query)?).await?;
     let items = listed
         .items
         .iter()
@@ -147,7 +149,7 @@ pub(crate) async fn create(
         (status = 403, description = "Step up first: `POST /auth/step-up`; or the caller isn't an Admin or the Owner.", body = ErrorResponse),
         (status = 404, description = "No such settings.", body = ErrorResponse),
         (status = 409, description = "`server_settings_changed`: the settings changed since the caller read `version`.", body = ErrorResponse),
-        (status = 422, description = "A field breaks its rule, named at its own path (`version`, `server`, `conflict_texts[3]`); a server another row has is `server`'s.", body = ErrorResponse),
+        (status = 422, description = "A field breaks its rule, named at its own path (`version`, `server`, `conflict_texts`, `conflict_texts[3]`): one error per field, a list's first; a server another row has is `server`'s.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
             headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
         (status = "default", description = "Any other answer the server gives, in the error envelope.", body = ErrorResponse),
@@ -252,6 +254,15 @@ fn checked<E>(
 /// The 422 of a server that has settings already.
 fn taken() -> ApiError {
     ApiError::Validation(vec![FieldError::new("server", SERVER_TAKEN)])
+}
+
+/// The page the list's query asks for. garde has checked the limit, so one
+/// out of range is a bug.
+fn settings_page(query: &ServerSettingsPageQuery) -> Result<Page<ServerSettingsId>, ApiError> {
+    Ok(Page {
+        before: query.before,
+        limit: PageLimit::new(query.limit_or_default()).map_err(ApiError::internal)?,
+    })
 }
 
 /// `settings` as the API answers them: the server as its key, each text as

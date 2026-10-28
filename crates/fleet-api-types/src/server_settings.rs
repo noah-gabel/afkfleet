@@ -9,14 +9,20 @@
 //! duplicates counting once (S6, S77). An answer gives each text as its
 //! lines, since a [`BoundedText`] shows a line break as ` | `: joined by
 //! line breaks again, the lines are the text exactly.
+//!
+//! A page holds at most [`SERVER_SETTINGS_PAGE_MAX`] rows, by default and at
+//! most ([`ServerSettingsPageQuery`]): a row at its caps answers about 64 KiB,
+//! so ten fit fleet-client's 1 MiB answer cap (PR #79's review).
 
 use fleet_core::disconnect::{ConflictTexts, ConflictTextsError};
 use garde::{Error, Path, Report, Validate};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
+use utoipa::openapi::Required;
+use utoipa::openapi::path::{Parameter, ParameterBuilder, ParameterIn};
 use utoipa::openapi::schema::ArrayBuilder;
 use utoipa::openapi::{RefOr, Schema};
-use utoipa::{PartialSchema as _, ToSchema};
+use utoipa::{IntoParams, PartialSchema as _, ToSchema};
 
 use crate::bots::{SERVER_ADDRESS_MAX_CHARS, valid_server_address};
 use crate::ids::{ServerSettingsId, id_schema};
@@ -38,6 +44,62 @@ pub const SERVER_SETTINGS_MAX: u32 = fleet_core::server_settings::MAX_SERVER_SET
 /// The field message of a server that has settings already, which only the
 /// server can tell.
 pub const SERVER_TAKEN: &str = "already has settings";
+
+/// The most rows one page of the servers' settings holds, and how many it
+/// holds when the query names no `limit`: [`MAX_SERVER_SETTINGS`] rows are
+/// then at most this many pages.
+///
+/// [`MAX_SERVER_SETTINGS`]: fleet_core::server_settings::MAX_SERVER_SETTINGS
+pub const SERVER_SETTINGS_PAGE_MAX: u32 = 10;
+
+/// `GET /server-settings?before=<id>&limit=<n>`: which page of the servers'
+/// settings to answer, newest first. Like [`crate::PageQuery`], with pages of
+/// at most [`SERVER_SETTINGS_PAGE_MAX`] rows, so a page of rows at their caps
+/// fits a client's answer cap. A parameter that isn't one of these two, or
+/// one given twice, is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct ServerSettingsPageQuery {
+    /// Only settings older than these: the `next` of the page before.
+    #[garde(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<ServerSettingsId>,
+    /// How many settings at most: 1 to [`SERVER_SETTINGS_PAGE_MAX`].
+    #[garde(range(min = 1, max = SERVER_SETTINGS_PAGE_MAX))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+impl ServerSettingsPageQuery {
+    /// The page size: `limit`, or [`SERVER_SETTINGS_PAGE_MAX`].
+    #[must_use]
+    pub fn limit_or_default(&self) -> u32 {
+        self.limit.unwrap_or(SERVER_SETTINGS_PAGE_MAX)
+    }
+}
+
+impl IntoParams for ServerSettingsPageQuery {
+    fn into_params(_parameter_in_provider: impl Fn() -> Option<ParameterIn>) -> Vec<Parameter> {
+        vec![
+            ParameterBuilder::new()
+                .name("before")
+                .parameter_in(ParameterIn::Query)
+                .required(Required::False)
+                .description(Some(
+                    "Only settings older than this ID: the `next` of the page before.",
+                ))
+                .schema(Some(id_schema()))
+                .build(),
+            ParameterBuilder::new()
+                .name("limit")
+                .parameter_in(ParameterIn::Query)
+                .required(Required::False)
+                .description(Some("How many settings at most; 10 by default."))
+                .schema(Some(integer_schema::<1, SERVER_SETTINGS_PAGE_MAX>()))
+                .build(),
+        ]
+    }
+}
 
 /// `POST /server-settings`: a server's new settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Validate, TS, ToSchema)]
@@ -382,6 +444,62 @@ mod tests {
         for message in messages {
             assert_eq!(BoundedText::<256>::new(message).as_str(), message);
         }
+    }
+
+    fn page(limit: Option<u32>) -> ServerSettingsPageQuery {
+        ServerSettingsPageQuery {
+            before: None,
+            limit,
+        }
+    }
+
+    #[rstest]
+    #[case::none(None)]
+    #[case::the_smallest(Some(1))]
+    #[case::the_largest(Some(10))]
+    fn a_page_limit_of_1_to_10_is_valid(#[case] limit: Option<u32>) {
+        assert_eq!(errors(&page(limit)), []);
+    }
+
+    #[rstest]
+    #[case::zero(0, "lower than 1")]
+    #[case::one_too_many(11, "greater than 10")]
+    fn a_page_limit_out_of_range_breaks_its_rule(#[case] limit: u32, #[case] message: &str) {
+        assert_eq!(
+            errors(&page(Some(limit))),
+            [("limit".to_owned(), message.to_owned())]
+        );
+    }
+
+    #[test]
+    fn a_page_holds_ten_rows_by_default() {
+        assert_eq!(page(None).limit_or_default(), 10);
+        assert_eq!(page(Some(3)).limit_or_default(), 3);
+    }
+
+    #[test]
+    fn a_page_query_refuses_an_unknown_parameter() {
+        let read =
+            serde_json::from_value::<ServerSettingsPageQuery>(json!({ "limit": 5, "after": 1 }));
+
+        assert!(read.is_err());
+    }
+
+    #[test]
+    fn the_page_query_names_its_two_parameters_and_the_bound_of_ten() {
+        let params = serde_json::to_value(ServerSettingsPageQuery::into_params(|| None)).unwrap();
+
+        assert_eq!(params[0]["name"], "before");
+        assert_eq!(params[0]["in"], "query");
+        assert_eq!(params[0]["schema"]["maxLength"], 36);
+        assert_eq!(params[1]["name"], "limit");
+        assert_eq!(
+            params[1]["description"],
+            "How many settings at most; 10 by default."
+        );
+        assert_eq!(params[1]["schema"]["minimum"], 1);
+        assert_eq!(params[1]["schema"]["maximum"], 10);
+        assert_eq!(params.as_array().unwrap().len(), 2);
     }
 
     #[test]

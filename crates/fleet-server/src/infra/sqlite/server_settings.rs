@@ -17,13 +17,13 @@ use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::{store_error, unique_violation};
 use crate::ports::page::Page;
 use crate::ports::server_settings::{
-    NewServerSettings, ServerSettingsChange, ServerTexts, StoredServerSettings,
+    NewServerSettings, ServerSettingsChange, ServerTexts, StoredServerSettings, UnreadableSettings,
     WriteServerSettingsError,
 };
 use crate::ports::store::StoreError;
 
 /// The table, as errors name it.
-const SERVER_SETTINGS: &str = "server_settings";
+pub(super) const SERVER_SETTINGS: &str = "server_settings";
 
 /// What SQLite names in a violation of the unique key on `server`.
 const TAKEN_SERVER: &str = "server_settings.server";
@@ -199,12 +199,13 @@ pub(super) async fn delete(
 
 /// Every server's conflict texts, for the fleet's snapshot (ADR-0020, R132):
 /// a row whose server doesn't read back fails the read, since its bots
-/// can't be told; one whose texts don't is unreadable, by its server.
+/// can't be told; one whose texts don't is unreadable, by its server, with
+/// its rowid and, when it reads, its ID.
 pub(super) async fn texts_by_server(
     conn: &mut SqliteConnection,
 ) -> Result<ServerTexts, StoreError> {
     let rows = sqlx::query!(
-        r#"SELECT rowid AS "rowid!: i64", server AS "server!",
+        r#"SELECT rowid AS "rowid!: i64", id AS "id!", server AS "server!",
                   conflict_texts AS "conflict_texts!"
            FROM server_settings"#
     )
@@ -218,13 +219,14 @@ pub(super) async fn texts_by_server(
             column: "server",
             rowid: row.rowid,
         })?;
-        match stored_texts(&row.conflict_texts) {
-            Some(read) => {
-                texts.readable.insert(server, read);
-            }
-            None => {
-                texts.unreadable.insert(server, row.rowid);
-            }
+        if let Some(read) = stored_texts(&row.conflict_texts) {
+            texts.readable.insert(server, read);
+        } else {
+            let unread = UnreadableSettings {
+                rowid: row.rowid,
+                id: parse_id(&row.id),
+            };
+            texts.unreadable.insert(server, unread);
         }
     }
     Ok(texts)

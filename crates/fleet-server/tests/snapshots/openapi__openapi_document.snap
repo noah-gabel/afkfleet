@@ -8392,7 +8392,7 @@ expression: answer.json()
         "operationId": "list_server_settings",
         "parameters": [
           {
-            "description": "Only items older than this ID: the `next` of the page before.",
+            "description": "Only settings older than this ID: the `next` of the page before.",
             "in": "query",
             "name": "before",
             "required": false,
@@ -8402,12 +8402,12 @@ expression: answer.json()
             }
           },
           {
-            "description": "How many items at most; 50 by default.",
+            "description": "How many settings at most; 10 by default.",
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
-              "maximum": 100,
+              "maximum": 10,
               "minimum": 1,
               "type": "integer"
             }
@@ -8462,7 +8462,7 @@ expression: answer.json()
                 }
               }
             },
-            "description": "A `limit` outside 1 to 100."
+            "description": "A `limit` outside 1 to 10."
           },
           "429": {
             "content": {
@@ -8803,7 +8803,7 @@ expression: answer.json()
                 }
               }
             },
-            "description": "A field breaks its rule, named at its own path (`version`, `server`, `conflict_texts[3]`); a server another row has is `server`'s."
+            "description": "A field breaks its rule, named at its own path (`version`, `server`, `conflict_texts`, `conflict_texts[3]`): one error per field, a list's first; a server another row has is `server`'s."
           },
           "429": {
             "content": {

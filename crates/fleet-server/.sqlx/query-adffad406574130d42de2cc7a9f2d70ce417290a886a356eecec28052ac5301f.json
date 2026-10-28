@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT rowid AS \"rowid!: i64\", server AS \"server!\",\n                  conflict_texts AS \"conflict_texts!\"\n           FROM server_settings",
+  "query": "SELECT rowid AS \"rowid!: i64\", id AS \"id!\", server AS \"server!\",\n                  conflict_texts AS \"conflict_texts!\"\n           FROM server_settings",
   "describe": {
     "columns": [
       {
@@ -15,8 +15,19 @@
         }
       },
       {
-        "name": "server!",
+        "name": "id!",
         "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "server_settings",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "server!",
+        "ordinal": 2,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -27,7 +38,7 @@
       },
       {
         "name": "conflict_texts!",
-        "ordinal": 2,
+        "ordinal": 3,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -43,8 +54,9 @@
     "nullable": [
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "a72684016748498d0fb05e14fa9acdf72d34a68b8ebe5fd754b9f0658c5d37df"
+  "hash": "adffad406574130d42de2cc7a9f2d70ce417290a886a356eecec28052ac5301f"
 }

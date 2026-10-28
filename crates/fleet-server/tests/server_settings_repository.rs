@@ -425,6 +425,11 @@ async fn the_table_refuses_what_its_checks_forbid(
             updated_at: "2027-01-14T08:00:00.000Z",
             ..Row::valid()
         },
+        // Later than `created_at`, so only its format's GLOB refuses it.
+        Row {
+            updated_at: "2027-01-16 08:00:00",
+            ..Row::valid()
+        },
     ];
 
     for row in &refused {

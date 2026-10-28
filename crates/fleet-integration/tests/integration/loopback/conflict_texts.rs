@@ -2,7 +2,8 @@
 //! P11.9; ADR-0020, S74, S76, S78): `POST /server-settings` through
 //! fleet-client and serve's own wiring hints the reconciler, whose next
 //! pass sends the agent that holds the bot an `Update` with the texts, in
-//! the session it has. A kick with another text is transient and the bot
+//! the session it has. The texts must come within [`HINTED`], before the
+//! periodic pass could bring them, so the case proves the hint's wiring. A kick with another text is transient and the bot
 //! comes back; a kick with one of them pauses it as someone logging in with
 //! its account, so it never kicks them back.
 
@@ -11,6 +12,7 @@ use fleet_core::disconnect::{ConflictKind, ConflictTexts, DisconnectReason};
 use fleet_server::grpc::registry::ViewPhase;
 
 use crate::harness::agent::RunOptions;
+use crate::harness::logs::HINTED;
 use crate::harness::server::ServerOptions;
 use crate::harness::world::World;
 
@@ -50,12 +52,15 @@ async fn a_servers_conflict_texts_reach_its_running_bot_and_a_listed_kick_pauses
             &["You are already connected to this proxy!"],
         )
         .await;
-    world
+    let hinted = world
         .logs
-        .until("the texts are sent", async || {
-            sent_texts().as_ref() == Some(&expected)
-        })
+        .within(HINTED, async || sent_texts().as_ref() == Some(&expected))
         .await;
+    assert!(
+        hinted,
+        "the texts are sent: not within {HINTED:?}, so no hint started a pass\n{}",
+        world.logs.buffer().text()
+    );
     world
         .ledger
         .end(bot, DisconnectReason::kicked(None, "Server closed"));

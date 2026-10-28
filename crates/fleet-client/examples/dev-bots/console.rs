@@ -44,7 +44,8 @@ use fleet_api_types::modes::{
     CreateModeRequest, ModeOwnership, ModeResponse, ModeVisibility, UpdateModeRequest,
 };
 use fleet_api_types::server_settings::{
-    CreateServerSettingsRequest, ServerSettingsResponse, UpdateServerSettingsRequest,
+    CreateServerSettingsRequest, ServerSettingsPageQuery, ServerSettingsResponse,
+    UpdateServerSettingsRequest,
 };
 use fleet_api_types::{
     AccountId, BotId, ErrorCode, ModeId, PageQuery, SafeInt, SecretText, ServerSettingsId, UserId,
@@ -911,7 +912,8 @@ async fn delete_mode<S: SessionStore>(
     Ok(())
 }
 
-/// Every page of the servers' settings, a line each.
+/// Every page of the servers' settings, a line each: pages of the
+/// default 10, so at most 10 pages.
 async fn servers<S: SessionStore>(
     client: &Client<S>,
     terminal: &mut impl Terminal,
@@ -919,7 +921,7 @@ async fn servers<S: SessionStore>(
     let mut before = None;
     loop {
         let page = client
-            .server_settings(&PageQuery {
+            .server_settings(&ServerSettingsPageQuery {
                 before,
                 limit: None,
             })

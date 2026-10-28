@@ -22,6 +22,16 @@
 //! certificate's expiry), so a write is told once. The first pass only notes
 //! what it saw.
 //!
+//! **The servers' conflict texts** (ADR-0020, S74, S76, R132): the snapshot
+//! holds every server's settings, and each bot's spec carries the texts of
+//! its server, by [`ServerKey`](fleet_core::value::ServerKey): the server its
+//! row names, or the last sent spec's while the row has none. A row whose
+//! server doesn't read back fails the whole read, since its bots can't be
+//! told: the pass warns and tries again, and the agents keep their last
+//! specs. A row whose texts don't read back leaves every bot on its server
+//! alone, never sent empty texts, which would fail open; that row is logged
+//! once a pass, with its ID and key, never each bot.
+//!
 //! **Facts live in state**, never only in a hint: a hint that's lost costs
 //! latency, never correctness. `QueueFull` and `NotConnected` mean the
 //! stream is gone, and its next hello resyncs. Nothing here moves a bot by
@@ -852,23 +862,35 @@ impl<'a> Known<'a> {
 }
 
 /// The bots of `fleet` that don't read back, as the planner leaves them
-/// alone; each is logged at `error`, once a pass.
+/// alone. Each is logged at `error`, once a pass, except a bot left alone
+/// for its server's settings: that row is logged instead, with its ID and
+/// key, once a pass however many bots play there (R132, PR #79's review).
 fn untouchable(fleet: &Fleet) -> Vec<Untouchable> {
+    for (server, row) in &fleet.server_texts.unreadable {
+        error!(
+            server_settings_id = row.id.map(tracing::field::display),
+            server = %server,
+            rowid = row.rowid,
+            "a server's settings don't read back: the reconciler leaves its bots alone until they're fixed"
+        );
+    }
     fleet
         .unreadable
         .iter()
         .map(|unreadable| {
-            let problem = StoreError::Corrupt {
-                table: unreadable.table,
-                column: unreadable.column,
-                rowid: unreadable.rowid,
-            };
-            error!(
-                bot_id = %unreadable.bot,
-                agent_id = ?unreadable.agent,
-                error = %problem,
-                "a bot doesn't read back: the reconciler leaves it alone until it's fixed"
-            );
+            if !unreadable.by_server {
+                let problem = StoreError::Corrupt {
+                    table: unreadable.table,
+                    column: unreadable.column,
+                    rowid: unreadable.rowid,
+                };
+                error!(
+                    bot_id = %unreadable.bot,
+                    agent_id = ?unreadable.agent,
+                    error = %problem,
+                    "a bot doesn't read back: the reconciler leaves it alone until it's fixed"
+                );
+            }
             Untouchable {
                 bot: unreadable.bot,
                 agent: unreadable.agent,

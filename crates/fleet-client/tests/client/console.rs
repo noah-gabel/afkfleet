@@ -9,6 +9,7 @@ use std::io;
 use std::sync::{Arc, Mutex};
 
 use fleet_api_types::accounts::{CreateGrantRequest, CreateOfflineAccountRequest, GrantLevel};
+use fleet_api_types::server_settings::ServerSettingsPageQuery;
 use fleet_api_types::users::{UserPatchRequest, UserRole};
 use fleet_api_types::{BotId, PageQuery, SecretText};
 use fleet_client::{
@@ -1600,7 +1601,7 @@ async fn new_server_asks_for_the_password_again_once_and_servers_lists_it() {
     assert_eq!(ended, Ended::LoggedOut);
     assert_eq!(terminal.secrets.len(), 0, "the step-up asked once");
     let stored = owner
-        .server_settings(&PageQuery {
+        .server_settings(&ServerSettingsPageQuery {
             before: None,
             limit: None,
         })
@@ -1619,6 +1620,44 @@ async fn new_server_asks_for_the_password_again_once_and_servers_lists_it() {
         "{}",
         terminal.text()
     );
+    server.stop().await;
+}
+
+/// `servers` reads every page: one more server than a page of 10 holds.
+#[tokio::test]
+async fn servers_lists_every_page_of_the_servers_settings() {
+    let server = Server::start().await;
+    let (owner, code) = owner_and_code(&server).await;
+    step_up(&owner).await;
+    for n in 0..11 {
+        owner
+            .create_server_settings(
+                &serde_json::from_value(serde_json::json!({
+                    "server": format!("s{n}.example.com"),
+                    "conflict_texts": ["One"],
+                }))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+    let (client, _) = server.client();
+    let mut terminal = Scripted::new(&[PASSWORD, &code], &["servers"]);
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    for n in 0..11 {
+        let key = format!(" s{n}.example.com:25565 ");
+        assert!(
+            terminal
+                .said
+                .iter()
+                .any(|line| line.starts_with("server ") && line.contains(&key)),
+            "{key}: {}",
+            terminal.text()
+        );
+    }
     server.stop().await;
 }
 
@@ -1672,7 +1711,7 @@ async fn edit_server_and_delete_server_write_and_bad_json_is_never_repeated() {
         "{text}"
     );
     let left = owner
-        .server_settings(&PageQuery {
+        .server_settings(&ServerSettingsPageQuery {
             before: None,
             limit: None,
         })
