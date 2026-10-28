@@ -425,6 +425,7 @@ just test-ms-account # the Microsoft check with your own account: you only (see 
 just test-managed-account # the managed check: your own account's bot Online through the control plane, you only (see below)
 just dod-mc-up # the DoD checks' online-mode Minecraft server on 127.0.0.1:25566, you only (see below)
 just dod-mc-down # remove it with its world, you only
+just dod-build # build the DoD checks' release server and agent first, you only
 just dod-server # the DoD checks' server, release, on 127.0.0.1:8090, its data in target/dod-run/, you only
 just dod-owner alice # the DoD database's Owner, the password typed hidden, you only
 just dod-enrollment-token # an enrollment token for dod-server: $bundle = just dod-enrollment-token, you only
@@ -503,17 +504,18 @@ When the test ends, its container is removed together with its volumes, which ho
 
 Only Ctrl+C, or the profile's 10-minute limit, can leave things behind. If they do, delete the `afkfleet-managed-check-…` folder in your temp directory (it holds your Minecraft name and UUID as plain text; the token in it can't be opened, since its key ended with the run), and remove the container: find it with `docker ps -a`, then `docker rm -fv <id>`. To end the sign-in's consent at Microsoft too, remove the app under Privacy, Apps and services, in your Microsoft account.
 
-**The DoD's first check** (Phase 11 on) is Phase 11's first definition of done: pressing Start in the app brings a bot with your own Microsoft account Online on a real online-mode server. It needs your real account, so only you run it; the AI never runs a `dod-*` recipe and never reads anything in `target/dod-run/`. Its server, agent and app are release builds with their own ports (HTTP `127.0.0.1:8090`, gRPC `127.0.0.1:7453`, Minecraft `127.0.0.1:25566`), so they run beside the dev stack. Everything they keep, the database with your account's sealed refresh token, the vault key that opens it, the PKI and the agent's identity, is in `target/dod-run/`, which M's 24-hour run reuses. They log at `info` to their terminals only, so no chat text is printed. The agent dials only the local container, never a public address (`public_targets = false`). Nothing secret goes on a command line: `dod-owner` asks for the password hidden, and `dod-enroll` reads the bundle from stdin.
+**The DoD's first check** (Phase 11 on) is Phase 11's first definition of done: pressing Start in the app brings a bot with your own Microsoft account Online on a real online-mode server. It needs your real account, so only you run it; the AI never runs a `dod-*` recipe and never reads anything in `target/dod-run/`. Its server, agent and app are release builds with their own ports (HTTP `127.0.0.1:8090`, gRPC `127.0.0.1:7453`, Minecraft `127.0.0.1:25566`), so they run beside the dev stack. Everything they keep, the database with your account's sealed refresh token, the vault key that opens it, the PKI and the agent's identity, is in `target/dod-run/`, which M's 24-hour run reuses. They log at `info` to their terminals only, so no chat text is printed. The agent dials only the local container, never a public address (`public_targets = false`, which `dod-agent` also exports itself, so a variable in your shell can't flip it). Nothing secret goes on a command line: `dod-owner` asks for the password hidden, and `dod-enroll` reads the bundle from stdin.
 
 *Part one: the check.*
-1. **Prepare:** Docker Desktop running, internet, and a Microsoft account that owns Minecraft: Java Edition with a profile, with nobody playing on it (a second login pauses the bot). Close every afkfleet app: the app runs once, and a second start only brings the first window forward. Sign out of any other server in the app: the app keeps one server, and at launch, while a stopped server's session is still stored, it waits for that server and offers no other. So if you were last signed in to `dev-server`, start it, log out and stop it again.
+1. **Prepare:** Docker Desktop running, internet, and a Microsoft account that owns Minecraft: Java Edition with a profile, with nobody playing on it (a second login pauses the bot). Close every afkfleet app: the app runs once, and a second start only brings the first window forward. Sign out of any other server in the app: the app keeps one server, and at launch, while a stopped server's session is still stored, it waits for that server and offers no other. So if you were last signed in to `dev-server`, start it, log out and stop it again. Keep the repository under your user folder (`C:\Users\<you>\…`), which only your Windows account can open: `target/dod-run/` holds your account's sealed refresh token and the vault key that opens it.
 2. **The stack,** each long-running recipe in its own PowerShell terminal at the repository's root:
    1. `just dod-mc-up`: it waits until the server is healthy, at most 5 minutes (the first start downloads the server).
-   2. `just dod-server`: the first run builds in release, which takes minutes. It creates `target/dod-run/` with its vault key and PKI, then serves `127.0.0.1:8090`, the agents' port on `127.0.0.1:7453`.
-   3. In a second terminal, `just dod-owner <name>`: your afkfleet Owner's name; the password twice, hidden.
-   4. In the same terminal: `$bundle = just dod-enrollment-token`, then `$bundle | just dod-enroll`, then `Remove-Variable bundle`.
-   5. There: `just dod-agent`.
-   6. In a third terminal, `just dod-app`. It builds the release app, prints "Enter http://127.0.0.1:8090 as the server's address in the app." and starts it.
+   2. `just dod-build`: the release server and agent. The first builds take minutes, with cargo's progress shown; doing them now means no build runs while the enrollment token's 15 minutes do.
+   3. `just dod-server`: it creates `target/dod-run/` with its vault key and PKI, then serves `127.0.0.1:8090`, the agents' port on `127.0.0.1:7453`.
+   4. In a second terminal, `just dod-owner <name>`: your afkfleet Owner's name; the password twice, hidden.
+   5. In the same terminal: `$bundle = just dod-enrollment-token`, then `$bundle | just dod-enroll`, then `Remove-Variable bundle`.
+   6. There: `just dod-agent`.
+   7. In a third terminal, `just dod-app`. Its first release build takes minutes too. It builds the release app, prints "Enter http://127.0.0.1:8090 as the server's address in the app." and starts it.
 3. **In the app:**
    1. Enter `http://127.0.0.1:8090`, on the setup screen or under "Server settings" on the login screen. Log in, and set up 2FA.
    2. Accounts, then "Link Microsoft account": read the warning and press "Get a code". Microsoft's page opens; enter the code there, sign in with your account and approve. The screen reads "… is linked."
@@ -532,7 +534,7 @@ Only Ctrl+C, or the profile's 10-minute limit, can leave things behind. If they 
 *Part two: when the DoD is finished* (after M's 24-hour run, or if you give it up):
 1. `just dod-server`, then `just dod-app`. Log in, delete the account (Accounts, open it, Delete, your password), log out, and close the app. Logging out removes the app's credential for `127.0.0.1:8090`.
 2. Ctrl+C `dod-server`, and run `just dod-mc-down` if the container is up.
-3. `just dod-clean`. It removes `target/dod-run/` and nothing else. While `dod-server` or `dod-agent` still runs it refuses, and says what to do; after a crash that left `afkfleet.db-wal`, start `just dod-server` once, stop it with Ctrl+C, then clean again.
+3. `just dod-clean`. It removes `target/dod-run/` and nothing else. Success prints "Removed target/dod-run and everything in it."; anything else means it didn't finish. A refusal removes nothing: while `dod-server` or `dod-agent` still runs it says what to do, and after a crash that left `afkfleet.db-wal`, start `just dod-server` once, stop it with Ctrl+C, then clean again. An error while removing names what it couldn't remove and why, usually a terminal or an editor still in the folder: close it and run `just dod-clean` again, which removes the rest.
 4. Optionally, end the app's consent at Microsoft: Privacy, then Apps and services, in your Microsoft account.
 
 *If something fails.* Never share a token, a code (Microsoft's, 2FA or recovery), the bundle, your Minecraft or Microsoft name, your UUID, or anything that holds one:

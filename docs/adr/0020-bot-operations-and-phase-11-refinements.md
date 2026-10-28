@@ -1415,9 +1415,29 @@ Built on H's and H3's planning (U1, U33, U50–U52, S72, R122–R126), with noth
 
 *Mutations* (each failed its tests, then was restored): MZ1 (a `public_targets` field in `[standalone]`), MZ2 (the default `false`), MZ3 (`public_targets` as text), MZ4 (a recipe found by a prefix of its name), MZ5 (the outside-prefix error's text), MZ6 (`justfile.mjs` reading the dependencies as parameters), MZ7 (`dev-pki.mjs` taking relative paths), MZ8 (`dev-enroll.mjs` taking an extra argument), MZ9 (the cleanup's walk following links with `stat`: it deleted the file behind the junction, and three tests failed), MZ10 (`public_targets = true` in `deploy/dod/agent.toml`), MZ11 (a published RCON port in `compose.dod.yaml`) and MZ12 (`dod-agent`'s heartbeat moved from where the cleanup looks). MZ7's and MZ8's mutated scripts really ran cargo with the dev configs, which refused at config validation; nothing was created.
 
+*PR #78's review, fixed on the branch before the check* (the user's points, in one more commit). Each test ran red before its fix, or, where it pinned working code, by a mutation restored from a saved copy:
+1. **`public_targets` can't be overridden from outside the file.**
+   - `dod-agent` exports `AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS="false"` itself, as it does the log filter, so a variable left in the shell can't flip it (an exported parameter replaces what the shell had). Red: the shell's `true` turned the DoD agent public, and the recipe test found no export.
+   - The justfile reader lists what reaches every recipe's environment (`environment`: the `set` settings and the top-level `export` lines, refusing one it can't read); a test checks that no setting is `export` or `dotenv-*` and no top-level export is an `AFKFLEET_` variable (mutation MZ13, `set dotenv-load`).
+   - A test checks that no `dod-*` body sets an `AFKFLEET_` variable or reads `$env:` (MZ14, a `$env:` line in `dod-agent`).
+   - The managed check's agent TOML sets `public_targets = false` too, since it runs the user's real account; red: its config test read it public.
+2. **The first enroll doesn't race the 15-minute token.**
+   - A new recipe, `dod-build`, builds exactly the release server and agent the other recipes run (`cargo build --release -p … --bin …`, checked against every `cargo run` and both scripts' commands) and touches nothing in `target/dod-run/`. The steps run it right after `dod-mc-up`.
+   - The DoD's builds are no longer quiet: `dod-enrollment-token` drops `--quiet`, and `dev-enroll.mjs` shows cargo's progress for a release build (a dev one stays quiet). Cargo writes its progress to stderr, so stdout stays the bundle, or the enroll's own lines.
+   - Red: no `dod-build`, `--quiet` in both.
+3. **`dod-clean` never silently does nothing.** Node runs a script by its real path, so through a linked path to the repository the entry check (`import.meta.url` against `process.argv[1]`) failed and `main` never ran: exit 0, nothing printed, nothing removed. That was the red run, through a junction.
+   - The entry check now compares with `process.argv[1]`'s real path.
+   - `clean()` compares the real path of the repository with that of the given folder's `target/..`, never resolving `target/` or `dod-run` themselves, which the `lstat` checks still refuse as links. Red: a folder named through a linked path was refused as another path.
+   - The README says success prints "Removed target/dod-run and everything in it." and anything else means it didn't finish: a refusal removes nothing, and after an error (below), running it again removes the rest. That's the user's sentence, adjusted for point 4: an error on the way leaves what was already removed removed.
+4. **An error while removing stops with one line.** `remove()`'s error (EBUSY when a terminal sits inside the folder) becomes "dod-clean couldn't remove {path} ({code}): something holds it open, such as a terminal or an editor in that folder. Close it, then run just dod-clean again.", exit 1. Tests: an injected EBUSY, and on Windows a real process sitting in `agent/`. Red: the error escaped (the injected one was never called; the real one threw EBUSY from `rmdir`). The Windows test waits until the child says it runs, and for its exit after the kill, each within 5 s: a process holds its working folder only once it has started, and a first version raced it in the full scripts run.
+5. **Folder permissions.** The README's Prepare says to keep the repository under the user folder (`C:\Users\<you>\…`), which only the user's Windows account can open, since `target/dod-run/` holds the sealed token beside its key; the threat model gains that accepted risk for U1's folder.
+6. **No "dev" in what the DoD recipes print.** `dev-vault-key.mjs` says "created the vault key at …" and `dev-enroll.mjs` drops its `dev-enroll:` prefix (red: both tests read the old words); ADR-0003's step 4 gets back the comma lost in H5's edit.
+
+*Not changed, proposed instead:* `dev-vault-key.mjs`, `dev-pki.mjs` and `dev-enroll.mjs` share `dod-clean.mjs`'s old entry check, so run through a linked path to the repository they'd do nothing too. `dod-enroll` would then exit 0 without enrolling, and the next failure would come at `dod-agent`'s start. The review named `dod-clean`; the same fix fits the three.
+
 *Snapshots:* none.
 
-*Size:* about 2,600 lines added and 150 removed, the docs included, above the planned 1,800: the justfile reader came to about 740 with its tests (the plan counted it among the kit's 1,300), and the cleanup's tests to about 240.
+*Size:* about 2,600 lines added and 150 removed, the docs included, above the planned 1,800: the justfile reader came to about 740 with its tests (the plan counted it among the kit's 1,300), and the cleanup's tests to about 240. PR #78's review added about 400 more.
 
 ### Notes for later groups
 - **B2 (P11.3's history):** built (above).

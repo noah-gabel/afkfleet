@@ -151,3 +151,20 @@ fn the_dod_container_keeps_compose_devs_rcon_and_publishes_only_its_game_port() 
     assert_eq!(rcon_settings(&dod), ["ENABLE_RCON: \"TRUE\""]);
     assert_eq!(list(&dod, "ports"), ["127.0.0.1:25566:25565"]);
 }
+
+#[test]
+fn no_setting_or_top_level_export_puts_a_config_key_in_a_dod_recipes_environment() {
+    let justfile = fleet_testkit::justfile::environment(&read("justfile")).unwrap();
+
+    // `set export` would export every parameter, `set dotenv-*` a .env file's
+    // variables, and a top-level export reaches every recipe (PR #78's review).
+    for setting in justfile.settings() {
+        assert!(
+            setting != "export" && !setting.starts_with("dotenv"),
+            "{setting}"
+        );
+    }
+    for export in justfile.exports() {
+        assert!(!export.starts_with("AFKFLEET_"), "{export}");
+    }
+}

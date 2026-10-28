@@ -16,12 +16,15 @@
 // - It refuses while the agent's heartbeat, agent/agent.alive, is under 30 s old (or in the
 //   future): the agent touches it while it runs.
 // - Otherwise it walks the folder with lstat: a link or junction is removed as an entry,
-//   never followed, a folder emptied and removed, a file removed.
+//   never followed, a folder emptied and removed, a file removed. An error on the way (a
+//   folder a terminal sits in: EBUSY on Windows) stops it with one line naming the cause and
+//   what to do; what it removed by then stays removed, and running it again removes the rest.
+// - The folder is compared by real paths, so a linked path to the repository names it too.
 // A missing folder is nothing to clean. It never touches Docker: `just dod-mc-down` removes
 // the container. Each refusal says what to do (U52). Exits with 0 when the folder was
-// removed or didn't exist, 1 when it refused, 2 on a usage error.
+// removed or didn't exist, 1 when it refused or stopped at an error, 2 on a usage error.
 // Tests: scripts/dod-clean.test.mjs.
-import { lstatSync, readdirSync, rmdirSync, unlinkSync } from "node:fs";
+import { lstatSync, readdirSync, realpathSync, rmdirSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -52,6 +55,24 @@ function entry(where) {
     }
     throw error;
   }
+}
+
+/** `where`'s real path, links resolved, or null when it doesn't exist. */
+function real(where) {
+  try {
+    return realpathSync(where);
+  } catch {
+    return null;
+  }
+}
+
+/** The line for an error while removing: its cause, and what to do. */
+function stopped(root, dodRun, error) {
+  const where = path
+    .relative(root, error.path ?? dodRun)
+    .split(path.sep)
+    .join("/");
+  return `dod-clean couldn't remove ${where} (${error.code ?? error.message}): something holds it open, such as a terminal or an editor in that folder. Close it, then run just dod-clean again.`;
 }
 
 /** Whether two absolute paths name the same place: ignoring case on Windows. */
@@ -88,13 +109,24 @@ function remove(where) {
 }
 
 /**
- * Cleans `folder` if it's `repo`'s target/dod-run, at the time `now` (ms): returns
- * `{ status, message }`, the exit code and the line to print.
+ * Cleans `folder` if it's `repo`'s target/dod-run, at the time `now` (ms), removing with
+ * `removeTree`: returns `{ status, message }`, the exit code and the line to print. Both
+ * sides are compared by their real paths (PR #78's review): `repo`, and the folder's
+ * target/.., so a linked path to the repository names it too, while target/ and dod-run
+ * themselves are never resolved: a link there is refused below.
  */
-export function clean(repo, folder, now = Date.now()) {
-  const target = path.join(path.resolve(repo), "target");
+export function clean(repo, folder, now = Date.now(), removeTree = remove) {
+  const root = realpathSync(repo);
+  const target = path.join(root, "target");
   const dodRun = path.join(target, "dod-run");
-  if (!samePath(path.resolve(folder), dodRun)) {
+  const given = path.resolve(folder);
+  const givenRoot = real(path.dirname(path.dirname(given)));
+  const named = path.join(path.basename(path.dirname(given)), path.basename(given));
+  if (
+    givenRoot === null ||
+    !samePath(givenRoot, root) ||
+    !samePath(named, path.join("target", "dod-run"))
+  ) {
     return { status: 1, message: ANOTHER };
   }
   for (const where of [target, dodRun]) {
@@ -113,7 +145,11 @@ export function clean(repo, folder, now = Date.now()) {
   if (heartbeat !== null && now - heartbeat.mtimeMs < HEARTBEAT_MS) {
     return { status: 1, message: HEARTBEAT };
   }
-  remove(dodRun);
+  try {
+    removeTree(dodRun);
+  } catch (error) {
+    return { status: 1, message: stopped(root, dodRun, error) };
+  }
   return { status: 0, message: DONE };
 }
 
@@ -132,6 +168,11 @@ function main(args) {
   return status;
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Node runs a script by its real path, so the entry check compares with process.argv[1]'s:
+// run through a linked path, a plain comparison would silently skip main (PR #78's review).
+if (
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
+) {
   process.exitCode = main(process.argv.slice(2));
 }

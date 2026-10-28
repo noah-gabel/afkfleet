@@ -490,3 +490,28 @@ fn the_dod_minecraft_server_gets_at_least_30_s_to_stop_gracefully() {
 
     assert!(grace >= Duration::from_secs(30), "{grace:?}");
 }
+
+/// PR #78's review: `dod-agent` exports `public_targets` itself, as it does
+/// the log filter, so a variable left in the user's shell can't flip it (an
+/// exported parameter replaces what the shell had).
+#[test]
+fn the_dod_agent_refuses_public_addresses_whatever_the_shell_says() {
+    let path = repo("deploy/dod/agent.toml");
+    let mut loaded = None;
+    in_jail(|jail| {
+        let exports = dod_exports("dod-agent", jail.directory());
+        jail.clear_env();
+        jail.set_env("AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS", "true");
+        for (name, value) in &exports {
+            jail.set_env(name, value);
+        }
+        loaded = Some(load(&path));
+    });
+
+    let config = loaded.unwrap().unwrap();
+
+    let AgentMode::ControlPlane(plane) = &config.mode else {
+        panic!("a managed config");
+    };
+    assert!(!plane.public_targets);
+}

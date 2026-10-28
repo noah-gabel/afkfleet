@@ -5,7 +5,8 @@
 // and the command-line tests run a copy of the script placed in that repository's
 // scripts/, which finds its repository from its own location.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import {
   copyFileSync,
   existsSync,
@@ -90,6 +91,15 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
+
+/** `promise`, or a rejection with `what` after 5 s. */
+function within(promise, what) {
+  let timer;
+  const late = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(what)), 5000);
+  });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
 
 /** Asserts that nothing outside target/dod-run was touched. */
 function outsideIsUntouched() {
@@ -197,6 +207,59 @@ describe("clean", () => {
 
     assert.deepEqual(clean(repo, folder, NOW), { status: 0, message: MISSING });
   });
+
+  it("takes the folder named through a linked path to the repository (PR #78's review)", () => {
+    const linkedRepo = path.join(tmp, "repo-link");
+    link(repo, linkedRepo);
+
+    const result = clean(repo, path.join(linkedRepo, "target", "dod-run"), NOW);
+
+    assert.deepEqual(result, { status: 0, message: DONE });
+    assert.equal(existsSync(folder), false);
+    outsideIsUntouched();
+  });
+
+  it("stops at an error while removing, naming its cause and what to do (PR #78's review)", () => {
+    const busy = path.join(folder, "agent");
+    const failing = () => {
+      throw Object.assign(new Error("resource busy or locked"), { code: "EBUSY", path: busy });
+    };
+
+    const result = clean(repo, folder, NOW, failing);
+
+    assert.deepEqual(result, {
+      status: 1,
+      message:
+        "dod-clean couldn't remove target/dod-run/agent (EBUSY): something holds it open, such as a terminal or an editor in that folder. Close it, then run just dod-clean again.",
+    });
+  });
+
+  it("stops at a folder a process sits in, and says so (Windows)", {
+    skip: process.platform !== "win32",
+  }, async () => {
+    // The child holds its working folder once it has started, so it says so first;
+    // every wait is bounded.
+    const inside = spawn(
+      process.execPath,
+      ["-e", "process.stdout.write('ready'); setTimeout(() => {}, 30000)"],
+      { cwd: path.join(folder, "agent"), stdio: ["ignore", "pipe", "ignore"] },
+    );
+    const exited = once(inside, "exit");
+    try {
+      await within(once(inside.stdout, "data"), "the process in the folder never started");
+
+      const result = clean(repo, folder, NOW);
+
+      assert.equal(result.status, 1);
+      assert.match(
+        result.message,
+        /^dod-clean couldn't remove target\/dod-run\/agent \(E[A-Z]+\): something holds it open/,
+      );
+    } finally {
+      inside.kill();
+      await within(exited, "the process in the folder never ended");
+    }
+  });
 });
 
 describe("the command line", () => {
@@ -210,6 +273,26 @@ describe("the command line", () => {
 
   it("cleans its own repository's folder, exit 0 and the line on stdout", () => {
     const ran = run([folder]);
+
+    assert.equal(ran.status, 0, ran.stderr);
+    assert.equal(ran.stdout, `${DONE}\n`);
+    assert.equal(existsSync(folder), false);
+    outsideIsUntouched();
+  });
+
+  it("runs and cleans when started through a linked path to the repository (PR #78's review)", () => {
+    run([]);
+    const linkedRepo = path.join(tmp, "repo-link");
+    link(repo, linkedRepo);
+
+    const ran = spawnSync(
+      process.execPath,
+      [
+        path.join(linkedRepo, "scripts", "dod-clean.mjs"),
+        path.join(linkedRepo, "target", "dod-run"),
+      ],
+      { encoding: "utf8" },
+    );
 
     assert.equal(ran.status, 0, ran.stderr);
     assert.equal(ran.stdout, `${DONE}\n`);

@@ -15,6 +15,12 @@
 //! prefix moved to another root, so a test can run the recipe's exports
 //! with temporary paths in place of the real folder's.
 //!
+//! What reaches every recipe's environment beside its own parameters,
+//! [`environment`] lists: the justfile's `set` settings (`set export` and
+//! `set dotenv-load` would export more) and its top-level `export` lines,
+//! so a test can check that nothing else sets a config key (PR #78's
+//! review).
+//!
 //! The scripts' Node tests read the same recipes through
 //! `scripts/justfile.mjs`.
 
@@ -78,6 +84,77 @@ pub enum JustfileError {
         /// The exported parameter, without its `$`.
         parameter: String,
     },
+    /// A top-level `set` or `export` line holds something this reader
+    /// doesn't read.
+    UnreadableLine {
+        /// The line's number, from 1.
+        line: usize,
+    },
+}
+
+/// What the justfile gives every recipe's environment beside the recipe's
+/// own parameters, as [`environment`] reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Environment {
+    settings: Vec<String>,
+    exports: Vec<String>,
+}
+
+impl Environment {
+    /// The names of the justfile's `set` settings, in order.
+    #[must_use]
+    pub fn settings(&self) -> &[String] {
+        &self.settings
+    }
+
+    /// The names of its top-level `export NAME := …` variables, in order.
+    #[must_use]
+    pub fn exports(&self) -> &[String] {
+        &self.exports
+    }
+}
+
+/// The settings and top-level exports of the justfile `text`.
+///
+/// # Errors
+/// [`JustfileError::UnreadableLine`] for a top-level `set` or `export` line
+/// without a name, or an `export` without its `:=`.
+pub fn environment(text: &str) -> Result<Environment, JustfileError> {
+    let mut read = Environment {
+        settings: Vec::new(),
+        exports: Vec::new(),
+    };
+    for (index, line) in text.lines().enumerate() {
+        let unreadable = || JustfileError::UnreadableLine { line: index + 1 };
+        let (words, export) = match (keyword(line, "set"), keyword(line, "export")) {
+            (Some(words), _) => (words, false),
+            (None, Some(words)) => (words, true),
+            (None, None) => continue,
+        };
+        let mut header = Header {
+            line: words,
+            recipe: "",
+            at: 0,
+        };
+        let name = header.identifier().ok_or_else(unreadable)?;
+        if export {
+            if !header.rest().trim_start().starts_with(":=") {
+                return Err(unreadable());
+            }
+            read.exports.push(name);
+        } else {
+            read.settings.push(name);
+        }
+    }
+    Ok(read)
+}
+
+/// What follows `word` and a space at the start of a top-level `line`.
+fn keyword<'a>(line: &'a str, word: &str) -> Option<&'a str> {
+    line.strip_prefix(word)?
+        .strip_prefix(' ')
+        .map(str::trim_start)
+        .or_else(|| (line == word).then_some(""))
 }
 
 impl fmt::Display for JustfileError {
@@ -95,6 +172,10 @@ impl fmt::Display for JustfileError {
             Self::NoDefault { recipe, parameter } => {
                 write!(f, "recipe {recipe} exports {parameter} without a default")
             }
+            Self::UnreadableLine { line } => write!(
+                f,
+                "the justfile's line {line} can't be read: a setting or an export needs a name, an export its :="
+            ),
         }
     }
 }
@@ -734,5 +815,42 @@ bare $AFKFLEET_A__NAME:
             shown,
             "recipe dod-server exports AFKFLEET_SERVER__DATABASE__PATH outside the prefix to be moved"
         );
+    }
+
+    /// A justfile with settings, a top-level export, a plain variable and a
+    /// recipe whose body sets and exports things of its own.
+    const GLOBALS: &str = r#"
+# set export would export every parameter
+set windows-shell := ["pwsh", "-NoLogo", "-NoProfile", "-Command"]
+set dotenv-load
+
+export RUSTDOCFLAGS := "-D warnings"
+stable := "1.99.0"
+
+r:
+    export X=1
+    set Y=2
+"#;
+
+    #[test]
+    fn the_environment_lists_every_setting_and_top_level_export() {
+        let read = environment(GLOBALS).unwrap();
+
+        assert_eq!(read.settings(), ["windows-shell", "dotenv-load"]);
+        assert_eq!(read.exports(), ["RUSTDOCFLAGS"]);
+    }
+
+    #[test]
+    fn a_setting_without_a_name_is_refused_by_its_line() {
+        let read = environment("plain:\n    echo\n\nset\n");
+
+        assert_eq!(read, Err(JustfileError::UnreadableLine { line: 4 }));
+    }
+
+    #[test]
+    fn an_export_without_its_assignment_is_refused_by_its_line() {
+        let read = environment("export RUSTDOCFLAGS\n");
+
+        assert_eq!(read, Err(JustfileError::UnreadableLine { line: 1 }));
     }
 }

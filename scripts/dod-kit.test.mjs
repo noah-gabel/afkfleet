@@ -12,6 +12,7 @@ import { recipeBody, recipeDependencies, recipeParameters } from "./justfile.mjs
 const RECIPES = [
   "dod-mc-up",
   "dod-mc-down",
+  "dod-build",
   "dod-server",
   "dod-owner",
   "dod-enrollment-token",
@@ -148,5 +149,51 @@ describe("just dod-app", () => {
       `@echo "Enter http://127.0.0.1:8090 as the server's address in the app."`,
       "target/release/afkfleet-desktop.exe",
     ]);
+  });
+});
+
+describe("the DoD recipes' environment (PR #78's review)", () => {
+  it("pin dod-agent's public_targets to false, as the log filter, so the shell can't flip it", () => {
+    assert.equal(
+      recipeParameters("dod-agent").$AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS,
+      '"false"',
+    );
+  });
+
+  it("set no AFKFLEET_ variable in a body and never read the shell's", () => {
+    for (const recipe of RECIPES) {
+      for (const line of recipeBody(recipe)) {
+        assert.doesNotMatch(line, /\$env:/i, `${recipe}: ${line}`);
+        assert.doesNotMatch(line, /AFKFLEET_\w*\s*=/, `${recipe}: ${line}`);
+      }
+    }
+  });
+});
+
+describe("just dod-build", () => {
+  it("builds the release server and agent and touches nothing in target/dod-run", () => {
+    assert.deepEqual(recipeParameters("dod-build"), {});
+    assert.deepEqual(recipeBody("dod-build"), [
+      "cargo build --release -p fleet-server --bin afkfleet-server",
+      "cargo build --release -p fleet-agent --bin afkfleet-agent",
+    ]);
+  });
+
+  it("builds exactly what every DoD recipe runs, so none of them builds while a token waits", () => {
+    const built = recipeBody("dod-build").map((line) => line.replace("cargo build ", ""));
+    for (const recipe of RECIPES) {
+      for (const line of recipeBody(recipe).filter((run) => run.startsWith("cargo run "))) {
+        const target = line.match(/(--release -p \S+ --bin \S+)/)?.[1];
+        assert.ok(target !== undefined && built.includes(target), `${recipe}: ${line}`);
+      }
+    }
+  });
+
+  it("leaves cargo's progress on stderr: no DoD build is quiet, so stdout stays the bundle", () => {
+    for (const recipe of RECIPES) {
+      for (const line of recipeBody(recipe)) {
+        assert.doesNotMatch(line, /--quiet/, `${recipe}: ${line}`);
+      }
+    }
   });
 });

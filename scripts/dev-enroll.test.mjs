@@ -8,7 +8,7 @@ import process from "node:process";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { enrollCommand, enrollInto, parseArgs } from "./dev-enroll.mjs";
+import { enrollCommand, parseArgs } from "./dev-enroll.mjs";
 import { recipeBody, recipeParameters } from "./justfile.mjs";
 
 const SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
@@ -50,10 +50,19 @@ describe("enrollInto", () => {
     assert.ok(existsSync(folder));
   });
 
-  it("reports a command that can't start with exit 1", () => {
-    const status = enrollInto(dir, path.join(dir, "no-such-command"), []);
+  it("reports a command that can't start with exit 1, in words that suit any recipe", () => {
+    const command = path.join(dir, "no-such-command");
+    const runner = [
+      "--input-type=module",
+      "-e",
+      `import { enrollInto } from ${JSON.stringify(pathToFileURL(SCRIPT).href)};
+       process.exitCode = enrollInto(${JSON.stringify(dir)}, ${JSON.stringify(command)}, []);`,
+    ];
 
-    assert.equal(status, 1);
+    const ran = spawnSync(process.execPath, runner, { encoding: "utf8" });
+
+    assert.equal(ran.status, 1);
+    assert.ok(ran.stderr.startsWith(`${command} can't be started: `), ran.stderr);
   });
 });
 
@@ -76,12 +85,11 @@ describe("enrollCommand", () => {
     ]);
   });
 
-  it("builds it in release only when asked", () => {
+  it("builds it in release only when asked, its progress shown, since a first build takes minutes", () => {
     assert.deepEqual(enrollCommand(true, "deploy/dod/agent.toml"), [
       "cargo",
       [
         "run",
-        "--quiet",
         "--release",
         "-p",
         "fleet-agent",

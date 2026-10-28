@@ -49,11 +49,11 @@ function main(args) {
   try {
     const result = ensureKey(file);
     if (result === "created") {
-      console.log(`created the dev vault key at ${file}`);
+      console.log(`created the vault key at ${file}`);
     }
     return 0;
   } catch (error) {
-    console.error(`can't create the dev vault key at ${file}: ${error.message}`);
+    console.error(`can't create the vault key at ${file}: ${error.message}`);
     return 1;
   }
 }

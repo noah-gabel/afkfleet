@@ -17,14 +17,16 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
-/** `afkfleet-agent enroll`'s command with `config`, built if needed, in release when `release`. */
+/**
+ * `afkfleet-agent enroll`'s command with `config`, built if needed: in release when
+ * `release`, with cargo's progress shown (a first release build takes minutes), else quiet.
+ */
 export function enrollCommand(release, config) {
   return [
     "cargo",
     [
       "run",
-      "--quiet",
-      ...(release ? ["--release"] : []),
+      ...(release ? ["--release"] : ["--quiet"]),
       "-p",
       "fleet-agent",
       "--bin",
@@ -45,7 +47,7 @@ export function enrollInto(dir, command, args) {
   mkdirSync(dir, { recursive: true });
   const ran = spawnSync(command, args, { stdio: "inherit" });
   if (ran.error !== undefined) {
-    console.error(`dev-enroll: ${command} can't be started: ${ran.error.message}`);
+    console.error(`${command} can't be started: ${ran.error.message}`);
     return 1;
   }
   return ran.status ?? 1;

@@ -352,6 +352,14 @@ dod-mc-up:
 dod-mc-down:
     docker compose --file deploy/compose.dod.yaml down --volumes
 
+# Exactly what dod-server, dod-owner, dod-enrollment-token, dod-enroll and dod-agent run, so
+# none of them builds while an enrollment token's 15 minutes run (PR #78's review). It touches
+# nothing in target/dod-run/; the first builds take minutes, and cargo shows its progress.
+# The user only: build the DoD checks' release server and agent before the stack starts.
+dod-build:
+    cargo build --release -p fleet-server --bin afkfleet-server
+    cargo build --release -p fleet-agent --bin afkfleet-agent
+
 # As dev-server, with deploy/dod/server.toml: Node creates the folder, the vault key when
 # it's missing (never overwritten, never printed) and the PKI with `pki init` when its files
 # are missing, for localhost, 127.0.0.1 and ::1 (never overwritten). [grpc] is on, on
@@ -375,13 +383,14 @@ dod-owner username $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "tar
     cargo run --release -p fleet-server --bin afkfleet-server -- user create-owner --config deploy/dod/server.toml --username "{{ username }}"
 
 # The bundle alone on stdout, so `$bundle = just dod-enrollment-token` takes it whole; its
-# expiry and the CA's fingerprint on stderr. Never print or paste the bundle anywhere else:
+# expiry and the CA's fingerprint on stderr, with cargo's progress (not quiet: run dod-build
+# first, so no build waits while the token's 15 minutes run). Never print or paste the bundle anywhere else:
 # it's a secret for 15 minutes. The same six paths as dod-server (R126). No exit message:
 # the command prints its own error line and exit code.
 # The user only: create an enrollment token in the DoD checks' database and print its bundle.
 [no-exit-message]
 dod-enrollment-token $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dod-run" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=(justfile_directory() / "target" / "dod-run" / "vault-key-1") $AFKFLEET_SERVER__GRPC__CA_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.crt") $AFKFLEET_SERVER__GRPC__CA_KEY_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.key") $AFKFLEET_SERVER__GRPC__SERVER_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "server.crt") $AFKFLEET_SERVER__GRPC__SERVER_KEY_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "server.key") $AFKFLEET_SERVER__LOG__FILTER="info":
-    cargo run --quiet --release -p fleet-server --bin afkfleet-server -- agent create-enrollment-token --config deploy/dod/server.toml
+    cargo run --release -p fleet-server --bin afkfleet-server -- agent create-enrollment-token --config deploy/dod/server.toml
 
 # `$bundle | just dod-enroll`: deploy/dod/agent.toml dials 127.0.0.1:7453 and pins
 # dod-server's CA; the key and certificate go into `dir`, owner-only, and are never
@@ -394,10 +403,12 @@ dod-enroll dir=(justfile_directory() / "target" / "dod-run" / "agent") $AFKFLEET
 
 # The identity dod-enroll left, with dod-server's CA; its heartbeat file, which dod-clean
 # checks, goes into `dir` too. Its bot dials only 127.0.0.1 (dod-mc-up's server), never a
-# public address (U50). No exit message: on Windows, Ctrl+C reaches just and PowerShell too.
+# public address (U50): the recipe exports public_targets false itself, as the log filter,
+# so a variable in the shell can't flip it (PR #78's review). No exit message: on Windows,
+# Ctrl+C reaches just and PowerShell too.
 # The user only: run the DoD checks' agent with deploy/dod/agent.toml against dod-server.
 [no-exit-message]
-dod-agent dir=(justfile_directory() / "target" / "dod-run" / "agent") $AFKFLEET_AGENT__CONTROL_PLANE__CA_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.crt") $AFKFLEET_AGENT__CONTROL_PLANE__CERT_FILE=(dir / "agent.crt") $AFKFLEET_AGENT__CONTROL_PLANE__KEY_FILE=(dir / "agent.key") $AFKFLEET_AGENT__RUNTIME__HEARTBEAT_FILE=(dir / "agent.alive") $AFKFLEET_AGENT__LOG__FILTER="info":
+dod-agent dir=(justfile_directory() / "target" / "dod-run" / "agent") $AFKFLEET_AGENT__CONTROL_PLANE__CA_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.crt") $AFKFLEET_AGENT__CONTROL_PLANE__CERT_FILE=(dir / "agent.crt") $AFKFLEET_AGENT__CONTROL_PLANE__KEY_FILE=(dir / "agent.key") $AFKFLEET_AGENT__RUNTIME__HEARTBEAT_FILE=(dir / "agent.alive") $AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS="false" $AFKFLEET_AGENT__LOG__FILTER="info":
     cargo run --release -p fleet-agent --bin afkfleet-agent -- run --config deploy/dod/agent.toml
 
 # app-build first (the release exe), then the exe itself: a GUI app, so the recipe returns
