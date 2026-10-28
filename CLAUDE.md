@@ -160,7 +160,7 @@ Server module layout:
 fleet-server/src/
   main.rs  lib.rs  config.rs
   cli/        # serve, migrate, healthcheck, user create-owner, vault status, vault rotate-key, pki init, pki server-cert, agent create-enrollment-token, agent list, agent disable, agent release, backup
-  app/        # services: auth, users, accounts, bots, modes, agents, enrollment, audit, events, event_tickets, retention, vault
+  app/        # services: auth, users, accounts, bots, modes, server_settings, agents, enrollment, audit, events, event_tickets, retention, vault
   ports/      # repository and provider traits
   infra/      # sqlite/ (sqlx repos), crypto/ (vault, tokens, passwords), msauth/ (Microsoft's account flows over HTTP), pki/ (the CA, certificates, CSRs)
   http/       # router.rs, middleware/, extractors/, handlers/<resource>.rs, error.rs, openapi.rs, ws.rs

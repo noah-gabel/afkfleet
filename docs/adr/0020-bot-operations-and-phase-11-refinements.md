@@ -1630,6 +1630,54 @@ H6 and H7 are built after H4's merge, on the decisions below, with no new planni
 | Preview (H7) | "Try a line", placeholder "Paste a line from the server's chat", "Try"; "Format {n} reads the sender as {name}." / "No format fits this line." |
 | Console icon (H7) | `title` and screen-reader label "Read from the server's text by a chat format. Minecraft doesn't check this name." |
 
+### As built (group H4)
+Built on H4's planning (U54–U60, S74–S80, R131–R136), with nothing asked again, in one PR on `p11/p11.9-server-settings` and eight commits:
+- PR #78's two nits;
+- the planning record;
+- fleet-core's key, cap, permissions and audit names;
+- the table and its repository;
+- the routes;
+- the reconciler;
+- fleet-client, the console and the loopback case;
+- the docs.
+
+Each new test ran red before its code, against a stub with the real signature, or, for a test that pins working code, by a mutation restored from a saved copy and checked by checksum. The stubs:
+- a key that put every address alike, a cap that never filled, permissions that denied everyone;
+- repositories that stored and found nothing, a service whose writes all answered `SessionGone`;
+- `spec_of` still sending empty texts;
+- client methods and console verbs answering `NoSession` or doing nothing.
+
+*Choices made while building:*
+- **The requests are `CreateServerSettingsRequest` and `UpdateServerSettingsRequest`,** verb first as the modes' are, not R131's `ServerSettingsCreateRequest`.
+- **The loopback case came with fleet-client,** in the seventh commit, since it writes the settings through the client's new methods.
+- **`servers` reads every page** (at most 100 rows), as `modes` does, rather than taking a `[before]`.
+- **A test's rows are made before the clock:** the table's `updated_at >= created_at` refuses an edit whose `now` is earlier, as the modes' does.
+- **`setup_with`** (the auth tests' builder) builds the new service through a helper of its own, to stay under clippy's 100 lines.
+- **`LosingTx`** loses the settings' updates and deletes too, under the existing `lose_next_mode_write`.
+
+*Mutations* (each failed its tests, then was restored):
+- M4.1: `check` letting an embedded public IPv4 through.
+- M4.2 and M4.3: the refusal's `warn!` as `debug!`, and its `range` dropped.
+- M4.4 and M4.5: the key without `to_canonical`, and without the default port.
+- M4.6: `server_addr` handing azalea another default.
+- M4.7: the migration without its lowercase CHECK.
+- M4.8: the list without `AuthUser` and its `require`.
+- M4.9: the create through `Json` without garde.
+- M4.10: the console without its `servers` arm.
+- M4.11: `spec_of` sending empty texts again (the loopback case: "the texts are sent: not within 90s").
+
+*Snapshots:*
+- the authorization matrix, two rows `ok ok 403`;
+- the audit names, three appended;
+- the migrations' checksums, `19 server settings`;
+- the OpenAPI document: five schemas, the new code, four paths;
+- the 409's envelope, `api_error__server_settings_changed`;
+- the created and edited answers, `auth__server_settings__server_settings_created` and `…_edited`.
+
+*Size:* about 6,850 lines added, the docs included, about 1,300 of them generated query data and snapshots; the plan said about 6,600.
+
+*Checks:* `just check` and `just test-slow` (7 of 7) green on Windows. Coverage per crate there: fleet-core 99.28 % of lines (`server_key` and `server_settings` 100 %), fleet-client 98.25 %. fleet-server's instrumented run filled the disk, one test's pool timing out with it (it passes on the plain build), so its gates, the control plane's among them, are CI's `cov` job's.
+
 ### Notes for later groups
 - **B2 (P11.3's history):** built (above).
 - **C (P11.4):** decided at C's planning (above), built in C1, C2 and C3.
