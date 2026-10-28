@@ -808,6 +808,22 @@ expression: answer.json()
         ],
         "type": "object"
       },
+      "ConflictTextResponse": {
+        "description": "One conflict text in an answer: its lines, in order.",
+        "properties": {
+          "lines": {
+            "items": {
+              "maxLength": 1024,
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "lines"
+        ],
+        "type": "object"
+      },
       "ConnectFailure": {
         "description": "Why a bot couldn't connect.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
         "enum": [
@@ -891,6 +907,28 @@ expression: answer.json()
         },
         "required": [
           "name"
+        ],
+        "type": "object"
+      },
+      "CreateServerSettingsRequest": {
+        "additionalProperties": false,
+        "description": "`POST /server-settings`: a server's new settings.",
+        "properties": {
+          "conflict_texts": {
+            "items": {
+              "maxLength": 1024,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "server": {
+            "maxLength": 259,
+            "type": "string"
+          }
+        },
+        "required": [
+          "server",
+          "conflict_texts"
         ],
         "type": "object"
       },
@@ -1052,7 +1090,8 @@ expression: answer.json()
           "mode_in_use_by_others",
           "mode_in_use",
           "too_many_connections",
-          "agent_not_disabled"
+          "agent_not_disabled",
+          "server_settings_changed"
         ],
         "type": "string"
       },
@@ -2115,6 +2154,68 @@ expression: answer.json()
         "minimum": -9007199254740991,
         "type": "integer"
       },
+      "ServerSettingsPage": {
+        "description": "`GET /server-settings`: one page of the servers' settings, newest first.",
+        "properties": {
+          "items": {
+            "description": "The settings.",
+            "items": {
+              "$ref": "#/components/schemas/ServerSettingsResponse"
+            },
+            "type": "array"
+          },
+          "next": {
+            "maxLength": 36,
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "ServerSettingsResponse": {
+        "description": "One server's settings.",
+        "properties": {
+          "conflict_texts": {
+            "description": "The conflict texts, in a fixed order, duplicates counted once.",
+            "items": {
+              "$ref": "#/components/schemas/ConflictTextResponse"
+            },
+            "type": "array"
+          },
+          "created_at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 36,
+            "type": "string"
+          },
+          "server": {
+            "maxLength": 259,
+            "type": "string"
+          },
+          "updated_at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "version": {
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "server",
+          "conflict_texts",
+          "version",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "SessionPage": {
         "description": "`GET /me/sessions`: one page of live sessions, newest first.",
         "properties": {
@@ -2266,6 +2367,34 @@ expression: answer.json()
           "name",
           "visibility",
           "steps"
+        ],
+        "type": "object"
+      },
+      "UpdateServerSettingsRequest": {
+        "additionalProperties": false,
+        "description": "`PUT /server-settings/{id}`: the settings as they should be from now on,\nand the version the caller last read (ADR-0020, S77).",
+        "properties": {
+          "conflict_texts": {
+            "items": {
+              "maxLength": 1024,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "server": {
+            "maxLength": 259,
+            "type": "string"
+          },
+          "version": {
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "server",
+          "conflict_texts"
         ],
         "type": "object"
       },
@@ -8254,6 +8383,467 @@ expression: answer.json()
         "summary": "`PUT /api/v1/modes/{id}/with-commands`: the mode as it should be, after\na step-up, whatever commands its steps send.",
         "tags": [
           "modes"
+        ],
+        "x-step-up": true
+      }
+    },
+    "/api/v1/server-settings": {
+      "get": {
+        "operationId": "list_server_settings",
+        "parameters": [
+          {
+            "description": "Only items older than this ID: the `next` of the page before.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "maxLength": 36,
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many items at most; 50 by default.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerSettingsPage"
+                }
+              }
+            },
+            "description": "One page of the servers' settings, newest first."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A query that doesn't parse."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Only Admins and the Owner read the servers' settings."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A `limit` outside 1 to 100."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`GET /api/v1/server-settings`: every server's settings, newest first.",
+        "tags": [
+          "server-settings"
+        ]
+      },
+      "post": {
+        "operationId": "create_server_settings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateServerSettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerSettingsResponse"
+                }
+              }
+            },
+            "description": "The new settings, their server as its key."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A body of the wrong shape: an unknown field, or a value of the wrong type. The answer never repeats what it read."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Step up first: `POST /auth/step-up`; or the caller isn't an Admin or the Owner."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`conflict`: 100 servers have settings already."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A field breaks its rule, named at its own path (`server`, `conflict_texts`, `conflict_texts[3]`): one error per field, a list's first; a server that has settings already is `server`'s."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/server-settings`: a server's new settings, after a\nstep-up.",
+        "tags": [
+          "server-settings"
+        ],
+        "x-step-up": true
+      }
+    },
+    "/api/v1/server-settings/{id}": {
+      "delete": {
+        "operationId": "delete_server_settings",
+        "parameters": [
+          {
+            "description": "The settings' ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The settings are deleted: the server's bots count no kick text as a login any more."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Step up first: `POST /auth/step-up`; or the caller isn't an Admin or the Owner."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such settings."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`DELETE /api/v1/server-settings/{id}`: deletes a server's settings,\nafter a step-up.",
+        "tags": [
+          "server-settings"
+        ],
+        "x-step-up": true
+      },
+      "put": {
+        "operationId": "update_server_settings",
+        "parameters": [
+          {
+            "description": "The settings' ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateServerSettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerSettingsResponse"
+                }
+              }
+            },
+            "description": "The settings as they now are: at the next version, or unchanged when the edit asks for what's stored."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A body of the wrong shape: an unknown field, or a value of the wrong type. The answer never repeats what it read."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Step up first: `POST /auth/step-up`; or the caller isn't an Admin or the Owner."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such settings."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`server_settings_changed`: the settings changed since the caller read `version`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A field breaks its rule, named at its own path (`version`, `server`, `conflict_texts[3]`); a server another row has is `server`'s."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`PUT /api/v1/server-settings/{id}`: the settings as they should be,\nafter a step-up.",
+        "tags": [
+          "server-settings"
         ],
         "x-step-up": true
       }

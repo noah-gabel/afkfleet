@@ -212,6 +212,7 @@ async fn setup_with(options: SqliteConnectOptions, limits: &RateLimitConfig) -> 
         agents: idle_agents(&db),
         bots: idle_bots(&db),
         modes: idle_modes(&db),
+        server_settings: idle_server_settings(&db),
         events: idle_events(&db),
         audit: fleet_server::app::audit::AuditService::new(
             std::sync::Arc::new(fleet_testkit::system::ManualClock::new(
@@ -830,6 +831,20 @@ fn idle_bots(db: &fleet_server::infra::sqlite::Database) -> fleet_server::app::b
         Arc::new(fleet_server::grpc::registry::AgentRegistry::new(clock)),
         fleet_server::app::events::EventBus::new(),
         false,
+    )
+}
+
+/// The servers' settings' service, which these tests never write through
+/// (P11.9).
+fn idle_server_settings(
+    db: &fleet_server::infra::sqlite::Database,
+) -> fleet_server::app::server_settings::ServerSettingsService {
+    fleet_server::app::server_settings::ServerSettingsService::new(
+        Arc::new(fleet_testkit::system::ManualClock::new(
+            chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+        )),
+        Arc::new(fleet_testkit::system::SeededRandom::new(1)),
+        Arc::new(db.clone()),
     )
 }
 

@@ -69,6 +69,10 @@ use fleet_api_types::modes::{
     ModeScheduleRequest, ModeStep, ModeStepRequest, ModeVisibility, UpdateModeRequest,
     number_schema,
 };
+use fleet_api_types::server_settings::{
+    CONFLICT_TEXT_MAX_CHARS, ConflictTextResponse, CreateServerSettingsRequest, ServerSettingsPage,
+    ServerSettingsResponse, UpdateServerSettingsRequest,
+};
 use fleet_api_types::sessions::{SessionPage, SessionResponse};
 use fleet_api_types::time::TIMESTAMP_CHARS;
 use fleet_api_types::users::{UserLabel, UserPage, UserPatchRequest, UserResponse, UserRole};
@@ -185,6 +189,7 @@ fn declarations() -> BTreeMap<String, String> {
     .chain(mode_declarations(&config))
     .chain(event_declarations(&config))
     .chain(admin_declarations(&config))
+    .chain(server_settings_declarations(&config))
     .map(|(name, declaration)| (name.to_owned(), declaration))
     .collect()
 }
@@ -206,6 +211,26 @@ fn admin_declarations(config: &Config) -> [(&'static str, String); 13] {
         ("AuditPage", AuditPage::decl(config)),
         ("AuditTargetKind", AuditTargetKind::decl(config)),
         ("AuditTargetResponse", AuditTargetResponse::decl(config)),
+    ]
+}
+
+/// ts-rs's declaration of every server-settings type (ADR-0020, S77).
+fn server_settings_declarations(config: &Config) -> [(&'static str, String); 5] {
+    [
+        ("ConflictTextResponse", ConflictTextResponse::decl(config)),
+        (
+            "CreateServerSettingsRequest",
+            CreateServerSettingsRequest::decl(config),
+        ),
+        (
+            "UpdateServerSettingsRequest",
+            UpdateServerSettingsRequest::decl(config),
+        ),
+        (
+            "ServerSettingsResponse",
+            ServerSettingsResponse::decl(config),
+        ),
+        ("ServerSettingsPage", ServerSettingsPage::decl(config)),
     ]
 }
 
@@ -557,6 +582,13 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::mode_updated_at("ModeResponse", "updated_at", TIMESTAMP_CHARS)]
 #[case::mode_message("ModeAction", "message", MODE_MESSAGE_MAX_CHARS)]
 #[case::mode_page_next("ModePage", "next", ID_CHARS)]
+#[case::settings_create_server("CreateServerSettingsRequest", "server", SERVER_ADDRESS_MAX_CHARS)]
+#[case::settings_update_server("UpdateServerSettingsRequest", "server", SERVER_ADDRESS_MAX_CHARS)]
+#[case::settings_id("ServerSettingsResponse", "id", ID_CHARS)]
+#[case::settings_server("ServerSettingsResponse", "server", SERVER_ADDRESS_MAX_CHARS)]
+#[case::settings_created_at("ServerSettingsResponse", "created_at", TIMESTAMP_CHARS)]
+#[case::settings_updated_at("ServerSettingsResponse", "updated_at", TIMESTAMP_CHARS)]
+#[case::settings_page_next("ServerSettingsPage", "next", ID_CHARS)]
 #[case::audit_at("AuditEntryResponse", "at", TIMESTAMP_CHARS)]
 #[case::audit_actor("AuditEntryResponse", "actor", ID_CHARS)]
 #[case::audit_ip("AuditEntryResponse", "ip", IP_MAX_CHARS)]
@@ -581,7 +613,7 @@ fn a_text_field_is_capped_at_its_constant(
 }
 
 /// Every text field whose cap the cases above check.
-const CHECKED_TEXTS: [(&str, &str); 122] = [
+const CHECKED_TEXTS: [(&str, &str); 129] = [
     ("ErrorBody", "message"),
     ("ErrorBody", "request_id"),
     ("FieldError", "path"),
@@ -704,6 +736,13 @@ const CHECKED_TEXTS: [(&str, &str); 122] = [
     ("ModeResponse", "updated_at"),
     ("ModeAction", "message"),
     ("ModePage", "next"),
+    ("CreateServerSettingsRequest", "server"),
+    ("UpdateServerSettingsRequest", "server"),
+    ("ServerSettingsResponse", "id"),
+    ("ServerSettingsResponse", "server"),
+    ("ServerSettingsResponse", "created_at"),
+    ("ServerSettingsResponse", "updated_at"),
+    ("ServerSettingsPage", "next"),
 ];
 
 /// Every text field of every component: the cases above must cover them.
@@ -742,6 +781,7 @@ fn a_request_schema_refuses_unknown_fields_and_responses_dont() {
         "CreateInviteRequest",
         "CreateModeRequest",
         "CreateOfflineAccountRequest",
+        "CreateServerSettingsRequest",
         "LoginMfaRequest",
         "LoginRequest",
         "MfaConfirmRequest",
@@ -753,6 +793,7 @@ fn a_request_schema_refuses_unknown_fields_and_responses_dont() {
         "RegisterRequest",
         "StepUpRequest",
         "UpdateModeRequest",
+        "UpdateServerSettingsRequest",
         "UserPatchRequest",
     ]);
     let components = components_json();
@@ -762,6 +803,24 @@ fn a_request_schema_refuses_unknown_fields_and_responses_dont() {
 
         assert_eq!(refused, requests.contains(name.as_str()), "{name}");
     }
+}
+
+/// A conflict text and each of its answered lines are capped at a kick
+/// message's length (ADR-0020, S77).
+#[rstest]
+#[case::create("CreateServerSettingsRequest", "conflict_texts")]
+#[case::update("UpdateServerSettingsRequest", "conflict_texts")]
+#[case::lines("ConflictTextResponse", "lines")]
+fn the_conflict_texts_are_capped_at_a_kick_messages_length(
+    #[case] component: &str,
+    #[case] field: &str,
+) {
+    let components = components_json();
+
+    assert_eq!(
+        property(&components, component, field),
+        &json!({ "type": "array", "items": { "type": "string", "maxLength": CONFLICT_TEXT_MAX_CHARS } })
+    );
 }
 
 #[test]
@@ -892,6 +951,7 @@ fn an_open_field_lists_exactly_its_enums_known_values() {
 #[case::mode_jitter_ms("ModeSchedule", "jitter_ms")]
 #[case::mode_owner("ModeResponse", "owner")]
 #[case::mode_page_next("ModePage", "next")]
+#[case::settings_page_next("ServerSettingsPage", "next")]
 #[case::event_bot_id("EventMessage", "bot_id")]
 #[case::event_bot("EventMessage", "bot")]
 #[case::event_at("EventMessage", "at")]

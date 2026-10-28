@@ -26,6 +26,8 @@
 //! - [`invites`]: `POST` and `GET /api/v1/invites`, `DELETE
 //!   /api/v1/invites/{id}` (P7.9).
 //! - [`modes`]: `GET /api/v1/modes` (P11.4).
+//! - [`server_settings`]: `GET` and `POST /api/v1/server-settings`, `PUT`
+//!   and `DELETE /api/v1/server-settings/{id}` (P11.9).
 //! - [`me`]: `GET /api/v1/me`, `POST /api/v1/me/password`, `GET
 //!   /api/v1/me/sessions` and `DELETE /api/v1/me/sessions/{id}` (P7.6).
 //! - [`mfa`]: `POST /api/v1/me/mfa/enroll`, `/confirm` and `/reset` (P7.7).
@@ -46,6 +48,7 @@ pub(super) mod invites;
 pub(super) mod me;
 pub(super) mod mfa;
 pub(super) mod modes;
+pub(super) mod server_settings;
 pub(super) mod users;
 
 use std::net::IpAddr;

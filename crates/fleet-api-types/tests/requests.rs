@@ -16,6 +16,7 @@ use fleet_api_types::invites::CreateInviteRequest;
 use fleet_api_types::me::PasswordChangeRequest;
 use fleet_api_types::mfa::MfaConfirmRequest;
 use fleet_api_types::modes::{CreateModeRequest, UpdateModeRequest};
+use fleet_api_types::server_settings::{CreateServerSettingsRequest, UpdateServerSettingsRequest};
 use fleet_api_types::users::UserPatchRequest;
 use fleet_api_types::{InviteId, PageQuery, SessionId, UserId};
 use garde::Validate;
@@ -71,6 +72,16 @@ fn every_request_serializes_to_the_json_the_server_reads() {
         "steps": [
             { "action": { "type": "sneak", "on": true }, "schedule": { "type": "at_start" }, "probability": 100 }
         ]
+    }));
+    round_trip::<CreateServerSettingsRequest>(&json!({
+        "server": "mc.example.com",
+        "conflict_texts": ["Already connected", "You logged in
+    from another location"]
+    }));
+    round_trip::<UpdateServerSettingsRequest>(&json!({
+        "version": 3,
+        "server": "[2001:db8::1]:25566",
+        "conflict_texts": ["Already connected"]
     }));
 }
 

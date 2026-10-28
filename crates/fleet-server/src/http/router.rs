@@ -64,6 +64,10 @@
 //! | `PUT /api/v1/modes/{id}` | user (the right to edit it, both as it is and as it will be; steps sending a command off the allowlist: pointed to `/with-commands`) | the mode as it should be, at the version read: 200 |
 //! | `PUT /api/v1/modes/{id}/with-commands` | user + step-up (the right to edit it, both ways) | the mode as it should be, whatever its steps send: 200 |
 //! | `DELETE /api/v1/modes/{id}` | user + step-up (the right to delete it) | deletes a mode no bot uses: 204 |
+//! | `GET /api/v1/server-settings` | user (Admin+) | one page of the servers' settings |
+//! | `POST /api/v1/server-settings` | user + step-up (Admin+) | a server's new settings: 201 |
+//! | `PUT /api/v1/server-settings/{id}` | user + step-up (Admin+) | the settings as they should be, at the version read |
+//! | `DELETE /api/v1/server-settings/{id}` | user + step-up (Admin+) | deletes a server's settings: 204 |
 //! | `POST /api/v1/events/ticket` | user | a single-use ticket for one live events socket of this session, 30 s |
 //! | `GET /api/v1/events` | user, with a ticket of this session | the live events socket (101); any other ticket 404, the user's sockets all open 429 |
 //! | `GET /api/openapi.json` | public | the `OpenAPI` document, only in dev mode ([`openapi`](super::openapi)) |
@@ -82,7 +86,7 @@ use utoipa_axum::routes;
 
 use super::handlers::{
     accounts, agents, audit, auth, bots, chat, events, grants, health, invites, me, mfa, modes,
-    users,
+    server_settings, users,
 };
 use super::middleware::RequestIds;
 use super::openapi::ApiDocs;
@@ -102,6 +106,7 @@ use crate::app::link_flows::LinkFlowService;
 use crate::app::login::LoginService;
 use crate::app::mfa::MfaService;
 use crate::app::modes::ModeService;
+use crate::app::server_settings::ServerSettingsService;
 use crate::app::users::UserService;
 use crate::config::HttpConfig;
 
@@ -141,6 +146,8 @@ pub struct AppState {
     pub(crate) bots: BotService,
     /// The modes: what each viewer may see of them.
     pub(crate) modes: ModeService,
+    /// The servers' settings, Admins' and the Owner's (P11.9).
+    pub(crate) server_settings: ServerSettingsService,
     /// The live events: the tickets, the bus and the sockets (P11.5).
     pub(crate) events: LiveEvents,
     /// The audit log, read by Admins and the Owner (P11.9).
@@ -180,6 +187,8 @@ pub struct Services {
     pub bots: BotService,
     /// The modes: what each viewer may see of them.
     pub modes: ModeService,
+    /// The servers' settings, Admins' and the Owner's.
+    pub server_settings: ServerSettingsService,
     /// The live events: the tickets, the bus and the sockets.
     pub events: LiveEvents,
     /// The audit log, read by Admins and the Owner.
@@ -205,6 +214,7 @@ impl AppState {
             agents,
             bots,
             modes,
+            server_settings,
             events,
             audit,
         } = services;
@@ -223,6 +233,7 @@ impl AppState {
             agents,
             bots,
             modes,
+            server_settings,
             events,
             audit,
         }
@@ -296,6 +307,10 @@ pub fn api_routes(routes: Routes) -> Routes {
         .authed_route(RateClass::Standard, routes!(modes::update))
         .step_up_route(RateClass::Standard, routes!(modes::update_with_commands))
         .step_up_route(RateClass::Standard, routes!(modes::delete))
+        .authed_route(RateClass::Standard, routes!(server_settings::list))
+        .step_up_route(RateClass::Standard, routes!(server_settings::create))
+        .step_up_route(RateClass::Standard, routes!(server_settings::update))
+        .step_up_route(RateClass::Standard, routes!(server_settings::delete))
         .authed_route(RateClass::Standard, routes!(events::ticket))
         .authed_route(RateClass::Standard, routes!(events::connect))
 }

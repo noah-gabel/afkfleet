@@ -753,7 +753,7 @@ pub struct BotPatchRequest {
 
 /// The garde rule of a server address: a valid `ServerAddress`. The message
 /// names the rule, never the text.
-fn valid_server_address<C>(address: &str, _context: &C) -> garde::Result {
+pub(crate) fn valid_server_address<C>(address: &str, _context: &C) -> garde::Result {
     ServerAddress::try_from(address)
         .map(drop)
         .map_err(|error| garde::Error::new(server_address_message(error)))

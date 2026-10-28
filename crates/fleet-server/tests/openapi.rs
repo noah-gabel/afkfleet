@@ -191,6 +191,7 @@ async fn app(db: &Database, docs: ApiDocs) -> Router {
         agents: idle_agents(db),
         bots: idle_bots(db),
         modes: idle_modes(db),
+        server_settings: idle_server_settings(db),
         events: idle_events(db),
         audit: fleet_server::app::audit::AuditService::new(
             std::sync::Arc::new(fleet_testkit::system::ManualClock::new(
@@ -419,6 +420,10 @@ async fn the_document_lists_exactly_the_api_routes(
             ("/api/v1/modes/{id}", "put"),
             ("/api/v1/modes/{id}", "delete"),
             ("/api/v1/modes/{id}/with-commands", "put"),
+            ("/api/v1/server-settings", "get"),
+            ("/api/v1/server-settings", "post"),
+            ("/api/v1/server-settings/{id}", "put"),
+            ("/api/v1/server-settings/{id}", "delete"),
             ("/api/v1/events/ticket", "post"),
             ("/api/v1/events", "get"),
             ("/api/v1/auth/login", "post"),
@@ -591,6 +596,20 @@ fn idle_bots(db: &fleet_server::infra::sqlite::Database) -> fleet_server::app::b
         Arc::new(fleet_server::grpc::registry::AgentRegistry::new(clock)),
         fleet_server::app::events::EventBus::new(),
         false,
+    )
+}
+
+/// The servers' settings' service, which these tests never write through
+/// (P11.9).
+fn idle_server_settings(
+    db: &fleet_server::infra::sqlite::Database,
+) -> fleet_server::app::server_settings::ServerSettingsService {
+    fleet_server::app::server_settings::ServerSettingsService::new(
+        Arc::new(fleet_testkit::system::ManualClock::new(
+            chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+        )),
+        Arc::new(fleet_testkit::system::SeededRandom::new(1)),
+        Arc::new(db.clone()),
     )
 }
 

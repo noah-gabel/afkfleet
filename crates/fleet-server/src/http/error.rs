@@ -163,6 +163,10 @@ pub enum ApiError {
     /// A release of an agent that's still enabled (409; ADR-0020, S49).
     #[error("only a disabled agent's bots can be released")]
     AgentNotDisabled,
+    /// An edit of a server's settings whose `version` is stale (409;
+    /// ADR-0020, S77).
+    #[error("the server's settings changed since they were read")]
+    ServerSettingsChanged,
     /// A resume of a bot that isn't paused (409).
     #[error("only a paused bot can be resumed")]
     BotNotPaused,
@@ -254,6 +258,7 @@ impl ApiError {
             Self::ModeInUse => ErrorCode::ModeInUse,
             Self::TooManyConnections { .. } => ErrorCode::TooManyConnections,
             Self::AgentNotDisabled => ErrorCode::AgentNotDisabled,
+            Self::ServerSettingsChanged => ErrorCode::ServerSettingsChanged,
         }
     }
 
@@ -287,7 +292,8 @@ pub const fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::ModeChanged
         | ErrorCode::ModeInUseByOthers
         | ErrorCode::ModeInUse
-        | ErrorCode::AgentNotDisabled => StatusCode::CONFLICT,
+        | ErrorCode::AgentNotDisabled
+        | ErrorCode::ServerSettingsChanged => StatusCode::CONFLICT,
         ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         ErrorCode::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
         ErrorCode::ValidationFailed => StatusCode::UNPROCESSABLE_ENTITY,
@@ -440,7 +446,8 @@ impl ApiError {
             | Self::ModeChanged
             | Self::ModeInUseByOthers
             | Self::ModeInUse
-            | Self::AgentNotDisabled => (None, None),
+            | Self::AgentNotDisabled
+            | Self::ServerSettingsChanged => (None, None),
         };
         (
             response,
@@ -735,7 +742,8 @@ mod tests {
             | ErrorCode::ModeChanged
             | ErrorCode::ModeInUseByOthers
             | ErrorCode::ModeInUse
-            | ErrorCode::AgentNotDisabled => ErrorCode::Conflict,
+            | ErrorCode::AgentNotDisabled
+            | ErrorCode::ServerSettingsChanged => ErrorCode::Conflict,
             ErrorCode::TooManyConnections => ErrorCode::RateLimited,
             other => other,
         }

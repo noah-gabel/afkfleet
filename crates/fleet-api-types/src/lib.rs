@@ -82,6 +82,7 @@ pub mod open;
 pub mod openapi;
 pub mod page;
 pub mod secret;
+pub mod server_settings;
 pub mod sessions;
 pub mod text;
 pub mod time;
