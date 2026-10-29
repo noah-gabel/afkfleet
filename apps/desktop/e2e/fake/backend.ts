@@ -783,13 +783,17 @@ export class FakeBackend {
 
   /** Settings `target` as an edit leaves them, at the version it read. */
   #updateSettings(target: string, request: Record<string, unknown>): Outcome {
+    const server = keyOf(String(request.server));
+    const texts = textsOf(request.conflict_texts);
+    const formats = formatsOf(request.chat_formats);
+    // The server's order: its extractor's rules, then the lookup, then the version.
+    if (texts.length === 0 && formats.length === 0) {
+      return holdsNothing();
+    }
     const settings = this.#settings.find((one) => one.id === target);
     if (settings === undefined) {
       return api(404, "not_found");
     }
-    const server = keyOf(String(request.server));
-    const texts = textsOf(request.conflict_texts);
-    const formats = formatsOf(request.chat_formats);
     if (
       server === settings.server &&
       texts.join("\0") === settings.texts.join("\0") &&
@@ -800,9 +804,6 @@ export class FakeBackend {
     }
     if (Number(request.version) !== settings.version) {
       return api(409, "server_settings_changed");
-    }
-    if (texts.length === 0 && formats.length === 0) {
-      return holdsNothing();
     }
     if (this.#settings.some((one) => one.id !== target && one.server === server)) {
       return api(422, "validation_failed", [{ path: "server", message: "already has settings" }]);

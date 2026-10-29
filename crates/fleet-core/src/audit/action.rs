@@ -509,30 +509,33 @@ audit_actions! {
     RETENTION_PURGE = "retention.purge";
 
     /// An Admin or the Owner gave a server settings, after a step-up
-    /// (P11.9; ADR-0020, U54, S78), through `POST /server-settings`.
+    /// (P11.9; ADR-0020, U54, S78, R141), through `POST /server-settings`.
     /// Outcome: Success. Actor and IP: the user's. Target: the settings.
     /// Metadata: `server_host` and `server_port` (the server's key, the
-    /// port always there) and `texts` (how many conflict texts). Never a
-    /// text. A create refused before it's written (the cap, a server that
-    /// has settings already) is no entry.
+    /// port always there), `texts` (how many conflict texts) and
+    /// `formats` (how many chat formats). Never a text or a format. A create
+    /// refused before it's written (the cap, a server that has settings
+    /// already) is no entry.
     SERVER_SETTINGS_CREATE = "server_settings.create";
 
     /// An Admin or the Owner changed a server's settings, after a step-up
-    /// (P11.9; ADR-0020, S77, S78), through `PUT /server-settings/{id}`.
+    /// (P11.9; ADR-0020, S77, S78, R141), through `PUT /server-settings/{id}`.
     /// Outcome: Success. Actor and IP: the user's. Target: the settings.
     /// Metadata: `version` (the one the edit wrote), `server_host` and
     /// `server_port`, `previous_server_host` and `previous_server_port`
     /// (only when the server changed), `texts` and `previous_texts` (how
-    /// many conflict texts after and before) and `texts_changed`. Never a
-    /// text. An edit that changes nothing is no entry; a refused one is no
-    /// entry either.
+    /// many conflict texts after and before), `texts_changed`, `formats`
+    /// and `previous_formats` (how many chat formats after and before) and
+    /// `formats_changed`. Never a text or a format. An edit that changes
+    /// nothing is no entry; a refused one is no entry either.
     SERVER_SETTINGS_UPDATE = "server_settings.update";
 
     /// An Admin or the Owner deleted a server's settings, after a step-up
-    /// (P11.9; ADR-0020, S78), through `DELETE /server-settings/{id}`.
+    /// (P11.9; ADR-0020, S78, R141), through `DELETE /server-settings/{id}`.
     /// Outcome: Success. Actor and IP: the user's. Target: the settings.
-    /// Metadata: `version` (the one deleted), `server_host`, `server_port`
-    /// and `texts`. Never a text. A refused delete is no entry.
+    /// Metadata: `version` (the one deleted), `server_host`, `server_port`,
+    /// `texts` and `formats` (how many conflict texts and chat formats it
+    /// held). Never a text or a format. A refused delete is no entry.
     SERVER_SETTINGS_DELETE = "server_settings.delete";
 }
 

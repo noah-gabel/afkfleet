@@ -495,7 +495,10 @@ mod tests {
     use super::*;
     use crate::chat::PlayerChatKind;
     use proptest::prelude::*;
+    use proptest::strategy::ValueTree;
+    use proptest::test_runner::TestRunner;
     use rstest::rstest;
+    use std::collections::BTreeSet;
 
     /// The user's example (S80): a clan tag that differs per player, and
     /// players without one.
@@ -546,6 +549,8 @@ mod tests {
     #[case::length_before_characters(&format!("\n{}", "x".repeat(64)), ChatFormatsError::TooLong { index: 0, chars: 65 })]
     #[case::characters_before_braces("{Sender}\n", ChatFormatsError::ForbiddenChar { index: 0, position: 8 })]
     #[case::separator_before_a_later_brace("{sender}x {Sender}", ChatFormatsError::SeparatorStartsWithNameChar { index: 0, position: 8 })]
+    #[case::separator_before_a_later_any("{sender}x{any}", ChatFormatsError::SeparatorStartsWithNameChar { index: 0, position: 8 })]
+    #[case::any_after_sender_before_a_later_separator("{sender}{any}x", ChatFormatsError::WildcardAfterSender { index: 0, position: 8 })]
     #[case::unfollowed_any_before_a_later_brace("{any}{x}", ChatFormatsError::WildcardWithoutLiteral { index: 0, position: 0 })]
     #[case::brace_before_a_later_second_sender("{x}{sender}{sender}", ChatFormatsError::UnknownPlaceholder { index: 0, position: 0 })]
     #[case::second_sender_before_a_missing_separator("{sender}{sender}", ChatFormatsError::SecondPlaceholder { index: 0, position: 8 })]
@@ -739,6 +744,33 @@ mod tests {
         assert_eq!(head(""), "");
     }
 
+    /// The longest line a match can need: a format at its 64 characters
+    /// with two `{any}` at their 32, its literals and a 16-character name.
+    /// `READ_MAX` counts the `{any}` placeholders' own characters too, so it
+    /// is 11 more than this (PR #81's review).
+    #[test]
+    fn the_longest_match_a_format_allows_still_reads_its_name() {
+        let format = format!(
+            "{ANY}{}{ANY}{}{SENDER}{}",
+            "!".repeat(20),
+            "#".repeat(20),
+            ":".repeat(6)
+        );
+        let line = format!(
+            "{}{}{}{}{}{}",
+            "ü".repeat(32),
+            "!".repeat(20),
+            "ü".repeat(32),
+            "#".repeat(20),
+            "N".repeat(16),
+            ":".repeat(6)
+        );
+
+        assert_eq!(format.chars().count(), ChatFormats::MAX_LEN);
+        assert_eq!(line.chars().count(), 126);
+        assert_eq!(sender(&[&format], &line), Some("N".repeat(16)));
+    }
+
     /// Characters for a format's literal text: no name characters, so a name
     /// ends where the text after it starts; braces included, escaped.
     const LITERAL: &str = "[ ]<>:|{}-!#.,»";
@@ -755,10 +787,22 @@ mod tests {
         text.replace('{', "{{").replace('}', "}}")
     }
 
+    /// A generated format and a line it fits.
+    #[derive(Debug, Clone)]
+    struct Fitting {
+        format: String,
+        line: String,
+        /// The line's start the format's head matches, up to the name.
+        head: String,
+        name: String,
+        /// The text after `{sender}`, its escapes read.
+        separator: String,
+    }
+
     /// A format with an optional prefix, up to two `{any}` each with its
     /// text, the sender and the text after it; a line it fits, with fills of
     /// letters (never in a literal), and the name it reads.
-    fn fitting() -> impl Strategy<Value = (String, String, String)> {
+    fn fitting() -> impl Strategy<Value = Fitting> {
         (
             proptest::option::of(literal(5)),
             proptest::collection::vec(("[a-z]{0,32}", literal(5)), 0..=2),
@@ -781,11 +825,185 @@ mod tests {
                 }
                 format.push_str(SENDER);
                 format.push_str(&escaped(&separator));
+                let head = line.clone();
                 line.push_str(&name);
                 line.push_str(&separator);
                 line.push_str(&tail);
-                (format, line, name)
+                Fitting {
+                    format,
+                    line,
+                    head,
+                    name,
+                    separator,
+                }
             })
+    }
+
+    /// A valid format's text just before `{sender}` (since the last
+    /// `{any}`, or from its start) and just after it, each with its escapes
+    /// read.
+    fn around_sender(format: &str) -> (String, String) {
+        let mut before = String::new();
+        let mut rest = format;
+        loop {
+            if let Some(after) = rest.strip_prefix(SENDER) {
+                return (before, after.replace("{{", "{").replace("}}", "}"));
+            }
+            if let Some(after) = rest.strip_prefix(ANY) {
+                before.clear();
+                rest = after;
+            } else if let Some(after) = rest.strip_prefix("{{") {
+                before.push('{');
+                rest = after;
+            } else if let Some(after) = rest.strip_prefix("}}") {
+                before.push('}');
+                rest = after;
+            } else {
+                let mut chars = rest.chars();
+                let Some(c) = chars.next() else {
+                    return (before, String::new());
+                };
+                before.push(c);
+                rest = chars.as_str();
+            }
+        }
+    }
+
+    /// Whether `read` holds `name` where `format` puts it: right after
+    /// the format's text before `{sender}` (at the start when there is
+    /// none), then the text after it.
+    fn holds_name_where_the_format_puts_it(read: &str, name: &str, format: &str) -> bool {
+        let (before, after) = around_sender(format);
+        let wanted = format!("{before}{name}{after}");
+        if before.is_empty() {
+            read.starts_with(&wanted)
+        } else {
+            read.contains(&wanted)
+        }
+    }
+
+    /// The pieces of a format or a line that reach the scan's error paths,
+    /// which `any::<String>()` almost never does (PR #81's review): both
+    /// placeholders, both escapes, a non-ASCII letter, and literal and name
+    /// characters.
+    const TOKENS: [&str; 12] = [
+        "{sender}", "{any}", "{{", "}}", "ü", "[", "]", ":", " ", "x", "_", "7",
+    ];
+
+    /// The pieces that end a format's checks at once: lone braces, a line
+    /// break, a formatting code and a text-direction mark. Drawn less often,
+    /// so the later checks are reached too.
+    const ENDING: [&str; 5] = ["{", "}", "\n", "§a", "\u{202e}"];
+
+    /// Up to `max` tokens, joined.
+    fn tokens(max: usize) -> impl Strategy<Value = String> {
+        let token = prop_oneof![
+            6 => proptest::sample::select(TOKENS.to_vec()),
+            1 => proptest::sample::select(ENDING.to_vec()),
+        ];
+        proptest::collection::vec(token, 0..=max).prop_map(|tokens| tokens.concat())
+    }
+
+    /// Lists of token formats, past the most a server holds.
+    fn token_lists() -> impl Strategy<Value = Vec<String>> {
+        proptest::collection::vec(tokens(40), 0..=MAX_CHAT_FORMATS + 1)
+    }
+
+    /// Whether `error` names one of `entries`, and its position points at
+    /// what it names.
+    fn points_at_what_it_names(entries: &[String], error: ChatFormatsError) -> bool {
+        let entry = |index: usize| entries.get(index).map(String::as_str);
+        let at = |index: usize, position: usize| {
+            entry(index).map(|entry| entry.chars().skip(position).collect::<String>())
+        };
+        match error {
+            ChatFormatsError::TooMany { count } => {
+                count == entries.len() && count > MAX_CHAT_FORMATS
+            }
+            ChatFormatsError::Empty { index } => entry(index) == Some(""),
+            ChatFormatsError::TooLong { index, chars } => {
+                chars > ChatFormats::MAX_LEN
+                    && entry(index).is_some_and(|entry| entry.chars().count() == chars)
+            }
+            ChatFormatsError::ForbiddenChar { index, position } => at(index, position)
+                .and_then(|at| at.chars().next())
+                .is_some_and(|c| matches!(c, '\n' | '§' | '\u{202e}')),
+            ChatFormatsError::UnknownPlaceholder { index, position } => at(index, position)
+                .and_then(|at| at.chars().next())
+                .is_some_and(|c| matches!(c, '{' | '}')),
+            ChatFormatsError::SecondPlaceholder { index, position } => {
+                at(index, position).is_some_and(|at| at.starts_with(SENDER))
+            }
+            ChatFormatsError::WildcardAfterSender { index, position }
+            | ChatFormatsError::TooManyWildcards { index, position }
+            | ChatFormatsError::WildcardWithoutLiteral { index, position } => {
+                at(index, position).is_some_and(|at| at.starts_with(ANY))
+            }
+            ChatFormatsError::MissingPlaceholder { index } => entry(index).is_some(),
+            ChatFormatsError::NoSeparator { index } => {
+                entry(index).is_some_and(|entry| entry.ends_with(SENDER))
+            }
+            ChatFormatsError::SeparatorStartsWithNameChar { index, position } => entry(index)
+                .is_some_and(|entry| {
+                    entry
+                        .chars()
+                        .take(position)
+                        .collect::<String>()
+                        .ends_with(SENDER)
+                        && entry.chars().nth(position).is_some_and(is_name_char)
+                }),
+        }
+    }
+
+    /// Each error's name, to see which ones a strategy reaches.
+    fn kind(error: ChatFormatsError) -> &'static str {
+        match error {
+            ChatFormatsError::TooMany { .. } => "too_many",
+            ChatFormatsError::Empty { .. } => "empty",
+            ChatFormatsError::TooLong { .. } => "too_long",
+            ChatFormatsError::ForbiddenChar { .. } => "forbidden_char",
+            ChatFormatsError::UnknownPlaceholder { .. } => "unknown_placeholder",
+            ChatFormatsError::SecondPlaceholder { .. } => "second_placeholder",
+            ChatFormatsError::WildcardAfterSender { .. } => "wildcard_after_sender",
+            ChatFormatsError::TooManyWildcards { .. } => "too_many_wildcards",
+            ChatFormatsError::WildcardWithoutLiteral { .. } => "wildcard_without_literal",
+            ChatFormatsError::MissingPlaceholder { .. } => "missing_placeholder",
+            ChatFormatsError::NoSeparator { .. } => "no_separator",
+            ChatFormatsError::SeparatorStartsWithNameChar { .. } => {
+                "separator_starts_with_name_char"
+            }
+        }
+    }
+
+    /// Which errors `lists` reaches in a fixed run of 4096 lists.
+    fn errors_reached(lists: impl Strategy<Value = Vec<String>>) -> BTreeSet<&'static str> {
+        let mut runner = TestRunner::deterministic();
+        (0..4096)
+            .filter_map(|_| {
+                let entries = lists.new_tree(&mut runner).unwrap().current();
+                ChatFormats::try_new(&entries).err().map(kind)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_format_tokens_reach_every_error() {
+        let every = BTreeSet::from([
+            "too_many",
+            "empty",
+            "too_long",
+            "forbidden_char",
+            "unknown_placeholder",
+            "second_placeholder",
+            "wildcard_after_sender",
+            "too_many_wildcards",
+            "wildcard_without_literal",
+            "missing_placeholder",
+            "no_separator",
+            "separator_starts_with_name_char",
+        ]);
+
+        assert_eq!(errors_reached(token_lists()), every);
     }
 
     proptest! {
@@ -813,49 +1031,107 @@ mod tests {
         }
 
         #[test]
-        fn a_generated_format_reads_the_name_back_from_its_line(
-            (format, line, name) in fitting(),
+        fn try_new_over_format_tokens_never_panics_and_points_at_what_it_names(
+            entries in token_lists(),
         ) {
-            let taken = ChatFormats::try_new(&[format.as_str()]).unwrap();
-            prop_assert_eq!(taken.iter().collect::<Vec<_>>(), [format.as_str()]);
+            match ChatFormats::try_new(&entries) {
+                Ok(taken) => prop_assert_eq!(
+                    taken.iter().collect::<Vec<_>>(),
+                    entries.iter().map(String::as_str).collect::<Vec<_>>()
+                ),
+                Err(error) => prop_assert!(
+                    points_at_what_it_names(&entries, error),
+                    "{:?} for {:?}",
+                    error,
+                    entries
+                ),
+            }
+        }
 
-            let found = taken.matched(&IncomingChat::system(&line)).unwrap();
+        #[test]
+        fn the_matcher_over_format_tokens_is_total_and_reads_a_name_where_its_format_puts_it(
+            entries in proptest::collection::vec(tokens(12), 0..MAX_CHAT_FORMATS),
+            fitting in fitting(),
+            text in tokens(40),
+            name in "[A-Za-z0-9_]{1,17}",
+            shape in 0..3_u8,
+        ) {
+            let mut written: Vec<String> = entries
+                .into_iter()
+                .filter(|entry| ChatFormats::try_new(&[entry]).is_ok())
+                .collect();
+            written.push(fitting.format.clone());
+            let taken = ChatFormats::try_new(&written).unwrap();
+            let line = match shape {
+                0 => fitting.line,
+                1 => format!("{text}{name}{}{text}", fitting.separator),
+                _ => text,
+            };
+            let chat = IncomingChat::system(&line);
 
-            prop_assert_eq!(found.sender().as_str(), name.as_str());
+            if let Some(found) = taken.matched(&chat) {
+                let format = written.get(found.format()).unwrap();
+                prop_assert!(holds_name_where_the_format_puts_it(
+                    head(chat.text()),
+                    found.sender().as_str(),
+                    format
+                ));
+            }
+        }
+
+        #[test]
+        fn a_generated_format_reads_the_name_back_from_its_line(fitting in fitting()) {
+            let taken = ChatFormats::try_new(&[fitting.format.as_str()]).unwrap();
+            prop_assert_eq!(taken.iter().collect::<Vec<_>>(), [fitting.format.as_str()]);
+
+            let found = taken.matched(&IncomingChat::system(&fitting.line)).unwrap();
+
+            prop_assert_eq!(found.sender().as_str(), fitting.name.as_str());
             prop_assert_eq!(found.format(), 0);
         }
 
         #[test]
         fn a_match_is_total_and_reads_a_valid_name_from_the_texts_start(
-            (format, line, _) in fitting(),
+            fitting in fitting(),
             other in any::<String>(),
             fitting_line in any::<bool>(),
         ) {
-            let taken = ChatFormats::try_new(&[format.as_str(), "{sender} : "]).unwrap();
-            let chat = IncomingChat::system(if fitting_line { &line } else { &other });
+            const PLAIN: &str = "{sender} : ";
+            let taken = ChatFormats::try_new(&[fitting.format.as_str(), PLAIN]).unwrap();
+            let chat = IncomingChat::system(if fitting_line { &fitting.line } else { &other });
 
-            if let Some(name) = taken.sender_of(&chat) {
-                prop_assert!(head(chat.text()).contains(name.as_str()));
+            if let Some(found) = taken.matched(&chat) {
+                let read = head(chat.text());
+                let name = found.sender().as_str();
+                // The name sits right after the format's head, then its
+                // separator: the generated head for the line it fits.
+                if fitting_line && found.format() == 0 {
+                    let expected = format!("{}{name}{}", fitting.head, fitting.separator);
+                    prop_assert!(read.starts_with(&expected));
+                } else {
+                    let format = if found.format() == 0 { fitting.format.as_str() } else { PLAIN };
+                    prop_assert!(holds_name_where_the_format_puts_it(read, name, format));
+                }
             }
         }
 
         #[test]
         fn text_past_the_first_characters_never_changes_the_answer(
-            (format, line, _) in fitting(),
+            fitting in fitting(),
             other in any::<String>(),
             starts_fitting in any::<bool>(),
             fitting_extra in any::<bool>(),
         ) {
-            let taken = ChatFormats::try_new(&[format.as_str()]).unwrap();
+            let taken = ChatFormats::try_new(&[fitting.format.as_str()]).unwrap();
             // A start that fits, or one that doesn't, then the fitting line
             // again or anything: past the start, nothing may change the answer.
-            let fits = if starts_fitting { IncomingChat::system(&line).text().to_owned() } else { String::new() };
+            let fits = if starts_fitting { IncomingChat::system(&fitting.line).text().to_owned() } else { String::new() };
             let start: String = fits
                 .chars()
                 .chain(core::iter::repeat('x'))
                 .take(READ_MAX)
                 .collect();
-            let extra = if fitting_extra { &line } else { &other };
+            let extra = if fitting_extra { &fitting.line } else { &other };
 
             prop_assert_eq!(
                 taken.sender_of(&IncomingChat::system(&start)),

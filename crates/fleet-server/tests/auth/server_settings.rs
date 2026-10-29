@@ -937,6 +937,33 @@ async fn each_write_is_recorded_without_a_text(
     );
 }
 
+/// A delete records how many formats the row held, not only how many texts
+/// (R141; PR #81's review).
+#[sqlx::test(migrations = false)]
+async fn a_delete_records_how_many_formats_the_row_held(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let created = setup
+        .create_settings(
+            &admin,
+            create_with(
+                "mc.example.com",
+                &[],
+                &["[{any}] {sender} : ", "{sender} : "],
+            ),
+        )
+        .await;
+
+    setup.delete_settings(&admin, created_id(&created)).await;
+
+    let recorded = metadata(&setup.last(&AuditAction::SERVER_SETTINGS_DELETE).await);
+    assert_eq!(recorded["texts"], "0");
+    assert_eq!(recorded["formats"], "2");
+}
+
 /// The writes re-check in their transaction: an Admin demoted meanwhile is
 /// 403, a session revoked meanwhile 401, and nothing is written.
 #[sqlx::test(migrations = false)]

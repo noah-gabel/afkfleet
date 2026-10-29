@@ -8597,7 +8597,7 @@ expression: answer.json()
                 }
               }
             },
-            "description": "A body of the wrong shape: an unknown field, or a value of the wrong type. The answer never repeats what it read."
+            "description": "A body of the wrong shape: an unknown field, a missing one, or a value of the wrong type. The answer never repeats what it read."
           },
           "401": {
             "content": {
@@ -8637,7 +8637,7 @@ expression: answer.json()
                 }
               }
             },
-            "description": "A field breaks its rule, named at its own path (`server`, `conflict_texts`, `conflict_texts[3]`): one error per field, a list's first; a server that has settings already is `server`'s."
+            "description": "A field breaks its rule, named at its own path (`server`, `conflict_texts`, `conflict_texts[3]`, `chat_formats`, `chat_formats[3]`): one error per field, a list's first; a server that has settings already is `server`'s."
           },
           "429": {
             "content": {
@@ -8920,7 +8920,7 @@ expression: answer.json()
                 }
               }
             },
-            "description": "A body of the wrong shape: an unknown field, or a value of the wrong type. The answer never repeats what it read."
+            "description": "A body of the wrong shape: an unknown field, a missing one, or a value of the wrong type. The answer never repeats what it read."
           },
           "401": {
             "content": {
@@ -8970,7 +8970,7 @@ expression: answer.json()
                 }
               }
             },
-            "description": "A field breaks its rule, named at its own path (`version`, `server`, `conflict_texts`, `conflict_texts[3]`): one error per field, a list's first; a server another row has is `server`'s."
+            "description": "A field breaks its rule, named at its own path (`version`, `server`, `conflict_texts`, `conflict_texts[3]`, `chat_formats`, `chat_formats[3]`): one error per field, a list's first; a server another row has is `server`'s."
           },
           "429": {
             "content": {

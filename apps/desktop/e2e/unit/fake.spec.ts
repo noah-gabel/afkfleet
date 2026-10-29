@@ -294,6 +294,33 @@ test("refuses settings that hold neither a text nor a chat format", async () => 
   });
 });
 
+test("checks an edit's cross-field rule before its lookup and version, as the server's extractor does", async () => {
+  const backend = new FakeBackend();
+  backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(OWNER) });
+  backend.handle("step_up", { request: { password: PASSWORD } });
+  const created = (await backend.handle("create_server_settings", {
+    request: { server: "mc.example.com", conflict_texts: ["a"], chat_formats: [] },
+  })) as { ok: true; value: ServerSettingsResponse };
+  const empty = { server: "mc.example.com", conflict_texts: [], chat_formats: [] };
+
+  const stale = await backend.handle("update_server_settings", {
+    id: created.value.id,
+    request: { version: 2, ...empty },
+  });
+  const unknown = await backend.handle("update_server_settings", {
+    id: "01900000-0000-7000-8000-000000000999",
+    request: { version: 1, ...empty },
+  });
+
+  for (const refused of [stale, unknown]) {
+    expect(refused).toMatchObject({
+      ok: false,
+      error: { api: { status: 422, fields: [{ path: "conflict_texts" }] } },
+    });
+  }
+});
+
 test("lets only Admins and the Owner read the servers' settings", async () => {
   const backend = new FakeBackend();
   backend.handle("login", { request: { username: MEMBER, password: PASSWORD } });

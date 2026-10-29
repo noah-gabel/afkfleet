@@ -2,8 +2,10 @@
 // filled from the row, every request built from the form, the writes through "Confirm it's
 // you", Add opening the new entry and Save staying, the 409 with "Load again", the 404, the
 // cap, the field errors, the most texts, and Delete asking first.
+
+import { onlineManager } from "@tanstack/react-query";
 import { act, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiClient } from "../../api/ApiClient";
 import type { ServerSettingsPage } from "../../generated/ServerSettingsPage";
@@ -16,6 +18,10 @@ import { PASSWORD, refusal } from "../../test/signIn";
 import { TEXTS_HINT } from "./texts";
 
 const ADMIN = me("admin", "afkadmin");
+
+afterEach(() => {
+  onlineManager.setOnline(true);
+});
 const CHANGED = "These settings changed since you opened them. Load them again to see the change.";
 
 /** The key the server answers for `server`: lowercase, the port always written. */
@@ -448,6 +454,29 @@ describe("a Minecraft server's settings, PR #80's review", () => {
     expect(text(2).value).toBe("You logged in\nfrom another location");
   });
 
+  it("keeps the notice and the edits when Load again's read is paused, since nothing was read", async () => {
+    const { app, state } = await atEditor(ROW.id, { rows: [ROW] });
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+    state.rows = [settings(1, "mc.example.com:25565", [["Someone else's"]], 2)];
+    await app.user.clear(text(1));
+    await app.user.type(text(1), "Mine");
+    await app.user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText(CHANGED)).toBeDefined();
+
+    // Windows reporting no network: TanStack pauses the read and resolves its refetch unread.
+    onlineManager.setOnline(false);
+    await app.user.click(screen.getByRole("button", { name: "Load again" }));
+
+    const failed = await screen.findByText(
+      "Couldn't load the servers: Windows reports no network connection, so the app didn't ask the server. Try again.",
+    );
+    expect(failed.closest('[role="alert"]')).toBe(
+      screen.getByText(CHANGED).closest('[role="alert"]'),
+    );
+    expect(text(1).value).toBe("Mine");
+    expect(text(2).value).toBe("You logged in\nfrom another location");
+  });
+
   it("locks the fields, Remove and Add text while Confirm it's you is up, and the retry sends what's shown", async () => {
     const { app } = await atEditor(ROW.id, { rows: [ROW], stamped: false });
     await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
@@ -592,6 +621,25 @@ describe("a Minecraft server's settings with chat formats (H7)", () => {
           conflict_texts: ["Already connected now"],
           chat_formats: formats,
         },
+      ],
+    ]);
+  });
+
+  it("saves a row that holds only formats with no texts, its formats as they came (PR #81's review)", async () => {
+    const formats = ["[{any}] {sender} : ", "{sender} : "];
+    const row = settings(1, "mc.example.com:25565", [], 1, formats);
+    const { app } = await atEditor(row.id, { rows: [row] });
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+
+    await app.user.clear(screen.getByLabelText("Server address"));
+    await app.user.type(screen.getByLabelText("Server address"), "play.example.com");
+    await app.user.click(screen.getByRole("button", { name: "Save" }));
+    await vi.waitFor(() => expect(calls(app, "updateServerSettings")).toHaveLength(1));
+
+    expect(calls(app, "updateServerSettings")).toEqual([
+      [
+        row.id,
+        { version: 1, server: "play.example.com", conflict_texts: [], chat_formats: formats },
       ],
     ]);
   });

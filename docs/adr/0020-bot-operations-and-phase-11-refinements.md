@@ -1931,6 +1931,34 @@ Each new test ran red before its code, against a stub with the real signature, o
 
 *Size:* about 3,530 lines added and 330 removed, the docs included, about 350 of them generated query data, types and snapshots; the plan said about 4,900 to 5,300. PR #80's review came to about 310 of them.
 
+### PR #81's review, fixed in H8's first commit
+- **a. The audit's docs** (`fleet_core::audit::action`) give the metadata the server-settings writes record: `formats` on create and delete; `formats`, `previous_formats` and `formats_changed` on update; never a text or a format. J's audit screen is built from them.
+- **b. Stale descriptions:**
+  - The create's and the update's 422 texts name `chat_formats` and `chat_formats[3]`.
+  - Their 400 texts name a missing field, since a request without `chat_formats` is 400 (R135).
+  - README's `POST /server-settings` shows the request with `chat_formats`.
+- **c. "Load again" counts as loaded only when the list's `dataUpdatedAt` moved forward.**
+  - **Why:** TanStack Query 5.104.1's `refetchQueries` resolves a paused query's refetch at once, without reading (`fetchStatus === 'paused'`, `queryClient.ts:523`). A read pauses whenever `onlineManager` reports offline, which Windows can report while `localhost` still answers.
+  - **What a paused read shows:** the notice and the edits stay, and the notice reads "Couldn't load the servers: Windows reports no network connection, so the app didn't ask the server. Try again." *(the text approved by the user at H8's plan review)*.
+  - **Test:** `onlineManager.setOnline(false)` after a 409. It was red against the code before: no failure line.
+- **d. R138's check order, as built.**
+  - **The rule:** the separator check runs in the left-to-right scan, not among the end checks. The first problem by position wins, as for the scan's other checks. Only "no `{sender}`" and "no text after it" are left for the end.
+  - **Examples:**
+    1. `{sender}x {Sender}` is `SeparatorStartsWithNameChar` at 8, before the brace at 10.
+    2. `{sender}x{any}` is `SeparatorStartsWithNameChar` at 8, before the `{any}` after `{sender}` at 9.
+    3. `{sender}{any}x` is `WildcardAfterSender` at 8, since the `x` at 13 comes later.
+  - **Tests:** the order's table holds all three (the last two are new).
+- **e. Test gaps:**
+  - **`READ_MAX`'s real worst case.** A 64-character format, `{any}`, 20 `!`, `{any}`, 20 `#`, `{sender}` and 6 `:`, reads a 16-character name from a 126-character line whose `{any}` parts are 32 `ü` each. `READ_MAX` is 11 more, since it also counts the `{any}` placeholders' own characters.
+  - **A token strategy.** It builds formats and lines from the placeholders, the escapes, `ü`, and literal and name characters. One draw in seven is a token that ends a format's checks at once (a lone brace, a line break, `§a`, U+202E), so the later checks are reached too. An entry has up to 40 tokens, so "too long" is reached.
+    - Over it, `try_new` never panics, and each error's position points at what it names.
+    - The matcher reads a name only where its format puts it: right after the format's text before `{sender}`, at the start when there's none, then the text after it. *(The plan said "after a character that isn't a name's". A format may put a name right after one, such as `x{sender} : `, so the property checks the format's own text instead.)*
+    - A fixed run of 4,096 lists from `TestRunner::deterministic()` reaches every one of the twelve errors. The same run over `any::<String>()` reaches five.
+  - **The fitting proptest** checks that the name sits right after the format's head, then its separator. It no longer only checks that the text holds the name.
+  - **The editor:** a row with formats and no texts saves `conflict_texts: []` with its formats.
+  - **The delete's entry** of a row with two formats records `formats: 2`.
+  - **The e2e fake's edit** checks the cross-field rule before its lookup and its version, as the server's extractor does. A stale version, or an unknown ID, with no texts and no formats is 422 at `conflict_texts`. It was red against the fake before: 409.
+
 ### Notes for later groups
 - **B2 (P11.3's history):** built (above).
 - **C (P11.4):** decided at C's planning (above), built in C1, C2 and C3.
