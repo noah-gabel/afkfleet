@@ -1959,6 +1959,85 @@ Each new test ran red before its code, against a stub with the real signature, o
   - **The delete's entry** of a row with two formats records `formats: 2`.
   - **The e2e fake's edit** checks the cross-field rule before its lookup and its version, as the server's extractor does. A stale version, or an unknown ID, with no texts and no formats is 422 at `conflict_texts`. It was red against the fake before: 409.
 
+### As built (group H8)
+Built on H7's planning (S81, R143, R146–R149) and H4's (U55, U58, S79, S80, the texts), with nothing asked again, in one PR on `p11/p11.9-parsed-senders` and eight commits:
+- PR #81's review (above);
+- the server: `parsed_sender` through the history and the live events;
+- the console's label;
+- the 54th command;
+- the editor's formats section with "Try a line";
+- U55's look;
+- the e2e story;
+- the docs.
+
+*The user's at H8's plan review:*
+- **The one new text** is approved as written: a "Load again" whose read was paused says "Couldn't load the servers: Windows reports no network connection, so the app didn't ask the server. Try again." (review c).
+- **The app-wide fix is scheduled for group I's first commit** (its note below). H8 doesn't build it.
+
+Each new test ran red before its code, against a stub with the real signature, or, for a test that pins working code or that a stub couldn't turn red, by a mutation restored from a saved copy and checked by checksum. The stubs:
+- `chat_line` ignoring its formats;
+- `formats_of` answering no settings;
+- `access()` giving no formats, `Rights::formats` none, and `LiveRights` logging nothing;
+- the console printing no label;
+- the endpoint answering an empty preview;
+- the editor without its formats section;
+- `senderOf` without the `parsed` look.
+
+Runs red against the code before, not mutations:
+- the paused "Load again" (no failure line);
+- the token reach test over `any::<String>()` (five of the twelve errors);
+- the e2e fake's edit (409, not 422).
+
+*Choices made at the plan (mine):*
+- **R150. The review's record** (d) and its two new cases, above.
+- **R151. The history's read by key.**
+  - `ServerSettingsReads::formats_of(&ServerKey)` answers `ServerFormats`: `NoSettings`, `Readable` or `Unreadable(UnreadableFormats)`, with the rowid, the ID and the server when they read, and the column.
+  - It looks the row up by the key's canonical text. A row whose stored server isn't canonical can't be any bot's (R132's reasoning), so the history never meets it.
+- **R152. The rights' formats.**
+  - `access()` reads each bot's address and every settings row in its transaction, at most 100 rows. The bots' part is a function of its own, since the read passed clippy's 100 lines.
+  - `Access` gains `bot_formats` (one `Arc<ChatFormats>` a server) and `unreadable_formats`.
+  - `Rights` keeps only `BotId → Arc<ChatFormats>`, so the snapshot holds no address.
+  - `LiveRights` keeps the unreadable rows' rowids under its rebuild turn, at most `MAX_SERVER_SETTINGS`, replaced at every rebuild.
+  - **The log line** is one function, `app::server_settings::unreadable_formats`, so both sites log under `fleet_server::app::server_settings`.
+- **R153. `chat_line(viewer, level, line, formats)`:** the received arm reads `formats.sender_of(chat)`, which answers nothing for any line but a system one.
+- **R154. The console's label** sits right after the kind: `#41 … system (format: Notch): [Clan] Notch : hello`.
+- **R155. The editor and "Try a line".**
+  - The form holds `formats: { format }[]`, which `useFieldArray` needs.
+  - **Where Try sits:** `TryLine`, a component of its own, at the end of the formats' fieldset. It's inside the editor's form, so Enter in its line tries rather than saving.
+  - **What it shows:** the answer as a `status`; a refusal's text under the box as an `alert`.
+  - **What it changes:** each try clears the format errors an earlier one put there. An answer that comes after the formats or the line changed is dropped.
+- **R156.** `usePreviewChatFormats` keeps the app's default `networkMode`, like every other hook, until I's first commit changes it for all of them.
+
+*Choices made while building:*
+- **The matcher's property** checks the name against the format's own text before `{sender}`, not "after a non-name character" (review e, above).
+- **The fake's matcher** came with the 54th command, which the fake must answer. The chat page reads with it from the e2e commit on.
+- **The auth harness** gained `on_server`, `formats_for`, `settings_gone` and `break_formats`.
+  - `on_server` changes nothing on a bot already there, since `running()` puts a bot on `mc.example.com`.
+  - The live tests' `said_on` puts a second bot's line on the bus. That bot is assigned to the chatting agent, since the append checks that the agent holds the bot.
+- **The console's own end-to-end case** sets the bot's server and a format through its verbs, then reads `history`.
+- **The bridge's tests** assert on each `Result`, so a stub answering a value fails an assertion, not an `unwrap`.
+
+*Mutations* (each failed its tests, then was restored):
+- M8.1: the separator check moved to the end checks.
+- M8.2: `{any}` allowed after `{sender}`.
+- M8.3: the head cut 12 characters short.
+- M8.4: a format's positions counted in bytes.
+- M8.5: the name read one character late.
+- M8.6: a row without texts given one blank text in the editor.
+- M8.7: the delete's entry writing `formats` as 0.
+- M8.8: the rights' read failing on a row whose formats don't read back (S81's rejected first option).
+- M8.9: the history failing on such a row.
+- M8.10: `LiveRights` logging at every rebuild.
+- M8.11 and M8.12: the e2e fake's preview answering `{}` always; its `{any}` taking 33 characters.
+- M8.13: `validated`'s preview passed unchecked.
+- M8.14: the e2e fake's chat page reading no parsed sender.
+
+*Snapshots:*
+- the OpenAPI document: the review's four descriptions, `ChatLine.parsed_sender` (optional, 64 characters), and the history route's 200 text;
+- `auth__bots__history__chat_history_as_each_viewer_sees_it`: a matched line in each viewer's page, with `parsed_sender` and no `sender`.
+
+*Size:* about 3,370 lines added and 150 removed, the docs included, about 100 of them generated query data, types and snapshots; the plan said about 3,500. PR #81's review came to about 470 of them.
+
 ### Notes for later groups
 - **B2 (P11.3's history):** built (above).
 - **C (P11.4):** decided at C's planning (above), built in C1, C2 and C3.
@@ -1975,8 +2054,8 @@ Each new test ran red before its code, against a stub with the real signature, o
 - **H4 (P11.9's per-server settings), from H's planning (S66):** the per-server conflict texts first (a table keyed by a normalized server identity, a new permission, its step-up a question there, routes with their rate class and audit, the reconciler's `spec_of` resolving each bot's texts, a `Change::Store` hint, fleet-client, the console and Tauri commands with the user's grants, a settings screen), then the chat format: a fleet-core parser (no regex without the user's approval of a dependency), parsing at ingest or at read decided there, a parsed sender in its own optional `ChatLine` field built through `chat_line`, never in `sender`, and the console's distinct rendering, its looks the user's. Split at its plan review if it passes about 5,300 lines. *Planned at group H4's planning (above): split into H4 (the conflict texts' server side), H6 (their screens) and H7 (the chat format); U54–U60, S74–S80, R131–R136.*
 - **H6 (P11.9's Minecraft-servers screens), from H4's planning:** U56's four commands change build.rs's `COMMANDS`, the capability, `tauri-hardening.mjs`, `ipc-contract.json`, `ApiClient` with `API_METHODS`, `TauriApiClient`, `FakeApiClient`, `UnavailableApiClient`, `validated.ts` and the e2e fake's `COMMANDS` together; `limits.ts` gains the texts' 16 and 1024 and the 100 rows, which `tests/limits.rs` checks. U57's list and screen follow R136 and the texts above; the editor sends the answer's lines back joined by line breaks (S77), and builds every request from its form state. An e2e story adds a server with a text after the step-up, sees it listed, edits it and deletes it. *Built (above), with U61: Add opens the new entry, Save stays; the page is 10 rows since PR #79's review.*
 - **H7 (P11.9's chat format), from H4's planning:** S79, S80 with U59, R134 and R135; U55's icon in `senderOf`'s new look; the preview's route and `preview_chat_formats` (54 grants, U58); `0020` adds the column, read back exactly; the audit's metadata gains `formats`, `previous_formats` and `formats_changed`; S78's empty rule becomes "no text without a format"; P13.2 gains two fuzz targets (the constructor over any list of strings, the matcher over any format and text: no panic, and a `Some` is a valid `McUsername` read from the text's head). *From H6:* the editor's formats section goes between the texts and Save, its fields built from the form state as the texts are, and its field errors at `chat_formats[i]`; the list adds " · 1 chat format" / " · {n} chat formats" to an entry's count. A row's answer grows by at most about 2 KiB with 8 formats of 64 four-byte characters, so a page of 10 still fits a client's answer cap (about 680 KB), and the largest request with formats in three-byte characters stays about 51 KiB, under the 64 KiB body limit. *Planned at group H7's planning (above): split into H7 (the formats as a setting) and H8 (parsed senders end to end, the editor's formats); S81, R137–R149.* *The user's later ideas (U60), not built in H7:* a `{clan}` part shown in its own console column, and per-server highlight rules (for example tpa requests) with their own look. H7's syntax and stored shape must not block them: braces are reserved (U59), so `{clan}` is free, and the stored lists leave room for another column beside them.
-- **H8 (P11.9's parsed senders), from H7's planning:** S79 with R146 and S81 (the six tests named there), the console's label (R143), the 54th command `preview_chat_formats` in every place CLAUDE.md's "A new command changes …" line names (54 grants, U58), the editor's formats section between the texts and Save (`useFieldArray`, "Chat format {n}", Remove described by its label, "Add format", at 8 "At most 8 formats.", locked like the texts) with "Try a line" (R148), U55's look (R149), and an e2e story: the Owner adds a format and tries a line, a bot on that server shows the matched line with the icon, and deleting the format shows it as the server's again. The fake reads formats at the chat's read with a small matcher of its own. The user's hands-on, on the dev stack: lines typed in `docker compose --file deploy/compose.dev.yaml exec minecraft rcon-cli`, a matched line, an unmatched one, the spoof `[x] Admin : hi`, the preview box, and deleting the format correcting the history.
-- **I (P11.9's mode editor):** *From H's planning (S68):* the editor shares the every-page modes query and may show `unlisted_command` as a mark; it never echoes the field back (R5; `deny_unknown_fields` makes an echo a 400). the editor binds to S12's types and opens a mode with an unknown `type` read-only; it shows a mode editable, deletable or with a visibility switch from S14's flags, and never copies `authorize()`; it builds each request from its form state, never by echoing an answer (R5), and marks a cut command outside its text (S15); on `mode_needs_step_up` it resends the same body to the `/with-commands` twin through `useStepUpAction` (S16), and `DELETE` goes through it directly; it keeps the loaded `version` and handles `mode_changed`, `mode_in_use_by_others` and `mode_in_use` (S17, S18). *The user's note at the plan review:* the editor shows hotbar slots as 1 to 9, the keys players know, and maps them to the API's 0 to 8. The wordings of its marks, the 409s' handling and "save as copy" are the user's then. *From C3:* the editor shows each step's schedule, `on_respawn` among them, and explains what a respawn does: the bot lets go of the use button and stops sneaking first, and an on-respawn chat is skipped within 30 s of the last; its wording is the user's then.
+- **H8 (P11.9's parsed senders), from H7's planning:** S79 with R146 and S81 (the six tests named there), the console's label (R143), the 54th command `preview_chat_formats` in every place CLAUDE.md's "A new command changes …" line names (54 grants, U58), the editor's formats section between the texts and Save (`useFieldArray`, "Chat format {n}", Remove described by its label, "Add format", at 8 "At most 8 formats.", locked like the texts) with "Try a line" (R148), U55's look (R149), and an e2e story: the Owner adds a format and tries a line, a bot on that server shows the matched line with the icon, and deleting the format shows it as the server's again. The fake reads formats at the chat's read with a small matcher of its own. The user's hands-on, on the dev stack: lines typed in `docker compose --file deploy/compose.dev.yaml exec minecraft rcon-cli`, a matched line, an unmatched one, the spoof `[x] Admin : hi`, the preview box, and deleting the format correcting the history. *Built (above).*
+- **I (P11.9's mode editor):** *From H's planning (S68):* the editor shares the every-page modes query and may show `unlisted_command` as a mark; it never echoes the field back (R5; `deny_unknown_fields` makes an echo a 400). the editor binds to S12's types and opens a mode with an unknown `type` read-only; it shows a mode editable, deletable or with a visibility switch from S14's flags, and never copies `authorize()`; it builds each request from its form state, never by echoing an answer (R5), and marks a cut command outside its text (S15); on `mode_needs_step_up` it resends the same body to the `/with-commands` twin through `useStepUpAction` (S16), and `DELETE` goes through it directly; it keeps the loaded `version` and handles `mode_changed`, `mode_in_use_by_others` and `mode_in_use` (S17, S18). *The user's note at the plan review:* the editor shows hotbar slots as 1 to 9, the keys players know, and maps them to the API's 0 to 8. The wordings of its marks, the 409s' handling and "save as copy" are the user's then. *From C3:* the editor shows each step's schedule, `on_respawn` among them, and explains what a respawn does: the bot lets go of the use button and stops sneaking first, and an on-respawn chat is skipped within 30 s of the last; its wording is the user's then. *From H8's plan review (the user's):* I's first commit makes the TanStack client's default `networkMode` `"always"` for queries and mutations, with tests of its own. Nothing then pauses while Windows reports offline, as PR #81's review found for "Load again" (a paused read resolves unread), and fleet-client's own unreachable answer, with the banner, decides.
 - **L (P11.11):** *After H3, the user's note:* the app looks poor throughout. Button placement, spacing and general styling need rework on every screen, and L's brief starts from it.
 - **M:** U1's 24-hour run on the same folder, logging JSON at `info` to files. *From H5's check (above):* it passed on 2026-10-28, and `target/dod-run/` holds the linked account for the run, where the user logs in again. *From H5:* the kit's recipes are the run's too (`dod-server`, `dod-agent`, `dod-app`, its own ports, release builds); M adds the log files, through the recipes' exports or a recipe of its own, which `scripts/dod-kit.test.mjs` and the config tests then cover; `deploy/dod/agent.toml`'s `public_targets = false` stays until M decides (U50); `dod-clean` refuses while the agent's heartbeat is fresh or the database's `-wal` is there; the steps' part two ends the DoD. *From H3's planning:* the first check runs on H5's branch, through H5's `dod-*` recipes, and the server's own `rcon-cli list` confirms the bot; M's run can confirm the same way. *From H's planning:* the run decides whether it changes `public_targets` (U50); "every event shows up live" reads as every event outside a gap the timeline marks (S71); about 96 routine reconnects a day each open a sub-second gap; the DoD exes are release builds (S72); the end follows U51's second part. *From C3:* at `info` a respawn shows only when the server didn't confirm one in 5 s (`warn`); a confirmed one logs at `debug`. *From E:* the 24-hour run sees the retention at work: a `debug` line per run that deleted something, and one `retention.purge` entry an hour that deleted anything, plus one at the stop. J's audit screen shows that entry as the server's, with its counts; its wording is the user's then.
 
