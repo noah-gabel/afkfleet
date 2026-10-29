@@ -1872,6 +1872,65 @@ The server side alone would have been about 5,500. Parsed senders are the one pa
 
 *The texts:* everything friends read is in H4's table, with the user's change to the list's count above. The preview's `line` past 1024 characters reuses the approved "must be at most 1024 characters".
 
+### As built (group H7)
+Built on H7's planning (S81, R137–R149) and H4's (U55, U58–U60, S78–S80, R134, R135), with nothing asked again, in one PR on `p11/p11.9-chat-format` and seven commits:
+- PR #80's review (above);
+- the planning record;
+- fleet-core's `ChatFormats`;
+- the column;
+- the API, the preview and the app's carry;
+- fleet-client and the console's verb;
+- the docs.
+
+Each new test ran red before its code, against a stub with the real signature, or, for a test that pins working code or that a stub couldn't turn red, by a mutation restored from a saved copy and checked by checksum. The stubs:
+- `try_new` taking everything, matching that found nothing;
+- a repository storing `[]` and reading back none;
+- DTO rules that let everything through;
+- a preview answering a fixed 404;
+- an editor that dropped a row's formats and a list that counted only texts;
+- a client method answering `NoSession`, and a console verb doing nothing.
+
+*Choices made while building:*
+- **`ConflictTextsProblem` became `ListProblem`,** since the formats' problems share its shape (an index or none, and a message).
+- **`READ_MAX` is exactly S80's 137:** a format's 64 characters less `{sender}`'s 8, two `{any}` of 32, and a name run up to its 17th character.
+- **The name-character rule is shared:** `McUsername` and the parser call one `is_name_char`.
+- **The largest request comes to about 50 KiB,** not the note's 51: 50,892 bytes with the longest server, 16 texts of 1024 three-byte characters and 8 formats at their cap.
+- **The desktop bridge's `ServerPorts`** needed the reconciler's timing too; the review's commit missed it (its search covered `crates/` alone), and the API's commit adds it.
+- **The e2e fake** reads a request's formats as written and takes a missing list as none, as it takes texts; the server's 400 for it is fleet-server's to test.
+
+*Mutations* (each failed its tests, then was restored):
+- M7.1: the editor's fields, Remove and Add text not locked while "Confirm it's you" is up.
+- M7.2 and M7.3: the form synced with the row (RHF's `values`); the version taken from the row, not the state.
+- M7.4 and M7.5: serve without `.with_reconcile` on `ServerSettingsService`, then on `ModeService`, each failing 3 runs of 3 ("not within 10s, so no hint started a pass").
+- M7.6: any kind of line read, not only a system line.
+- M7.7 and M7.8: the text after `{sender}` compared ignoring case; leading spaces skipped before a literal.
+- M7.9: no check of the text after `{sender}`.
+- M7.10 and M7.11: a long name cut to 16; a short one padded.
+- M7.12: `is_empty` inverted.
+- M7.13: an error naming the next place in the list.
+- M7.14: a name not read from the text.
+- M7.15: an unbounded `{any}` over the whole text.
+- M7.16: `0020` without its CHECK.
+- M7.17: the fleet's read treating unreadable formats as unreadable settings.
+- M7.18: `chat_formats` defaulted in a create.
+- M7.19: a row needing a text whatever its formats.
+- M7.20: a preview's line refused for a control character.
+- M7.21: a preview's answer writing `null` for what it lacks.
+- M7.22: the e2e fake's old empty-row message.
+- M7.23: the no-op check without the formats.
+- M7.24: the update's entry without the formats.
+- M7.25: the answer's formats sorted.
+- M7.26: the auth harness's body limit lowered to 50,000 bytes.
+- M7.27: the preview's formats unvalidated.
+- M7.28: the preview without its authorization.
+
+*Snapshots:*
+- the migrations' checksums, `20 chat formats`;
+- the created and edited answers, `auth__server_settings__server_settings_created` and `…_edited`, each with its formats;
+- the OpenAPI document: `chat_formats` in both requests and the answer (required), the preview's two schemas and its path.
+
+*Size:* about 3,530 lines added and 330 removed, the docs included, about 350 of them generated query data, types and snapshots; the plan said about 4,900 to 5,300. PR #80's review came to about 310 of them.
+
 ### Notes for later groups
 - **B2 (P11.3's history):** built (above).
 - **C (P11.4):** decided at C's planning (above), built in C1, C2 and C3.
