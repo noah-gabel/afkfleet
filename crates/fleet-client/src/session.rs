@@ -100,8 +100,9 @@ use fleet_api_types::mfa::{
 };
 use fleet_api_types::modes::{CreateModeRequest, ModePage, ModeResponse, UpdateModeRequest};
 use fleet_api_types::server_settings::{
-    CreateServerSettingsRequest, ServerSettingsPage, ServerSettingsPageQuery,
-    ServerSettingsResponse, UpdateServerSettingsRequest,
+    CreateServerSettingsRequest, PreviewChatFormatsRequest, PreviewChatFormatsResponse,
+    ServerSettingsPage, ServerSettingsPageQuery, ServerSettingsResponse,
+    UpdateServerSettingsRequest,
 };
 use fleet_api_types::sessions::SessionPage;
 use fleet_api_types::users::{UserPage, UserPatchRequest, UserResponse};
@@ -1000,6 +1001,17 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         let url = self.server.api(&["server-settings", &id.to_string()]);
         let answer = self.authed(Method::DELETE, url, None).await?;
         expect_empty(answer, 204)
+    }
+
+    /// Which sender unsaved chat formats read from a line, through
+    /// `POST /server-settings/chat-format-preview` (200).
+    pub(crate) async fn preview_chat_formats(
+        self: &Arc<Self>,
+        request: &PreviewChatFormatsRequest,
+    ) -> Result<PreviewChatFormatsResponse, ClientError> {
+        let url = self.server.api(&["server-settings", "chat-format-preview"]);
+        let answer = self.authed(Method::POST, url, Some(json(request))).await?;
+        expect_json(answer, 200)
     }
 
     // ---- Modes (Plan.md P11.4) ----

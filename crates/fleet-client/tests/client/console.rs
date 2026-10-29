@@ -1608,7 +1608,7 @@ async fn new_server_asks_for_the_password_again_once_and_servers_lists_it() {
         .await
         .unwrap();
     let id = stored.items[0].id;
-    let line = format!("server {id} mc.example.com:25565 texts 2 version 1");
+    let line = format!("server {id} mc.example.com:25565 texts 2 formats 1 version 1");
     assert_eq!(
         terminal.said.iter().filter(|said| **said == line).count(),
         2,
@@ -1704,7 +1704,7 @@ async fn edit_server_and_delete_server_write_and_bad_json_is_never_repeated() {
     assert!(!text.contains("secret-looking"), "{text}");
     assert!(
         text.contains(&format!(
-            "server {id} mc.example.com:25565 texts 2 version 2"
+            "server {id} mc.example.com:25565 texts 2 formats 0 version 2"
         )),
         "{text}"
     );
@@ -1720,5 +1720,46 @@ async fn edit_server_and_delete_server_write_and_bad_json_is_never_repeated() {
         .await
         .unwrap();
     assert_eq!(left.items, []);
+    server.stop().await;
+}
+
+/// `preview-formats` says which format reads which sender, counted from 1,
+/// or that none fits, without a step-up; it never prints the line back, and
+/// JSON that isn't a preview's is said so (P11.9; ADR-0020, R143).
+#[tokio::test]
+async fn preview_formats_says_which_format_reads_which_sender_and_never_repeats_the_line() {
+    let server = Server::start().await;
+    let (_owner, code) = owner_and_code(&server).await;
+    let (client, _) = server.client();
+    let mut terminal = Scripted::new(
+        &[PASSWORD, &code],
+        &[
+            r#"preview-formats {"chat_formats": ["<{sender}> ", "[{any}] {sender} : "], "line": "[Clan] Notch : a line never shown"}"#,
+            r#"preview-formats {"chat_formats": ["{sender} : "], "line": "Server restarting soon"}"#,
+            r#"preview-formats {"formats": ["a secret-looking format"]}"#,
+        ],
+    );
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    assert_eq!(terminal.secrets.len(), 0, "no step-up was asked");
+    let text = terminal.text();
+    assert!(
+        terminal
+            .said
+            .iter()
+            .any(|line| line == "format 2 reads Notch"),
+        "{text}"
+    );
+    assert!(
+        terminal.said.iter().any(|line| line == "no format fits"),
+        "{text}"
+    );
+    assert!(text.contains("not a preview's JSON"), "{text}");
+    assert!(
+        !text.contains("never shown") && !text.contains("secret-looking"),
+        "{text}"
+    );
     server.stop().await;
 }
