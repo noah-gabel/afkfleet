@@ -193,7 +193,11 @@ test("keeps the servers' settings: writes after a step-up, the key, the version,
   const backend = new FakeBackend();
   backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
   backend.handle("login_mfa", { code: backend.code(OWNER) });
-  const request = { server: "MC.example.com", conflict_texts: ["b", "a\nlines", "b"] };
+  const request = {
+    server: "MC.example.com",
+    conflict_texts: ["b", "a\nlines", "b"],
+    chat_formats: ["{sender} : ", "[{any}] {sender} : ", "{sender} : "],
+  };
 
   const unstepped = await backend.handle("create_server_settings", { request });
   backend.handle("step_up", { request: { password: PASSWORD } });
@@ -203,7 +207,11 @@ test("keeps the servers' settings: writes after a step-up, the key, the version,
   };
   const taken = await backend.handle("create_server_settings", { request });
   const id = created.value.id;
-  const edit = { server: "mc.example.com:25565", conflict_texts: ["c"] };
+  const edit = {
+    server: "mc.example.com:25565",
+    conflict_texts: [],
+    chat_formats: ["<{sender}> "],
+  };
   const stale = await backend.handle("update_server_settings", {
     id,
     request: { version: 2, ...edit },
@@ -223,6 +231,7 @@ test("keeps the servers' settings: writes after a step-up, the key, the version,
   expect(created.value).toMatchObject({
     server: "mc.example.com:25565",
     conflict_texts: [{ lines: ["a", "lines"] }, { lines: ["b"] }],
+    chat_formats: ["{sender} : ", "[{any}] {sender} : ", "{sender} : "],
     version: 1,
   });
   expect(taken).toMatchObject({
@@ -235,7 +244,7 @@ test("keeps the servers' settings: writes after a step-up, the key, the version,
   });
   expect(edited).toMatchObject({
     ok: true,
-    value: { version: 2, conflict_texts: [{ lines: ["c"] }] },
+    value: { version: 2, conflict_texts: [], chat_formats: ["<{sender}> "] },
   });
   expect(listed).toMatchObject({ ok: true, value: { items: [{ id, version: 2 }] } });
   expect(removed).toEqual({ ok: true });
@@ -249,15 +258,40 @@ test("checks the cap before a taken server, as the server does", async () => {
   backend.handle("step_up", { request: { password: PASSWORD } });
   for (let n = 0; n < 100; n += 1) {
     await backend.handle("create_server_settings", {
-      request: { server: `mc${n}.example.com`, conflict_texts: ["a"] },
+      request: { server: `mc${n}.example.com`, conflict_texts: ["a"], chat_formats: [] },
     });
   }
 
   const taken = await backend.handle("create_server_settings", {
-    request: { server: "mc0.example.com", conflict_texts: ["a"] },
+    request: { server: "mc0.example.com", conflict_texts: ["a"], chat_formats: [] },
   });
 
   expect(taken).toMatchObject({ ok: false, error: { api: { status: 409, code: "conflict" } } });
+});
+
+test("refuses settings that hold neither a text nor a chat format", async () => {
+  const backend = new FakeBackend();
+  backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(OWNER) });
+  backend.handle("step_up", { request: { password: PASSWORD } });
+  const empty = { server: "mc.example.com", conflict_texts: [], chat_formats: [] };
+
+  const refused = await backend.handle("create_server_settings", { request: empty });
+
+  expect(refused).toMatchObject({
+    ok: false,
+    error: {
+      api: {
+        status: 422,
+        fields: [
+          {
+            path: "conflict_texts",
+            message: "must hold at least one text, unless a chat format is set",
+          },
+        ],
+      },
+    },
+  });
 });
 
 test("lets only Admins and the Owner read the servers' settings", async () => {

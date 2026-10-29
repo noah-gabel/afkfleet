@@ -3,6 +3,10 @@ source: crates/fleet-server/tests/auth/server_settings.rs
 expression: "redacted(&edited.body, &[(id.to_string(), \"the settings\")])"
 ---
 {
+  "chat_formats": [
+    "{sender} : ",
+    "[{any}] {sender} : "
+  ],
   "conflict_texts": [
     {
       "lines": [

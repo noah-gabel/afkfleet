@@ -29,6 +29,15 @@ use crate::support::{
 /// The collection's route.
 const SETTINGS: &str = "/api/v1/server-settings";
 
+/// The chat formats' preview (ADR-0020, U58, R134).
+const PREVIEW: &str = "/api/v1/server-settings/chat-format-preview";
+
+/// The user's two formats (S80): a clan tag, and none.
+const FORMATS: [&str; 2] = ["[{any}] {sender} : ", "{sender} : "];
+
+/// The cross-field rule's message (R140).
+const TEXTS_UNLESS_FORMATS: &str = "must hold at least one text, unless a chat format is set";
+
 /// A settings row's route.
 fn path(id: ServerSettingsId) -> String {
     format!("{SETTINGS}/{id}")
@@ -63,14 +72,39 @@ fn widest_texts(width: usize, offset: u32) -> Vec<String> {
         .collect()
 }
 
-/// A create's body.
-fn create_body(server: &str, texts: &[&str]) -> Value {
-    json!({ "server": server, "conflict_texts": texts })
+/// 8 chat formats of 64 characters as written, every literal character
+/// `width` bytes in UTF-8: the formats at their caps.
+fn widest_formats(width: usize) -> Vec<String> {
+    let character = if width == 3 { '\u{4E00}' } else { '\u{1F600}' };
+    assert_eq!(character.len_utf8(), width);
+    let format = format!("{{sender}} : {}", character.to_string().repeat(53));
+    assert_eq!(format.chars().count(), 64);
+    vec![format; 8]
 }
 
-/// An edit's body, at `version`.
+/// A create's body, without chat formats.
+fn create_body(server: &str, texts: &[&str]) -> Value {
+    create_with(server, texts, &[])
+}
+
+/// A create's body with chat formats.
+fn create_with(server: &str, texts: &[&str], formats: &[&str]) -> Value {
+    json!({ "server": server, "conflict_texts": texts, "chat_formats": formats })
+}
+
+/// An edit's body, at `version`, without chat formats.
 fn edit_body(version: u32, server: &str, texts: &[&str]) -> Value {
-    json!({ "version": version, "server": server, "conflict_texts": texts })
+    edit_with(version, server, texts, &[])
+}
+
+/// An edit's body, at `version`, with chat formats.
+fn edit_with(version: u32, server: &str, texts: &[&str], formats: &[&str]) -> Value {
+    json!({ "version": version, "server": server, "conflict_texts": texts, "chat_formats": formats })
+}
+
+/// A preview's body.
+fn preview_body(formats: &[&str], line: &str) -> Value {
+    json!({ "chat_formats": formats, "line": line })
 }
 
 fn key(address: &str) -> ServerKey {
@@ -117,6 +151,11 @@ impl Setup {
             Some(body),
         )
         .await
+    }
+
+    /// `POST /server-settings/chat-format-preview` with `body` as `by`.
+    async fn preview_formats(&self, by: &Person, body: Value) -> Seen {
+        self.post(PREVIEW, Some(&by.token), Some(body)).await
     }
 
     /// `DELETE /server-settings/{id}` as `by`.
@@ -166,6 +205,19 @@ impl Setup {
         server: &str,
         texts: &[impl AsRef<str>],
     ) -> ServerSettingsId {
+        self.add_settings_formatted(n, server, texts, &[] as &[&str])
+            .await
+    }
+
+    /// As [`Setup::add_settings`], with the conflict texts `texts` and the
+    /// chat formats `formats`.
+    async fn add_settings_formatted(
+        &self,
+        n: u8,
+        server: &str,
+        texts: &[impl AsRef<str>],
+        formats: &[impl AsRef<str>],
+    ) -> ServerSettingsId {
         let created = at(T0 - 3_600_000 + i64::from(n));
         let id = ServerSettingsId::new_v7(created, [n; 10]).unwrap();
         let mut tx = self.db.write().await.unwrap();
@@ -174,7 +226,7 @@ impl Setup {
                 id,
                 server: key(server),
                 conflict_texts: ConflictTexts::try_new(texts).unwrap(),
-                chat_formats: ChatFormats::default(),
+                chat_formats: ChatFormats::try_new(formats).unwrap(),
                 created_at: created,
             })
             .await
@@ -215,6 +267,9 @@ async fn the_server_settings_need_a_session(
             )
             .await,
         setup.delete(&path(id), None).await,
+        setup
+            .post(PREVIEW, None, Some(preview_body(&FORMATS, "Notch : hi")))
+            .await,
     ];
 
     for seen in &seen {
@@ -240,6 +295,9 @@ async fn a_member_is_refused_every_route_whatever_the_id(
         setup
             .create_settings(&member, create_body("play.example.com", &["One"]))
             .await,
+        setup
+            .preview_formats(&member, preview_body(&FORMATS, "Notch : hi"))
+            .await,
     ];
     for id in [existing, unknown] {
         seen.push(
@@ -263,7 +321,7 @@ async fn a_member_is_refused_every_route_whatever_the_id(
 }
 
 /// Every write needs a fresh step-up and changes nothing without one;
-/// reading doesn't.
+/// reading and the preview don't (R134).
 #[sqlx::test(migrations = false)]
 async fn writes_need_a_fresh_step_up_and_reads_dont(
     _pool: SqlitePoolOptions,
@@ -275,6 +333,9 @@ async fn writes_need_a_fresh_step_up_and_reads_dont(
     let before = setup.stored_settings(id).await;
 
     let read = setup.list_settings(&admin, "").await;
+    let previewed = setup
+        .preview_formats(&admin, preview_body(&FORMATS, "Notch : hi"))
+        .await;
     let refused = [
         setup
             .create_settings(&admin, create_body("play.example.com", &["One"]))
@@ -286,6 +347,7 @@ async fn writes_need_a_fresh_step_up_and_reads_dont(
     ];
 
     assert_eq!(read.status, 200, "{}", read.text);
+    assert_eq!(previewed.status, 200, "{}", previewed.text);
     for seen in &refused {
         assert_eq!(
             (seen.status, seen.code()),
@@ -313,9 +375,10 @@ async fn an_admin_creates_lists_edits_and_deletes_a_servers_settings(
     let created = setup
         .create_settings(
             &admin,
-            create_body(
+            create_with(
                 "MC.example.com",
                 &["You logged in\nfrom another location", "Already connected"],
+                &FORMATS,
             ),
         )
         .await;
@@ -336,7 +399,12 @@ async fn an_admin_creates_lists_edits_and_deletes_a_servers_settings(
         .edit_settings(
             &admin,
             id,
-            edit_body(1, "mc.example.com:25570", &["Kicked: duplicate"]),
+            edit_with(
+                1,
+                "mc.example.com:25570",
+                &["Kicked: duplicate"],
+                &["{sender} : ", "[{any}] {sender} : "],
+            ),
         )
         .await;
     assert_eq!(edited.status, 200, "{}", edited.text);
@@ -421,7 +489,8 @@ async fn a_limit_past_ten_is_422_and_a_page_holds_ten_by_default(
 }
 
 /// The longest page, rows at every cap (the longest server, 16 texts of
-/// 1024 four-byte characters), fits fleet-client's 1 MiB answer cap.
+/// 1024 four-byte characters, 8 formats of 64), fits fleet-client's 1 MiB
+/// answer cap.
 #[sqlx::test(migrations = false)]
 async fn the_longest_page_fits_a_clients_answer_cap(
     _pool: SqlitePoolOptions,
@@ -432,7 +501,12 @@ async fn the_longest_page_fits_a_clients_answer_cap(
     let rows = u8::try_from(SERVER_SETTINGS_PAGE_MAX).unwrap();
     for n in 0..rows {
         setup
-            .add_settings_with(n, &longest_server(n), &widest_texts(4, 0))
+            .add_settings_formatted(
+                n,
+                &longest_server(n),
+                &widest_texts(4, 0),
+                &widest_formats(4),
+            )
             .await;
     }
 
@@ -446,7 +520,7 @@ async fn the_longest_page_fits_a_clients_answer_cap(
         usize::from(rows)
     );
     assert!(
-        seen.text.len() > usize::from(rows) * 16 * 1024 * 4,
+        seen.text.len() > usize::from(rows) * (16 * 1024 + 8 * 53) * 4,
         "the rows are at their caps: {} bytes",
         seen.text.len()
     );
@@ -496,9 +570,14 @@ async fn a_body_that_doesnt_parse_is_400_and_a_broken_rule_422(
     let id = setup.add_settings(1, "mc.example.com").await;
     let before = setup.stored_settings(id).await;
     let mut unknown_field = create_body("play.example.com", &["One"]);
-    unknown_field["chat_formats"] = json!([]);
+    unknown_field["highlights"] = json!([]);
     let mut no_version = edit_body(1, "mc.example.com", &["One"]);
     no_version.as_object_mut().unwrap().remove("version");
+    // R135: an older client, which doesn't know the formats, is refused
+    // rather than clearing them.
+    let no_formats = json!({ "server": "play.example.com", "conflict_texts": ["One"] });
+    let no_formats_edit =
+        json!({ "version": 1, "server": "mc.example.com", "conflict_texts": ["One"] });
     let seventeen: Vec<String> = (0..17).map(|n| format!("Text {n}")).collect();
     let seventeen: Vec<&str> = seventeen.iter().map(String::as_str).collect();
     let long = "x".repeat(1025);
@@ -512,6 +591,8 @@ async fn a_body_that_doesnt_parse_is_400_and_a_broken_rule_422(
             )
             .await,
         setup.edit_settings(&admin, id, no_version).await,
+        setup.create_settings(&admin, no_formats).await,
+        setup.edit_settings(&admin, id, no_formats_edit).await,
     ];
     for seen in &shapes {
         assert_eq!(seen.status, 400, "{}", seen.text);
@@ -525,7 +606,26 @@ async fn a_body_that_doesnt_parse_is_400_and_a_broken_rule_422(
         (
             create_body("play.example.com", &[]),
             "conflict_texts",
-            "must hold at least one text",
+            TEXTS_UNLESS_FORMATS,
+        ),
+        (
+            create_with(
+                "play.example.com",
+                &["One"],
+                &["{sender} : ", "{Sender} : "],
+            ),
+            "chat_formats[1]",
+            "can hold only {sender} and {any}; write a brace as {{ or }}",
+        ),
+        (
+            create_with("play.example.com", &["One"], &["{sender} : "; 9]),
+            "chat_formats",
+            "must hold at most 8 formats",
+        ),
+        (
+            create_with("play.example.com", &["One"], &["{sender}\n: "]),
+            "chat_formats[0]",
+            "must be one line, without control characters, formatting codes, text-direction marks or invisible characters",
         ),
         (
             create_body("play.example.com", &seventeen),
@@ -727,8 +827,8 @@ async fn the_answers_lines_sent_back_change_nothing(
 }
 
 /// Each write records one entry with the server's host and port and the
-/// counts, never a text; an edit that moves the server records the one
-/// before too (S78).
+/// counts, never a text or a format; an edit that moves the server records
+/// the one before too (S78, R141).
 #[sqlx::test(migrations = false)]
 async fn each_write_is_recorded_without_a_text(
     _pool: SqlitePoolOptions,
@@ -737,13 +837,21 @@ async fn each_write_is_recorded_without_a_text(
     let setup = setup(options).await;
     let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
     let secret = "a kick text no entry may hold";
+    let format = "{sender} says a kick text: ";
 
     let created = setup
-        .create_settings(&admin, create_body("mc.example.com", &[secret, "Two"]))
+        .create_settings(
+            &admin,
+            create_with("mc.example.com", &[secret, "Two"], &[format]),
+        )
         .await;
     let id = created_id(&created);
     setup
-        .edit_settings(&admin, id, edit_body(1, "[2001:db8::1]:25570", &[secret]))
+        .edit_settings(
+            &admin,
+            id,
+            edit_with(1, "[2001:db8::1]:25570", &[secret], &[format]),
+        )
         .await;
     setup
         .edit_settings(&admin, id, edit_body(2, "[2001:db8::1]:25570", &["Other"]))
@@ -782,7 +890,8 @@ async fn each_write_is_recorded_without_a_text(
         map(&[
             ("server_host", "mc.example.com"),
             ("server_port", "25565"),
-            ("texts", "2")
+            ("texts", "2"),
+            ("formats", "1"),
         ])
     );
     // Newest first: the second edit, then the first, which moved the server.
@@ -797,6 +906,9 @@ async fn each_write_is_recorded_without_a_text(
             ("texts", "1"),
             ("previous_texts", "2"),
             ("texts_changed", "true"),
+            ("formats", "1"),
+            ("previous_formats", "1"),
+            ("formats_changed", "false"),
         ])
     );
     assert_eq!(
@@ -808,6 +920,9 @@ async fn each_write_is_recorded_without_a_text(
             ("texts", "1"),
             ("previous_texts", "1"),
             ("texts_changed", "true"),
+            ("formats", "0"),
+            ("previous_formats", "1"),
+            ("formats_changed", "true"),
         ])
     );
     assert_eq!(
@@ -817,6 +932,7 @@ async fn each_write_is_recorded_without_a_text(
             ("server_host", "2001:db8::1"),
             ("server_port", "25570"),
             ("texts", "1"),
+            ("formats", "0"),
         ])
     );
 }
@@ -916,7 +1032,7 @@ async fn every_route_spends_the_users_request_limit(
     let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
     let id = setup.add_settings(1, "mc.example.com").await;
 
-    for route in 0..4 {
+    for route in 0..5 {
         let call = || async {
             match route {
                 0 => setup.list_settings(&admin, "").await,
@@ -934,12 +1050,17 @@ async fn every_route_spends_the_users_request_limit(
                         )
                         .await
                 }
-                _ => {
+                3 => {
                     setup
                         .delete_settings(
                             &admin,
                             ServerSettingsId::new_v7(at(T0), [0xEE; 10]).unwrap(),
                         )
+                        .await
+                }
+                _ => {
+                    setup
+                        .preview_formats(&admin, preview_body(&FORMATS, "Notch : hi"))
                         .await
                 }
             }
@@ -1004,9 +1125,9 @@ async fn a_demoted_admin_is_403_before_any_row_is_read(
     assert_eq!(setup.settings_entries().await, 0);
 }
 
-/// The largest valid request, the longest server and 16 texts of 1024
-/// three-byte characters, fits the default 64 KiB body limit: a create's
-/// and an edit's.
+/// The largest valid request, the longest server, 16 texts of 1024
+/// three-byte characters and 8 formats of 64, fits the default 64 KiB body
+/// limit: a create's and an edit's (about 50 KiB).
 #[sqlx::test(migrations = false)]
 async fn the_largest_valid_request_fits_the_body_limit(
     _pool: SqlitePoolOptions,
@@ -1015,13 +1136,22 @@ async fn the_largest_valid_request_fits_the_body_limit(
     let setup = setup(options).await;
     let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
     let server = longest_server(0);
-    let create = json!({ "server": server, "conflict_texts": widest_texts(3, 0) });
-    let edit = json!({ "version": 1, "server": server, "conflict_texts": widest_texts(3, 16) });
+    let create = json!({
+        "server": server,
+        "conflict_texts": widest_texts(3, 0),
+        "chat_formats": widest_formats(3),
+    });
+    let edit = json!({
+        "version": 1,
+        "server": server,
+        "conflict_texts": widest_texts(3, 16),
+        "chat_formats": widest_formats(3),
+    });
 
     let created = setup.create_settings(&admin, create.clone()).await;
 
     assert!(
-        create.to_string().len() > 48 * 1024,
+        create.to_string().len() > 49 * 1024,
         "{}",
         create.to_string().len()
     );
@@ -1048,7 +1178,11 @@ async fn sixteen_texts_of_four_byte_characters_are_413(
 ) {
     let setup = setup(options).await;
     let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
-    let body = json!({ "server": "mc.example.com", "conflict_texts": widest_texts(4, 0) });
+    let body = json!({
+        "server": "mc.example.com",
+        "conflict_texts": widest_texts(4, 0),
+        "chat_formats": [],
+    });
 
     let seen = setup.create_settings(&admin, body).await;
     let listed = setup.list_settings(&admin, "").await;
@@ -1080,7 +1214,7 @@ async fn an_edits_broken_texts_are_422_at_their_paths(
     let long = "x".repeat(1025);
 
     for (texts, field, message) in [
-        (vec![], "conflict_texts", "must hold at least one text"),
+        (vec![], "conflict_texts", TEXTS_UNLESS_FORMATS),
         (seventeen, "conflict_texts", "must hold at most 16 texts"),
         (vec!["One", ""], "conflict_texts[1]", "must not be empty"),
         (
@@ -1101,4 +1235,235 @@ async fn an_edits_broken_texts_are_422_at_their_paths(
     }
     assert_eq!(setup.stored_settings(id).await, before);
     assert_eq!(setup.settings_entries().await, 0);
+}
+
+/// A row holds at least one text unless it holds a chat format (S78,
+/// R140): one with formats and no texts is created and edited; one with
+/// neither is 422 at `conflict_texts`, a create's and an edit's alike, and
+/// nothing is written.
+#[sqlx::test(migrations = false)]
+async fn a_row_holds_a_text_unless_it_holds_a_format(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+
+    let created = setup
+        .create_settings(&admin, create_with("mc.example.com", &[], &FORMATS))
+        .await;
+    assert_eq!(created.status, 201, "{}", created.text);
+    assert_eq!(created.body["conflict_texts"], json!([]));
+    assert_eq!(created.body["chat_formats"], json!(FORMATS));
+    let id = created_id(&created);
+    let entries = setup.settings_entries().await;
+    let before = setup.stored_settings(id).await;
+
+    for seen in [
+        setup
+            .create_settings(&admin, create_with("play.example.com", &[], &[]))
+            .await,
+        setup
+            .edit_settings(&admin, id, edit_with(1, "mc.example.com", &[], &[]))
+            .await,
+    ] {
+        assert_eq!(seen.status, 422, "{}", seen.text);
+        assert_eq!(
+            seen.body["error"]["fields"],
+            json!([{ "path": "conflict_texts", "message": TEXTS_UNLESS_FORMATS }])
+        );
+    }
+    assert_eq!(setup.stored_settings(id).await, before);
+    assert_eq!(setup.settings_entries().await, entries);
+    let texts_only = setup
+        .edit_settings(&admin, id, edit_with(1, "mc.example.com", &["One"], &[]))
+        .await;
+    assert_eq!(texts_only.status, 200, "{}", texts_only.text);
+    assert_eq!(texts_only.body["chat_formats"], json!([]));
+}
+
+/// An edit of the formats alone is a real write: the next version, its
+/// entry, and the reconciler's hint (S78, R141).
+#[sqlx::test(migrations = false)]
+async fn a_formats_only_edit_is_a_real_write(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let created = setup
+        .create_settings(&admin, create_with("mc.example.com", &["One"], &FORMATS))
+        .await;
+    let id = created_id(&created);
+    setup.hints.take();
+
+    let edited = setup
+        .edit_settings(
+            &admin,
+            id,
+            edit_with(1, "mc.example.com", &["One"], &["{sender} : "]),
+        )
+        .await;
+
+    assert_eq!(edited.status, 200, "{}", edited.text);
+    assert_eq!(edited.body["version"], 2);
+    assert_eq!(edited.body["chat_formats"], json!(["{sender} : "]));
+    assert_eq!(setup.hints.take(), [Change::Store]);
+    let entry = setup.last(&AuditAction::SERVER_SETTINGS_UPDATE).await;
+    let recorded = metadata(&entry);
+    assert_eq!(recorded["texts_changed"], "false");
+    assert_eq!(recorded["formats_changed"], "true");
+    assert_eq!(recorded["formats"], "1");
+    assert_eq!(recorded["previous_formats"], "2");
+}
+
+/// The answer's formats, sent back as they came, are the formats exactly:
+/// escaped braces, order and duplicates kept, so the edit is a no-op (S77's
+/// rule for the formats). Reordering them is a change.
+#[sqlx::test(migrations = false)]
+async fn the_answers_formats_sent_back_change_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let formats = ["{{{sender}}} : ", "[{any}] {sender} : ", "{{{sender}}} : "];
+    let created = setup
+        .create_settings(&admin, create_with("mc.example.com", &["One"], &formats))
+        .await;
+    let id = created_id(&created);
+    setup.hints.take();
+    let entries = setup.settings_entries().await;
+    let answered: Vec<&str> = created.body["chat_formats"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|format| format.as_str().unwrap())
+        .collect();
+
+    let back = setup
+        .edit_settings(
+            &admin,
+            id,
+            edit_with(1, "mc.example.com", &["One"], &answered),
+        )
+        .await;
+    let reordered = setup
+        .edit_settings(
+            &admin,
+            id,
+            edit_with(
+                1,
+                "mc.example.com",
+                &["One"],
+                &[formats[1], formats[0], formats[2]],
+            ),
+        )
+        .await;
+
+    assert_eq!(answered, formats);
+    assert_eq!(back.status, 200, "{}", back.text);
+    assert_eq!(back.body, created.body);
+    assert_eq!(reordered.body["version"], 2, "{}", reordered.text);
+    assert_eq!(setup.settings_entries().await, entries + 1);
+    assert_eq!(setup.hints.take(), [Change::Store]);
+}
+
+/// The preview answers which sender the first fitting format reads, and
+/// that format's place counted from 0, for an Admin and the Owner without a
+/// step-up; the line is cleaned as received chat is; nothing is stored,
+/// recorded or hinted (U58, R134).
+#[sqlx::test(migrations = false)]
+async fn the_preview_reads_the_sender_the_first_fitting_format_reads(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+    let owner = setup.person(3, "owner", Role::Owner).await;
+
+    for (by, formats, line, answer) in [
+        (
+            &admin,
+            &FORMATS[..],
+            "[Clan] Notch : hello",
+            json!({ "sender": "Notch", "format": 0 }),
+        ),
+        (
+            &admin,
+            &FORMATS[..],
+            "Notch : hello",
+            json!({ "sender": "Notch", "format": 1 }),
+        ),
+        (&admin, &FORMATS[..], "Server restarting soon", json!({})),
+        // S80's accepted residual: display only, and marked in the app.
+        (
+            &admin,
+            &FORMATS[..],
+            "[x] Admin : hi",
+            json!({ "sender": "Admin", "format": 0 }),
+        ),
+        (
+            &admin,
+            &FORMATS[..],
+            "\u{a7}c[Clan] \u{a7}fNotch\u{202e} : hi",
+            json!({ "sender": "Notch", "format": 0 }),
+        ),
+        (&admin, &[][..], "Notch : hi", json!({})),
+        (&owner, &FORMATS[..], "", json!({})),
+    ] {
+        let seen = setup.preview_formats(by, preview_body(formats, line)).await;
+
+        assert_eq!(seen.status, 200, "{line}: {}", seen.text);
+        assert_eq!(seen.body, answer, "{line}");
+    }
+    assert_eq!(setup.settings_entries().await, 0);
+    assert_eq!(setup.hints.take(), []);
+    assert_eq!(
+        setup.list_settings(&admin, "").await.body["items"],
+        json!([])
+    );
+}
+
+/// The preview's formats are validated as on save, at their paths, and a
+/// line past 1024 characters is 422 at `line`; a body without its line is
+/// the bare 400 (R134).
+#[sqlx::test(migrations = false)]
+async fn a_previews_broken_formats_and_long_line_are_refused_at_their_paths(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+    let long = "x".repeat(1025);
+
+    for (body, field, message) in [
+        (
+            preview_body(&["{sender} : ", "{Sender} : "], "Notch : hi"),
+            "chat_formats[1]",
+            "can hold only {sender} and {any}; write a brace as {{ or }}",
+        ),
+        (
+            preview_body(&["{sender} : "; 9], "Notch : hi"),
+            "chat_formats",
+            "must hold at most 8 formats",
+        ),
+        (
+            preview_body(&FORMATS, &long),
+            "line",
+            "must be at most 1024 characters",
+        ),
+    ] {
+        let seen = setup.preview_formats(&admin, body).await;
+
+        assert_eq!(seen.status, 422, "{field}: {}", seen.text);
+        assert_eq!(
+            seen.body["error"]["fields"],
+            json!([{ "path": field, "message": message }])
+        );
+    }
+    let no_line = setup
+        .preview_formats(&admin, json!({ "chat_formats": FORMATS }))
+        .await;
+    assert_eq!(no_line.status, 400, "{}", no_line.text);
 }

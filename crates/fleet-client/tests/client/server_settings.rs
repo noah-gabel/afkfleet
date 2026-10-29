@@ -4,7 +4,7 @@
 //! error's path. Who may do what is fleet-server's to test.
 
 use fleet_api_types::ErrorCode;
-use fleet_api_types::server_settings::ConflictTextsInput;
+use fleet_api_types::server_settings::{ChatFormatsInput, ConflictTextsInput};
 use fleet_api_types::server_settings::{
     CreateServerSettingsRequest, ServerSettingsPageQuery, UpdateServerSettingsRequest,
 };
@@ -15,6 +15,7 @@ fn create(server: &str, texts: &[&str]) -> CreateServerSettingsRequest {
     CreateServerSettingsRequest {
         server: server.to_owned(),
         conflict_texts: ConflictTextsInput(texts.iter().map(|text| (*text).to_owned()).collect()),
+        chat_formats: ChatFormatsInput::default(),
     }
 }
 
@@ -23,6 +24,7 @@ fn update(version: u32, server: &str, texts: &[&str]) -> UpdateServerSettingsReq
         version,
         server: server.to_owned(),
         conflict_texts: ConflictTextsInput(texts.iter().map(|text| (*text).to_owned()).collect()),
+        chat_formats: ChatFormatsInput::default(),
     }
 }
 

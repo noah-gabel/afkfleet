@@ -36,6 +36,7 @@ use fleet_server::config::{
     AccountsConfig, Argon2Params, AuditConfig, AuthConfig, ChatConfig, DatabaseConfig, HttpConfig,
     LogConfig, LogFormat, RateLimitConfig, ServerConfig, VaultConfig,
 };
+use fleet_server::grpc::reconciler::ReconcileTimings;
 use fleet_server::http::rate_limit::TrustedProxies;
 use fleet_server::infra::crypto::passwords::Argon2Passwords;
 use fleet_server::infra::crypto::vault::{DerivedKey, VaultKeys};
@@ -136,6 +137,7 @@ impl Server {
             // Never called: these tests link no Microsoft account.
             microsoft: Arc::new(ReqwestMicrosoftAuth::new(Arc::new(clock.clone())).unwrap()),
             pace: Arc::new(TokioPace),
+            reconcile: ReconcileTimings::default(),
         };
         let app = app_with(
             &config,

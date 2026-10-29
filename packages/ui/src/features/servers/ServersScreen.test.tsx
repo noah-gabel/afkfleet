@@ -19,6 +19,8 @@ describe("the Minecraft servers' list", () => {
       {
         serverSettings: async () => ({
           items: [
+            settings(4, "chat.example.com:25565", [], 1, ["{sender} : ", "<{sender}> "]),
+            settings(3, "both.example.com:25565", [["One"]], 1, ["{sender} : ", "<{sender}> "]),
             settings(2, "play.example.com:25566", [["One"], ["Two", "lines"], ["Three"]]),
             settings(1, "mc.example.com:25565", [["Already connected"]]),
           ],
@@ -36,8 +38,11 @@ describe("the Minecraft servers' list", () => {
     const items = within(screen.getByRole("list", { name: "Minecraft servers" })).getAllByRole(
       "listitem",
     );
-    expect(items).toHaveLength(2);
-    const [first, second] = items;
+    expect(items).toHaveLength(4);
+    const [formatsOnly, both, first, second] = items;
+    // Only the parts a row has (the user's change at H7's plan review).
+    expect(within(formatsOnly as HTMLElement).getByText("2 chat formats")).toBeDefined();
+    expect(within(both as HTMLElement).getByText("1 conflict text · 2 chat formats")).toBeDefined();
     expect(within(first as HTMLElement).getByText("play.example.com:25566")).toBeDefined();
     expect(within(first as HTMLElement).getByText("3 conflict texts")).toBeDefined();
     expect(within(second as HTMLElement).getByText("mc.example.com:25565")).toBeDefined();

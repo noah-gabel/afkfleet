@@ -12,6 +12,14 @@ export type CreateServerSettingsRequest = {
 server: string, 
 /**
  * The kick texts that count as someone logging in with a bot's
- * account: 1 to 16, each 1 to 1024 characters, line breaks allowed.
+ * account: up to 16, each 1 to 1024 characters, line breaks allowed;
+ * at least one unless `chat_formats` holds one.
  */
-conflict_texts: Array<string>, };
+conflict_texts: Array<string>, 
+/**
+ * The chat formats, in the order they're tried: up to 8, each at most
+ * 64 characters as written, with one `{sender}`, up to two `{any}`
+ * before it and literal braces written `{{` and `}}`. Always given;
+ * `[]` for none.
+ */
+chat_formats: Array<string>, };

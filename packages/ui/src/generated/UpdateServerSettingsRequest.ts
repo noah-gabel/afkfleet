@@ -18,4 +18,8 @@ server: string,
 /**
  * The conflict texts, under `CreateServerSettingsRequest`'s rules.
  */
-conflict_texts: Array<string>, };
+conflict_texts: Array<string>, 
+/**
+ * The chat formats, under `CreateServerSettingsRequest`'s rules.
+ */
+chat_formats: Array<string>, };

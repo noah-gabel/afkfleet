@@ -1,13 +1,15 @@
 //! The servers' settings routes (Plan.md P11.9, Appendix B; ADR-0020, U54,
-//! S74–S78): Admins and the Owner read them, and after a step-up write them.
+//! U58, S74–S80, R134, R135): Admins and the Owner read them, after a
+//! step-up write them, and try unsaved chat formats on a line.
 //!
 //! - **Reading** (`GET /api/v1/server-settings`): `authorize()` asks
 //!   `ViewServerSettings` first (403 for a Member), then one page, newest
 //!   first, of at most 10 rows, so a page of rows at their caps fits a
 //!   client's answer cap (`ServerSettingsPageQuery`).
 //! - **Creating** (`POST /api/v1/server-settings`, after a step-up): a
-//!   `CreateServerSettingsRequest`, whose every rule garde checked; the
-//!   server is keyed (S74) and the texts built by fleet-core.
+//!   `CreateServerSettingsRequest`, whose every rule garde checked, at
+//!   least one text unless a chat format is set (R140); the server is keyed
+//!   (S74) and the texts and formats built by fleet-core.
 //!   `ConfigureServerSettings` first (403), then the service checks it all
 //!   again in its transaction: the cap (409 `conflict`, S78) and a server
 //!   that has settings already (422 on `server`).
@@ -20,6 +22,10 @@
 //!   `server`.
 //! - **Deleting** (`DELETE /api/v1/server-settings/{id}`, after a step-up):
 //!   `ConfigureServerSettings` first, then 404 for a missing row. 204.
+//! - **Previewing** (`POST /api/v1/server-settings/chat-format-preview`, no
+//!   step-up, U58): `ConfigureServerSettings` (403), then which of the
+//!   request's formats, validated as on save, fits its line first, cleaned
+//!   as received chat is (R134). Nothing is read, written or recorded.
 
 use axum::Json;
 use axum::extract::State;
@@ -27,11 +33,13 @@ use axum::http::StatusCode;
 use core::num::NonZeroU32;
 
 use fleet_api_types::server_settings::{
-    ConflictTextResponse, CreateServerSettingsRequest, SERVER_TAKEN, ServerSettingsPage,
-    ServerSettingsPageQuery, ServerSettingsResponse, UpdateServerSettingsRequest,
+    ChatFormatsInput, ConflictTextResponse, ConflictTextsInput, CreateServerSettingsRequest,
+    PreviewChatFormatsRequest, PreviewChatFormatsResponse, SERVER_TAKEN, ServerSettingsPage,
+    ServerSettingsPageQuery, ServerSettingsResponse, UpdateServerSettingsRequest, holds_something,
 };
 use fleet_api_types::{BoundedText, ErrorResponse, FieldError};
 use fleet_core::authz::{Permission, ResourceContext};
+use fleet_core::chat::ChatFormats;
 use fleet_core::disconnect::ConflictTexts;
 use fleet_core::id::ServerSettingsId;
 use fleet_core::value::{ServerAddress, ServerKey};
@@ -111,14 +119,18 @@ pub(crate) async fn create(
     ValidJson(request): ValidJson<CreateServerSettingsRequest>,
 ) -> Result<(StatusCode, Json<ServerSettingsResponse>), ApiError> {
     let user = user.user();
-    let (server, texts) = checked(&request.server, &request.conflict_texts.texts())?;
+    let (server, texts, formats) = checked(
+        &request.server,
+        &request.conflict_texts,
+        &request.chat_formats,
+    )?;
     user.require(
         Permission::ConfigureServerSettings,
         &ResourceContext::Global,
     )?;
     let created = state
         .server_settings
-        .create(&acting(user, ip), server, texts)
+        .create(&acting(user, ip), server, texts, formats)
         .await
         .map_err(|error| match error {
             CreateServerSettingsError::SessionGone => ApiError::Unauthorized,
@@ -163,7 +175,11 @@ pub(crate) async fn update(
     ValidJson(request): ValidJson<UpdateServerSettingsRequest>,
 ) -> Result<Json<ServerSettingsResponse>, ApiError> {
     let user = user.user();
-    let (server, texts) = checked(&request.server, &request.conflict_texts.texts())?;
+    let (server, texts, formats) = checked(
+        &request.server,
+        &request.conflict_texts,
+        &request.chat_formats,
+    )?;
     let version = NonZeroU32::new(request.version)
         .ok_or_else(|| ApiError::internal("the version is at least 1: garde checked it"))?;
     user.require(
@@ -174,6 +190,7 @@ pub(crate) async fn update(
         version,
         server,
         conflict_texts: texts,
+        chat_formats: formats,
     };
     let edited = state
         .server_settings
@@ -238,17 +255,71 @@ pub(crate) async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// The request's server, keyed, and its texts. garde checked both already,
-/// so a refusal here is a bug.
-fn checked<E>(
+/// The request's server, keyed, its texts and its formats. garde checked
+/// them all already, at least one text or format among them, so a refusal
+/// here is a bug.
+fn checked(
     server: &str,
-    texts: &Result<ConflictTexts, E>,
-) -> Result<(ServerKey, ConflictTexts), ApiError> {
+    texts: &ConflictTextsInput,
+    formats: &ChatFormatsInput,
+) -> Result<(ServerKey, ConflictTexts, ChatFormats), ApiError> {
     let address = ServerAddress::try_from(server).map_err(ApiError::internal)?;
+    if !holds_something(texts, formats) {
+        return Err(ApiError::internal(
+            "a row holds a text or a format: garde checked it",
+        ));
+    }
     let texts = texts
-        .as_ref()
+        .texts()
         .map_err(|_| ApiError::internal("the texts' rules already hold: garde checked them"))?;
-    Ok((ServerKey::from(&address), texts.clone()))
+    let formats = formats
+        .formats()
+        .map_err(|_| ApiError::internal("the formats' rules already hold: garde checked them"))?;
+    Ok((ServerKey::from(&address), texts, formats))
+}
+
+/// `POST /api/v1/server-settings/chat-format-preview`: which sender unsaved
+/// chat formats read from a line.
+#[utoipa::path(
+    post,
+    path = "/api/v1/server-settings/chat-format-preview",
+    operation_id = "preview_chat_formats",
+    tag = "server-settings",
+    request_body = PreviewChatFormatsRequest,
+    responses(
+        (status = 200, description = "The sender the first format that fits the line reads, and that format's place counted from 0; an empty object when none fits. Nothing is stored or recorded.", body = PreviewChatFormatsResponse),
+        (status = 400, description = "A body of the wrong shape: an unknown field, a missing one, or a value of the wrong type. The answer never repeats what it read.", body = ErrorResponse),
+        (status = 401, description = "No valid access token.", body = ErrorResponse),
+        (status = 403, description = "Only Admins and the Owner try chat formats.", body = ErrorResponse),
+        (status = 422, description = "A field breaks its rule, named at its own path (`chat_formats`, `chat_formats[3]`, `line`), the formats under the save's rules.", body = ErrorResponse),
+        (status = 429, description = "Too many requests.", body = ErrorResponse,
+            headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
+        (status = "default", description = "Any other answer the server gives, in the error envelope.", body = ErrorResponse),
+    ),
+)]
+pub(crate) async fn preview(
+    user: AuthUser,
+    State(state): State<AppState>,
+    ValidJson(request): ValidJson<PreviewChatFormatsRequest>,
+) -> Result<Json<PreviewChatFormatsResponse>, ApiError> {
+    user.require(
+        Permission::ConfigureServerSettings,
+        &ResourceContext::Global,
+    )?;
+    let formats = request
+        .chat_formats
+        .formats()
+        .map_err(|_| ApiError::internal("the formats' rules already hold: garde checked them"))?;
+    let found = state.server_settings.preview(&formats, &request.line);
+    Ok(Json(PreviewChatFormatsResponse {
+        sender: found
+            .as_ref()
+            .map(|found| BoundedText::new(found.sender().as_str())),
+        format: found
+            .map(|found| u32::try_from(found.format()))
+            .transpose()
+            .map_err(ApiError::internal)?,
+    }))
 }
 
 /// The 422 of a server that has settings already.
@@ -266,12 +337,13 @@ fn settings_page(query: &ServerSettingsPageQuery) -> Result<Page<ServerSettingsI
 }
 
 /// `settings` as the API answers them: the server as its key, each text as
-/// its lines.
+/// its lines, the formats as written.
 fn settings_response(settings: &StoredServerSettings) -> Result<ServerSettingsResponse, ApiError> {
     Ok(ServerSettingsResponse {
         id: settings.id,
         server: BoundedText::new(&settings.server.to_string()),
         conflict_texts: ConflictTextResponse::list(&settings.conflict_texts),
+        chat_formats: settings.chat_formats.iter().map(BoundedText::new).collect(),
         version: settings.version.get(),
         created_at: timestamp(settings.created_at)?,
         updated_at: timestamp(settings.updated_at)?,

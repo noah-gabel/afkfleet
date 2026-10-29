@@ -947,7 +947,7 @@ async fn new_server<S: SessionStore>(
 ) -> Result<(), ClientError> {
     let Ok(request) = serde_json::from_str::<CreateServerSettingsRequest>(json) else {
         terminal.say(
-            "not server settings' JSON: {\"server\", \"conflict_texts\"}, as the README shows; nothing was sent",
+            "not server settings' JSON: {\"server\", \"conflict_texts\", \"chat_formats\"}, as the README shows; nothing was sent",
         );
         return Ok(());
     };
@@ -973,7 +973,7 @@ async fn edit_server<S: SessionStore>(
 ) -> Result<(), ClientError> {
     let Ok(request) = serde_json::from_str::<UpdateServerSettingsRequest>(json) else {
         terminal.say(
-            "not server settings' JSON: {\"version\", \"server\", \"conflict_texts\"}, as the README shows; nothing was sent",
+            "not server settings' JSON: {\"version\", \"server\", \"conflict_texts\", \"chat_formats\"}, as the README shows; nothing was sent",
         );
         return Ok(());
     };
@@ -1642,7 +1642,7 @@ mod tests {
     fn the_server_settings_verbs_take_their_ids_and_new_server_the_rest_of_the_line() {
         let id = "018bcfe5-6800-7bab-abab-abababababab";
         let settings: ServerSettingsId = id.parse().unwrap();
-        let json = r#"{"server": "mc.example.com", "conflict_texts": ["One"]}"#;
+        let json = r#"{"server": "mc.example.com", "conflict_texts": ["One"], "chat_formats": []}"#;
 
         assert_eq!(Command::parse("servers"), Some(Command::Servers));
         assert_eq!(

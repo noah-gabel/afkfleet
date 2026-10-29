@@ -14,13 +14,13 @@ import type { ServerSettingsResponse } from "../../../generated/ServerSettingsRe
 import { serverSettingsAccess } from "../../admin/permissions";
 import {
   ADD_SERVER,
-  conflictTextCount,
   LOADING_SERVERS,
   NO_SERVERS,
   openServer,
   SERVERS_HEADING,
   SERVERS_INTRO,
   serversFailed,
+  settingsCount,
 } from "../texts";
 
 /** Every server's settings. */
@@ -88,7 +88,7 @@ function ServerCard({ row }: { row: ServerSettingsResponse }) {
       </CardHeader>
       <CardContent>
         <p className="text-sm text-muted-foreground">
-          {conflictTextCount(row.conflict_texts.length)}
+          {settingsCount(row.conflict_texts.length, row.chat_formats.length)}
         </p>
       </CardContent>
     </Card>

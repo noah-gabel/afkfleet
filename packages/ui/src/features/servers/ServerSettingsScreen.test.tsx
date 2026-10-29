@@ -54,6 +54,8 @@ async function atEditor(
           9,
           keyOf(request.server),
           request.conflict_texts.map((text) => text.split("\n")),
+          1,
+          request.chat_formats,
         );
         state.rows = [made, ...state.rows];
         return made;
@@ -71,6 +73,7 @@ async function atEditor(
           ...row,
           server: keyOf(request.server),
           conflict_texts: request.conflict_texts.map((text) => ({ lines: text.split("\n") })),
+          chat_formats: [...request.chat_formats],
           version: row.version + 1,
         };
         state.rows = state.rows.map((one) => (one.id === rowId ? edited : one));
@@ -148,7 +151,11 @@ describe("a Minecraft server's settings", () => {
       await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 }),
     ).toBeDefined();
     expect(text(1).value).toBe("Two\nlines");
-    const request = { server: "MC.example.com", conflict_texts: ["Two\nlines"] };
+    const request = {
+      server: "MC.example.com",
+      conflict_texts: ["Two\nlines"],
+      chat_formats: [],
+    };
     expect(calls(app, "createServerSettings")).toEqual([[request], [request]]);
   });
 
@@ -170,8 +177,14 @@ describe("a Minecraft server's settings", () => {
     expect(app.path()).toBe(`/admin/servers/${ROW.id}`);
     const texts = ["One", "You logged in\nfrom another location", "Three"];
     expect(calls(app, "updateServerSettings")).toEqual([
-      [ROW.id, { version: 1, server: "mc.example.com:25565", conflict_texts: texts }],
-      [ROW.id, { version: 2, server: "mc.example.com:25565", conflict_texts: texts }],
+      [
+        ROW.id,
+        { version: 1, server: "mc.example.com:25565", conflict_texts: texts, chat_formats: [] },
+      ],
+      [
+        ROW.id,
+        { version: 2, server: "mc.example.com:25565", conflict_texts: texts, chat_formats: [] },
+      ],
     ]);
     expect(calls(app, "stepUp")).toEqual([]);
   });
@@ -193,7 +206,12 @@ describe("a Minecraft server's settings", () => {
 
     expect(calls(app, "updateServerSettings")[1]).toEqual([
       ROW.id,
-      { version: 2, server: "mc.example.com:25565", conflict_texts: ["Someone else's"] },
+      {
+        version: 2,
+        server: "mc.example.com:25565",
+        conflict_texts: ["Someone else's"],
+        chat_formats: [],
+      },
     ]);
   });
 
@@ -275,7 +293,12 @@ describe("a Minecraft server's settings", () => {
       handlers: {
         updateServerSettings: async () => {
           throw refusal(422, "validation_failed", {
-            fields: [{ path: "conflict_texts", message: "must hold at least one text" }],
+            fields: [
+              {
+                path: "conflict_texts",
+                message: "must hold at least one text, unless a chat format is set",
+              },
+            ],
           });
         },
       },
@@ -287,9 +310,14 @@ describe("a Minecraft server's settings", () => {
     }
     await app.user.click(screen.getByRole("button", { name: "Save" }));
 
-    expect(await screen.findByText("must hold at least one text")).toBeDefined();
+    expect(
+      await screen.findByText("must hold at least one text, unless a chat format is set"),
+    ).toBeDefined();
     expect(calls(app, "updateServerSettings")).toEqual([
-      [ROW.id, { version: 1, server: "mc.example.com:25565", conflict_texts: [] }],
+      [
+        ROW.id,
+        { version: 1, server: "mc.example.com:25565", conflict_texts: [], chat_formats: [] },
+      ],
     ]);
   });
 
@@ -331,7 +359,10 @@ describe("a Minecraft server's settings", () => {
       (one) => one !== "Text 2",
     );
     expect(calls(app, "updateServerSettings")).toEqual([
-      [many.id, { version: 1, server: "mc.example.com:25565", conflict_texts: sent }],
+      [
+        many.id,
+        { version: 1, server: "mc.example.com:25565", conflict_texts: sent, chat_formats: [] },
+      ],
     ]);
   });
 
@@ -446,6 +477,7 @@ describe("a Minecraft server's settings, PR #80's review", () => {
       version: 1,
       server: "mc.example.com:25565",
       conflict_texts: ["Already connected now", "You logged in\nfrom another location"],
+      chat_formats: [],
     };
     expect(calls(app, "updateServerSettings")).toEqual([
       [ROW.id, shown],
@@ -479,6 +511,7 @@ describe("a Minecraft server's settings, PR #80's review", () => {
           version: 1,
           server: "play.example.com",
           conflict_texts: ["Typed", "You logged in\nfrom another location"],
+          chat_formats: [],
         },
       ],
     ]);
@@ -536,5 +569,44 @@ describe("a Minecraft server's settings, PR #80's review", () => {
       .filter((region) => region.textContent?.includes(CHANGED) === true);
     expect(regions).toHaveLength(1);
     expect(within(regions[0] as HTMLElement).queryAllByRole("alert")).toEqual([]);
+  });
+});
+
+describe("a Minecraft server's settings with chat formats (H7)", () => {
+  it("keeps a row's chat formats unseen and sends them back as they came (R135, R144)", async () => {
+    const formats = ["{{{sender}}} : ", "[{any}] {sender} : ", "{{{sender}}} : "];
+    const row = settings(1, "mc.example.com:25565", [["Already connected"]], 1, formats);
+    const { app } = await atEditor(row.id, { rows: [row] });
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+
+    await app.user.type(text(1), " now");
+    await app.user.click(screen.getByRole("button", { name: "Save" }));
+    await vi.waitFor(() => expect(calls(app, "updateServerSettings")).toHaveLength(1));
+
+    expect(calls(app, "updateServerSettings")).toEqual([
+      [
+        row.id,
+        {
+          version: 1,
+          server: "mc.example.com:25565",
+          conflict_texts: ["Already connected now"],
+          chat_formats: formats,
+        },
+      ],
+    ]);
+  });
+
+  it("adds a server with no chat formats", async () => {
+    const { app } = await atEditor("new");
+    await screen.findByRole("heading", { name: "Add a server", level: 1 });
+
+    await app.user.type(screen.getByLabelText("Server address"), "mc.example.com");
+    await app.user.type(text(1), "One");
+    await app.user.click(screen.getByRole("button", { name: "Save" }));
+    await vi.waitFor(() => expect(calls(app, "createServerSettings")).toHaveLength(1));
+
+    expect(calls(app, "createServerSettings")).toEqual([
+      [{ server: "mc.example.com", conflict_texts: ["One"], chat_formats: [] }],
+    ]);
   });
 });

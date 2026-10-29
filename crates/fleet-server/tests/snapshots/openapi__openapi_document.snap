@@ -914,6 +914,13 @@ expression: answer.json()
         "additionalProperties": false,
         "description": "`POST /server-settings`: a server's new settings.",
         "properties": {
+          "chat_formats": {
+            "items": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "type": "array"
+          },
           "conflict_texts": {
             "items": {
               "maxLength": 1024,
@@ -928,7 +935,8 @@ expression: answer.json()
         },
         "required": [
           "server",
-          "conflict_texts"
+          "conflict_texts",
+          "chat_formats"
         ],
         "type": "object"
       },
@@ -2073,6 +2081,43 @@ expression: answer.json()
         ],
         "type": "object"
       },
+      "PreviewChatFormatsRequest": {
+        "additionalProperties": false,
+        "description": "`POST /server-settings/chat-format-preview`: which sender unsaved chat\nformats read from a line (ADR-0020, U58, R134).",
+        "properties": {
+          "chat_formats": {
+            "items": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "line": {
+            "maxLength": 1024,
+            "type": "string"
+          }
+        },
+        "required": [
+          "chat_formats",
+          "line"
+        ],
+        "type": "object"
+      },
+      "PreviewChatFormatsResponse": {
+        "description": "What the preview's formats read from its line: nothing when none fits.",
+        "properties": {
+          "format": {
+            "maximum": 7,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sender": {
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "RefreshRequest": {
         "additionalProperties": false,
         "description": "`POST /auth/refresh`: a new token pair for the refresh token.",
@@ -2177,6 +2222,13 @@ expression: answer.json()
       "ServerSettingsResponse": {
         "description": "One server's settings.",
         "properties": {
+          "chat_formats": {
+            "items": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "type": "array"
+          },
           "conflict_texts": {
             "description": "The conflict texts, in a fixed order, duplicates counted once.",
             "items": {
@@ -2210,6 +2262,7 @@ expression: answer.json()
           "id",
           "server",
           "conflict_texts",
+          "chat_formats",
           "version",
           "created_at",
           "updated_at"
@@ -2374,6 +2427,13 @@ expression: answer.json()
         "additionalProperties": false,
         "description": "`PUT /server-settings/{id}`: the settings as they should be from now on,\nand the version the caller last read (ADR-0020, S77).",
         "properties": {
+          "chat_formats": {
+            "items": {
+              "maxLength": 64,
+              "type": "string"
+            },
+            "type": "array"
+          },
           "conflict_texts": {
             "items": {
               "maxLength": 1024,
@@ -2394,7 +2454,8 @@ expression: answer.json()
         "required": [
           "version",
           "server",
-          "conflict_texts"
+          "conflict_texts",
+          "chat_formats"
         ],
         "type": "object"
       },
@@ -8619,6 +8680,112 @@ expression: answer.json()
           "server-settings"
         ],
         "x-step-up": true
+      }
+    },
+    "/api/v1/server-settings/chat-format-preview": {
+      "post": {
+        "operationId": "preview_chat_formats",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewChatFormatsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewChatFormatsResponse"
+                }
+              }
+            },
+            "description": "The sender the first format that fits the line reads, and that format's place counted from 0; an empty object when none fits. Nothing is stored or recorded."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A body of the wrong shape: an unknown field, a missing one, or a value of the wrong type. The answer never repeats what it read."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Only Admins and the Owner try chat formats."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A field breaks its rule, named at its own path (`chat_formats`, `chat_formats[3]`, `line`), the formats under the save's rules."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/server-settings/chat-format-preview`: which sender unsaved\nchat formats read from a line.",
+        "tags": [
+          "server-settings"
+        ]
       }
     },
     "/api/v1/server-settings/{id}": {

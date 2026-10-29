@@ -1591,7 +1591,7 @@ async fn new_server_asks_for_the_password_again_once_and_servers_lists_it() {
     let mut terminal = Scripted::new(
         &[PASSWORD, &code, PASSWORD],
         &[
-            r#"new-server {"server": "MC.example.com", "conflict_texts": ["A text never shown", "Two"]}"#,
+            r#"new-server {"server": "MC.example.com", "conflict_texts": ["A text never shown", "Two"], "chat_formats": ["{sender} never shown : "]}"#,
             "servers",
         ],
     );
@@ -1635,6 +1635,7 @@ async fn servers_lists_every_page_of_the_servers_settings() {
                 &serde_json::from_value(serde_json::json!({
                     "server": format!("s{n}.example.com"),
                     "conflict_texts": ["One"],
+                    "chat_formats": [],
                 }))
                 .unwrap(),
             )
@@ -1673,6 +1674,7 @@ async fn edit_server_and_delete_server_write_and_bad_json_is_never_repeated() {
             &serde_json::from_value(serde_json::json!({
                 "server": "mc.example.com",
                 "conflict_texts": ["One"],
+                "chat_formats": [],
             }))
             .unwrap(),
         )
@@ -1681,7 +1683,7 @@ async fn edit_server_and_delete_server_write_and_bad_json_is_never_repeated() {
     let id = created.id;
     let (client, _) = server.client();
     let edit = format!(
-        r#"edit-server {id} {{"version": 1, "server": "mc.example.com", "conflict_texts": ["One", "Two"]}}"#
+        r#"edit-server {id} {{"version": 1, "server": "mc.example.com", "conflict_texts": ["One", "Two"], "chat_formats": []}}"#
     );
     let delete = format!("delete-server {id}");
     let mut terminal = Scripted::new(

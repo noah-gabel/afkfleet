@@ -16,7 +16,7 @@ use fleet_api_types::modes::{
     ModeScheduleRequest, ModeStepRequest, ModeSteps, ModeVisibility, UpdateModeRequest,
 };
 use fleet_api_types::server_settings::{
-    ConflictTextsInput, CreateServerSettingsRequest, ServerSettingsResponse,
+    ChatFormatsInput, ConflictTextsInput, CreateServerSettingsRequest, ServerSettingsResponse,
 };
 use fleet_api_types::{PageQuery, SecretText};
 use fleet_client::{Client, ClientConfig, ClientError, LoginStep, MemoryStore, ServerUrl, Trust};
@@ -237,6 +237,7 @@ impl Owner {
                 conflict_texts: ConflictTextsInput(
                     texts.iter().map(|text| (*text).to_owned()).collect(),
                 ),
+                chat_formats: ChatFormatsInput::default(),
             })
             .await
             .unwrap()

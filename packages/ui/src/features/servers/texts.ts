@@ -30,6 +30,26 @@ export function conflictTextCount(count: number): string {
   return count === 1 ? "1 conflict text" : `${count} conflict texts`;
 }
 
+/** How many chat formats an entry holds. */
+export function chatFormatCount(count: number): string {
+  return count === 1 ? "1 chat format" : `${count} chat formats`;
+}
+
+/**
+ * What an entry holds, only the parts it has (the user's change at H7's plan review): its
+ * texts, its formats, or both joined by " · ". A row always holds one of them.
+ */
+export function settingsCount(texts: number, formats: number): string {
+  const parts = [];
+  if (texts > 0 || formats === 0) {
+    parts.push(conflictTextCount(texts));
+  }
+  if (formats > 0) {
+    parts.push(chatFormatCount(formats));
+  }
+  return parts.join(" · ");
+}
+
 /** The editor's field and section. */
 export const SERVER_FIELD = "Server address";
 export const SERVER_HINT = "Host or host:port, e.g. play.example.com";

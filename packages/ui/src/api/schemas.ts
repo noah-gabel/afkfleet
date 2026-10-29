@@ -5,6 +5,8 @@
 
 import {
   CA_PEM_MAX_BYTES,
+  CHAT_FORMAT_MAX_CHARS,
+  CHAT_FORMATS_MAX,
   CHAT_MESSAGE_MAX_UNITS,
   CODE_MAX_CHARS,
   CONFLICT_TEXT_MAX_CHARS,
@@ -197,15 +199,36 @@ export const conflictTexts = z
     `must hold at most ${CONFLICT_TEXTS_MAX} texts`,
   );
 
+/**
+ * One chat format: at most `CHAT_FORMAT_MAX_CHARS` characters as written, in the server's
+ * words. The server checks the rest: its placeholders, braces and characters (ADR-0020, S80).
+ */
+export const chatFormat = z
+  .string()
+  .refine(
+    (format) => chars(format) <= CHAT_FORMAT_MAX_CHARS,
+    `must be at most ${CHAT_FORMAT_MAX_CHARS} characters`,
+  );
+
+/** A server's chat formats: at most `CHAT_FORMATS_MAX`, in the server's words. */
+export const chatFormats = z
+  .array(chatFormat)
+  .refine(
+    (formats) => formats.length <= CHAT_FORMATS_MAX,
+    `must hold at most ${CHAT_FORMATS_MAX} formats`,
+  );
+
 export const createServerSettingsRequest = z.strictObject({
   server: serverAddress,
   conflict_texts: conflictTexts,
+  chat_formats: chatFormats,
 });
 
 export const updateServerSettingsRequest = z.strictObject({
   version: z.number().int().min(1),
   server: serverAddress,
   conflict_texts: conflictTexts,
+  chat_formats: chatFormats,
 });
 
 export const botModeRequest = z.strictObject({ mode_id: id });

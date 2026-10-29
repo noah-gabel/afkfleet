@@ -409,9 +409,15 @@
     {
       "command": "create_server_settings",
       "method": "createServerSettings",
-      "inputs": [{ "server": "mc.example.com", "conflict_texts": ["Already connected"] }],
+      "inputs": [
+        { "server": "mc.example.com", "conflict_texts": ["Already connected"], "chat_formats": [] }
+      ],
       "args": {
-        "request": { "server": "mc.example.com", "conflict_texts": ["Already connected"] }
+        "request": {
+          "server": "mc.example.com",
+          "conflict_texts": ["Already connected"],
+          "chat_formats": []
+        }
       },
       "expect": { "error": "no_server" }
     },
@@ -420,14 +426,20 @@
       "method": "updateServerSettings",
       "inputs": [
         "01900000-0000-7000-8000-00000000000d",
-        { "version": 1, "server": "mc.example.com", "conflict_texts": ["Already connected"] }
+        {
+          "version": 1,
+          "server": "mc.example.com",
+          "conflict_texts": ["Already connected"],
+          "chat_formats": []
+        }
       ],
       "args": {
         "id": "01900000-0000-7000-8000-00000000000d",
         "request": {
           "version": 1,
           "server": "mc.example.com",
-          "conflict_texts": ["Already connected"]
+          "conflict_texts": ["Already connected"],
+          "chat_formats": []
         }
       },
       "expect": { "error": "no_server" }

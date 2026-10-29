@@ -1,6 +1,8 @@
 // One Minecraft server's settings (Plan.md P11.9; ADR-0020, U57, U61, R136, S77): its address
 // and its conflict texts, a textarea each (`useFieldArray`), filled from its row in the list,
-// each text's lines joined by line breaks. Every request is built from the form, never by
+// each text's lines joined by line breaks. Its chat formats ride along in the form unseen and go
+// back as they came, so a save never clears formats set elsewhere (R135, R144); their own
+// section comes with H8. Every request is built from the form, never by
 // echoing an answer, at the `version` read. Each write goes through `useStepUpAction`: a new
 // server's Save opens its own screen, an edit's stays with what the server saved (U61), and
 // Delete asks first, then goes back to the list. A 409 `server_settings_changed` shows the
@@ -20,7 +22,7 @@ import { useApiClient } from "../../../api/context";
 import { describeError } from "../../../api/describeError";
 import { CONFLICT_TEXTS_MAX } from "../../../api/limits";
 import { SERVER_SETTINGS_KEY, useMe, useServerSettings } from "../../../api/queries";
-import { conflictText, serverAddress } from "../../../api/schemas";
+import { chatFormats, conflictText, serverAddress } from "../../../api/schemas";
 import { z } from "../../../api/zod";
 import { FieldMessage } from "../../../components/FieldMessage";
 import { FormField } from "../../../components/FormField";
@@ -73,6 +75,7 @@ const settingsForm = z.object({
       (texts) => texts.length <= CONFLICT_TEXTS_MAX,
       `must hold at most ${CONFLICT_TEXTS_MAX} texts`,
     ),
+  chatFormats,
 });
 
 type SettingsValues = z.infer<typeof settingsForm>;
@@ -139,11 +142,12 @@ function BackLink() {
 /** The form's values from `row`, or a new server's with one empty text. */
 function valuesOf(row: ServerSettingsResponse | undefined): SettingsValues {
   if (row === undefined) {
-    return { server: "", texts: [{ text: "" }] };
+    return { server: "", texts: [{ text: "" }], chatFormats: [] };
   }
   return {
     server: row.server,
     texts: row.conflict_texts.map((text) => ({ text: text.lines.join("\n") })),
+    chatFormats: [...row.chat_formats],
   };
 }
 
@@ -222,6 +226,7 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
     wait.reset();
     const server = values.server;
     const conflictTexts = values.texts.map((entry) => entry.text);
+    const formats = values.chatFormats;
     void writes.attempt({
       key: SAVE_KEY,
       run: async () => {
@@ -229,11 +234,16 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
         try {
           saved =
             row === undefined
-              ? await api.createServerSettings({ server, conflict_texts: conflictTexts })
+              ? await api.createServerSettings({
+                  server,
+                  conflict_texts: conflictTexts,
+                  chat_formats: formats,
+                })
               : await api.updateServerSettings(row.id, {
                   version,
                   server,
                   conflict_texts: conflictTexts,
+                  chat_formats: formats,
                 });
         } catch (rejection) {
           const error = toApiError(rejection).error;

@@ -667,6 +667,11 @@ async fn the_authed_routes_are_registered_with_their_class(
             entry(Method::POST, "/api/v1/modes", RateClass::Standard),
             entry(Method::PUT, "/api/v1/modes/{id}", RateClass::Standard),
             entry(Method::GET, "/api/v1/server-settings", RateClass::Standard),
+            entry(
+                Method::POST,
+                "/api/v1/server-settings/chat-format-preview",
+                RateClass::Standard
+            ),
             entry(Method::POST, "/api/v1/events/ticket", RateClass::Standard),
             entry(Method::GET, "/api/v1/events", RateClass::Standard),
         ])
