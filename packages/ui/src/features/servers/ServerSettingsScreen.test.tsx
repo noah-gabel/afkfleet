@@ -602,7 +602,7 @@ describe("a Minecraft server's settings, PR #80's review", () => {
 });
 
 describe("a Minecraft server's settings with chat formats (H7)", () => {
-  it("keeps a row's chat formats unseen and sends them back as they came (R135, R144)", async () => {
+  it("sends a row's chat formats back as they came when only a text changed (R135, R144)", async () => {
     const formats = ["{{{sender}}} : ", "[{any}] {sender} : ", "{{{sender}}} : "];
     const row = settings(1, "mc.example.com:25565", [["Already connected"]], 1, formats);
     const { app } = await atEditor(row.id, { rows: [row] });
@@ -656,5 +656,233 @@ describe("a Minecraft server's settings with chat formats (H7)", () => {
     expect(calls(app, "createServerSettings")).toEqual([
       [{ server: "mc.example.com", conflict_texts: ["One"], chat_formats: [] }],
     ]);
+  });
+});
+
+describe("a Minecraft server's chat formats and Try a line (H8)", () => {
+  const FORMATS = ["[{any}] {sender} : ", "{sender} : "];
+  const WITH_FORMATS = settings(1, "mc.example.com:25565", [["Already connected"]], 1, FORMATS);
+
+  /** Format `n`'s field, counted from 1. */
+  function format(n: number): HTMLInputElement {
+    return screen.getByLabelText(`Chat format ${n}`) as HTMLInputElement;
+  }
+
+  /** The formats' section. */
+  function section(): HTMLElement {
+    return screen.getByRole("group", { name: "Chat formats" });
+  }
+
+  /** `field`'s value replaced by `value`, pasted, since braces are keys to `type`. */
+  async function fill(app: RenderedApp, field: HTMLElement, value: string): Promise<void> {
+    await app.user.clear(field);
+    await app.user.click(field);
+    await app.user.paste(value);
+  }
+
+  it("shows a row's chat formats in order with the hint, and saves them as shown (R135)", async () => {
+    const { app } = await atEditor(WITH_FORMATS.id, { rows: [WITH_FORMATS] });
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+
+    expect([format(1).value, format(2).value]).toEqual(FORMATS);
+    expect(section().getAttribute("aria-describedby")).toContain(
+      within(section()).getByText(/^Some servers send players' chat as server text/).id,
+    );
+    await fill(app, format(2), "<{sender}> ");
+    await app.user.click(screen.getByRole("button", { name: "Save" }));
+    await vi.waitFor(() => expect(calls(app, "updateServerSettings")).toHaveLength(1));
+
+    expect(calls(app, "updateServerSettings")).toEqual([
+      [
+        WITH_FORMATS.id,
+        {
+          version: 1,
+          server: "mc.example.com:25565",
+          conflict_texts: ["Already connected"],
+          chat_formats: ["[{any}] {sender} : ", "<{sender}> "],
+        },
+      ],
+    ]);
+  });
+
+  it("adds formats up to 8, then says so, and Remove, described by its label, takes one out", async () => {
+    const { app } = await atEditor("new");
+    await screen.findByRole("heading", { name: "Add a server", level: 1 });
+    const add = () => within(section()).getByRole("button", { name: "Add format" });
+
+    for (let n = 0; n < 8; n += 1) {
+      await app.user.click(add());
+    }
+
+    expect(within(section()).getAllByRole("textbox", { name: /^Chat format / })).toHaveLength(8);
+    expect((add() as HTMLButtonElement).disabled).toBe(true);
+    expect(within(section()).getByText("At most 8 formats.")).toBeDefined();
+    const removes = within(section()).getAllByRole("button", { name: "Remove" });
+    expect(removes[2]?.getAttribute("aria-describedby")).toBe(screen.getByText("Chat format 3").id);
+    await app.user.click(removes[0] as HTMLElement);
+    expect(within(section()).getAllByRole("textbox", { name: /^Chat format / })).toHaveLength(7);
+    expect(within(section()).queryByText("At most 8 formats.")).toBeNull();
+    expect((add() as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("puts a save's refusal at the format it names, and one of the list in the section's description", async () => {
+    let answer = 0;
+    const { app } = await atEditor(WITH_FORMATS.id, {
+      rows: [WITH_FORMATS],
+      handlers: {
+        updateServerSettings: async () => {
+          answer += 1;
+          throw refusal(422, "validation_failed", {
+            fields: [
+              answer === 1
+                ? { path: "chat_formats[1]", message: "must hold {sender} exactly once" }
+                : { path: "chat_formats", message: "must hold at most 8 formats" },
+            ],
+          });
+        },
+      },
+    });
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+
+    await app.user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("must hold {sender} exactly once")).toBeDefined();
+    expect(format(1).getAttribute("aria-invalid")).toBe("false");
+    expect(format(2).getAttribute("aria-invalid")).toBe("true");
+    await app.user.click(screen.getByRole("button", { name: "Save" }));
+
+    const listed = await screen.findByText("must hold at most 8 formats");
+    expect(section().getAttribute("aria-describedby")).toContain(listed.id);
+  });
+
+  it("locks the formats, Remove and Add format while Confirm it's you is up, and Try stays usable", async () => {
+    const { app } = await atEditor(WITH_FORMATS.id, {
+      rows: [WITH_FORMATS],
+      stamped: false,
+      handlers: { previewChatFormats: async () => ({ sender: "Notch", format: 0 }) },
+    });
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+    await app.user.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByLabelText("Current password");
+
+    expect(format(1).readOnly).toBe(true);
+    expect(format(2).readOnly).toBe(true);
+    for (const remove of within(section()).getAllByRole("button", { name: "Remove" })) {
+      expect((remove as HTMLButtonElement).disabled).toBe(true);
+    }
+    expect(
+      (within(section()).getByRole("button", { name: "Add format" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    await fill(app, screen.getByLabelText("Try a line"), "[Clan] Notch : hello");
+    await app.user.click(screen.getByRole("button", { name: "Try" }));
+
+    expect(await screen.findByText("Format 1 reads the sender as Notch.")).toBeDefined();
+    expect(calls(app, "previewChatFormats")).toEqual([
+      [{ chat_formats: FORMATS, line: "[Clan] Notch : hello" }],
+    ]);
+  });
+
+  it("tries the form's formats on a line, the first that fits counted from 1, and Enter tries without saving", async () => {
+    const { app } = await atEditor(WITH_FORMATS.id, {
+      rows: [WITH_FORMATS],
+      handlers: {
+        previewChatFormats: async ({ line }) =>
+          line.includes(" : ") ? { sender: "Notch", format: 1 } : {},
+      },
+    });
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+    const line = screen.getByLabelText("Try a line");
+
+    expect(line.getAttribute("placeholder")).toBe("Paste a line from the server's chat");
+    await fill(app, format(1), "<{sender}> ");
+    await fill(app, line, "Notch : hello");
+    await app.user.click(screen.getByRole("button", { name: "Try" }));
+    expect(
+      (await screen.findByText("Format 2 reads the sender as Notch.")).getAttribute("role"),
+    ).toBe("status");
+    await fill(app, line, "Server restarting soon");
+    await app.user.keyboard("{Enter}");
+
+    expect(await screen.findByText("No format fits this line.")).toBeDefined();
+    expect(calls(app, "previewChatFormats")).toEqual([
+      [{ chat_formats: ["<{sender}> ", "{sender} : "], line: "Notch : hello" }],
+      [{ chat_formats: ["<{sender}> ", "{sender} : "], line: "Server restarting soon" }],
+    ]);
+    expect(calls(app, "updateServerSettings")).toEqual([]);
+  });
+
+  it("shows a preview's refusal at the format it names, under the line, or as its text under the box", async () => {
+    const answers = [
+      refusal(422, "validation_failed", {
+        fields: [
+          {
+            path: "chat_formats[0]",
+            message: "can hold only {sender} and {any}; write a brace as {{ or }}",
+          },
+        ],
+      }),
+      refusal(422, "validation_failed", {
+        fields: [{ path: "line", message: "must be at most 1024 characters" }],
+      }),
+      refusal(403, "forbidden"),
+    ];
+    const { app } = await atEditor(WITH_FORMATS.id, {
+      rows: [WITH_FORMATS],
+      handlers: {
+        previewChatFormats: async () => {
+          throw answers.shift();
+        },
+      },
+    });
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+    const line = screen.getByLabelText("Try a line");
+    const tryIt = () => app.user.click(screen.getByRole("button", { name: "Try" }));
+
+    await fill(app, line, "a line");
+    await tryIt();
+    expect(
+      await screen.findByText("can hold only {sender} and {any}; write a brace as {{ or }}"),
+    ).toBeDefined();
+    expect(format(1).getAttribute("aria-invalid")).toBe("true");
+    await tryIt();
+    const long = await screen.findByText("must be at most 1024 characters");
+    expect(line.getAttribute("aria-describedby")).toContain(long.id);
+    expect(format(1).getAttribute("aria-invalid")).toBe("false");
+    await tryIt();
+
+    expect(await screen.findByText(/^refused: forbidden \(request /)).toBeDefined();
+    expect(screen.queryByText("must be at most 1024 characters")).toBeNull();
+  });
+
+  it("drops the answer once a format or the line changes, and never shows a late one", async () => {
+    const late = deferred<{ sender: string; format: number }>();
+    let answer = 0;
+    const { app } = await atEditor(WITH_FORMATS.id, {
+      rows: [WITH_FORMATS],
+      handlers: {
+        previewChatFormats: async () => {
+          answer += 1;
+          return answer === 3 ? late.promise : { sender: "Notch", format: 0 };
+        },
+      },
+    });
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+    const line = screen.getByLabelText("Try a line");
+    const tryIt = () => app.user.click(screen.getByRole("button", { name: "Try" }));
+    const shown = () => screen.queryByText("Format 1 reads the sender as Notch.");
+
+    await fill(app, line, "[Clan] Notch : hello");
+    await tryIt();
+    expect(await screen.findByText("Format 1 reads the sender as Notch.")).toBeDefined();
+    await app.user.type(line, "!");
+    expect(shown()).toBeNull();
+    await tryIt();
+    expect(await screen.findByText("Format 1 reads the sender as Notch.")).toBeDefined();
+    await app.user.type(format(1), "x");
+    expect(shown()).toBeNull();
+    await tryIt();
+    await app.user.type(format(2), "y");
+    await act(async () => late.resolve({ sender: "Notch", format: 0 }));
+
+    expect(shown()).toBeNull();
   });
 });
