@@ -762,10 +762,17 @@ async fn history<S: SessionStore>(
     Ok(())
 }
 
-/// One chat line: its ID, time and kind; who sent it (a received line's
-/// Minecraft sender, or the user who had it sent, as the server shows
-/// them); its text; and whether arguments were left out or the text cut.
+/// One chat line: its ID, time and kind; the name a chat format read, right
+/// after the kind and never where a sender goes (ADR-0020, R143); who sent
+/// it (a received line's Minecraft sender, or the user who had it sent, as
+/// the server shows them); its text; and whether arguments were left out or
+/// the text cut.
 fn chat_line_of(line: &ChatLine) -> String {
+    let parsed = line
+        .parsed_sender
+        .as_ref()
+        .map(|name| format!(" (format: {name})"))
+        .unwrap_or_default();
     let who = match (&line.sender, &line.sent_by) {
         (Some(sender), _) => format!(" {}", sender.name),
         (None, _) if line.mine => " by you".to_owned(),
@@ -773,7 +780,7 @@ fn chat_line_of(line: &ChatLine) -> String {
         (None, None) => String::new(),
     };
     let mut shown = format!(
-        "#{} {} {}{who}: {}",
+        "#{} {} {}{parsed}{who}: {}",
         line.id,
         line.at,
         line.kind.as_str(),
@@ -1648,9 +1655,11 @@ mod tests {
         let mut announced = a_line("announcement", "restart soon");
         announced.sender = serde_json::from_value(serde_json::json!({ "name": "Server" })).unwrap();
         let system = a_line("system", "Steve joined the game");
+        let mut parsed = a_line("system", "[Clan] Notch : hello");
+        parsed.parsed_sender = Some(fleet_api_types::BoundedText::new("Notch"));
 
         let shown: Vec<String> = [
-            steve, cut, mode, by, mine, unnamed, newer, emote, announced, system,
+            steve, cut, mode, by, mine, unnamed, newer, emote, announced, system, parsed,
         ]
         .iter()
         .map(chat_line_of)
@@ -1670,6 +1679,7 @@ mod tests {
                 format!("{at} emote Alex: waves"),
                 format!("{at} announcement Server: restart soon"),
                 format!("{at} system: Steve joined the game"),
+                format!("{at} system (format: Notch): [Clan] Notch : hello"),
             ]
         );
     }

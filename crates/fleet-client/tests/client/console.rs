@@ -451,6 +451,51 @@ async fn history_shows_a_page_oldest_first_and_where_older_lines_start() {
     server.stop().await;
 }
 
+/// `history` shows the sender a chat format of the bot's server reads as
+/// ` (format: {name})` right after the kind, never where a player's name
+/// goes (ADR-0020, R143), and a line no format fits as the server's.
+#[tokio::test]
+async fn history_shows_a_parsed_sender_after_the_kind() {
+    let server = Server::start().await;
+    let (owner, code) = owner_and_code(&server).await;
+    let bot = bot_of(&owner, "AfkBot9").await;
+    server
+        .said(bot, &["[Clan] Notch : hello", "Server restarting soon"])
+        .await;
+    let (client, _) = server.client();
+    let set = format!("server {bot} mc.example.com");
+    let history = format!("history {bot}");
+    let mut terminal = Scripted::new(
+        &[PASSWORD, &code, PASSWORD],
+        &[
+            &set,
+            r#"new-server {"server": "mc.example.com", "conflict_texts": [], "chat_formats": ["[{any}] {sender} : "]}"#,
+            &history,
+        ],
+    );
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    let lines: Vec<&String> = terminal
+        .said
+        .iter()
+        .filter(|line| line.starts_with('#'))
+        .collect();
+    assert_eq!(lines.len(), 2, "{}", terminal.text());
+    assert!(
+        lines[0].ends_with(" system (format: Notch): [Clan] Notch : hello"),
+        "{}",
+        terminal.text()
+    );
+    assert!(
+        lines[1].ends_with(" system: Server restarting soon"),
+        "{}",
+        terminal.text()
+    );
+    server.stop().await;
+}
+
 /// `chat <id>` with only spaces after it is invalid input: nothing is sent,
 /// so the server never answers that the line is empty.
 #[tokio::test]
@@ -1342,6 +1387,14 @@ fn each_event_kind_reads_as_its_console_line() {
                 "truncated": false, "arguments_hidden": false, "mine": false
             } }),
             format!("bot {EVENT_BOT} #40 {EVENT_AT} system: Welcome"),
+        ),
+        (
+            json!({ "type": "chat", "bot_id": EVENT_BOT, "line": {
+                "id": 42, "at": EVENT_AT, "direction": "in", "kind": "system",
+                "text": "[Clan] Notch : hello", "truncated": false, "arguments_hidden": false,
+                "parsed_sender": "Notch", "mine": false
+            } }),
+            format!("bot {EVENT_BOT} #42 {EVENT_AT} system (format: Notch): [Clan] Notch : hello"),
         ),
         (
             json!({ "type": "chat_sent", "bot_id": EVENT_BOT, "request": EVENT_REQUEST }),
