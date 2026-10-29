@@ -348,6 +348,8 @@ export const CHAT = {
   you: "You",
   aUser: "a user",
   modeTag: "mode",
+  /** The `title` and screen-reader label of a name a chat format read (U55). */
+  parsedMark: "Read from the server's text by a chat format. Minecraft doesn't check this name.",
   argumentsHidden: "(arguments hidden)",
   cutShort: "(cut short)",
   pending: "pending",

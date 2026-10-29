@@ -13,6 +13,7 @@
 //   their own key (chatOutcomes.ts); a pending mark lasts while no live update was missed.
 
 import { cn } from "cn";
+import { ScanTextIcon } from "lucide-react";
 import { type ReactNode, useEffect, useLayoutEffect, useRef } from "react";
 
 import { toApiError } from "../../../api/ApiError";
@@ -215,6 +216,18 @@ function SenderCell({ sender }: { sender: Sender }) {
       return <Capped className="font-medium text-primary" label={sender.label} />;
     case "server":
       return <Capped label={sender.label} />;
+    case "parsed":
+      // A name a chat format read: its mark first, outside the capped name, then the name at a
+      // player's weight but never in their color (U55).
+      return (
+        <span className="flex min-w-0 items-baseline gap-1">
+          <span title={CHAT.parsedMark} className="shrink-0 self-center">
+            <ScanTextIcon aria-hidden className="size-3.5 text-muted-foreground" />
+            <span className="sr-only">{CHAT.parsedMark}</span>
+          </span>
+          <Capped className="font-medium text-foreground" label={sender.label} />
+        </span>
+      );
     case "mode":
       return (
         <span className="flex min-w-0 items-baseline gap-1 font-medium">
