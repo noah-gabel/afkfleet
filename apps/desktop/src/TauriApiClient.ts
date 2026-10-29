@@ -38,6 +38,8 @@ import type { MfaConfirmResponse } from "@afkfleet/ui/generated/MfaConfirmRespon
 import type { MfaEnrollResponse } from "@afkfleet/ui/generated/MfaEnrollResponse";
 import type { ModePage } from "@afkfleet/ui/generated/ModePage";
 import type { PasswordChangeRequest } from "@afkfleet/ui/generated/PasswordChangeRequest";
+import type { PreviewChatFormatsRequest } from "@afkfleet/ui/generated/PreviewChatFormatsRequest";
+import type { PreviewChatFormatsResponse } from "@afkfleet/ui/generated/PreviewChatFormatsResponse";
 import type { RegisterRequest } from "@afkfleet/ui/generated/RegisterRequest";
 import type { RegisterResponse } from "@afkfleet/ui/generated/RegisterResponse";
 import type { ServerProfileRequest } from "@afkfleet/ui/generated/ServerProfileRequest";
@@ -258,6 +260,10 @@ export class TauriApiClient implements ApiClient {
 
   deleteServerSettings(id: string): Promise<void> {
     return this.#call("delete_server_settings", { id });
+  }
+
+  previewChatFormats(request: PreviewChatFormatsRequest): Promise<PreviewChatFormatsResponse> {
+    return this.#call("preview_chat_formats", { request });
   }
 
   account(id: string): Promise<AccountResponse> {

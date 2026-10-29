@@ -4,8 +4,8 @@
 
 use fleet_api_types::app::CommandErrorCode;
 use fleet_api_types::server_settings::{
-    ChatFormatsInput, ConflictTextsInput, CreateServerSettingsRequest, SERVER_SETTINGS_PAGE_MAX,
-    UpdateServerSettingsRequest,
+    ChatFormatsInput, ConflictTextsInput, CreateServerSettingsRequest, PreviewChatFormatsRequest,
+    PreviewChatFormatsResponse, SERVER_SETTINGS_PAGE_MAX, UpdateServerSettingsRequest,
 };
 use fleet_api_types::{BoundedText, ErrorCode, ServerSettingsId};
 
@@ -146,5 +146,88 @@ async fn the_owner_adds_lists_edits_and_deletes_a_servers_settings_after_a_step_
     );
     assert!(is_api(&gone, 404, ErrorCode::NotFound), "{gone:?}");
     assert_eq!(after.items, []);
+    server.stop().await;
+}
+
+/// A preview's request: `formats` tried on `line`.
+fn preview(formats: &[&str], line: &str) -> PreviewChatFormatsRequest {
+    PreviewChatFormatsRequest {
+        chat_formats: ChatFormatsInput(formats.iter().map(|&format| format.to_owned()).collect()),
+        line: line.to_owned(),
+    }
+}
+
+#[tokio::test]
+async fn without_a_server_a_preview_is_no_server() {
+    let bridge = Bridge::new();
+
+    let answer = bridge
+        .state
+        .preview_chat_formats(preview(&["{sender} : "], "Notch : hi"))
+        .await;
+
+    assert_eq!(
+        answer.map_err(|error| error.code),
+        Err(CommandErrorCode::NoServer)
+    );
+}
+
+#[tokio::test]
+async fn a_preview_with_a_broken_format_or_a_long_line_is_refused_before_any_request() {
+    let bridge = Bridge::new();
+
+    let format = bridge
+        .state
+        .preview_chat_formats(preview(&["{sender} : ", "{Sender} : "], "Notch : hi"))
+        .await;
+    let line = bridge
+        .state
+        .preview_chat_formats(preview(&["{sender} : "], &"x".repeat(1025)))
+        .await;
+
+    assert!(
+        format
+            .as_ref()
+            .is_err_and(|error| is_invalid(error, "chat_formats[1]")),
+        "{format:?}"
+    );
+    assert!(
+        line.as_ref().is_err_and(|error| is_invalid(error, "line")),
+        "{line:?}"
+    );
+}
+
+/// The Owner tries unsaved formats on lines, without a step-up: the first
+/// format that fits names the sender, counted from 0, and a line none fits
+/// answers nothing (ADR-0020, U58, R142).
+#[tokio::test]
+async fn the_owner_tries_chat_formats_on_a_line_without_a_step_up() {
+    let server = Server::start().await;
+    let (owner, _) = server.owner().await;
+    let formats = ["<{sender}> ", "[{any}] {sender} : "];
+
+    let matched = owner
+        .state
+        .preview_chat_formats(preview(&formats, "[Clan] Notch : hello"))
+        .await
+        .unwrap();
+    let unmatched = owner
+        .state
+        .preview_chat_formats(preview(&formats, "Server restarting soon"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        matched.sender.as_ref().map(BoundedText::as_str),
+        Some("Notch")
+    );
+    assert_eq!(matched.format, Some(1));
+    assert_eq!(
+        unmatched,
+        PreviewChatFormatsResponse {
+            sender: None,
+            format: None
+        }
+    );
     server.stop().await;
 }

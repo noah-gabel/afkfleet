@@ -140,6 +140,7 @@ export function watched(client: ApiClient, stores: AppStores, events: WatchEvent
     createServerSettings: watch((request) => client.createServerSettings(request)),
     updateServerSettings: watch((id, request) => client.updateServerSettings(id, request)),
     deleteServerSettings: watch((id) => client.deleteServerSettings(id)),
+    previewChatFormats: watch((request) => client.previewChatFormats(request)),
   };
 }
 

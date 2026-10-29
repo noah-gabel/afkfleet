@@ -22,8 +22,8 @@ use fleet_api_types::mfa::{CODE_MAX_CHARS, TOKEN_MAX_CHARS};
 use fleet_api_types::modes::{MODE_MAX_STEPS, MODE_NAME_MAX_CHARS};
 use fleet_api_types::page::PAGE_MAX;
 use fleet_api_types::server_settings::{
-    CHAT_FORMAT_MAX_CHARS, CHAT_FORMATS_MAX, CONFLICT_TEXT_MAX_CHARS, CONFLICT_TEXTS_MAX,
-    SERVER_SETTINGS_MAX, SERVER_SETTINGS_PAGE_MAX,
+    CHAT_FORMAT_MAX_CHARS, CHAT_FORMATS_MAX, CHAT_PREVIEW_LINE_MAX_CHARS, CONFLICT_TEXT_MAX_CHARS,
+    CONFLICT_TEXTS_MAX, SERVER_SETTINGS_MAX, SERVER_SETTINGS_PAGE_MAX,
 };
 use fleet_core::auth::{NewPassword, STEP_UP_WINDOW};
 use fleet_core::value::{McUsername, Username};
@@ -55,6 +55,10 @@ fn expected() -> BTreeMap<&'static str, u64> {
         ("SERVER_SETTINGS_MAX", u64::from(SERVER_SETTINGS_MAX)),
         ("CHAT_FORMATS_MAX", usize(CHAT_FORMATS_MAX)),
         ("CHAT_FORMAT_MAX_CHARS", usize(CHAT_FORMAT_MAX_CHARS)),
+        (
+            "CHAT_PREVIEW_LINE_MAX_CHARS",
+            usize(CHAT_PREVIEW_LINE_MAX_CHARS),
+        ),
         (
             "SERVER_SETTINGS_PAGE_MAX",
             u64::from(SERVER_SETTINGS_PAGE_MAX),

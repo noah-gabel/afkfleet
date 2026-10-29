@@ -1,5 +1,5 @@
 // The e2e suite's fake backend (Plan.md P8.9, ADR-0017): the desktop app's Rust side and the
-// server in one, answering the 53 commands of src-tauri/tests/ipc-contract.json with the
+// server in one, answering the 54 commands of src-tauri/tests/ipc-contract.json with the
 // generated types, the Rust side's fixed `CommandError` messages and the server's error
 // codes. It keeps the state one test needs, fresh per test: users with their passwords and
 // authenticators, invites, the one session the app holds, the pending login or setup step,
@@ -14,7 +14,9 @@
 // server keeps them (ADR-0020, S74, S77, S78): a server keyed lowercase with its port always
 // written (25565 when none is given), its texts sorted and counted once, answered as their
 // lines; a stale version is 409 `server_settings_changed`, a server that has settings 422
-// at `server`, the hundred and first 409 `conflict`, and an ID it doesn't hold 404.
+// at `server`, the hundred and first 409 `conflict`, and an ID it doesn't hold 404. Its
+// chat formats are read by a small matcher of its own (`senderOf`): the preview answers
+// with it.
 // A flow reads `waiting` once, then `linked`, its account pending unless the Owner linked
 // it.
 //
@@ -57,6 +59,7 @@ import type { MfaConfirmResponse } from "@afkfleet/ui/generated/MfaConfirmRespon
 import type { MfaEnrollResponse } from "@afkfleet/ui/generated/MfaEnrollResponse";
 import type { ModePage } from "@afkfleet/ui/generated/ModePage";
 import type { ModeResponse } from "@afkfleet/ui/generated/ModeResponse";
+import type { PreviewChatFormatsResponse } from "@afkfleet/ui/generated/PreviewChatFormatsResponse";
 import type { RegisterResponse } from "@afkfleet/ui/generated/RegisterResponse";
 import type { ServerProfileState } from "@afkfleet/ui/generated/ServerProfileState";
 import type { ServerSettingsPage } from "@afkfleet/ui/generated/ServerSettingsPage";
@@ -139,6 +142,7 @@ export const COMMANDS = [
   "create_server_settings",
   "update_server_settings",
   "delete_server_settings",
+  "preview_chat_formats",
 ] as const;
 
 /** One command. */
@@ -318,6 +322,96 @@ function textsOf(texts: unknown): string[] {
 /** A request's chat formats as the server keeps them: as written, in order. */
 function formatsOf(formats: unknown): string[] {
   return Array.isArray(formats) ? formats.map(String) : [];
+}
+
+/** A chat format's start: each piece of text, and whether an `{any}` comes before it. */
+interface Part {
+  readonly any: boolean;
+  readonly text: string;
+}
+
+/** A format's parts before `{sender}` and its text after, braces read; none for a format
+ * the server would refuse in a way the fake needs to see. */
+function partsOf(format: string): { head: Part[]; separator: string } | undefined {
+  const head: Part[] = [];
+  let text = "";
+  let any = false;
+  let sender = false;
+  let separator = "";
+  let rest = format;
+  while (rest.length > 0) {
+    if (rest.startsWith(SENDER) || rest.startsWith(ANY)) {
+      if (sender || (any && text === "")) {
+        return undefined;
+      }
+      if (text !== "") {
+        head.push({ any, text });
+      }
+      text = "";
+      any = rest.startsWith(ANY);
+      sender = rest.startsWith(SENDER);
+      rest = rest.slice(sender ? SENDER.length : ANY.length);
+      continue;
+    }
+    const escaped = rest.startsWith("{{") || rest.startsWith("}}");
+    const piece = escaped ? rest.charAt(0) : String.fromCodePoint(rest.codePointAt(0) ?? 0);
+    rest = rest.slice(escaped ? 2 : piece.length);
+    if (sender) {
+      separator += piece;
+    } else {
+      text += piece;
+    }
+  }
+  return sender && separator !== "" ? { head, separator } : undefined;
+}
+
+/** `{sender}` and `{any}`, as a format writes them. */
+const SENDER = "{sender}";
+const ANY = "{any}";
+
+/**
+ * The name `format` reads from `line`'s start, as the server's matcher does it in small
+ * (ADR-0020, S80): its text compared exactly, an `{any}` taking up to 32 characters until the
+ * first place its text starts, never across a line break, then a name of 3 to 16 of
+ * `[A-Za-z0-9_]` right before the format's text after it.
+ */
+function senderOf(format: string, line: string): string | undefined {
+  const parts = partsOf(format);
+  if (parts === undefined) {
+    return undefined;
+  }
+  let rest = line;
+  for (const part of parts.head) {
+    if (part.any) {
+      let skipped = 0;
+      while (!rest.startsWith(part.text)) {
+        if (skipped === 32 || rest === "" || rest.startsWith("\n")) {
+          return undefined;
+        }
+        rest = rest.slice(String.fromCodePoint(rest.codePointAt(0) ?? 0).length);
+        skipped += 1;
+      }
+    } else if (!rest.startsWith(part.text)) {
+      return undefined;
+    }
+    rest = rest.slice(part.text.length);
+  }
+  const name = /^[A-Za-z0-9_]{1,17}/.exec(rest)?.[0];
+  if (name === undefined || name.length < 3 || name.length > 16) {
+    return undefined;
+  }
+  return rest.slice(name.length).startsWith(parts.separator) ? name : undefined;
+}
+
+/** What the first of `formats` that fits reads from `line`, and its place from 0. */
+function preview(formats: readonly string[], line: string): PreviewChatFormatsResponse {
+  for (const [format, written] of formats.entries()) {
+    const sender = senderOf(written, line);
+    if (sender !== undefined) {
+      return { sender, format };
+    }
+  }
+  return {};
 }
 
 /** The cross-field rule's refusal: a row holds a text unless it holds a format (R140). */
@@ -545,6 +639,10 @@ export class FakeBackend {
             this.#settings = kept;
             return value();
           }),
+        );
+      case "preview_chat_formats":
+        return this.#admin(() =>
+          value(preview(formatsOf(request.chat_formats), String(request.line ?? ""))),
         );
       default:
         return this.#accountCommand(command as Command, args);

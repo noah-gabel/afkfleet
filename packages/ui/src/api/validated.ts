@@ -148,6 +148,8 @@ export function validated(client: ApiClient): ApiClient {
       return client.updateServerSettings(id, request);
     },
     deleteServerSettings: async (id) => client.deleteServerSettings(check(schemas.id, id, "id")),
+    previewChatFormats: async (request) =>
+      client.previewChatFormats(check(schemas.previewChatFormatsRequest, request)),
   };
 }
 

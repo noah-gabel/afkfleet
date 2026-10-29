@@ -321,6 +321,50 @@ test("checks an edit's cross-field rule before its lookup and version, as the se
   }
 });
 
+test("tries chat formats on a line with a matcher of its own, for Admins and the Owner", async () => {
+  const backend = new FakeBackend();
+  backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(OWNER) });
+  const formats = ["<{sender}> ", "[{any}] {sender} : ", "{{{sender}}} "];
+  const tried = (line: string) =>
+    backend.handle("preview_chat_formats", { request: { chat_formats: formats, line } });
+
+  expect(await tried("[Clan] Notch : hello")).toEqual({
+    ok: true,
+    value: { sender: "Notch", format: 1 },
+  });
+  expect(await tried("{Notch} hi")).toEqual({ ok: true, value: { sender: "Notch", format: 2 } });
+  expect(await tried("[x] Admin : hi")).toEqual({
+    ok: true,
+    value: { sender: "Admin", format: 1 },
+  });
+  for (const line of [
+    "Server restarting soon",
+    "[Clan] No : hello",
+    "[Clan] Seventeen_letters : hello",
+    "[Clan]Notch : hello",
+    `[${"x".repeat(33)}] Notch : hello`,
+    "[Cl\nan] Notch : hello",
+  ])
+    expect(await tried(line), line).toEqual({ ok: true, value: {} });
+  expect(await tried(`[${"x".repeat(32)}] Notch : hello`)).toEqual({
+    ok: true,
+    value: { sender: "Notch", format: 1 },
+  });
+});
+
+test("lets only Admins and the Owner try chat formats", async () => {
+  const backend = new FakeBackend();
+  backend.handle("login", { request: { username: MEMBER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(MEMBER) });
+
+  const tried = await backend.handle("preview_chat_formats", {
+    request: { chat_formats: ["{sender} : "], line: "Notch : hi" },
+  });
+
+  expect(tried).toMatchObject({ ok: false, error: { api: { status: 403, code: "forbidden" } } });
+});
+
 test("lets only Admins and the Owner read the servers' settings", async () => {
   const backend = new FakeBackend();
   backend.handle("login", { request: { username: MEMBER, password: PASSWORD } });

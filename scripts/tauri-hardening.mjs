@@ -90,6 +90,7 @@ export const COMMANDS = [
   "create_server_settings",
   "update_server_settings",
   "delete_server_settings",
+  "preview_chat_formats",
 ];
 
 /** The whole of `app.security`. */
