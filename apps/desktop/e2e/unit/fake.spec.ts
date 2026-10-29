@@ -353,6 +353,48 @@ test("tries chat formats on a line with a matcher of its own, for Admins and the
   });
 });
 
+test("reads a bot's system lines with its server's formats at each read, so a deleted one reads none", async () => {
+  const backend = new FakeBackend();
+  backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(OWNER) });
+  backend.handle("step_up", { request: { password: PASSWORD } });
+  backend.addAccount(OWNER);
+  backend.setBot("AfkBot1", { serverAddress: "MC.example.com:25565" });
+  const id = backend.bot("AfkBot1").id;
+  const said = (kind: "system" | "chat", text: string) =>
+    backend.addChat("AfkBot1", {
+      at: "2026-10-27T12:00:00.000Z",
+      direction: "in",
+      kind,
+      text,
+      truncated: false,
+      arguments_hidden: false,
+      mine: false,
+      ...(kind === "chat" ? { sender: { name: "Steve" } } : {}),
+    });
+  said("system", "[Clan] Notch : hello");
+  said("chat", "[Clan] Notch : hello");
+  said("system", "Server restarting soon");
+  const read = async () =>
+    ((await backend.handle("bot_chat", { id })) as { ok: true; value: ChatPage }).value.items.map(
+      (line) => line.parsed_sender,
+    );
+  const created = (await backend.handle("create_server_settings", {
+    request: {
+      server: "mc.example.com",
+      conflict_texts: [],
+      chat_formats: ["[{any}] {sender} : "],
+    },
+  })) as { ok: true; value: ServerSettingsResponse };
+
+  const formatted = await read();
+  await backend.handle("delete_server_settings", { id: created.value.id });
+  const unformatted = await read();
+
+  expect(formatted).toEqual([undefined, undefined, "Notch"]);
+  expect(unformatted).toEqual([undefined, undefined, undefined]);
+});
+
 test("lets only Admins and the Owner try chat formats", async () => {
   const backend = new FakeBackend();
   backend.handle("login", { request: { username: MEMBER, password: PASSWORD } });

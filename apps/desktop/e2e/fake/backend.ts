@@ -16,7 +16,8 @@
 // lines; a stale version is 409 `server_settings_changed`, a server that has settings 422
 // at `server`, the hundred and first 409 `conflict`, and an ID it doesn't hold 404. Its
 // chat formats are read by a small matcher of its own (`senderOf`): the preview answers
-// with it.
+// with it, and a bot's chat reads each system line with its server's formats then, so a
+// deleted format shows the line as the server's again.
 // A flow reads `waiting` once, then `linked`, its account pending unless the Owner linked
 // it.
 //
@@ -1144,12 +1145,19 @@ export class FakeBackend {
     limit: unknown,
   ): ChatPage {
     const size = typeof limit === "number" ? limit : 50;
+    const formats = this.#formatsOf(account.bot.serverAddress);
     const older = [...account.bot.chat]
       .reverse()
       .filter((line) => typeof before !== "number" || line.id < before);
     const items = older.slice(0, size).map((line): ChatLine => {
       const mine = line.sent_by?.id === user.id;
-      const { sent_by: sentBy, ...rest } = line;
+      const { sent_by: sentBy, parsed_sender: _stored, ...read } = line;
+      // Read now, from the formats of the bot's server as it is now (ADR-0020, S79, R146).
+      const parsed =
+        line.kind === "system" && line.sender === undefined
+          ? preview(formats, line.text).sender
+          : undefined;
+      const rest = parsed === undefined ? read : { ...read, parsed_sender: parsed };
       const sent = level === "manage" && sentBy !== undefined ? { sent_by: sentBy } : {};
       const cut =
         level !== "manage" && (line.kind === "user" || line.kind === "mode")
@@ -1161,6 +1169,13 @@ export class FakeBackend {
     });
     const last = items.at(-1);
     return older.length > size && last !== undefined ? { items, next: last.id } : { items };
+  }
+
+  /** The chat formats of `server`'s settings, by its key; none without either. */
+  #formatsOf(server: string | undefined): readonly string[] {
+    return server === undefined
+      ? []
+      : (this.#settings.find((one) => one.server === keyOf(server))?.formats ?? []);
   }
 
   /** The next chat line's ID: a newer line has a greater one. */
