@@ -1,13 +1,17 @@
 //! The `server_settings` table's SQL.
 //!
 //! A row's server reads back only as a [`ServerKey`] already in canonical
-//! form, and its conflict texts only through [`ConflictTexts`]'
-//! constructor, exactly as [`ConflictTexts::iter`] writes them: sorted and
-//! without duplicates. `serde_json`'s error, which can quote the stored
-//! text, is dropped for [`StoreError::Corrupt`], which never holds it.
+//! form, its conflict texts only through [`ConflictTexts`]' constructor,
+//! exactly as [`ConflictTexts::iter`] writes them: sorted and without
+//! duplicates; and its chat formats only through [`ChatFormats`]'
+//! constructor, exactly as written: in order, duplicates kept (ADR-0020,
+//! R139). `serde_json`'s error, which can quote the stored text, is
+//! dropped for [`StoreError::Corrupt`], which never holds it. The fleet's
+//! read never reads the formats: they never reach an agent.
 
 use core::num::NonZeroU32;
 
+use fleet_core::chat::ChatFormats;
 use fleet_core::disconnect::ConflictTexts;
 use fleet_core::id::ServerSettingsId;
 use fleet_core::value::ServerKey;
@@ -34,6 +38,7 @@ struct SettingsRow {
     id: String,
     server: String,
     conflict_texts: String,
+    chat_formats: String,
     version: i64,
     created_at: String,
     updated_at: String,
@@ -51,8 +56,9 @@ where
     sqlx::query_as!(
         SettingsRow,
         r#"SELECT rowid AS "rowid!: i64", id AS "id!", server AS "server!",
-                  conflict_texts AS "conflict_texts!", version AS "version!: i64",
-                  created_at AS "created_at!", updated_at AS "updated_at!"
+                  conflict_texts AS "conflict_texts!", chat_formats AS "chat_formats!",
+                  version AS "version!: i64", created_at AS "created_at!",
+                  updated_at AS "updated_at!"
            FROM server_settings WHERE id = ?"#,
         id
     )
@@ -76,8 +82,9 @@ where
     sqlx::query_as!(
         SettingsRow,
         r#"SELECT rowid AS "rowid!: i64", id AS "id!", server AS "server!",
-                  conflict_texts AS "conflict_texts!", version AS "version!: i64",
-                  created_at AS "created_at!", updated_at AS "updated_at!"
+                  conflict_texts AS "conflict_texts!", chat_formats AS "chat_formats!",
+                  version AS "version!: i64", created_at AS "created_at!",
+                  updated_at AS "updated_at!"
            FROM server_settings
            WHERE (? IS NULL OR id < ?)
            ORDER BY id DESC
@@ -134,16 +141,19 @@ pub(super) async fn insert(
     let id = id_text(settings.id);
     let server = settings.server.to_string();
     let texts = texts_json(&settings.conflict_texts)?;
+    let formats = formats_json(&settings.chat_formats)?;
     let created_at = time_text(settings.created_at).ok_or(StoreError::Unstorable {
         table: SERVER_SETTINGS,
         column: "created_at",
     })?;
     sqlx::query!(
-        "INSERT INTO server_settings (id, server, conflict_texts, version, created_at, updated_at)
-         VALUES (?, ?, ?, 1, ?, ?)",
+        "INSERT INTO server_settings
+             (id, server, conflict_texts, chat_formats, version, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 1, ?, ?)",
         id,
         server,
         texts,
+        formats,
         created_at,
         created_at
     )
@@ -163,16 +173,18 @@ pub(super) async fn update(
     let version = i64::from(change.version.get());
     let server = change.server.to_string();
     let texts = texts_json(&change.conflict_texts)?;
+    let formats = formats_json(&change.chat_formats)?;
     let updated_at = time_text(change.updated_at).ok_or(StoreError::Unstorable {
         table: SERVER_SETTINGS,
         column: "updated_at",
     })?;
     let done = sqlx::query!(
         "UPDATE server_settings
-         SET server = ?, conflict_texts = ?, version = ?, updated_at = ?
+         SET server = ?, conflict_texts = ?, chat_formats = ?, version = ?, updated_at = ?
          WHERE id = ? AND version = ?",
         server,
         texts,
+        formats,
         version,
         updated_at,
         id,
@@ -246,6 +258,12 @@ fn texts_json(texts: &ConflictTexts) -> Result<String, StoreError> {
         .map_err(|error| StoreError::Backend(Box::new(error)))
 }
 
+/// `formats` as the column stores them: a JSON array, as written.
+fn formats_json(formats: &ChatFormats) -> Result<String, StoreError> {
+    serde_json::to_string(&formats.iter().collect::<Vec<_>>())
+        .map_err(|error| StoreError::Backend(Box::new(error)))
+}
+
 /// Reads a `server_settings` row back, or [`StoreError::Corrupt`] naming the
 /// first column that doesn't.
 fn settings_from_row(row: &SettingsRow) -> Result<StoredServerSettings, StoreError> {
@@ -262,6 +280,7 @@ fn settings_from_row(row: &SettingsRow) -> Result<StoredServerSettings, StoreErr
         server: ServerKey::try_from(row.server.as_str()).map_err(|_| corrupt("server"))?,
         conflict_texts: stored_texts(&row.conflict_texts)
             .ok_or_else(|| corrupt("conflict_texts"))?,
+        chat_formats: stored_formats(&row.chat_formats).ok_or_else(|| corrupt("chat_formats"))?,
         version: u32::try_from(row.version)
             .ok()
             .and_then(NonZeroU32::new)
@@ -281,4 +300,16 @@ fn stored_texts(json: &str) -> Option<ConflictTexts> {
         .iter()
         .eq(entries.iter().map(String::as_str))
         .then_some(texts)
+}
+
+/// The formats a stored array holds, only when it's exactly what they were
+/// given as: every entry one the constructor takes, in order.
+fn stored_formats(json: &str) -> Option<ChatFormats> {
+    // serde_json's error can quote the stored text: it's dropped here.
+    let entries: Vec<String> = serde_json::from_str(json).ok()?;
+    let formats = ChatFormats::try_new(&entries).ok()?;
+    formats
+        .iter()
+        .eq(entries.iter().map(String::as_str))
+        .then_some(formats)
 }

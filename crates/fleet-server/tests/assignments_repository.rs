@@ -22,6 +22,7 @@ use fleet_core::account::{AccountKind, AccountStatus};
 use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::authz::Role;
 use fleet_core::bot::{BotAccount, FailReason, LastReport, LastState};
+use fleet_core::chat::ChatFormats;
 use fleet_core::disconnect::ConflictTexts;
 use fleet_core::id::{AccountId, AgentId, BotId, ServerSettingsId, UserId};
 use fleet_core::mode::ModePreset;
@@ -664,6 +665,7 @@ impl Setup {
             id,
             server: ServerKey::from(&server.parse::<ServerAddress>().unwrap()),
             conflict_texts: ConflictTexts::try_new(texts).unwrap(),
+            chat_formats: ChatFormats::default(),
             created_at: at(T0),
         };
         self.write(async |tx| tx.server_settings().insert(&settings).await.unwrap())
@@ -773,6 +775,44 @@ async fn a_bot_whose_servers_texts_dont_read_back_is_unreadable_and_the_others_r
             rowid: setup.settings_rowid(row).await,
             id: Some(row),
         })
+    );
+}
+
+/// A row's chat formats never reach the fleet's read: formats that don't
+/// read back leave its texts readable and its bots placed, since no agent
+/// is sent a format (ADR-0013, R139).
+#[sqlx::test(migrations = false)]
+async fn a_settings_rows_chat_formats_never_reach_the_fleets_read(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let (_, bot) = setup.bot(1, false).await;
+    setup.on_server(bot, "mc.example.com").await;
+    let row = setup.settings(1, "mc.example.com", &["One"]).await;
+    let id = row.to_string();
+    sqlx::query!(
+        r#"UPDATE server_settings SET chat_formats = '["{Sender} : ", 1]' WHERE id = ?"#,
+        id
+    )
+    .execute(setup.db.write_pool())
+    .await
+    .unwrap();
+
+    let fleet = setup.db.bots().fleet().await.unwrap();
+
+    assert_eq!(
+        fleet
+            .bots
+            .iter()
+            .map(|record| record.bot.id)
+            .collect::<Vec<_>>(),
+        [bot]
+    );
+    assert!(fleet.unreadable.is_empty(), "{:?}", fleet.unreadable);
+    assert_eq!(
+        fleet.server_texts.of(&"mc.example.com".parse().unwrap()),
+        Some(ConflictTexts::try_new(&["One"]).unwrap())
     );
 }
 

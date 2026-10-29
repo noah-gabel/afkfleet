@@ -30,6 +30,7 @@ use std::sync::Arc;
 
 use fleet_core::audit::{AuditAction, AuditError, AuditMetadata, AuditOutcome, AuditTarget};
 use fleet_core::authz::{AuthzError, Permission, ResourceContext, authorize};
+use fleet_core::chat::ChatFormats;
 use fleet_core::disconnect::ConflictTexts;
 use fleet_core::id::ServerSettingsId;
 use fleet_core::server_settings::server_settings_cap_reached;
@@ -253,6 +254,7 @@ impl ServerSettingsService {
             id,
             server,
             conflict_texts: texts,
+            chat_formats: ChatFormats::default(),
             created_at: now,
         };
         tx.server_settings()
@@ -283,6 +285,7 @@ impl ServerSettingsService {
             id,
             server: settings.server,
             conflict_texts: settings.conflict_texts,
+            chat_formats: settings.chat_formats,
             version: NonZeroU32::MIN,
             created_at: now,
             updated_at: now,
@@ -348,6 +351,7 @@ impl ServerSettingsService {
             version,
             server: edit.server,
             conflict_texts: edit.conflict_texts,
+            chat_formats: stored.chat_formats.clone(),
             updated_at: now,
         };
         let wrote = tx
@@ -377,6 +381,7 @@ impl ServerSettingsService {
             id,
             server: change.server,
             conflict_texts: change.conflict_texts,
+            chat_formats: change.chat_formats,
             version,
             created_at: stored.created_at,
             updated_at: now,

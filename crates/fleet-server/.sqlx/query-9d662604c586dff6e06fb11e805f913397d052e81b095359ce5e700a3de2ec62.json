@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT server AS \"server!\", conflict_texts AS \"texts!\" FROM server_settings WHERE id = ?",
+  "query": "SELECT server AS \"server!\", conflict_texts AS \"texts!\", chat_formats AS \"formats!\"\n           FROM server_settings WHERE id = ?",
   "describe": {
     "columns": [
       {
@@ -24,6 +24,17 @@
             "name": "conflict_texts"
           }
         }
+      },
+      {
+        "name": "formats!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "server_settings",
+            "name": "chat_formats"
+          }
+        }
       }
     ],
     "parameters": {
@@ -31,8 +42,9 @@
     },
     "nullable": [
       false,
+      false,
       false
     ]
   },
-  "hash": "65c078982f5aeea842cf1c468e5a441c18fa3a7600fdb9aeab527f39b065363d"
+  "hash": "9d662604c586dff6e06fb11e805f913397d052e81b095359ce5e700a3de2ec62"
 }

@@ -68,12 +68,24 @@
             "name": "updated_at"
           }
         }
+      },
+      {
+        "name": "chat_formats",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "server_settings",
+            "name": "chat_formats"
+          }
+        }
       }
     ],
     "parameters": {
       "Right": 0
     },
     "nullable": [
+      false,
       false,
       false,
       false,

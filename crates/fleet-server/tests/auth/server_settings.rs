@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use fleet_api_types::server_settings::SERVER_SETTINGS_PAGE_MAX;
 use fleet_core::audit::{AuditAction, AuditOutcome, AuditTarget, RecordedTarget};
 use fleet_core::authz::Role;
+use fleet_core::chat::ChatFormats;
 use fleet_core::disconnect::ConflictTexts;
 use fleet_core::id::ServerSettingsId;
 use fleet_core::server_settings::MAX_SERVER_SETTINGS;
@@ -173,6 +174,7 @@ impl Setup {
                 id,
                 server: key(server),
                 conflict_texts: ConflictTexts::try_new(texts).unwrap(),
+                chat_formats: ChatFormats::default(),
                 created_at: created,
             })
             .await
