@@ -7,6 +7,17 @@ expression: "redacted(&serde_json::to_value(&seen).unwrap(), &viewers.names())"
     "items": [
       {
         "arguments_hidden": false,
+        "at": "[T0+1s]",
+        "direction": "in",
+        "id": 14,
+        "kind": "system",
+        "mine": false,
+        "parsed_sender": "Notch",
+        "text": "[Clan] Notch : hello",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
         "at": "[T0+11s]",
         "direction": "out",
         "id": 11,
@@ -179,6 +190,17 @@ expression: "redacted(&serde_json::to_value(&seen).unwrap(), &viewers.names())"
   "controller": {
     "items": [
       {
+        "arguments_hidden": false,
+        "at": "[T0+1s]",
+        "direction": "in",
+        "id": 14,
+        "kind": "system",
+        "mine": false,
+        "parsed_sender": "Notch",
+        "text": "[Clan] Notch : hello",
+        "truncated": false
+      },
+      {
         "arguments_hidden": true,
         "at": "[T0+11s]",
         "direction": "out",
@@ -299,6 +321,17 @@ expression: "redacted(&serde_json::to_value(&seen).unwrap(), &viewers.names())"
   },
   "manager": {
     "items": [
+      {
+        "arguments_hidden": false,
+        "at": "[T0+1s]",
+        "direction": "in",
+        "id": 14,
+        "kind": "system",
+        "mine": false,
+        "parsed_sender": "Notch",
+        "text": "[Clan] Notch : hello",
+        "truncated": false
+      },
       {
         "arguments_hidden": false,
         "at": "[T0+11s]",
@@ -446,6 +479,17 @@ expression: "redacted(&serde_json::to_value(&seen).unwrap(), &viewers.names())"
     "items": [
       {
         "arguments_hidden": false,
+        "at": "[T0+1s]",
+        "direction": "in",
+        "id": 14,
+        "kind": "system",
+        "mine": false,
+        "parsed_sender": "Notch",
+        "text": "[Clan] Notch : hello",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
         "at": "[T0+11s]",
         "direction": "out",
         "id": 11,
@@ -591,6 +635,17 @@ expression: "redacted(&serde_json::to_value(&seen).unwrap(), &viewers.names())"
     "items": [
       {
         "arguments_hidden": false,
+        "at": "[T0+1s]",
+        "direction": "in",
+        "id": 14,
+        "kind": "system",
+        "mine": false,
+        "parsed_sender": "Notch",
+        "text": "[Clan] Notch : hello",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
         "at": "[T0+11s]",
         "direction": "out",
         "id": 11,
@@ -734,6 +789,17 @@ expression: "redacted(&serde_json::to_value(&seen).unwrap(), &viewers.names())"
   },
   "viewer": {
     "items": [
+      {
+        "arguments_hidden": false,
+        "at": "[T0+1s]",
+        "direction": "in",
+        "id": 14,
+        "kind": "system",
+        "mine": false,
+        "parsed_sender": "Notch",
+        "text": "[Clan] Notch : hello",
+        "truncated": false
+      },
       {
         "arguments_hidden": true,
         "at": "[T0+11s]",

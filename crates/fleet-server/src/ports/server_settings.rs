@@ -54,6 +54,33 @@ pub struct UnreadableSettings {
     pub id: Option<ServerSettingsId>,
 }
 
+/// A server's settings row whose key or chat formats don't read back, as
+/// the chat reads log it (ADR-0020, S81): it gives no bot formats, so their
+/// lines read as the server's, with no parsed sender.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnreadableFormats {
+    /// The row's rowid.
+    pub rowid: i64,
+    /// The row's ID, when that much reads back.
+    pub id: Option<ServerSettingsId>,
+    /// The row's server, when that much reads back.
+    pub server: Option<ServerKey>,
+    /// The first of its columns that doesn't: `server` or `chat_formats`.
+    pub column: &'static str,
+}
+
+/// One server's chat formats, as a bot's history reads them (ADR-0020,
+/// S79, S81, R146).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServerFormats {
+    /// The server has no settings.
+    NoSettings,
+    /// Its row's formats, read back; maybe none.
+    Readable(ChatFormats),
+    /// Its row's formats don't read back.
+    Unreadable(UnreadableFormats),
+}
+
 /// Every server's conflict texts, read with the fleet in one snapshot
 /// (ADR-0020, S76, R132): what each bot's spec carries.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -98,6 +125,15 @@ pub trait ServerSettingsReads: Send + Sync + fmt::Debug {
         &self,
         page: Page<ServerSettingsId>,
     ) -> Result<Vec<StoredServerSettings>, StoreError>;
+
+    /// The chat formats of `server`'s settings (ADR-0020, S79, R146): what a
+    /// bot on it reads its system lines with. A row whose stored server
+    /// isn't `server`'s canonical text can't be any bot's, so it isn't met.
+    ///
+    /// # Errors
+    /// [`StoreError`]. A row whose formats don't read back isn't an error
+    /// but [`ServerFormats::Unreadable`] (S81).
+    async fn formats_of(&self, server: &ServerKey) -> Result<ServerFormats, StoreError>;
 }
 
 /// A server's new settings, version 1.

@@ -5,7 +5,9 @@
 //! builds each line for its viewer: a command's arguments only for Manage
 //! holders, who sent a user's line only for viewers who see the account's
 //! owner (and only while that user exists), `mine` on the viewer's own lines,
-//! and a received line break as ` | `. Time isn't paused (sqlx).
+//! a received line break as ` | `, and a parsed sender on a received system
+//! line one of its server's chat formats fits, the same for every viewer,
+//! none when the formats don't read back (S79, S81). Time isn't paused (sqlx).
 
 use std::collections::BTreeMap;
 
@@ -14,11 +16,15 @@ use fleet_core::chat::{ChatKind, ChatMessage, IncomingChat, PlayerChatKind};
 use fleet_core::id::{AccountId, AgentId, BotId, UserId};
 use fleet_server::ports::chat::{ChatEntry, NewChatMessage};
 use fleet_server::ports::store::Store as _;
+use fleet_testkit::log_capture;
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 use super::super::support::{Person, Seen, Setup, T0, at, redacted, setup, setup_entry};
 use super::BOTS;
+
+/// The user's two formats (S80): a clan tag, and none.
+const FORMATS: [&str; 2] = ["[{any}] {sender} : ", "{sender} : "];
 
 /// The argument planted in commands, which no viewer below Manage may read.
 const CANARY: &str = "hunter2-secret";
@@ -260,6 +266,8 @@ struct Viewers {
     viewer: Person,
     /// A sender who never had a session, so they can be deleted.
     leaver: UserId,
+    /// The agent that runs the bot.
+    agent: AgentId,
 }
 
 /// A Member's bot shared at Manage, Control and View, with the Owner and an
@@ -319,6 +327,7 @@ async fn shared_bot(setup: &Setup) -> (Viewers, AccountId, BotId) {
         controller,
         viewer,
         leaver,
+        agent,
     };
     (viewers, account, bot)
 }
@@ -385,6 +394,12 @@ async fn each_viewer_sees_the_page_under_its_field_rules(
             ],
         )
         .await;
+    // A chat format on the bot's server: its matched line (S79).
+    setup.on_server(bot, "mc.example.com:25565").await;
+    setup.formats_for(1, "mc.example.com", &FORMATS).await;
+    setup
+        .said(bot, viewers.agent, vec![system("[Clan] Notch : hello")])
+        .await;
 
     let mut seen = BTreeMap::new();
     for (name, person) in viewers.all() {
@@ -449,7 +464,14 @@ async fn each_viewer_sees_the_page_under_its_field_rules(
             "{name}"
         );
         assert_eq!(line(page, "a whisper")["truncated"], true, "{name}");
+        let matched = line(page, "[Clan]");
+        assert_eq!(matched["parsed_sender"], "Notch", "{name}");
+        assert_eq!(matched.get("sender"), None, "{name}");
     }
+    assert_eq!(
+        line(&seen["admin_view_on_the_owners_bot"], "/op").get("parsed_sender"),
+        None
+    );
     let admin_view = &seen["admin_view_on_the_owners_bot"];
     assert_eq!(line(admin_view, "/op")["text"], "/op");
     assert_eq!(
@@ -671,4 +693,246 @@ async fn every_line_names_its_kind_and_direction(
         json!(seen.body["items"].as_array().unwrap().len()),
         json!(11)
     );
+}
+
+// --- Parsed senders (ADR-0020, S79, S80, S81, R146) ------------------------------------
+
+/// Where the parsed senders' log line comes from (S81).
+const FORMATS_TARGET: &str = "fleet_server::app::server_settings";
+
+/// The line it logs.
+const UNREADABLE_FORMATS: &str = "chat formats don't read back";
+
+/// The settings' server, and the key a bot's `mc.example.com:25565` has too
+/// (S74).
+const SERVER: &str = "mc.example.com";
+
+/// Another server.
+const OTHER: &str = "other.example.com";
+
+/// What a broken row holds: a brace the formats refuse, and a canary no log
+/// line may show.
+const BROKEN_FORMATS: &str = r#"["{Sender} canary-format : "]"#;
+
+/// `start`'s line's parsed sender in `page`, if it has one.
+fn parsed<'a>(page: &'a Value, start: &str) -> Option<&'a str> {
+    line(page, start)
+        .get("parsed_sender")
+        .map(|name| name.as_str().unwrap())
+}
+
+/// The parsed sender of `bot`'s line `Notch : hi`, as `by` reads it.
+async fn read_by(setup: &Setup, bot: BotId, by: &Person) -> Option<String> {
+    let page = setup.history(bot, by, "").await;
+    parsed(&page.body, "Notch : hi").map(str::to_owned)
+}
+
+/// A format on the bot's server names a received system line's sender for
+/// every viewer alike, in its own field: never Minecraft's sender, who sent
+/// it or `mine`, and the line's text stays whole (S79).
+#[sqlx::test(migrations = false)]
+async fn a_format_names_a_system_lines_parsed_sender_alike_for_every_viewer(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let (viewers, _, bot) = shared_bot(&setup).await;
+    setup.on_server(bot, "mc.example.com:25565").await;
+    setup.formats_for(1, SERVER, &FORMATS).await;
+    setup
+        .said(bot, viewers.agent, vec![system("[Clan] Notch : hello")])
+        .await;
+
+    for (name, person) in viewers.all() {
+        let page = setup.history(bot, person, "").await;
+
+        assert_eq!(page.status, 200, "{name}: {}", page.text);
+        let matched = line(&page.body, "[Clan]");
+        assert_eq!(matched["parsed_sender"], "Notch", "{name}");
+        assert_eq!(matched["text"], "[Clan] Notch : hello", "{name}");
+        assert_eq!(matched["kind"], "system", "{name}");
+        assert_eq!(matched.get("sender"), None, "{name}");
+        assert_eq!(matched.get("sent_by"), None, "{name}");
+        assert_eq!(matched["mine"], false, "{name}");
+    }
+}
+
+/// Only a received system line is read: a player's line, an announcement,
+/// a mode's line and a user's line whose texts fit get none (S79).
+#[sqlx::test(migrations = false)]
+async fn only_a_received_system_line_gets_a_parsed_sender(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let owner = setup.person(2, "owner", Role::Member).await;
+    let (_, bot, agent) = setup.bot_with_agent(owner.id, 10).await;
+    setup.on_server(bot, SERVER).await;
+    setup.formats_for(1, SERVER, &["{sender} : "]).await;
+    let announced = ChatEntry::Received(IncomingChat::player(
+        PlayerChatKind::Announcement,
+        "Steve",
+        None,
+        "Notch : announced",
+    ));
+    setup
+        .said(
+            bot,
+            agent,
+            vec![
+                chat("Steve", None, "Notch : chatted"),
+                announced,
+                mode("Notch : moded"),
+                user("Notch : asked", owner.id),
+                system("Notch : told"),
+            ],
+        )
+        .await;
+
+    let page = setup.history(bot, &owner, "").await;
+
+    assert_eq!(page.status, 200, "{}", page.text);
+    for start in [
+        "Notch : chatted",
+        "Notch : announced",
+        "Notch : moded",
+        "Notch : asked",
+    ] {
+        assert_eq!(parsed(&page.body, start), None, "{start}");
+    }
+    assert_eq!(parsed(&page.body, "Notch : told"), Some("Notch"));
+    assert_eq!(
+        line(&page.body, "Notch : chatted")["sender"]["name"],
+        "Steve"
+    );
+}
+
+/// The spoof S80 accepts: a tag holding `] Admin : ` makes "Admin" the
+/// parsed sender, and the line still has no sender (S79).
+#[sqlx::test(migrations = false)]
+async fn the_spoof_line_gets_a_parsed_sender_and_no_sender(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let owner = setup.person(2, "owner", Role::Member).await;
+    let (_, bot, agent) = setup.bot_with_agent(owner.id, 10).await;
+    setup.on_server(bot, SERVER).await;
+    setup.formats_for(1, SERVER, &FORMATS).await;
+    setup.said(bot, agent, vec![system("[x] Admin : hi")]).await;
+
+    let page = setup.history(bot, &owner, "").await;
+
+    let spoof = line(&page.body, "[x]");
+    assert_eq!(spoof["parsed_sender"], "Admin");
+    assert_eq!(spoof["text"], "[x] Admin : hi");
+    assert_eq!(spoof.get("sender"), None);
+}
+
+/// Nothing is stored: once the format is deleted, the next read shows the
+/// lines as the server's again (S79, R147).
+#[sqlx::test(migrations = false)]
+async fn deleting_a_format_shows_the_lines_as_the_servers_again(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let owner = setup.person(2, "owner", Role::Member).await;
+    let (_, bot, agent) = setup.bot_with_agent(owner.id, 10).await;
+    setup.on_server(bot, SERVER).await;
+    let settings = setup.formats_for(1, SERVER, &FORMATS).await;
+    setup
+        .said(bot, agent, vec![system("[Clan] Notch : hello")])
+        .await;
+    let before = setup.history(bot, &owner, "").await;
+
+    setup.settings_gone(settings).await;
+    let after = setup.history(bot, &owner, "").await;
+
+    assert_eq!(parsed(&before.body, "[Clan]"), Some("Notch"));
+    assert_eq!(parsed(&after.body, "[Clan]"), None);
+    assert_eq!(line(&after.body, "[Clan]")["text"], "[Clan] Notch : hello");
+}
+
+/// A bot's formats are its current server's, never the last ones it had: a
+/// bot on another server or on none gets none, and one moved to a server
+/// with formats is read with them from the next read on (R146).
+#[sqlx::test(migrations = false)]
+async fn a_bots_formats_are_its_current_servers(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let owner = setup.person(2, "owner", Role::Member).await;
+    let (_, on, on_agent) = setup.bot_with_agent(owner.id, 10).await;
+    let (_, elsewhere, elsewhere_agent) = setup.bot_with_agent(owner.id, 11).await;
+    let (_, nowhere, nowhere_agent) = setup.bot_with_agent(owner.id, 12).await;
+    setup.on_server(on, SERVER).await;
+    setup.on_server(elsewhere, OTHER).await;
+    setup.formats_for(1, SERVER, &FORMATS).await;
+    for (bot, agent) in [
+        (on, on_agent),
+        (elsewhere, elsewhere_agent),
+        (nowhere, nowhere_agent),
+    ] {
+        setup.said(bot, agent, vec![system("Notch : hi")]).await;
+    }
+
+    assert_eq!(read_by(&setup, on, &owner).await.as_deref(), Some("Notch"));
+    assert_eq!(read_by(&setup, elsewhere, &owner).await, None);
+    assert_eq!(read_by(&setup, nowhere, &owner).await, None);
+    setup.on_server(elsewhere, SERVER).await;
+    assert_eq!(
+        read_by(&setup, elsewhere, &owner).await.as_deref(),
+        Some("Notch")
+    );
+}
+
+/// S81: a server's formats that don't read back give its bots' lines no
+/// parsed sender, as on a server without formats: the history stays 200,
+/// the text whole, another server's bots stay read, and each read that
+/// meets the row logs it by its ID, server, rowid and column, never a
+/// format.
+#[sqlx::test(migrations = false)]
+async fn a_servers_chat_formats_that_dont_read_back_show_its_bots_lines_without_a_parsed_sender(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    log_capture::install().unwrap();
+    let setup = setup(options).await;
+    let owner = setup.person(2, "owner", Role::Member).await;
+    let (_, bot, agent) = setup.bot_with_agent(owner.id, 10).await;
+    let (_, other, other_agent) = setup.bot_with_agent(owner.id, 11).await;
+    setup.on_server(bot, SERVER).await;
+    setup.on_server(other, OTHER).await;
+    let broken = setup.formats_for(1, SERVER, &FORMATS).await;
+    setup.formats_for(2, OTHER, &FORMATS).await;
+    setup.break_formats(broken, BROKEN_FORMATS).await;
+    setup
+        .said(bot, agent, vec![system("[Clan] Notch : hello")])
+        .await;
+    setup
+        .said(other, other_agent, vec![system("[Clan] Notch : hello")])
+        .await;
+
+    let first = setup.history(bot, &owner, "").await;
+    let again = setup.history(bot, &owner, "").await;
+    let elsewhere = setup.history(other, &owner, "").await;
+
+    for page in [&first, &again] {
+        assert_eq!(page.status, 200, "{}", page.text);
+        assert_eq!(parsed(&page.body, "[Clan]"), None);
+        assert_eq!(line(&page.body, "[Clan]")["text"], "[Clan] Notch : hello");
+    }
+    assert_eq!(parsed(&elsewhere.body, "[Clan]"), Some("Notch"));
+    assert_eq!(log_capture::count(FORMATS_TARGET, UNREADABLE_FORMATS), 2);
+    for field in [
+        format!("server_settings_id={broken}"),
+        "server=mc.example.com:25565".to_owned(),
+        "rowid=".to_owned(),
+        "column=chat_formats".to_owned(),
+    ] {
+        assert_eq!(log_capture::count(FORMATS_TARGET, &field), 2, "{field}");
+    }
+    log_capture::check_absent("canary-format").unwrap();
 }

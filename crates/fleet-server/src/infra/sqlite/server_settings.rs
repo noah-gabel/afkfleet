@@ -7,9 +7,14 @@
 //! constructor, exactly as written: in order, duplicates kept (ADR-0020,
 //! R139). `serde_json`'s error, which can quote the stored text, is
 //! dropped for [`StoreError::Corrupt`], which never holds it. The fleet's
-//! read never reads the formats: they never reach an agent.
+//! read never reads the formats: they never reach an agent. The chat reads
+//! do, a bot's history by its server's key and the rights' read every row,
+//! and a row whose formats don't read back gives no bot formats there,
+//! rather than failing the read (ADR-0020, S79, S81).
 
 use core::num::NonZeroU32;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use fleet_core::chat::ChatFormats;
 use fleet_core::disconnect::ConflictTexts;
@@ -21,8 +26,8 @@ use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::{store_error, unique_violation};
 use crate::ports::page::Page;
 use crate::ports::server_settings::{
-    NewServerSettings, ServerSettingsChange, ServerTexts, StoredServerSettings, UnreadableSettings,
-    WriteServerSettingsError,
+    NewServerSettings, ServerFormats, ServerSettingsChange, ServerTexts, StoredServerSettings,
+    UnreadableFormats, UnreadableSettings, WriteServerSettingsError,
 };
 use crate::ports::store::StoreError;
 
@@ -242,6 +247,89 @@ pub(super) async fn texts_by_server(
         }
     }
     Ok(texts)
+}
+
+/// Server `server`'s chat formats, for a bot's history (ADR-0020, S79,
+/// S81, R146): looked up by the key's canonical text, which is how a row
+/// stores it.
+pub(super) async fn formats_of<'c, E>(
+    executor: E,
+    server: &ServerKey,
+) -> Result<ServerFormats, StoreError>
+where
+    E: sqlx::SqliteExecutor<'c>,
+{
+    let key = server.to_string();
+    let row = sqlx::query!(
+        r#"SELECT rowid AS "rowid!: i64", id AS "id!", chat_formats AS "chat_formats!"
+           FROM server_settings WHERE server = ?"#,
+        key
+    )
+    .fetch_optional(executor)
+    .await
+    .map_err(store_error)?;
+    Ok(row.map_or(ServerFormats::NoSettings, |row| {
+        stored_formats(&row.chat_formats).map_or_else(
+            || {
+                ServerFormats::Unreadable(UnreadableFormats {
+                    rowid: row.rowid,
+                    id: parse_id(&row.id),
+                    server: Some(server.clone()),
+                    column: "chat_formats",
+                })
+            },
+            ServerFormats::Readable,
+        )
+    }))
+}
+
+/// Every server's chat formats, for the rights' read (ADR-0020, S81, R146),
+/// in its transaction: each readable row's that holds any, one shared copy
+/// a server, by key; and each row whose server or formats don't read back,
+/// which gives no bot formats rather than failing the read.
+pub(super) async fn formats_by_server(
+    conn: &mut SqliteConnection,
+) -> Result<ServersFormats, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT rowid AS "rowid!: i64", id AS "id!", server AS "server!",
+                  chat_formats AS "chat_formats!"
+           FROM server_settings"#
+    )
+    .fetch_all(conn)
+    .await
+    .map_err(store_error)?;
+    let mut formats = ServersFormats::default();
+    for row in rows {
+        let unreadable = |server, column| UnreadableFormats {
+            rowid: row.rowid,
+            id: parse_id(&row.id),
+            server,
+            column,
+        };
+        let Ok(server) = ServerKey::try_from(row.server.as_str()) else {
+            formats.unreadable.push(unreadable(None, "server"));
+            continue;
+        };
+        match stored_formats(&row.chat_formats) {
+            Some(read) if read.is_empty() => {}
+            Some(read) => {
+                formats.readable.insert(server, Arc::new(read));
+            }
+            None => formats
+                .unreadable
+                .push(unreadable(Some(server), "chat_formats")),
+        }
+    }
+    Ok(formats)
+}
+
+/// Every server's chat formats, as [`formats_by_server`] reads them.
+#[derive(Debug, Default)]
+pub(super) struct ServersFormats {
+    /// Each server's formats, when its row holds any.
+    pub(super) readable: HashMap<ServerKey, Arc<ChatFormats>>,
+    /// The rows whose server or formats don't read back.
+    pub(super) unreadable: Vec<UnreadableFormats>,
 }
 
 /// A write's error: the unique key's refusal as [`WriteServerSettingsError::ServerTaken`].

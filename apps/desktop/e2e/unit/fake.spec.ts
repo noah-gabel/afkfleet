@@ -294,6 +294,119 @@ test("refuses settings that hold neither a text nor a chat format", async () => 
   });
 });
 
+test("checks an edit's cross-field rule before its lookup and version, as the server's extractor does", async () => {
+  const backend = new FakeBackend();
+  backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(OWNER) });
+  backend.handle("step_up", { request: { password: PASSWORD } });
+  const created = (await backend.handle("create_server_settings", {
+    request: { server: "mc.example.com", conflict_texts: ["a"], chat_formats: [] },
+  })) as { ok: true; value: ServerSettingsResponse };
+  const empty = { server: "mc.example.com", conflict_texts: [], chat_formats: [] };
+
+  const stale = await backend.handle("update_server_settings", {
+    id: created.value.id,
+    request: { version: 2, ...empty },
+  });
+  const unknown = await backend.handle("update_server_settings", {
+    id: "01900000-0000-7000-8000-000000000999",
+    request: { version: 1, ...empty },
+  });
+
+  for (const refused of [stale, unknown]) {
+    expect(refused).toMatchObject({
+      ok: false,
+      error: { api: { status: 422, fields: [{ path: "conflict_texts" }] } },
+    });
+  }
+});
+
+test("tries chat formats on a line with a matcher of its own, for Admins and the Owner", async () => {
+  const backend = new FakeBackend();
+  backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(OWNER) });
+  const formats = ["<{sender}> ", "[{any}] {sender} : ", "{{{sender}}} "];
+  const tried = (line: string) =>
+    backend.handle("preview_chat_formats", { request: { chat_formats: formats, line } });
+
+  expect(await tried("[Clan] Notch : hello")).toEqual({
+    ok: true,
+    value: { sender: "Notch", format: 1 },
+  });
+  expect(await tried("{Notch} hi")).toEqual({ ok: true, value: { sender: "Notch", format: 2 } });
+  expect(await tried("[x] Admin : hi")).toEqual({
+    ok: true,
+    value: { sender: "Admin", format: 1 },
+  });
+  for (const line of [
+    "Server restarting soon",
+    "[Clan] No : hello",
+    "[Clan] Seventeen_letters : hello",
+    "[Clan]Notch : hello",
+    `[${"x".repeat(33)}] Notch : hello`,
+    "[Cl\nan] Notch : hello",
+  ])
+    expect(await tried(line), line).toEqual({ ok: true, value: {} });
+  expect(await tried(`[${"x".repeat(32)}] Notch : hello`)).toEqual({
+    ok: true,
+    value: { sender: "Notch", format: 1 },
+  });
+});
+
+test("reads a bot's system lines with its server's formats at each read, so a deleted one reads none", async () => {
+  const backend = new FakeBackend();
+  backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(OWNER) });
+  backend.handle("step_up", { request: { password: PASSWORD } });
+  backend.addAccount(OWNER);
+  backend.setBot("AfkBot1", { serverAddress: "MC.example.com:25565" });
+  const id = backend.bot("AfkBot1").id;
+  const said = (kind: "system" | "chat", text: string) =>
+    backend.addChat("AfkBot1", {
+      at: "2026-10-27T12:00:00.000Z",
+      direction: "in",
+      kind,
+      text,
+      truncated: false,
+      arguments_hidden: false,
+      mine: false,
+      ...(kind === "chat" ? { sender: { name: "Steve" } } : {}),
+    });
+  said("system", "[Clan] Notch : hello");
+  said("chat", "[Clan] Notch : hello");
+  said("system", "Server restarting soon");
+  const read = async () =>
+    ((await backend.handle("bot_chat", { id })) as { ok: true; value: ChatPage }).value.items.map(
+      (line) => line.parsed_sender,
+    );
+  const created = (await backend.handle("create_server_settings", {
+    request: {
+      server: "mc.example.com",
+      conflict_texts: [],
+      chat_formats: ["[{any}] {sender} : "],
+    },
+  })) as { ok: true; value: ServerSettingsResponse };
+
+  const formatted = await read();
+  await backend.handle("delete_server_settings", { id: created.value.id });
+  const unformatted = await read();
+
+  expect(formatted).toEqual([undefined, undefined, "Notch"]);
+  expect(unformatted).toEqual([undefined, undefined, undefined]);
+});
+
+test("lets only Admins and the Owner try chat formats", async () => {
+  const backend = new FakeBackend();
+  backend.handle("login", { request: { username: MEMBER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(MEMBER) });
+
+  const tried = await backend.handle("preview_chat_formats", {
+    request: { chat_formats: ["{sender} : "], line: "Notch : hi" },
+  });
+
+  expect(tried).toMatchObject({ ok: false, error: { api: { status: 403, code: "forbidden" } } });
+});
+
 test("lets only Admins and the Owner read the servers' settings", async () => {
   const backend = new FakeBackend();
   backend.handle("login", { request: { username: MEMBER, password: PASSWORD } });

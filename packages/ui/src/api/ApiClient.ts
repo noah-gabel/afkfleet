@@ -34,6 +34,8 @@ import type { MfaConfirmResponse } from "../generated/MfaConfirmResponse";
 import type { MfaEnrollResponse } from "../generated/MfaEnrollResponse";
 import type { ModePage } from "../generated/ModePage";
 import type { PasswordChangeRequest } from "../generated/PasswordChangeRequest";
+import type { PreviewChatFormatsRequest } from "../generated/PreviewChatFormatsRequest";
+import type { PreviewChatFormatsResponse } from "../generated/PreviewChatFormatsResponse";
 import type { RegisterRequest } from "../generated/RegisterRequest";
 import type { RegisterResponse } from "../generated/RegisterResponse";
 import type { ServerProfileRequest } from "../generated/ServerProfileRequest";
@@ -179,6 +181,11 @@ export interface ApiClient {
   ): Promise<ServerSettingsResponse>;
   /** Deletes a server's settings, after a step-up. */
   deleteServerSettings(id: string): Promise<void>;
+  /**
+   * Which sender unsaved chat formats read from a line, and which format fitted first, counted
+   * from 0; nothing is stored, and no step-up is needed (Admins and the Owner, U58, R134).
+   */
+  previewChatFormats(request: PreviewChatFormatsRequest): Promise<PreviewChatFormatsResponse>;
 }
 
 /** A method of the API. */
@@ -239,4 +246,5 @@ export const API_METHODS = [
   "createServerSettings",
   "updateServerSettings",
   "deleteServerSettings",
+  "previewChatFormats",
 ] as const satisfies readonly ApiMethod[];

@@ -16,12 +16,14 @@
 use core::fmt;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use fleet_core::account::{AccountKind, AccountStatus};
 use fleet_core::authz::{Actor, GrantLevel, Role};
 use fleet_core::bot::{BotAccount, DesiredRunState, LastReport};
+use fleet_core::chat::ChatFormats;
 use fleet_core::id::{AccountId, AgentId, BotId, ModeId, UserId};
 use fleet_core::mode::ModeDefinition;
 use fleet_core::placement::McIdentity;
@@ -29,7 +31,7 @@ use fleet_core::value::ServerAddress;
 
 use super::accounts::ListedAccount;
 use super::page::Page;
-use super::server_settings::ServerTexts;
+use super::server_settings::{ServerTexts, UnreadableFormats};
 use super::store::StoreError;
 
 /// A stored bot.
@@ -149,8 +151,10 @@ pub struct Fleet {
 
 /// Who may see which bot, read in one read transaction (ADR-0020, S30):
 /// every bot with its account and the account's owner, every grant, and
-/// every user's role and whether they're enabled. Nothing else: no names,
-/// no addresses, nothing a viewer is sent.
+/// every user's role and whether they're enabled; with each bot's chat
+/// formats, its current server's (S79, R146). Nothing else: no names, no
+/// addresses, nothing a viewer is sent but the parsed senders the formats
+/// read.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Access {
     /// Every bot.
@@ -159,6 +163,21 @@ pub struct Access {
     pub grants: Vec<GrantAccess>,
     /// Every user.
     pub users: Vec<UserAccess>,
+    /// Each bot whose current server's settings hold chat formats, with
+    /// them: one shared copy a server.
+    pub bot_formats: Vec<BotFormats>,
+    /// The settings rows whose server or formats don't read back: they give
+    /// no bot formats (S81).
+    pub unreadable_formats: Vec<UnreadableFormats>,
+}
+
+/// A bot's chat formats: its current server's settings' (ADR-0020, R146).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BotFormats {
+    /// The bot.
+    pub bot: BotId,
+    /// Its server's formats, shared by every bot on it.
+    pub formats: Arc<ChatFormats>,
 }
 
 /// A bot, its account and the account's owner.

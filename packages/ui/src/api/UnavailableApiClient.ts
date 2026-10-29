@@ -55,6 +55,7 @@ export class UnavailableApiClient implements ApiClient {
   createServerSettings = unavailable;
   updateServerSettings = unavailable;
   deleteServerSettings = unavailable;
+  previewChatFormats = unavailable;
   accountsAwaitingApproval = unavailable;
   account = unavailable;
   deleteAccount = unavailable;

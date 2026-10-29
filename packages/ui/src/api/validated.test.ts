@@ -8,6 +8,7 @@ import {
   CHAT_FORMAT_MAX_CHARS,
   CHAT_FORMATS_MAX,
   CHAT_MESSAGE_MAX_UNITS,
+  CHAT_PREVIEW_LINE_MAX_CHARS,
   CODE_MAX_CHARS,
   CONFLICT_TEXT_MAX_CHARS,
   CONFLICT_TEXTS_MAX,
@@ -83,6 +84,7 @@ function client() {
     createServerSettings: ok,
     updateServerSettings: ok,
     deleteServerSettings: ok,
+    previewChatFormats: ok,
   });
   return { fake, api: validated(fake) as ApiClient };
 }
@@ -414,6 +416,38 @@ describe("validated", () => {
     };
     expect(await refusedFields(api.createServerSettings(unknown))).toEqual([""]);
     expect(fake.calls).toEqual([]);
+  });
+
+  it("passes a chat formats' preview at its caps and refuses one past them (R142)", async () => {
+    const { fake, api } = client();
+    // A character outside the BMP counts once, as the server counts it.
+    const longest = {
+      chat_formats: Array.from({ length: CHAT_FORMATS_MAX }, () => "{sender} : "),
+      line: "😀".repeat(CHAT_PREVIEW_LINE_MAX_CHARS),
+    };
+
+    await api.previewChatFormats(longest);
+
+    expect(fake.calls.map((call) => [call.method, call.args])).toEqual([
+      ["previewChatFormats", [longest]],
+    ]);
+    expect(
+      await refused(
+        api.previewChatFormats({
+          chat_formats: ["x".repeat(CHAT_FORMAT_MAX_CHARS + 1)],
+          line: "x".repeat(CHAT_PREVIEW_LINE_MAX_CHARS + 1),
+        }),
+      ),
+    ).toEqual([
+      { path: "chat_formats[0]", message: "must be at most 64 characters" },
+      { path: "line", message: "must be at most 1024 characters" },
+    ]);
+    expect(
+      await refusedFields(
+        api.previewChatFormats({ chat_formats: [], line: "", extra: 1 } as never),
+      ),
+    ).toEqual([""]);
+    expect(fake.calls).toHaveLength(1);
   });
 
   it("passes valid bot writes through unchanged", async () => {

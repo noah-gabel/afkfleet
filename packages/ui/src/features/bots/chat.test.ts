@@ -32,6 +32,21 @@ describe("a chat line's sender (U3, U43, S7)", () => {
     expect(senderOf(received(kind as ChatLineKind, name), BOT)).toEqual(shown);
   });
 
+  it("shows a system line a chat format read under its parsed sender, and nothing else so (U55, S79)", () => {
+    expect(senderOf({ ...received("system"), parsed_sender: "Notch" }, BOT)).toEqual({
+      label: "Notch",
+      look: "parsed",
+    });
+    expect(senderOf({ ...received("announcement"), parsed_sender: "Notch" }, BOT)).toEqual({
+      label: "Server",
+      look: "server",
+    });
+    expect(senderOf({ ...received("chat", "Steve"), parsed_sender: "Notch" }, BOT)).toEqual({
+      label: "Steve",
+      look: "player",
+    });
+  });
+
   it("shows a mode's line with its tag and the bot's name", () => {
     expect(senderOf({ ...line(1), direction: "out", kind: "mode" }, BOT)).toEqual({
       label: BOT,

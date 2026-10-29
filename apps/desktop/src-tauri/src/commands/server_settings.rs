@@ -1,12 +1,13 @@
 //! The servers' settings commands (Plan.md P11.9; ADR-0020, U54, U56, S77):
 //! Admins and the Owner read every server's settings a page at a time, and
-//! after a step-up create, edit and delete them.
+//! after a step-up create, edit and delete them. They try unsaved chat
+//! formats on a line without a step-up (U58).
 
 use fleet_api_types::ServerSettingsId;
 use fleet_api_types::app::CommandError;
 use fleet_api_types::server_settings::{
-    CreateServerSettingsRequest, ServerSettingsPage, ServerSettingsResponse,
-    UpdateServerSettingsRequest,
+    CreateServerSettingsRequest, PreviewChatFormatsRequest, PreviewChatFormatsResponse,
+    ServerSettingsPage, ServerSettingsResponse, UpdateServerSettingsRequest,
 };
 
 use super::Managed;
@@ -43,4 +44,12 @@ pub(crate) async fn delete_server_settings(
     id: ServerSettingsId,
 ) -> Result<(), CommandError> {
     state.delete_server_settings(id).await
+}
+
+#[tauri::command]
+pub(crate) async fn preview_chat_formats(
+    state: Managed<'_>,
+    request: PreviewChatFormatsRequest,
+) -> Result<PreviewChatFormatsResponse, CommandError> {
+    state.preview_chat_formats(request).await
 }

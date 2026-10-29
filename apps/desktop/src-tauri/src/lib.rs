@@ -103,6 +103,7 @@ pub fn configure<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         commands::server_settings::create_server_settings,
         commands::server_settings::update_server_settings,
         commands::server_settings::delete_server_settings,
+        commands::server_settings::preview_chat_formats,
     ])
 }
 

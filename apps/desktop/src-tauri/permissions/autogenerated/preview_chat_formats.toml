@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-preview-chat-formats"
+description = "Enables the preview_chat_formats command without any pre-configured scope."
+commands.allow = ["preview_chat_formats"]
+
+[[permission]]
+identifier = "deny-preview-chat-formats"
+description = "Denies the preview_chat_formats command without any pre-configured scope."
+commands.deny = ["preview_chat_formats"]

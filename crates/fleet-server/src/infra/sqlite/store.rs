@@ -61,8 +61,8 @@ use crate::ports::page::Page;
 use crate::ports::recovery_codes::RecoveryCodeHash;
 use crate::ports::retention::{AuditCut, AuditPurged, RetentionBatch, RetentionReads};
 use crate::ports::server_settings::{
-    NewServerSettings, ServerSettingsChange, ServerSettingsReads, ServerSettingsWrites,
-    StoredServerSettings, WriteServerSettingsError,
+    NewServerSettings, ServerFormats, ServerSettingsChange, ServerSettingsReads,
+    ServerSettingsWrites, StoredServerSettings, WriteServerSettingsError,
 };
 use crate::ports::sessions::{
     LiveSince, NewSession, RefreshLookup, Rotation, Session, SessionReads, SessionWithUser,
@@ -842,6 +842,10 @@ impl ServerSettingsReads for Reads {
         page: Page<ServerSettingsId>,
     ) -> Result<Vec<StoredServerSettings>, StoreError> {
         server_settings::page(&self.pool, page).await
+    }
+
+    async fn formats_of(&self, server: &ServerKey) -> Result<ServerFormats, StoreError> {
+        server_settings::formats_of(&self.pool, server).await
     }
 }
 

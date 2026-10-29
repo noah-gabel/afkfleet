@@ -68,7 +68,7 @@ use fleet_api_types::{BoundedText, FieldError, PageQuery, SafeInt, SecretText, T
 use fleet_core::authz::{
     Actor, CommandCheck, GrantLevel, ModeVisibility, Permission, Role, authorize, effective_level,
 };
-use fleet_core::chat::{ChatMessage, ChatSender, Redacted};
+use fleet_core::chat::{ChatFormats, ChatMessage, ChatSender, Redacted};
 use fleet_core::id::UserId;
 use fleet_core::value::Username;
 use fleet_proto::control::ChatFailedReason;
@@ -227,7 +227,16 @@ fn chat_failure(reason: ChatFailedReason) -> ChatFailure {
 ///   viewer's own lines, which lifts neither rule.
 /// - **The text** is cleaned on its way out, a line break becoming ` | `
 ///   (S11).
-fn chat_line(viewer: &Actor, level: GrantLevel, line: &ListedChat) -> Result<ChatLine, ApiError> {
+/// - **A parsed sender** (S79) on a received system line that one of
+///   `formats`, the bot's server's, fits: the name it reads, the same for
+///   every viewer, in its own field. Never `sender`, `sent_by` or `mine`,
+///   and the text stays whole.
+fn chat_line(
+    viewer: &Actor,
+    level: GrantLevel,
+    line: &ListedChat,
+    formats: &ChatFormats,
+) -> Result<ChatLine, ApiError> {
     let record = &line.record;
     let id = SafeInt::try_new(record.id.get()).map_err(ApiError::internal)?;
     let at = timestamp(record.at)?;
@@ -241,6 +250,11 @@ fn chat_line(viewer: &Actor, level: GrantLevel, line: &ListedChat) -> Result<Cha
             truncated: chat.is_truncated(),
             arguments_hidden: false,
             sender: chat.sender().map(line_sender),
+            // Only a system line is read, and the formats answer `None` for
+            // any other (S79).
+            parsed_sender: formats
+                .sender_of(chat)
+                .map(|name| BoundedText::new(name.as_str())),
             sent_by: None,
             mine: false,
         },
@@ -368,6 +382,7 @@ fn sent_line(
         truncated: false,
         arguments_hidden: shown.arguments_hidden,
         sender: None,
+        parsed_sender: None,
         sent_by,
         mine,
     }
@@ -387,7 +402,7 @@ fn line_sender(sender: &ChatSender) -> ChatLineSender {
 mod tests {
     use chrono::DateTime;
     use fleet_api_types::bots::LastDisconnect;
-    use fleet_core::chat::IncomingChat;
+    use fleet_core::chat::{IncomingChat, PlayerChatKind};
     use fleet_core::disconnect::DisconnectReason;
     use fleet_core::id::BotId;
     use proptest::prelude::*;
@@ -417,6 +432,52 @@ mod tests {
         }
     }
 
+    /// A parsed sender only on a received system line one of the formats
+    /// fits, the same at every level, in its own field (ADR-0020, S79): never
+    /// the sender, `sent_by` or `mine`, and the text whole.
+    #[test]
+    fn a_parsed_sender_is_its_own_field_on_a_received_system_line_alone() {
+        let formats = ChatFormats::try_new(&["[{any}] {sender} : "]).unwrap();
+        let spoof = "[x] Admin : hi";
+        let player = IncomingChat::player(PlayerChatKind::Chat, "Steve", None, spoof);
+        for level in [GrantLevel::View, GrantLevel::Control, GrantLevel::Manage] {
+            let line = |stored: &IncomingChat| {
+                chat_line(&viewer(), level, &received(stored), &formats).unwrap()
+            };
+
+            let system = line(&IncomingChat::system(spoof));
+            let chatted = line(&player);
+            let unmatched = line(&IncomingChat::system("Server restarting soon"));
+            let unformatted = chat_line(
+                &viewer(),
+                level,
+                &received(&IncomingChat::system(spoof)),
+                &ChatFormats::default(),
+            )
+            .unwrap();
+
+            assert_eq!(
+                system.parsed_sender.as_ref().map(BoundedText::as_str),
+                Some("Admin")
+            );
+            assert_eq!(system.text.as_str(), spoof);
+            assert_eq!(
+                (system.sender, system.sent_by, system.mine),
+                (None, None, false)
+            );
+            assert_eq!(chatted.parsed_sender, None);
+            assert_eq!(
+                chatted
+                    .sender
+                    .map(|sender| sender.name.as_str().to_owned())
+                    .as_deref(),
+                Some("Steve")
+            );
+            assert_eq!(unmatched.parsed_sender, None);
+            assert_eq!(unformatted.parsed_sender, None);
+        }
+    }
+
     proptest! {
         /// Every stored text crosses whole, each line break as ` | `, to
         /// every viewer (ADR-0020, S11): a stored text keeps up to 1024
@@ -436,7 +497,7 @@ mod tests {
         ) {
             let stored = IncomingChat::system(&raw);
 
-            let line = chat_line(&viewer(), level, &received(&stored)).unwrap();
+            let line = chat_line(&viewer(), level, &received(&stored), &ChatFormats::default()).unwrap();
 
             prop_assert_eq!(line.text.as_str(), stored.text().replace('\n', " | "));
             prop_assert!(!line.arguments_hidden);

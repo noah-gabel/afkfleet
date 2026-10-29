@@ -8,6 +8,7 @@ import {
   CHAT_FORMAT_MAX_CHARS,
   CHAT_FORMATS_MAX,
   CHAT_MESSAGE_MAX_UNITS,
+  CHAT_PREVIEW_LINE_MAX_CHARS,
   CODE_MAX_CHARS,
   CONFLICT_TEXT_MAX_CHARS,
   CONFLICT_TEXTS_MAX,
@@ -229,6 +230,20 @@ export const updateServerSettingsRequest = z.strictObject({
   server: serverAddress,
   conflict_texts: conflictTexts,
   chat_formats: chatFormats,
+});
+
+/**
+ * The chat formats' preview: the formats under the save's rules, and a line as the server sends
+ * it, at most `CHAT_PREVIEW_LINE_MAX_CHARS` characters (ADR-0020, R142).
+ */
+export const previewChatFormatsRequest = z.strictObject({
+  chat_formats: chatFormats,
+  line: z
+    .string()
+    .refine(
+      (line) => chars(line) <= CHAT_PREVIEW_LINE_MAX_CHARS,
+      `must be at most ${CHAT_PREVIEW_LINE_MAX_CHARS} characters`,
+    ),
 });
 
 export const botModeRequest = z.strictObject({ mode_id: id });

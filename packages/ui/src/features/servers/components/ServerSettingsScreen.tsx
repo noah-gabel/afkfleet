@@ -1,8 +1,7 @@
-// One Minecraft server's settings (Plan.md P11.9; ADR-0020, U57, U61, R136, S77): its address
-// and its conflict texts, a textarea each (`useFieldArray`), filled from its row in the list,
-// each text's lines joined by line breaks. Its chat formats ride along in the form unseen and go
-// back as they came, so a save never clears formats set elsewhere (R135, R144); their own
-// section comes with H8. Every request is built from the form, never by
+// One Minecraft server's settings (Plan.md P11.9; ADR-0020, U57, U61, R136, S77): its address,
+// its conflict texts, a textarea each (`useFieldArray`), filled from its row in the list,
+// each text's lines joined by line breaks, and its chat formats, an input each, as written,
+// with "Try a line" (R148). Every request is built from the form, never by
 // echoing an answer, at the `version` read. Each write goes through `useStepUpAction`: a new
 // server's Save opens its own screen, an edit's stays with what the server saved (U61), and
 // Delete asks first, then goes back to the list. A 409 `server_settings_changed` shows the
@@ -14,15 +13,15 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useId, useState } from "react";
-import { type Path, useFieldArray, useForm } from "react-hook-form";
+import { type Path, useFieldArray, useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
 
 import { toApiError } from "../../../api/ApiError";
 import { useApiClient } from "../../../api/context";
 import { describeError } from "../../../api/describeError";
-import { CONFLICT_TEXTS_MAX } from "../../../api/limits";
+import { CHAT_FORMATS_MAX, CONFLICT_TEXTS_MAX } from "../../../api/limits";
 import { SERVER_SETTINGS_KEY, useMe, useServerSettings } from "../../../api/queries";
-import { chatFormats, conflictText, serverAddress } from "../../../api/schemas";
+import { chatFormat, conflictText, serverAddress } from "../../../api/schemas";
 import { z } from "../../../api/zod";
 import { FieldMessage } from "../../../components/FieldMessage";
 import { FormField } from "../../../components/FormField";
@@ -41,19 +40,25 @@ import { StepUpPrompt } from "../../admin/components/StepUpPrompt";
 import { useStepUpAction } from "../../admin/hooks/useStepUpAction";
 import { serverSettingsAccess } from "../../admin/permissions";
 import {
+  ADD_FORMAT,
   ADD_SERVER,
   ADD_TEXT,
+  AT_MOST_FORMATS,
   AT_MOST_TEXTS,
   added,
   CANCEL,
   CAP_REACHED,
+  chatFormatLabel,
   conflictTextLabel,
   DELETE,
   DELETE_SETTINGS,
   deleted,
   deleteQuestion,
+  FORMATS_HEADING,
+  FORMATS_HINT,
   LOAD_AGAIN,
   LOADING_SERVERS,
+  RELOAD_PAUSED,
   REMOVE,
   SAVE,
   SAVED,
@@ -65,8 +70,9 @@ import {
   TEXTS_HEADING,
   TEXTS_HINT,
 } from "../texts";
+import { TryLine } from "./TryLine";
 
-/** The form: the server's address and each text, as `useFieldArray` keeps them. */
+/** The form: the server's address, each text and each format, as `useFieldArray` keeps them. */
 const settingsForm = z.object({
   server: serverAddress,
   texts: z
@@ -75,7 +81,12 @@ const settingsForm = z.object({
       (texts) => texts.length <= CONFLICT_TEXTS_MAX,
       `must hold at most ${CONFLICT_TEXTS_MAX} texts`,
     ),
-  chatFormats,
+  formats: z
+    .array(z.object({ format: chatFormat }))
+    .refine(
+      (formats) => formats.length <= CHAT_FORMATS_MAX,
+      `must hold at most ${CHAT_FORMATS_MAX} formats`,
+    ),
 });
 
 type SettingsValues = z.infer<typeof settingsForm>;
@@ -139,26 +150,37 @@ function BackLink() {
   );
 }
 
-/** The form's values from `row`, or a new server's with one empty text. */
+/** The form's values from `row`, or a new server's with one empty text and no format. */
 function valuesOf(row: ServerSettingsResponse | undefined): SettingsValues {
   if (row === undefined) {
-    return { server: "", texts: [{ text: "" }], chatFormats: [] };
+    return { server: "", texts: [{ text: "" }], formats: [] };
   }
   return {
     server: row.server,
     texts: row.conflict_texts.map((text) => ({ text: text.lines.join("\n") })),
-    chatFormats: [...row.chat_formats],
+    formats: row.chat_formats.map((format) => ({ format })),
   };
 }
 
-/** Where each of a request's field paths shows on a form of `count` texts. */
-function fieldPaths(count: number): Record<string, Path<SettingsValues>> {
+/** Where each of a request's field paths shows on a form of `texts` texts and `formats` formats. */
+function fieldPaths(texts: number, formats: number): Record<string, Path<SettingsValues>> {
   const paths: Record<string, Path<SettingsValues>> = {
     server: "server",
     conflict_texts: "texts",
+    ...formatPaths(formats),
   };
-  for (let index = 0; index < count; index += 1) {
+  for (let index = 0; index < texts; index += 1) {
     paths[`conflict_texts[${index}]`] = `texts.${index}.text`;
+  }
+  return paths;
+}
+
+/** Where a request's chat formats' paths show on a form of `count` formats: the list's own at
+ * the section, each format's at its input. */
+function formatPaths(count: number): Record<string, Path<SettingsValues>> {
+  const paths: Record<string, Path<SettingsValues>> = { chat_formats: "formats" };
+  for (let index = 0; index < count; index += 1) {
+    paths[`chat_formats[${index}]`] = `formats.${index}.format`;
   }
   return paths;
 }
@@ -195,6 +217,8 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
     defaultValues: valuesOf(row),
   });
   const texts = useFieldArray({ control: form.control, name: "texts" });
+  const formats = useFieldArray({ control: form.control, name: "formats" });
+  const shownFormats = useWatch({ control: form.control, name: "formats" });
   const reread = () =>
     void queryClient.invalidateQueries({ queryKey: SERVER_SETTINGS_KEY, exact: true });
 
@@ -211,7 +235,13 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
     } else if (details?.status === 404) {
       setGone(true);
       reread();
-    } else if (!showFieldErrors(form.setError, error, fieldPaths(form.getValues("texts").length))) {
+    } else if (
+      !showFieldErrors(
+        form.setError,
+        error,
+        fieldPaths(form.getValues("texts").length, form.getValues("formats").length),
+      )
+    ) {
       setFormError(describeError(error));
     }
   }
@@ -226,7 +256,7 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
     wait.reset();
     const server = values.server;
     const conflictTexts = values.texts.map((entry) => entry.text);
-    const formats = values.chatFormats;
+    const chatFormats = values.formats.map((entry) => entry.format);
     void writes.attempt({
       key: SAVE_KEY,
       run: async () => {
@@ -237,13 +267,13 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
               ? await api.createServerSettings({
                   server,
                   conflict_texts: conflictTexts,
-                  chat_formats: formats,
+                  chat_formats: chatFormats,
                 })
               : await api.updateServerSettings(row.id, {
                   version,
                   server,
                   conflict_texts: conflictTexts,
-                  chat_formats: formats,
+                  chat_formats: chatFormats,
                 });
         } catch (rejection) {
           const error = toApiError(rejection).error;
@@ -275,13 +305,16 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
   /**
    * Reads the row again after a 409 and fills the form from it; a row gone shows so. A read
    * that fails changes nothing but saying why: the notice and the edits stay, and the list's
-   * cache still holds the old row, which must never be shown as current.
+   * cache still holds the old row, which must never be shown as current. A read counts only
+   * when the list's `dataUpdatedAt` moved forward: while Windows reports no network, TanStack
+   * pauses the read and resolves the refetch without reading (PR #81's review, c).
    */
   async function loadAgain(): Promise<void> {
     if (row === undefined) {
       return;
     }
     setReloadFailed(null);
+    const before = queryClient.getQueryState(SERVER_SETTINGS_KEY)?.dataUpdatedAt ?? 0;
     try {
       await queryClient.refetchQueries(
         { queryKey: SERVER_SETTINGS_KEY, exact: true },
@@ -294,6 +327,10 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
       return;
     }
     if (!alive.current) {
+      return;
+    }
+    if ((queryClient.getQueryState(SERVER_SETTINGS_KEY)?.dataUpdatedAt ?? 0) <= before) {
+      setReloadFailed(RELOAD_PAUSED);
       return;
     }
     setStale(null);
@@ -316,6 +353,8 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
   const errors = form.formState.errors;
   const full = texts.fields.length >= CONFLICT_TEXTS_MAX;
   const listError = errors.texts?.message ?? errors.texts?.root?.message;
+  const formatsFull = formats.fields.length >= CHAT_FORMATS_MAX;
+  const formatsError = errors.formats?.message ?? errors.formats?.root?.message;
   return (
     <main className="flex max-w-3xl flex-col gap-6 p-6">
       <h1 className="text-2xl font-semibold tracking-tight">{row?.server ?? ADD_SERVER}</h1>
@@ -391,6 +430,77 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
               </Button>
               {full ? <span className="text-sm text-muted-foreground">{AT_MOST_TEXTS}</span> : null}
             </div>
+          ) : null}
+        </fieldset>
+        <fieldset
+          className="flex flex-col gap-4"
+          aria-describedby={
+            formatsError === undefined
+              ? `${formId}-formats-hint`
+              : `${formId}-formats-hint ${formId}-formats-error`
+          }
+        >
+          <legend className="mb-2 text-lg font-semibold">{FORMATS_HEADING}</legend>
+          <p id={`${formId}-formats-hint`} className="text-sm text-muted-foreground">
+            {FORMATS_HINT}
+          </p>
+          {formats.fields.map((field, index) => (
+            <div key={field.id} className="flex flex-col gap-2">
+              <FormField
+                id={`${formId}-format-${field.id}`}
+                label={chatFormatLabel(index + 1)}
+                error={errors.formats?.[index]?.format?.message}
+              >
+                {(control) => (
+                  <Input
+                    {...control}
+                    autoComplete="off"
+                    readOnly={readOnly}
+                    {...form.register(`formats.${index}.format`)}
+                  />
+                )}
+              </FormField>
+              {configure ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="self-start"
+                  disabled={locked}
+                  aria-describedby={`${formId}-format-${field.id}-label`}
+                  onClick={() => formats.remove(index)}
+                >
+                  {REMOVE}
+                </Button>
+              ) : null}
+            </div>
+          ))}
+          <FieldMessage id={`${formId}-formats-error`} message={formatsError} />
+          {configure ? (
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={locked || formatsFull}
+                onClick={() => formats.append({ format: "" })}
+              >
+                {ADD_FORMAT}
+              </Button>
+              {formatsFull ? (
+                <span className="text-sm text-muted-foreground">{AT_MOST_FORMATS}</span>
+              ) : null}
+            </div>
+          ) : null}
+          {configure ? (
+            <TryLine
+              id={`${formId}-try`}
+              formats={shownFormats.map((entry) => entry.format)}
+              clearFormatErrors={() => form.clearErrors("formats")}
+              showFormatErrors={(error) =>
+                showFieldErrors(form.setError, error, formatPaths(form.getValues("formats").length))
+              }
+            />
           ) : null}
         </fieldset>
         {formError === undefined ? null : (

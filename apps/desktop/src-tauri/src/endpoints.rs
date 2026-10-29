@@ -33,8 +33,9 @@ use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaConfirmResponse, MfaEnrollResponse};
 use fleet_api_types::modes::ModePage;
 use fleet_api_types::server_settings::{
-    CreateServerSettingsRequest, ServerSettingsPage, ServerSettingsPageQuery,
-    ServerSettingsResponse, UpdateServerSettingsRequest,
+    CreateServerSettingsRequest, PreviewChatFormatsRequest, PreviewChatFormatsResponse,
+    ServerSettingsPage, ServerSettingsPageQuery, ServerSettingsResponse,
+    UpdateServerSettingsRequest,
 };
 use fleet_api_types::sessions::SessionPage;
 use fleet_api_types::users::{UserPage, UserPatchRequest, UserResponse};
@@ -780,6 +781,26 @@ impl<F: StoreFactory> AppState<F> {
         let conn = self.conn.read().await;
         conn.client()?
             .delete_server_settings(id)
+            .await
+            .map_err(error::client)
+    }
+
+    /// The `preview_chat_formats` command: which sender unsaved chat formats
+    /// read from a line, and which format fitted first, counted from 0;
+    /// nothing is stored, and no step-up is needed (ADR-0020, U58, R134).
+    ///
+    /// # Errors
+    /// `invalid_input` for a format the server would refuse or a line past
+    /// 1024 characters, `no_server`, `no_session`, or `api` 403
+    /// (`forbidden`), 422 or 429.
+    pub async fn preview_chat_formats(
+        &self,
+        request: PreviewChatFormatsRequest,
+    ) -> Result<PreviewChatFormatsResponse, CommandError> {
+        validate(&request)?;
+        let conn = self.conn.read().await;
+        conn.client()?
+            .preview_chat_formats(&request)
             .await
             .map_err(error::client)
     }

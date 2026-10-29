@@ -57,7 +57,7 @@ use crate::ports::page::{Page, PageLimit};
     tag = "bots",
     params(("id" = String, Path, description = "The bot's ID."), ChatPageQuery),
     responses(
-        (status = 200, description = "One page of the bot's chat, newest first by ID, which is the order the server stored the lines in. Each line is as the caller may see it: a command's arguments only for Manage holders, and who had a user's line sent only for callers who see the account's owner.", body = ChatPage),
+        (status = 200, description = "One page of the bot's chat, newest first by ID, which is the order the server stored the lines in. Each line is as the caller may see it: a command's arguments only for Manage holders, and who had a user's line sent only for callers who see the account's owner. A received system line that a chat format of the bot's server fits carries the name it reads as `parsed_sender`, for display only and the same for every caller.", body = ChatPage),
         (status = 400, description = "A query that doesn't parse: an unknown parameter, one given twice, or a value that isn't a whole number the parameter can hold.", body = ErrorResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
         (status = 404, description = "No such bot, or one the caller may not see.", body = ErrorResponse),
@@ -85,7 +85,7 @@ pub(crate) async fn history(
         .lines
         .items
         .iter()
-        .map(|line| chat_line(&actor, level, line))
+        .map(|line| chat_line(&actor, level, line, &history.formats))
         .collect::<Result<_, _>>()?;
     let next = history
         .lines

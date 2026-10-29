@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE bots SET server_address = 'not an address' WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "38f1b6bad8a585bf2df860b0e0dd4f27d55b07256d52e96d9dfc701af4d6685c"
+}

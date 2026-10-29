@@ -12,6 +12,7 @@
 //! refusal too.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use fleet_core::account::{AccountKind, AccountStatus};
@@ -27,8 +28,8 @@ use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::store_error;
 use super::{accounts, server_settings};
 use crate::ports::bots::{
-    Access, Bot, BotAccess, BotRecord, Fleet, GrantAccess, ListedBot, NewBot, ReleaseRecord,
-    UnreadableBot, UserAccess,
+    Access, Bot, BotAccess, BotFormats, BotRecord, Fleet, GrantAccess, ListedBot, NewBot,
+    ReleaseRecord, UnreadableBot, UserAccess,
 };
 use crate::ports::page::Page;
 use crate::ports::server_settings::ServerTexts;
@@ -640,23 +641,28 @@ fn unreadable_texts(texts: &ServerTexts, record: &BotRecord) -> Option<i64> {
         .map(|row| row.rowid)
 }
 
-/// Who may see which bot (S30): every bot with its account's owner, every
-/// grant and every user, in one read transaction, so the three agree. Any
-/// row that doesn't read back fails the read.
-pub(super) async fn access(pool: &sqlx::SqlitePool) -> Result<Access, StoreError> {
-    let mut tx = pool.begin().await.map_err(store_error)?;
-    let bots = sqlx::query!(
+/// Every bot with its account's owner, for [`access`], and the chat formats
+/// of each one on a server in `servers`. A bot's address that doesn't read
+/// back gives it no formats, and the reconciler logs the bot itself at
+/// every pass (S81).
+async fn bots_access(
+    conn: &mut SqliteConnection,
+    servers: &server_settings::ServersFormats,
+) -> Result<(Vec<BotAccess>, Vec<BotFormats>), StoreError> {
+    let rows = sqlx::query!(
         r#"SELECT b.rowid AS "rowid!: i64", b.id AS "id!", b.account_id AS "account_id!",
+                  b.server_address AS "server_address?",
                   a.rowid AS "account_rowid!: i64", a.owner_user_id AS "owner_user_id!"
            FROM bots b
            JOIN mc_accounts a ON a.id = b.account_id"#
     )
-    .fetch_all(&mut *tx)
+    .fetch_all(conn)
     .await
-    .map_err(store_error)?
-    .into_iter()
-    .map(|row| {
-        Ok(BotAccess {
+    .map_err(store_error)?;
+    let mut bots = Vec::with_capacity(rows.len());
+    let mut formats = Vec::new();
+    for row in rows {
+        let bot = BotAccess {
             bot: parse_id(&row.id).ok_or(StoreError::Corrupt {
                 table: BOTS,
                 column: "id",
@@ -672,9 +678,33 @@ pub(super) async fn access(pool: &sqlx::SqlitePool) -> Result<Access, StoreError
                 column: "owner_user_id",
                 rowid: row.account_rowid,
             })?,
-        })
-    })
-    .collect::<Result<Vec<_>, StoreError>>()?;
+        };
+        let found = row
+            .server_address
+            .as_deref()
+            .and_then(|server| ServerAddress::try_from(server).ok())
+            .and_then(|server| servers.readable.get(&ServerKey::from(&server)));
+        if let Some(found) = found {
+            formats.push(BotFormats {
+                bot: bot.bot,
+                formats: Arc::clone(found),
+            });
+        }
+        bots.push(bot);
+    }
+    Ok((bots, formats))
+}
+
+/// Who may see which bot (S30): every bot with its account's owner, every
+/// grant and every user, in one read transaction, so the three agree, with
+/// each bot's chat formats, its current server's (S79, R146). Any row that
+/// doesn't read back fails the read, except what only the formats need: a
+/// bot's address or a settings row that doesn't read back gives those bots
+/// none (S81).
+pub(super) async fn access(pool: &sqlx::SqlitePool) -> Result<Access, StoreError> {
+    let mut tx = pool.begin().await.map_err(store_error)?;
+    let servers = server_settings::formats_by_server(&mut tx).await?;
+    let (bots, bot_formats) = bots_access(&mut tx, &servers).await?;
     let grants = sqlx::query!(
         r#"SELECT rowid AS "rowid!: i64", account_id AS "account_id!", user_id AS "user_id!",
                   level AS "level!"
@@ -732,6 +762,8 @@ pub(super) async fn access(pool: &sqlx::SqlitePool) -> Result<Access, StoreError
         bots,
         grants,
         users,
+        bot_formats,
+        unreadable_formats: servers.unreadable,
     })
 }
 

@@ -17,13 +17,15 @@ use chrono::{DateTime, Utc};
 use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::auth::{InviteTtl, LockoutPolicy, NewPassword, SessionPolicy};
 use fleet_core::authz::{Actor, CommandAllowlist, GrantLevel, Role};
+use fleet_core::chat::ChatFormats;
+use fleet_core::disconnect::ConflictTexts;
 use fleet_core::id::{
     AccountId, AgentId, BotId, InviteId, ModeId, ServerSettingsId, SessionId, UserId,
 };
 use fleet_core::mode::ModeName;
 use fleet_core::pki::CertFingerprint;
 use fleet_core::system::Clock as _;
-use fleet_core::value::{AgentName, ServerKey, Username};
+use fleet_core::value::{AgentName, ServerAddress, ServerKey, Username};
 use fleet_server::app::agents::AgentService;
 use fleet_server::app::audit::AuditService;
 use fleet_server::app::auth::TokenService;
@@ -1980,6 +1982,65 @@ impl Setup {
             .await
             .unwrap()
             .map(|attempt| attempt.failures)
+    }
+
+    /// Puts `bot` on the server `address`, as `PATCH /bots/{id}` would, in
+    /// a commit of its own; nothing changes when it's there already.
+    pub(crate) async fn on_server(&self, bot: BotId, address: &str) {
+        let mut tx = self.db.write().await.unwrap();
+        tx.bots()
+            .set_server(bot, &address.parse().unwrap())
+            .await
+            .unwrap();
+        tx.commit(setup_entry()).await.unwrap();
+    }
+
+    /// Stores settings `n` for `server` with the chat formats `formats` and
+    /// no conflict text, as a write would, in a commit of its own (ADR-0020,
+    /// S79): made an hour before now, so their IDs sort by `n`.
+    pub(crate) async fn formats_for(
+        &self,
+        n: u8,
+        server: &str,
+        formats: &[&str],
+    ) -> ServerSettingsId {
+        let created = at(T0 - 3_600_000 + i64::from(n));
+        let id = ServerSettingsId::new_v7(created, [n; 10]).unwrap();
+        let mut tx = self.db.write().await.unwrap();
+        tx.server_settings()
+            .insert(&NewServerSettings {
+                id,
+                server: ServerKey::from(&server.parse::<ServerAddress>().unwrap()),
+                conflict_texts: ConflictTexts::default(),
+                chat_formats: ChatFormats::try_new(formats).unwrap(),
+                created_at: created,
+            })
+            .await
+            .unwrap();
+        tx.commit(setup_entry()).await.unwrap();
+        id
+    }
+
+    /// Deletes settings `id`, in a commit of its own.
+    pub(crate) async fn settings_gone(&self, id: ServerSettingsId) {
+        let mut tx = self.db.write().await.unwrap();
+        assert!(tx.server_settings().delete(id).await.unwrap());
+        tx.commit(setup_entry()).await.unwrap();
+    }
+
+    /// Stores `json` as settings `id`'s chat formats past every check, as a
+    /// broken row would hold them. It's no commit, so no socket hears of it
+    /// until the next one.
+    pub(crate) async fn break_formats(&self, id: ServerSettingsId, json: &str) {
+        let id = id.to_string();
+        sqlx::query!(
+            "UPDATE server_settings SET chat_formats = ? WHERE id = ?",
+            json,
+            id
+        )
+        .execute(self.db.write_pool())
+        .await
+        .unwrap();
     }
 }
 

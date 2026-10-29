@@ -25,7 +25,8 @@ use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::audit::NewAuditEntry;
 use fleet_server::ports::page::{Page, PageLimit};
 use fleet_server::ports::server_settings::{
-    NewServerSettings, ServerSettingsChange, StoredServerSettings, WriteServerSettingsError,
+    NewServerSettings, ServerFormats, ServerSettingsChange, StoredServerSettings,
+    WriteServerSettingsError,
 };
 use fleet_server::ports::store::{Store, StoreError};
 use sqlx::SqlitePool;
@@ -641,4 +642,102 @@ async fn a_row_without_texts_reads_back_with_its_formats(
         without.map(|settings| settings.chat_formats),
         Some(ChatFormats::default())
     );
+}
+
+/// A server's chat formats are found by its key, as a bot's history reads
+/// them (ADR-0020, S79, R146): its row's, none when the row holds none, and
+/// no settings for a server without a row.
+#[sqlx::test(migrations = false)]
+async fn a_servers_formats_are_found_by_its_key(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let users = ["[{any}] {sender} : ", "{sender} : "];
+    let mut with = new_settings(1, "mc.example.com", &["Already connected"]);
+    with.chat_formats = formats(&users);
+    insert(&db, &with).await.unwrap();
+    insert(
+        &db,
+        &new_settings(2, "other.example.com", &["Already connected"]),
+    )
+    .await
+    .unwrap();
+    let reads = db.server_settings();
+
+    let found = reads.formats_of(&key("mc.example.com:25565")).await;
+    let empty = reads.formats_of(&key("other.example.com")).await;
+    let none = reads.formats_of(&key("third.example.com")).await;
+
+    assert_eq!(found.unwrap(), ServerFormats::Readable(formats(&users)));
+    assert_eq!(
+        empty.unwrap(),
+        ServerFormats::Readable(ChatFormats::default())
+    );
+    assert_eq!(none.unwrap(), ServerFormats::NoSettings);
+}
+
+/// S81: a row whose formats don't read back is no error but the row, named
+/// by its rowid, ID, server and column, never with its text; a row whose
+/// stored server isn't its key's own text can't be any bot's, so it isn't
+/// met.
+#[sqlx::test(migrations = false)]
+async fn a_rows_formats_that_dont_read_back_are_unreadable_without_their_text(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let nine = r#"["{sender} : ","{sender} : ","{sender} : ","{sender} : ","{sender} : ","{sender} : ","{sender} : ","{sender} : ","{sender} : "]"#;
+    for json in ["[1]", r#"["{Sender} : canary"]"#, nine] {
+        sqlx::query!("DELETE FROM server_settings")
+            .execute(db.write_pool())
+            .await
+            .unwrap();
+        Row {
+            chat_formats: json,
+            ..Row::valid()
+        }
+        .insert(db.write_pool())
+        .await
+        .unwrap();
+
+        let read = db
+            .server_settings()
+            .formats_of(&key("mc.example.com"))
+            .await
+            .unwrap();
+
+        match &read {
+            ServerFormats::Unreadable(row) => assert_eq!(
+                (row.id, row.server.clone(), row.column),
+                (
+                    Some(ID.parse().unwrap()),
+                    Some(key("mc.example.com")),
+                    "chat_formats"
+                ),
+                "{json}"
+            ),
+            other => panic!("{json} read as {other:?}"),
+        }
+        assert!(!format!("{read:?}").contains("canary"), "{read:?}");
+    }
+    sqlx::query!("DELETE FROM server_settings")
+        .execute(db.write_pool())
+        .await
+        .unwrap();
+    Row {
+        server: "mc.example.com",
+        ..Row::valid()
+    }
+    .insert(db.write_pool())
+    .await
+    .unwrap();
+
+    let unmet = db
+        .server_settings()
+        .formats_of(&key("mc.example.com"))
+        .await
+        .unwrap();
+
+    assert_eq!(unmet, ServerFormats::NoSettings);
 }

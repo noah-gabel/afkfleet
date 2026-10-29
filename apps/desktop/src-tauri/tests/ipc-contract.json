@@ -450,6 +450,15 @@
       "inputs": ["01900000-0000-7000-8000-00000000000d"],
       "args": { "id": "01900000-0000-7000-8000-00000000000d" },
       "expect": { "error": "no_server" }
+    },
+    {
+      "command": "preview_chat_formats",
+      "method": "previewChatFormats",
+      "inputs": [{ "chat_formats": ["[{any}] {sender} : "], "line": "[Clan] Notch : hello" }],
+      "args": {
+        "request": { "chat_formats": ["[{any}] {sender} : "], "line": "[Clan] Notch : hello" }
+      },
+      "expect": { "error": "no_server" }
     }
   ]
 }

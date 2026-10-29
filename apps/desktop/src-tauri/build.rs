@@ -64,6 +64,7 @@ const COMMANDS: &[&str] = &[
     "create_server_settings",
     "update_server_settings",
     "delete_server_settings",
+    "preview_chat_formats",
 ];
 
 fn main() -> Result<(), Box<dyn Error>> {

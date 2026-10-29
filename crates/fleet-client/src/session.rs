@@ -3412,6 +3412,7 @@ mod tests {
                 truncated: false,
                 arguments_hidden: true,
                 sender: None,
+                parsed_sender: None,
                 sent_by: None,
                 mine: true,
             }],

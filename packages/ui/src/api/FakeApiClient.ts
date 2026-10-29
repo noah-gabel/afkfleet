@@ -37,6 +37,8 @@ import type { MfaConfirmResponse } from "../generated/MfaConfirmResponse";
 import type { MfaEnrollResponse } from "../generated/MfaEnrollResponse";
 import type { ModePage } from "../generated/ModePage";
 import type { PasswordChangeRequest } from "../generated/PasswordChangeRequest";
+import type { PreviewChatFormatsRequest } from "../generated/PreviewChatFormatsRequest";
+import type { PreviewChatFormatsResponse } from "../generated/PreviewChatFormatsResponse";
 import type { RegisterRequest } from "../generated/RegisterRequest";
 import type { RegisterResponse } from "../generated/RegisterResponse";
 import type { ServerProfileRequest } from "../generated/ServerProfileRequest";
@@ -254,6 +256,12 @@ export class FakeApiClient implements ApiClient {
 
   async deleteServerSettings(id: string): Promise<void> {
     return this.#handler("deleteServerSettings", [id])(id);
+  }
+
+  async previewChatFormats(
+    request: PreviewChatFormatsRequest,
+  ): Promise<PreviewChatFormatsResponse> {
+    return this.#handler("previewChatFormats", [request])(request);
   }
 
   async account(id: string): Promise<AccountResponse> {
