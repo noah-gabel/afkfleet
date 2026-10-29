@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT rowid AS \"rowid!: i64\", id AS \"id!\", server AS \"server!\",\n                  conflict_texts AS \"conflict_texts!\", version AS \"version!: i64\",\n                  created_at AS \"created_at!\", updated_at AS \"updated_at!\"\n           FROM server_settings WHERE id = ?",
+  "query": "SELECT rowid AS \"rowid!: i64\", id AS \"id!\", server AS \"server!\",\n                  conflict_texts AS \"conflict_texts!\", chat_formats AS \"chat_formats!\",\n                  version AS \"version!: i64\", created_at AS \"created_at!\",\n                  updated_at AS \"updated_at!\"\n           FROM server_settings WHERE id = ?",
   "describe": {
     "columns": [
       {
@@ -48,8 +48,19 @@
         }
       },
       {
-        "name": "version!: i64",
+        "name": "chat_formats!",
         "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "server_settings",
+            "name": "chat_formats"
+          }
+        }
+      },
+      {
+        "name": "version!: i64",
+        "ordinal": 5,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -60,7 +71,7 @@
       },
       {
         "name": "created_at!",
-        "ordinal": 5,
+        "ordinal": 6,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -71,7 +82,7 @@
       },
       {
         "name": "updated_at!",
-        "ordinal": 6,
+        "ordinal": 7,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -91,8 +102,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "34b9c266c519e676f6dabd5d710ea15717d75c1d2d878c2bfcf772554ef377ec"
+  "hash": "71ae213a6ef54ee75b94971569c5be41b7141d8cbd01f2ee9bac1ff713c3d16a"
 }

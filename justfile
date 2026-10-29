@@ -225,7 +225,7 @@ dev-managed-agent dir=(justfile_directory() / "target" / "dev-agent") $AFKFLEET_
 # A console for dev-server's bot, mode and admin endpoints: bots, bot, offline, server, mode,
 # start, stop, chat, command, history, modes, new-mode, edit-mode, delete-mode, events, users,
 # audit, agents, release, held, shared, leave, servers, new-server, edit-server, delete-server,
-# quit. `events` runs over fleet-client's own
+# preview-formats, quit. `events` runs over fleet-client's own
 # socket, so it works over https too and never sees a ticket or a token (ADR-0020, R80).
 [no-exit-message]
 dev-bots username server="http://127.0.0.1:8080":

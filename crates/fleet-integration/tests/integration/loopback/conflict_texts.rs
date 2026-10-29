@@ -2,23 +2,29 @@
 //! P11.9; ADR-0020, S74, S76, S78): `POST /server-settings` through
 //! fleet-client and serve's own wiring hints the reconciler, whose next
 //! pass sends the agent that holds the bot an `Update` with the texts, in
-//! the session it has. The texts must come within [`HINTED`], before the
-//! periodic pass could bring them, so the case proves the hint's wiring. A kick with another text is transient and the bot
-//! comes back; a kick with one of them pauses it as someone logging in with
-//! its account, so it never kicks them back.
+//! the session it has. The case runs at [`QUIET_RECONCILE`], so no periodic
+//! pass falls inside its wait: texts that come within [`HINTED`] came from
+//! the hint, and the case proves its wiring (PR #79's and PR #80's reviews).
+//! A kick with another text is transient and the bot comes back; a kick
+//! with one of them pauses it as someone logging in with its account, so it
+//! never kicks them back.
 
 use fleet_core::bot::{BotState, PauseReason};
 use fleet_core::disconnect::{ConflictKind, ConflictTexts, DisconnectReason};
 use fleet_server::grpc::registry::ViewPhase;
 
 use crate::harness::agent::RunOptions;
-use crate::harness::logs::HINTED;
+use crate::harness::logs::{HINTED, QUIET_RECONCILE};
 use crate::harness::server::ServerOptions;
 use crate::harness::world::World;
 
 #[tokio::test]
 async fn a_servers_conflict_texts_reach_its_running_bot_and_a_listed_kick_pauses_it() {
-    let world = World::new(ServerOptions::default()).await;
+    let world = World::new(ServerOptions {
+        reconcile: QUIET_RECONCILE,
+        ..ServerOptions::default()
+    })
+    .await;
     let mut agent = world.agent("agent-a").await;
     agent.start(&world.ledger, RunOptions::capacity(1));
     // Pointed at `mc.example.com:25565`; the settings name it without the

@@ -1,9 +1,9 @@
 //! Tests for the servers' settings table and repository (Plan.md P11.9,
-//! Appendix D; ADR-0020, S76–S78): a stored row reads back as it was
-//! given; a server's key is unique and in canonical form; an edit writes
-//! only at the version it read; a row whose server or texts don't read back
-//! exactly is corrupt, without its text; and the table refuses what its
-//! CHECKs forbid.
+//! Appendix D; ADR-0020, S76–S78, R139): a stored row reads back as it was
+//! given, its chat formats as written; a server's key is unique and in
+//! canonical form; an edit writes only at the version it read; a row whose
+//! server, texts or formats don't read back exactly is corrupt, without its
+//! text; and the table refuses what its CHECKs forbid.
 //!
 //! Each test gets a fresh database from `#[sqlx::test]` and opens it with
 //! `Database::connect`, the production settings. Time isn't paused: sqlx's
@@ -17,6 +17,7 @@ use core::num::NonZeroU32;
 
 use chrono::{DateTime, Duration, Utc};
 use fleet_core::audit::{AuditAction, AuditOutcome};
+use fleet_core::chat::ChatFormats;
 use fleet_core::disconnect::ConflictTexts;
 use fleet_core::id::ServerSettingsId;
 use fleet_core::value::{ServerAddress, ServerKey};
@@ -53,6 +54,10 @@ fn texts(entries: &[&str]) -> ConflictTexts {
     ConflictTexts::try_new(entries).unwrap()
 }
 
+fn formats(entries: &[&str]) -> ChatFormats {
+    ChatFormats::try_new(entries).unwrap()
+}
+
 fn page(before: Option<ServerSettingsId>, limit: u32) -> Page<ServerSettingsId> {
     Page {
         before,
@@ -78,6 +83,7 @@ fn new_settings(n: u8, server: &str, entries: &[&str]) -> NewServerSettings {
         id: ServerSettingsId::new_v7(created, [n; 10]).unwrap(),
         server: key(server),
         conflict_texts: texts(entries),
+        chat_formats: ChatFormats::default(),
         created_at: created,
     }
 }
@@ -99,6 +105,7 @@ struct Row {
     id: &'static str,
     server: &'static str,
     conflict_texts: &'static str,
+    chat_formats: &'static str,
     version: i64,
     created_at: &'static str,
     updated_at: &'static str,
@@ -110,6 +117,7 @@ impl Row {
             id: ID,
             server: "mc.example.com:25565",
             conflict_texts: r#"["Already connected","You logged in from another location"]"#,
+            chat_formats: r#"["[{any}] {sender} : ","{sender} : "]"#,
             version: 1,
             created_at: MADE,
             updated_at: MADE,
@@ -119,11 +127,13 @@ impl Row {
     /// Inserts the row through the write pool.
     async fn insert(&self, pool: &SqlitePool) -> Result<(), sqlx::Error> {
         sqlx::query!(
-            "INSERT INTO server_settings (id, server, conflict_texts, version, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO server_settings
+                 (id, server, conflict_texts, chat_formats, version, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
             self.id,
             self.server,
             self.conflict_texts,
+            self.chat_formats,
             self.version,
             self.created_at,
             self.updated_at
@@ -136,18 +146,22 @@ impl Row {
 
 /// A stored row reads back as it was given, at version 1, through the
 /// reads and through a write transaction alike; its server is stored as
-/// its key's text and its texts sorted, as the set iterates.
+/// its key's text, its texts sorted, as the set iterates, and its chat
+/// formats as written, in order, duplicates kept (R139).
 #[sqlx::test(migrations = false)]
 async fn inserted_settings_read_back_at_version_one(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
     let db = database(options).await;
-    let settings = new_settings(
-        1,
-        "MC.example.com",
-        &["Zz: line\nbreak", "Already connected"],
-    );
+    let settings = NewServerSettings {
+        chat_formats: formats(&["{sender} : ", "[{any}] {sender} : ", "{sender} : "]),
+        ..new_settings(
+            1,
+            "MC.example.com",
+            &["Zz: line\nbreak", "Already connected"],
+        )
+    };
 
     insert(&db, &settings).await.unwrap();
 
@@ -155,6 +169,7 @@ async fn inserted_settings_read_back_at_version_one(
         id: settings.id,
         server: key("mc.example.com:25565"),
         conflict_texts: settings.conflict_texts.clone(),
+        chat_formats: settings.chat_formats.clone(),
         version: NonZeroU32::MIN,
         created_at: settings.created_at,
         updated_at: settings.created_at,
@@ -171,7 +186,8 @@ async fn inserted_settings_read_back_at_version_one(
     drop(tx);
     let id = settings.id.to_string();
     let row = sqlx::query!(
-        r#"SELECT server AS "server!", conflict_texts AS "texts!" FROM server_settings WHERE id = ?"#,
+        r#"SELECT server AS "server!", conflict_texts AS "texts!", chat_formats AS "formats!"
+           FROM server_settings WHERE id = ?"#,
         id
     )
     .fetch_one(db.read_pool())
@@ -179,6 +195,10 @@ async fn inserted_settings_read_back_at_version_one(
     .unwrap();
     assert_eq!(row.server, "mc.example.com:25565");
     assert_eq!(row.texts, r#"["Already connected","Zz: line\nbreak"]"#);
+    assert_eq!(
+        row.formats,
+        r#"["{sender} : ","[{any}] {sender} : ","{sender} : "]"#
+    );
 }
 
 #[sqlx::test(migrations = false)]
@@ -304,6 +324,7 @@ fn change(
         version: NonZeroU32::new(expected + 1).unwrap(),
         server: key(server),
         conflict_texts: texts(entries),
+        chat_formats: ChatFormats::default(),
         updated_at: of.created_at + Duration::hours(1),
     }
 }
@@ -319,7 +340,10 @@ async fn an_update_writes_only_at_the_expected_version(
     let settings = new_settings(1, "mc.example.com", &["One"]);
     insert(&db, &settings).await.unwrap();
     let stale = change(&settings, 2, "stale.example.com", &["Stale"]);
-    let fresh = change(&settings, 1, "play.example.com:25570", &["Two", "One"]);
+    let fresh = ServerSettingsChange {
+        chat_formats: formats(&["<{sender}> ", "{sender} : "]),
+        ..change(&settings, 1, "play.example.com:25570", &["Two", "One"])
+    };
 
     let mut tx = db.write().await.unwrap();
     let wrote_stale = tx.server_settings().update(&stale).await.unwrap();
@@ -337,6 +361,7 @@ async fn an_update_writes_only_at_the_expected_version(
             id: settings.id,
             server: key("play.example.com:25570"),
             conflict_texts: texts(&["One", "Two"]),
+            chat_formats: formats(&["<{sender}> ", "{sender} : "]),
             version: NonZeroU32::new(2).unwrap(),
             created_at: settings.created_at,
             updated_at: fresh.updated_at,
@@ -414,6 +439,14 @@ async fn the_table_refuses_what_its_checks_forbid(
             ..Row::valid()
         },
         Row {
+            chat_formats: "not json",
+            ..Row::valid()
+        },
+        Row {
+            chat_formats: r#"{"format":"{sender} : "}"#,
+            ..Row::valid()
+        },
+        Row {
             version: 0,
             ..Row::valid()
         },
@@ -446,10 +479,11 @@ async fn the_table_refuses_what_its_checks_forbid(
     );
 }
 
-/// A row whose server isn't a key's canonical text, or whose texts aren't
+/// A row whose server isn't a key's canonical text, whose texts aren't
 /// exactly what the set writes (sorted, without duplicates, each one the
-/// constructor takes), is `Corrupt` naming its column; the error never
-/// holds the text.
+/// constructor takes), or whose formats aren't a list the constructor takes
+/// as it is, is `Corrupt` naming its column; the error never holds the
+/// text.
 #[sqlx::test(migrations = false)]
 async fn a_row_that_doesnt_read_back_exactly_is_corrupt_without_its_text(
     _pool: SqlitePoolOptions,
@@ -499,6 +533,27 @@ async fn a_row_that_doesnt_read_back_exactly_is_corrupt_without_its_text(
                 ..Row::valid()
             },
         ),
+        (
+            "chat_formats",
+            Row {
+                chat_formats: "[1]",
+                ..Row::valid()
+            },
+        ),
+        (
+            "chat_formats",
+            Row {
+                chat_formats: r#"["{Sender} : example"]"#,
+                ..Row::valid()
+            },
+        ),
+        (
+            "chat_formats",
+            Row {
+                chat_formats: r#"["{sender} : ","{sender} : ","{sender} : ","{sender} : ","{sender} : ","{sender} : ","{sender} : ","{sender} : ","{sender} : "]"#,
+                ..Row::valid()
+            },
+        ),
     ];
 
     for (column, row) in &cases {
@@ -533,10 +588,11 @@ async fn a_row_that_doesnt_read_back_exactly_is_corrupt_without_its_text(
     }
 }
 
-/// An empty list reads back as no texts: the routes refuse to write one,
-/// but the chat format (H7) will store rows without texts.
+/// A row with chat formats and no texts reads back as no texts and its
+/// formats (ADR-0020, R140's cross-field rule), and a row written without
+/// formats, as before 0020, reads back with none.
 #[sqlx::test(migrations = false)]
-async fn a_row_without_texts_reads_back_as_an_empty_set(
+async fn a_row_without_texts_reads_back_with_its_formats(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
@@ -556,7 +612,33 @@ async fn a_row_without_texts_reads_back_as_an_empty_set(
         .unwrap();
 
     assert_eq!(
-        read.map(|settings| settings.conflict_texts),
-        Some(ConflictTexts::default())
+        read.map(|settings| (settings.conflict_texts, settings.chat_formats)),
+        Some((
+            ConflictTexts::default(),
+            formats(&["[{any}] {sender} : ", "{sender} : "])
+        ))
+    );
+    sqlx::query!("DELETE FROM server_settings")
+        .execute(db.write_pool())
+        .await
+        .unwrap();
+    sqlx::query!(
+        r#"INSERT INTO server_settings (id, server, conflict_texts, version, created_at, updated_at)
+           VALUES (?, 'mc.example.com:25565', '["One"]', 1, ?, ?)"#,
+        ID,
+        MADE,
+        MADE
+    )
+    .execute(db.write_pool())
+    .await
+    .unwrap();
+    let without = db
+        .server_settings()
+        .find(ID.parse().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        without.map(|settings| settings.chat_formats),
+        Some(ChatFormats::default())
     );
 }

@@ -1,5 +1,7 @@
 // One labelled form field (Plan.md P8.7): the label, the control, an optional hint and the
-// field's error, with the control's `aria-describedby` and `aria-invalid` set from them.
+// field's error, with the control's `aria-describedby` and `aria-invalid` set from them. The
+// label's ID is `{id}-label`, so a control beside the field, such as a list entry's Remove, can
+// be described by it.
 import type { ReactNode } from "react";
 
 import { FieldMessage } from "./FieldMessage";
@@ -32,7 +34,9 @@ export function FormField({
   ];
   return (
     <div className="flex flex-col gap-1.5">
-      <Label htmlFor={id}>{label}</Label>
+      <Label id={`${id}-label`} htmlFor={id}>
+        {label}
+      </Label>
       {children({
         id,
         "aria-invalid": error !== undefined,

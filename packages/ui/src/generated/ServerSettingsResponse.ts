@@ -19,6 +19,11 @@ server: string,
  */
 conflict_texts: Array<ConflictTextResponse>, 
 /**
+ * The chat formats as written, in the order they're tried; `[]` when
+ * there are none.
+ */
+chat_formats: Array<string>, 
+/**
  * 1 when they were created, one more on every change.
  */
 version: number, 

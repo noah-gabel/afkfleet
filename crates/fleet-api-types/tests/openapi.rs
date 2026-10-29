@@ -70,8 +70,10 @@ use fleet_api_types::modes::{
     number_schema,
 };
 use fleet_api_types::server_settings::{
-    CONFLICT_TEXT_MAX_CHARS, ConflictTextResponse, CreateServerSettingsRequest, ServerSettingsPage,
-    ServerSettingsResponse, UpdateServerSettingsRequest,
+    CHAT_FORMAT_MAX_CHARS, CHAT_PREVIEW_LINE_MAX_CHARS, CONFLICT_TEXT_MAX_CHARS,
+    ConflictTextResponse, CreateServerSettingsRequest, PreviewChatFormatsRequest,
+    PreviewChatFormatsResponse, ServerSettingsPage, ServerSettingsResponse,
+    UpdateServerSettingsRequest,
 };
 use fleet_api_types::sessions::{SessionPage, SessionResponse};
 use fleet_api_types::time::TIMESTAMP_CHARS;
@@ -214,8 +216,8 @@ fn admin_declarations(config: &Config) -> [(&'static str, String); 13] {
     ]
 }
 
-/// ts-rs's declaration of every server-settings type (ADR-0020, S77).
-fn server_settings_declarations(config: &Config) -> [(&'static str, String); 5] {
+/// ts-rs's declaration of every server-settings type (ADR-0020, S77, R134).
+fn server_settings_declarations(config: &Config) -> [(&'static str, String); 7] {
     [
         ("ConflictTextResponse", ConflictTextResponse::decl(config)),
         (
@@ -231,6 +233,14 @@ fn server_settings_declarations(config: &Config) -> [(&'static str, String); 5] 
             ServerSettingsResponse::decl(config),
         ),
         ("ServerSettingsPage", ServerSettingsPage::decl(config)),
+        (
+            "PreviewChatFormatsRequest",
+            PreviewChatFormatsRequest::decl(config),
+        ),
+        (
+            "PreviewChatFormatsResponse",
+            PreviewChatFormatsResponse::decl(config),
+        ),
     ]
 }
 
@@ -589,6 +599,8 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::settings_created_at("ServerSettingsResponse", "created_at", TIMESTAMP_CHARS)]
 #[case::settings_updated_at("ServerSettingsResponse", "updated_at", TIMESTAMP_CHARS)]
 #[case::settings_page_next("ServerSettingsPage", "next", ID_CHARS)]
+#[case::preview_line("PreviewChatFormatsRequest", "line", CHAT_PREVIEW_LINE_MAX_CHARS)]
+#[case::preview_sender("PreviewChatFormatsResponse", "sender", CHAT_SENDER_MAX_CHARS)]
 #[case::audit_at("AuditEntryResponse", "at", TIMESTAMP_CHARS)]
 #[case::audit_actor("AuditEntryResponse", "actor", ID_CHARS)]
 #[case::audit_ip("AuditEntryResponse", "ip", IP_MAX_CHARS)]
@@ -613,7 +625,7 @@ fn a_text_field_is_capped_at_its_constant(
 }
 
 /// Every text field whose cap the cases above check.
-const CHECKED_TEXTS: [(&str, &str); 129] = [
+const CHECKED_TEXTS: [(&str, &str); 131] = [
     ("ErrorBody", "message"),
     ("ErrorBody", "request_id"),
     ("FieldError", "path"),
@@ -743,6 +755,8 @@ const CHECKED_TEXTS: [(&str, &str); 129] = [
     ("ServerSettingsResponse", "created_at"),
     ("ServerSettingsResponse", "updated_at"),
     ("ServerSettingsPage", "next"),
+    ("PreviewChatFormatsRequest", "line"),
+    ("PreviewChatFormatsResponse", "sender"),
 ];
 
 /// Every text field of every component: the cases above must cover them.
@@ -789,6 +803,7 @@ fn a_request_schema_refuses_unknown_fields_and_responses_dont() {
         "ModeScheduleRequest",
         "ModeStepRequest",
         "PasswordChangeRequest",
+        "PreviewChatFormatsRequest",
         "RefreshRequest",
         "RegisterRequest",
         "StepUpRequest",
@@ -803,6 +818,24 @@ fn a_request_schema_refuses_unknown_fields_and_responses_dont() {
 
         assert_eq!(refused, requests.contains(name.as_str()), "{name}");
     }
+}
+
+/// A request's and an answer's chat formats are each capped at a format's
+/// length (ADR-0020, S80).
+#[rstest]
+#[case::create("CreateServerSettingsRequest", "chat_formats")]
+#[case::update("UpdateServerSettingsRequest", "chat_formats")]
+#[case::preview("PreviewChatFormatsRequest", "chat_formats")]
+#[case::answer("ServerSettingsResponse", "chat_formats")]
+fn the_chat_formats_are_capped_at_a_formats_length(#[case] component: &str, #[case] field: &str) {
+    let components = components_json();
+    let required = components[component]["required"].as_array().unwrap();
+
+    assert_eq!(
+        property(&components, component, field),
+        &json!({ "type": "array", "items": { "type": "string", "maxLength": CHAT_FORMAT_MAX_CHARS } })
+    );
+    assert!(required.contains(&json!(field)), "{component}: R135");
 }
 
 /// A conflict text and each of its answered lines are capped at a kick
@@ -952,6 +985,8 @@ fn an_open_field_lists_exactly_its_enums_known_values() {
 #[case::mode_owner("ModeResponse", "owner")]
 #[case::mode_page_next("ModePage", "next")]
 #[case::settings_page_next("ServerSettingsPage", "next")]
+#[case::preview_sender("PreviewChatFormatsResponse", "sender")]
+#[case::preview_format("PreviewChatFormatsResponse", "format")]
 #[case::event_bot_id("EventMessage", "bot_id")]
 #[case::event_bot("EventMessage", "bot")]
 #[case::event_at("EventMessage", "at")]

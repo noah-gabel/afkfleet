@@ -22,9 +22,11 @@
 //! every server's settings, a line each, for Admins and the Owner;
 //! `new-server` and `edit-server` take their JSON, `delete-server` an ID,
 //! each asking for the password again when the server wants it; a line
-//! shows a server's key and how many conflict texts it has, never a text,
-//! and JSON that isn't server settings is said so, never repeated (P11.9;
-//! ADR-0020, S77).
+//! shows a server's key and how many conflict texts and chat formats it
+//! has, never a text or a format, and JSON that isn't server settings is
+//! said so, never repeated (P11.9; ADR-0020, S77). `preview-formats` takes
+//! a preview's JSON and says which format reads which sender from its
+//! line, counted from 1, never printing the line back (U58, R143).
 
 use core::fmt::Write as _;
 use core::pin::Pin;
@@ -44,8 +46,8 @@ use fleet_api_types::modes::{
     CreateModeRequest, ModeOwnership, ModeResponse, ModeVisibility, UpdateModeRequest,
 };
 use fleet_api_types::server_settings::{
-    CreateServerSettingsRequest, ServerSettingsPageQuery, ServerSettingsResponse,
-    UpdateServerSettingsRequest,
+    CreateServerSettingsRequest, PreviewChatFormatsRequest, ServerSettingsPageQuery,
+    ServerSettingsResponse, UpdateServerSettingsRequest,
 };
 use fleet_api_types::{
     AccountId, BotId, ErrorCode, ModeId, PageQuery, SafeInt, SecretText, ServerSettingsId, UserId,
@@ -94,7 +96,7 @@ pub(crate) fn arguments(args: &[String]) -> Option<(&str, &str)> {
 }
 
 /// The commands, as the console lists them.
-pub(crate) const HELP: &str = "commands: bots | bot <id> | offline <name> | server <id> <address> | mode <id> <mode> | start <id> | stop <id> | chat <id> <text> | command <id> <text> | history <id> [before] | modes | new-mode <json> | edit-mode <id> <json> | delete-mode <id> | events | users | audit [before] | agents | release <agent-id> | held <user-id> [before] | shared <user-id> [before] | leave <account-id> | servers | new-server <json> | edit-server <id> <json> | delete-server <id> | quit";
+pub(crate) const HELP: &str = "commands: bots | bot <id> | offline <name> | server <id> <address> | mode <id> <mode> | start <id> | stop <id> | chat <id> <text> | command <id> <text> | history <id> [before] | modes | new-mode <json> | edit-mode <id> <json> | delete-mode <id> | events | users | audit [before] | agents | release <agent-id> | held <user-id> [before] | shared <user-id> [before] | leave <account-id> | servers | new-server <json> | edit-server <id> <json> | delete-server <id> | preview-formats <json> | quit";
 
 /// How many 2FA codes a login may try.
 const CODES: usize = 3;
@@ -162,6 +164,9 @@ enum Command {
     EditServer(ServerSettingsId, String),
     /// A server's settings deleted.
     DeleteServer(ServerSettingsId),
+    /// Which sender chat formats read from a line: the rest of the line, as
+    /// typed, a preview's JSON.
+    PreviewFormats(String),
     Quit,
 }
 
@@ -194,7 +199,8 @@ impl Command {
                 _ => {}
             }
         }
-        // A new mode's or server's JSON is the rest of the line, as typed.
+        // A new mode's or server's JSON, or a preview's, is the rest of the
+        // line, as typed.
         match line
             .trim_start()
             .split_once(char::is_whitespace)
@@ -202,6 +208,9 @@ impl Command {
         {
             Some(("new-mode", json)) => return Some(Self::NewMode(json.to_owned())),
             Some(("new-server", json)) => return Some(Self::NewServer(json.to_owned())),
+            Some(("preview-formats", json)) => {
+                return Some(Self::PreviewFormats(json.to_owned()));
+            }
             _ => {}
         }
         let words: Vec<&str> = line.split_whitespace().collect();
@@ -412,6 +421,7 @@ async fn command_of<S: SessionStore>(
         Command::NewServer(json) => new_server(client, &json, terminal).await,
         Command::EditServer(id, json) => edit_server(client, id, &json, terminal).await,
         Command::DeleteServer(id) => delete_server(client, id, terminal).await,
+        Command::PreviewFormats(json) => preview_formats(client, &json, terminal).await,
         Command::Quit => Ok(()),
     };
     match done {
@@ -947,7 +957,7 @@ async fn new_server<S: SessionStore>(
 ) -> Result<(), ClientError> {
     let Ok(request) = serde_json::from_str::<CreateServerSettingsRequest>(json) else {
         terminal.say(
-            "not server settings' JSON: {\"server\", \"conflict_texts\"}, as the README shows; nothing was sent",
+            "not server settings' JSON: {\"server\", \"conflict_texts\", \"chat_formats\"}, as the README shows; nothing was sent",
         );
         return Ok(());
     };
@@ -973,7 +983,7 @@ async fn edit_server<S: SessionStore>(
 ) -> Result<(), ClientError> {
     let Ok(request) = serde_json::from_str::<UpdateServerSettingsRequest>(json) else {
         terminal.say(
-            "not server settings' JSON: {\"version\", \"server\", \"conflict_texts\"}, as the README shows; nothing was sent",
+            "not server settings' JSON: {\"version\", \"server\", \"conflict_texts\", \"chat_formats\"}, as the README shows; nothing was sent",
         );
         return Ok(());
     };
@@ -1010,14 +1020,40 @@ async fn delete_server<S: SessionStore>(
     Ok(())
 }
 
-/// One server's settings as a line: `server <id> <key> texts <n> version
-/// <v>`, the version `edit-server` sends back; never a text.
+/// Which format reads which sender from the line `json` holds, counted
+/// from 1 as the app shows it; never the line, which can hold anything a
+/// server sends. JSON that isn't a preview's is said so, never repeated.
+async fn preview_formats<S: SessionStore>(
+    client: &Client<S>,
+    json: &str,
+    terminal: &mut impl Terminal,
+) -> Result<(), ClientError> {
+    let Ok(request) = serde_json::from_str::<PreviewChatFormatsRequest>(json) else {
+        terminal.say(
+            "not a preview's JSON: {\"chat_formats\", \"line\"}, as the README shows; nothing was sent",
+        );
+        return Ok(());
+    };
+    let found = client.preview_chat_formats(&request).await?;
+    match (found.format, found.sender) {
+        (Some(format), Some(sender)) => {
+            terminal.say(&format!("format {} reads {sender}", u64::from(format) + 1));
+        }
+        _ => terminal.say("no format fits"),
+    }
+    Ok(())
+}
+
+/// One server's settings as a line: `server <id> <key> texts <n> formats
+/// <m> version <v>`, the version `edit-server` sends back; never a text or
+/// a format.
 fn server_line_of(settings: &ServerSettingsResponse) -> String {
     format!(
-        "server {} {} texts {} version {}",
+        "server {} {} texts {} formats {} version {}",
         settings.id,
         settings.server,
         settings.conflict_texts.len(),
+        settings.chat_formats.len(),
         settings.version
     )
 }
@@ -1642,7 +1678,7 @@ mod tests {
     fn the_server_settings_verbs_take_their_ids_and_new_server_the_rest_of_the_line() {
         let id = "018bcfe5-6800-7bab-abab-abababababab";
         let settings: ServerSettingsId = id.parse().unwrap();
-        let json = r#"{"server": "mc.example.com", "conflict_texts": ["One"]}"#;
+        let json = r#"{"server": "mc.example.com", "conflict_texts": ["One"], "chat_formats": []}"#;
 
         assert_eq!(Command::parse("servers"), Some(Command::Servers));
         assert_eq!(
@@ -1650,6 +1686,13 @@ mod tests {
             Some(Command::NewServer(json.to_owned()))
         );
         assert_eq!(Command::parse("new-server"), None);
+        assert_eq!(
+            Command::parse(r#"preview-formats {"chat_formats": [], "line": "a  b"}"#),
+            Some(Command::PreviewFormats(
+                r#"{"chat_formats": [], "line": "a  b"}"#.to_owned()
+            ))
+        );
+        assert_eq!(Command::parse("preview-formats "), None);
         assert_eq!(Command::parse("new-server   "), None);
         assert_eq!(
             Command::parse(&format!("edit-server {id} {json}")),

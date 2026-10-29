@@ -2,9 +2,10 @@
 //! bot on one Minecraft server shares, whoever's bot it is.
 //!
 //! A row is keyed by its server's [`ServerKey`] and holds the server's
-//! [`ConflictTexts`]. It's read back only when its key is in canonical form
-//! and its texts are exactly what [`ConflictTexts::iter`] writes, so a
-//! stored row is valid as soon as it's read. A row changes only at the
+//! [`ConflictTexts`] and [`ChatFormats`]. It's read back only when its key
+//! is in canonical form, its texts are exactly what [`ConflictTexts::iter`]
+//! writes and its formats exactly what [`ChatFormats::iter`] gives back, so
+//! a stored row is valid as soon as it's read. A row changes only at the
 //! version its editor read ([`ServerSettingsWrites::update`], S77), and the
 //! fleet holds at most [`fleet_core::server_settings::MAX_SERVER_SETTINGS`]
 //! of them, which a create counts in its own transaction (S78).
@@ -15,6 +16,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use fleet_core::chat::ChatFormats;
 use fleet_core::disconnect::ConflictTexts;
 use fleet_core::id::ServerSettingsId;
 use fleet_core::value::{ServerAddress, ServerKey};
@@ -31,6 +33,9 @@ pub struct StoredServerSettings {
     pub server: ServerKey,
     /// The kick texts that count as someone logging in with a bot's account.
     pub conflict_texts: ConflictTexts,
+    /// The formats that read a display-only sender out of its system lines
+    /// (ADR-0020, S79, S80).
+    pub chat_formats: ChatFormats,
     /// 1 when it's created, one more on every change.
     pub version: NonZeroU32,
     /// When it was created.
@@ -104,6 +109,8 @@ pub struct NewServerSettings {
     pub server: ServerKey,
     /// Its conflict texts.
     pub conflict_texts: ConflictTexts,
+    /// Its chat formats.
+    pub chat_formats: ChatFormats,
     /// When they were made.
     pub created_at: DateTime<Utc>,
 }
@@ -121,6 +128,8 @@ pub struct ServerSettingsChange {
     pub server: ServerKey,
     /// Its conflict texts.
     pub conflict_texts: ConflictTexts,
+    /// Its chat formats.
+    pub chat_formats: ChatFormats,
     /// When they changed.
     pub updated_at: DateTime<Utc>,
 }

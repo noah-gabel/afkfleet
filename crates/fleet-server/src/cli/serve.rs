@@ -368,12 +368,16 @@ pub struct ServerPorts {
     pub microsoft: Arc<dyn MicrosoftAuthProvider>,
     /// The link flows' waits between their calls.
     pub pace: Arc<dyn Pace>,
+    /// The reconciler's timing: [`ReconcileTimings::default`] for a real
+    /// server; the loopback suite's hint cases run with an interval no
+    /// periodic pass falls inside (ADR-0020, PR #80's review).
+    pub reconcile: ReconcileTimings,
 }
 
 impl ServerPorts {
     /// The real ones: [`SystemClock`], a [`MonotonicClock`] for the
     /// limiters, [`OsRandom`], [`ReqwestMicrosoftAuth`] on the system clock,
-    /// and [`TokioPace`]. Only [`app`] calls it, so `serve`, `user
+    /// [`TokioPace`], and the reconciler's default timing. Only [`app`] calls it, so `serve`, `user
     /// create-owner` and the `vault` commands stay the only places the real
     /// clock and randomness are built.
     ///
@@ -387,6 +391,7 @@ impl ServerPorts {
             limiter_clock: Arc::new(MonotonicClock::start()),
             random: Arc::new(OsRandom),
             pace: Arc::new(TokioPace),
+            reconcile: ReconcileTimings::default(),
         })
     }
 }
@@ -442,31 +447,24 @@ pub fn app_with(
     ports: ServerPorts,
     ca: Option<CertificateAuthority>,
 ) -> App {
-    let ServerPorts {
-        clock,
-        limiter_clock,
-        random,
-        microsoft,
-        pace,
-    } = ports;
     let store: Arc<dyn Store> = Arc::new(database.clone());
     // One bus, built first: the agents' answers, a chat send's wait (S5) and
     // the services' hints to the live events sockets (R36).
     let events = EventBus::new();
-    let vault: Arc<dyn Vault> = Arc::new(XChaChaVault::new(keys, Arc::clone(&random)));
+    let vault: Arc<dyn Vault> = Arc::new(XChaChaVault::new(keys, Arc::clone(&ports.random)));
     let (reconcile, inbox) = hint_queue(config.grpc.is_some() && ca.is_some());
     let hints = Hints::new(&reconcile, &events);
     let shared = Shared {
-        clock: &clock,
-        random: &random,
+        clock: &ports.clock,
+        random: &ports.random,
         store: &store,
     };
     let (link_flows, accounts) = account_services(
         config,
         &reconcile,
-        shared.link_flow_ports(&vault, &microsoft, pace, hints.live()),
+        shared.link_flow_ports(&vault, &ports.microsoft, ports.pace, hints.live()),
     );
-    let token_port: Arc<dyn Tokens> = Arc::new(Sha256Tokens::new(Arc::clone(&random)));
+    let token_port: Arc<dyn Tokens> = Arc::new(Sha256Tokens::new(Arc::clone(&ports.random)));
     let auth = auth_services(
         config,
         shared,
@@ -478,11 +476,11 @@ pub fn app_with(
         },
         &hints,
     );
-    let limits = RateLimits::new(&config.rate_limits, limiter_clock);
-    let ids = RequestIds::new(Arc::clone(&clock), Arc::clone(&random));
-    let audit = AuditService::new(Arc::clone(&clock), Arc::clone(&store));
+    let limits = RateLimits::new(&config.rate_limits, ports.limiter_clock);
+    let ids = RequestIds::new(Arc::clone(&ports.clock), Arc::clone(&ports.random));
+    let audit = AuditService::new(Arc::clone(&ports.clock), Arc::clone(&store));
     let fleet = fleet_services(config, shared, &hints, &events, reconcile);
-    let retention = retention(config, &clock, &store);
+    let retention = retention(config, &ports.clock, &store);
     let shutdown = CancellationToken::new();
     let (sockets, live) = live_events(&auth.tickets, &events, &store, &shutdown);
     let (enrollment_tokens, grpc) = control_plane_services(
@@ -490,17 +488,18 @@ pub fn app_with(
         ca,
         inbox,
         EnrollmentPorts {
-            clock,
-            random,
+            clock: ports.clock,
+            random: ports.random,
             store: Arc::clone(&store),
             tokens: token_port,
             limits: limits.clone(),
             ids: ids.clone(),
             registry: fleet.registry.clone(),
             vault,
-            microsoft,
+            microsoft: ports.microsoft,
             shutdown: shutdown.clone(),
             bus: events.clone(),
+            reconcile: ports.reconcile,
         },
     );
     let state = AppState::new(Services {
@@ -919,8 +918,9 @@ fn mfa_service(
 }
 
 /// What the control plane's services run on: the app's clock, randomness,
-/// store and tokens, the rate limits and the request IDs; and, for the
-/// session grants, the vault, Microsoft and serve's shutdown token.
+/// store and tokens, the rate limits and the request IDs; for the session
+/// grants, the vault, Microsoft and serve's shutdown token; and the
+/// reconciler's timing.
 struct EnrollmentPorts {
     clock: Arc<dyn Clock>,
     random: Arc<dyn SecureRandom>,
@@ -933,6 +933,7 @@ struct EnrollmentPorts {
     microsoft: Arc<dyn MicrosoftAuthProvider>,
     shutdown: CancellationToken,
     bus: EventBus,
+    reconcile: ReconcileTimings,
 }
 
 /// The session-token service over `ports`' Microsoft and vault, stopping
@@ -987,7 +988,7 @@ fn control_plane_services(
         )),
         Arc::clone(&ports.clock),
         inbox,
-        ReconcileTimings::default(),
+        ports.reconcile,
         config.accounts.allow_offline,
         config.rate_limits.chat_per_bot,
     )

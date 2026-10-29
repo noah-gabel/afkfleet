@@ -20,6 +20,7 @@ mod username;
 pub use agent_capacity::{AgentCapacity, AgentCapacityError};
 pub use agent_name::{AgentName, AgentNameError};
 pub use agent_version::{AgentVersion, AgentVersionError};
+pub(crate) use mc_username::is_name_char;
 pub use mc_username::{McUsername, McUsernameError};
 pub use mc_uuid::{McUuid, McUuidError};
 pub use server_address::{Host, ServerAddress, ServerAddressError};

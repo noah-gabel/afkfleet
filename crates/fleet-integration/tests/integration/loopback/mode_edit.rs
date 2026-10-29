@@ -3,9 +3,10 @@
 //! hints the reconciler, whose next pass sends the agent that holds the bot
 //! an `Update` with the edited steps. The bot runs them in the session it
 //! has: the same session, no new `Assign` (P10.5), so the hold keeps its
-//! `since` (PR #64's review). The steps must come within [`HINTED`], before
-//! the periodic pass could bring them, so the case proves the hint's wiring
-//! (PR #79's review).
+//! `since` (PR #64's review). The case runs at [`QUIET_RECONCILE`], so no
+//! periodic pass falls inside its wait: steps that come within [`HINTED`]
+//! came from the hint, and the case proves its wiring (PR #79's and PR #80's
+//! reviews).
 
 use core::time::Duration;
 
@@ -15,13 +16,17 @@ use fleet_server::grpc::registry::{HoldEntry, ViewPhase};
 use fleet_testkit::mc::Performed;
 
 use crate::harness::agent::RunOptions;
-use crate::harness::logs::HINTED;
+use crate::harness::logs::{HINTED, QUIET_RECONCILE};
 use crate::harness::server::ServerOptions;
 use crate::harness::world::World;
 
 #[tokio::test]
 async fn an_edited_mode_reaches_its_held_bot_as_an_update_without_a_new_session() {
-    let world = World::new(ServerOptions::default()).await;
+    let world = World::new(ServerOptions {
+        reconcile: QUIET_RECONCILE,
+        ..ServerOptions::default()
+    })
+    .await;
     let mut agent = world.agent("agent-a").await;
     agent.start(&world.ledger, RunOptions::capacity(1));
     let bot = world.owner.bot("AfkBot1").await;

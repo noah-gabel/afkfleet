@@ -424,6 +424,7 @@ async fn the_document_lists_exactly_the_api_routes(
             ("/api/v1/server-settings", "post"),
             ("/api/v1/server-settings/{id}", "put"),
             ("/api/v1/server-settings/{id}", "delete"),
+            ("/api/v1/server-settings/chat-format-preview", "post"),
             ("/api/v1/events/ticket", "post"),
             ("/api/v1/events", "get"),
             ("/api/v1/auth/login", "post"),

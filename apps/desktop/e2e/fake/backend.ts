@@ -299,6 +299,8 @@ interface Settings {
   readonly id: string;
   server: string;
   texts: string[];
+  /** The chat formats as written, in order, duplicates kept (ADR-0020, R139). */
+  formats: string[];
   version: number;
 }
 
@@ -313,12 +315,28 @@ function textsOf(texts: unknown): string[] {
   return [...new Set(Array.isArray(texts) ? texts.map(String) : [])].sort();
 }
 
+/** A request's chat formats as the server keeps them: as written, in order. */
+function formatsOf(formats: unknown): string[] {
+  return Array.isArray(formats) ? formats.map(String) : [];
+}
+
+/** The cross-field rule's refusal: a row holds a text unless it holds a format (R140). */
+function holdsNothing(): Outcome {
+  return api(422, "validation_failed", [
+    {
+      path: "conflict_texts",
+      message: "must hold at least one text, unless a chat format is set",
+    },
+  ]);
+}
+
 /** `settings` as the server answers them: each text as its lines. */
 function settingsResponse(settings: Settings): ServerSettingsResponse {
   return {
     id: settings.id,
     server: settings.server,
     conflict_texts: settings.texts.map((text) => ({ lines: text.split("\n") })),
+    chat_formats: [...settings.formats],
     version: settings.version,
     created_at: "2026-10-28T08:00:00.000Z",
     updated_at: "2026-10-28T08:00:00.000Z",
@@ -747,18 +765,18 @@ export class FakeBackend {
   #createSettings(request: Record<string, unknown>): Outcome {
     const server = keyOf(String(request.server));
     const texts = textsOf(request.conflict_texts);
-    if (texts.length === 0) {
-      return api(422, "validation_failed", [
-        { path: "conflict_texts", message: "must hold at least one text" },
-      ]);
+    const formats = formatsOf(request.chat_formats);
+    if (texts.length === 0 && formats.length === 0) {
+      return holdsNothing();
+    }
+    // The server's order: the cap, then a taken server.
+    if (this.#settings.length >= 100) {
+      return api(409, "conflict");
     }
     if (this.#settings.some((one) => one.server === server)) {
       return api(422, "validation_failed", [{ path: "server", message: "already has settings" }]);
     }
-    if (this.#settings.length >= 100) {
-      return api(409, "conflict");
-    }
-    const settings: Settings = { id: id(this.#next()), server, texts, version: 1 };
+    const settings: Settings = { id: id(this.#next()), server, texts, formats, version: 1 };
     this.#settings = [settings, ...this.#settings];
     return value(settingsResponse(settings));
   }
@@ -771,22 +789,27 @@ export class FakeBackend {
     }
     const server = keyOf(String(request.server));
     const texts = textsOf(request.conflict_texts);
-    if (server === settings.server && texts.join("\0") === settings.texts.join("\0")) {
+    const formats = formatsOf(request.chat_formats);
+    if (
+      server === settings.server &&
+      texts.join("\0") === settings.texts.join("\0") &&
+      formats.join("\0") === settings.formats.join("\0") &&
+      formats.length === settings.formats.length
+    ) {
       return value(settingsResponse(settings));
     }
     if (Number(request.version) !== settings.version) {
       return api(409, "server_settings_changed");
     }
-    if (texts.length === 0) {
-      return api(422, "validation_failed", [
-        { path: "conflict_texts", message: "must hold at least one text" },
-      ]);
+    if (texts.length === 0 && formats.length === 0) {
+      return holdsNothing();
     }
     if (this.#settings.some((one) => one.id !== target && one.server === server)) {
       return api(422, "validation_failed", [{ path: "server", message: "already has settings" }]);
     }
     settings.server = server;
     settings.texts = texts;
+    settings.formats = formats;
     settings.version += 1;
     return value(settingsResponse(settings));
   }

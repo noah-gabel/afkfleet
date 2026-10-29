@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE server_settings\n         SET server = ?, conflict_texts = ?, chat_formats = ?, version = ?, updated_at = ?\n         WHERE id = ? AND version = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "e79681e281fa268b03c884b4e690564cfad82a3cbf3416ed57d86d12202157fb"
+}

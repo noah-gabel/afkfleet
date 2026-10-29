@@ -35,14 +35,15 @@ One branch and one PR per group, one commit per task, in this order, each after 
 | H5 | `p11/p11-dod-kit` | The DoD's kit and its first check, with the agent's `public_targets` (U50; split from H3 at its plan review) |
 | H4 | `p11/p11.9-server-settings` | P11.9's per-server conflict texts, their server side (added at H's planning, S66; split at its plan review) |
 | H6 | `p11/p11.9-server-settings-screen` | P11.9's Minecraft-servers screens for the conflict texts (split from H4 at its plan review) |
-| H7 | `p11/p11.9-chat-format` | P11.9's per-server chat format and its parsed senders (split from H4 at its plan review) |
+| H7 | `p11/p11.9-chat-format` | P11.9's per-server chat format as a server setting, its preview (split from H4 at its plan review) |
+| H8 | `p11/p11.9-parsed-senders` | P11.9's parsed senders end to end and the editor's formats (split from H7 at its plan review) |
 | I | `p11/p11.9-mode-editor` | P11.9's mode editor |
 | J | `p11/p11.9-admin-screens` | P11.9's admin screens, ticked here |
 | K | `p11/p11.10-dark-mode` | P11.10 |
 | L | `p11/p11.11-design-pass` | P11.11 |
 | M | `p11/p11-wrap-up` | The threat model, the README, the DoD's 24-hour run |
 
-- **P11.3 is spread over A, B1 and B2.** B was one group until its plan review, which split it (below). With the chat rate travelling in each bot's spec (S3) and secure chat in fleet-mc (S2), one group would have been about 10,000 lines; Phase 10's group G (about 17,000) was too much for one review, and F and H (about 5,300 each) read well. **P11.5 is spread over D1 and D2** (D was split at its plan review: about 11,600 lines in one; below). **P11.8 is spread over G1 and G2** (G was split at its plan review: about 10,300 lines in one; below), P11.7 ticked in G1. **P11.9 is spread over F, H1–H4, H6, H7, I and J**, ticked in J (H was split at its plan review: about 13,300 lines in one; H4 was added there; below). H3's plan review moved the DoD's kit to a new group, H5 (about 5,550 lines in one; below). H4's plan review split it in three: the conflict texts' server side (H4), their screens (H6) and the chat format (H7), about 15,000 lines in one (below).
+- **P11.3 is spread over A, B1 and B2.** B was one group until its plan review, which split it (below). With the chat rate travelling in each bot's spec (S3) and secure chat in fleet-mc (S2), one group would have been about 10,000 lines; Phase 10's group G (about 17,000) was too much for one review, and F and H (about 5,300 each) read well. **P11.5 is spread over D1 and D2** (D was split at its plan review: about 11,600 lines in one; below). **P11.8 is spread over G1 and G2** (G was split at its plan review: about 10,300 lines in one; below), P11.7 ticked in G1. **P11.9 is spread over F, H1–H4, H6–H8, I and J**, ticked in J (H was split at its plan review: about 13,300 lines in one; H4 was added there; below). H3's plan review moved the DoD's kit to a new group, H5 (about 5,550 lines in one; below). H4's plan review split it in three: the conflict texts' server side (H4), their screens (H6) and the chat format (H7), about 15,000 lines in one (below). H7's plan review split it in two: the formats as a server setting (H7) and parsed senders end to end (H8), about 7,700 lines in one (below).
 - **New dependencies** arrive with their group, each with the user's approval of its version, license and release date (checked on crates.io at the planning):
   - D: axum's `ws` feature, which brings tokio-tungstenite 0.29.0 (MIT, 2026-03-17) and tungstenite 0.29.0 (MIT OR Apache-2.0, 2026-03-17), since axum 0.8.9 pins `tokio-tungstenite = "0.29.0"`; tokio-tungstenite as fleet-server's dev-dependency; futures-util 0.3.34 and moka 0.12.16 only if D needs them. 0.30.0 exists but would build a second tungstenite. *Approved at D's planning (U11):* axum's `ws`; tokio-tungstenite and futures-util as dev-dependencies of fleet-server and of fleet-client (the console's `events`); no moka (S29).
   - E: tokio-tungstenite as fleet-integration's dev-dependency (ADR-0019's note for P11.7). *Moved to G with P11.7 at E's planning (U18): fleet-integration's dependencies are G's question.*
@@ -1748,6 +1749,188 @@ The texts' plurals ran red by a mutation (M6.9: the bare number).
 
 *Size:* about 3,100 lines added, the docs included, about 60 of them generated query data, permissions and the snapshot: PR #79's review about 750, the commands about 600, the screens about 1,450, the e2e story about 240. The plan said about 2,500 for H6 without the review.
 
+### PR #80's review, fixed in H7's first commit
+- **a. "Load again" never shows old data as current.**
+  - Its read is `refetchQueries` with `throwOnError`. Only a read that succeeded clears the notice and fills the form.
+  - A failed one keeps the 409 notice and the edits, and says "Couldn't load the servers: {describeError}" inside the notice. The list's cache still holds the old row, which must never be shown as current.
+  - Test: a failing reload after a 409. Red: the notice went and the form showed the old row.
+- **b. Two editor rules, pinned by tests that fail without their code:**
+  - **While "Confirm it's you" is up,** the address, the texts, Remove and Add text are locked, typing changes nothing, and the retry sends exactly what's shown.
+  - **A background read** (`invalidateQueries` with a newer row) never overwrites what's being typed. Save sends the typed values at the version read, so the server answers 409.
+- **c. Accessibility:**
+  - The texts' list-level error joins the fieldset's `aria-describedby`.
+  - Each Remove is described by its text's label: `FormField`'s label has the ID `{id}-label`.
+  - The 409 notice is one live region, the `Alert`'s; the inner `role="alert"` went.
+- **d. The e2e fake's create** checks the cap before a taken server, as the server does (`fake.spec.ts`; red: 422).
+- **e. The loopback hint cases wait on the hint alone:**
+  - `ServerPorts` gains `reconcile: ReconcileTimings`, `system()` the default, carried into the control plane through `EnrollmentPorts`.
+  - The harness's `ServerOptions` gains it too.
+  - `conflict_texts.rs` and `mode_edit.rs` run at `QUIET_RECONCILE`, a periodic pass an hour apart, longer than any case runs (a const assertion keeps it past ten `PATIENCE`s). So no periodic pass can fall inside their 10 s wait: everything else a case waits on is hinted (an agent's welcome, a start, a mode edit, a settings write), and the placement gate opens at the welcome's pass.
+  - Removing serve's `.with_reconcile` therefore fails them every time.
+  - `conflict_texts.rs`'s 123-character doc line is wrapped.
+- **f.** The note for J below points to CLAUDE.md's "A new command changes …" line, not a list of its own.
+
+### Group H7's planning
+H7 builds the chat format on H4's planning (U55, U58–U60, S78–S80, R134, R135, the texts, H6's note on the page size), with nothing asked again.
+
+With PR #80's review it measured about 7,700 lines end to end, past the 5,300 bound, so it was split before coding, with the user's approval at the plan review:
+- **H7** (`p11/p11.9-chat-format`, about 5,000): PR #80's review, and the formats as a server setting:
+  - fleet-core's `ChatFormats`;
+  - `0020`;
+  - the DTOs with R135's field and the cross-field rule;
+  - the audit's fields;
+  - the preview route;
+  - fleet-client and the console's verbs;
+  - the app carrying the field unchanged.
+- **H8** (`p11/p11.9-parsed-senders`, new, about 3,100): parsed senders end to end:
+  - S79 through `chat_line`, the history and the live rights (S81);
+  - the console's label;
+  - U55's look;
+  - the 54th command and the editor's formats section with "Try a line";
+  - e2e.
+
+The server side alone would have been about 5,500. Parsed senders are the one part with a spoofing story, so the server's separate field and the app's mark are reviewed in one PR. H8 is built after H7's merge, on the decisions below, with no new planning. CLAUDE.md's step 3 counts twenty-five group branches, H in eight.
+
+*The user's change at the plan review:* the list shows only the parts a row has (R144):
+- "1 conflict text" / "{n} conflict texts" and "1 chat format" / "{n} chat formats", joined by " · " when both are there.
+- A row with no texts reads "2 chat formats", never "0 conflict texts · 2 chat formats". One with both reads "1 conflict text · 2 chat formats".
+- A test covers all three shapes.
+
+*Decided by a review agent, approved by the user at the plan review:*
+- **S81 (security). Formats that don't read back count as none for chat** (H8).
+  - **The question:** what the chat reads do when a server's `chat_formats` or `server`, or a bot's `server_address`, doesn't read back.
+  - **The decision:** authorization inputs still fail the read; display-only inputs fall back to what claims nothing.
+  - **The history:** stays 200. That server's bots' system lines carry no `parsed_sender`, and their text stays whole. A bot whose own row doesn't read back still fails at `listed()`, as before.
+  - **The rights read:** `access()` still fails on any corrupt ID, role or flag in bots, grants or users. A settings row whose formats or key don't read back, or a bot address that doesn't, only gives those bots no formats; other bots and sockets are untouched.
+  - **The list:** `GET /server-settings` keeps its 500 for the row (ADR-0015).
+  - **The log line:** `error`, with `server_settings_id` and `server` when they read, `rowid` and `column`; never a format.
+    - The history logs one line per read that meets the row.
+    - The rights log one line per row when it turns unreadable, the first rebuild included. `LiveRights` keeps that set, at most 100 rows, since every commit moves the count.
+    - A bad bot address gets no new line: the reconciler logs that bot each pass.
+  - **Why:** for a marked, display-only value, failing closed means no parsed sender. The line then reads as the server's, as on a server without formats, so no name can pass as a player's and no chat is hidden. R132 fails closed because empty texts would make a bot act and kick a human; missing formats make nothing act. History and live frames still match.
+  - **Rejected:**
+    - Failing like any corrupt row: one bad row in the shared rights read would close every socket and block every reopen, and give a Member a 500 over a row S75 hides from them.
+    - Failing those bots' chat closed: it hides real chat, such as moderation lines and kick warnings, over display-only data. It also adds per-server state to the snapshot, and gives 500s to users who can't see or fix the row.
+
+*Reconciliations (mine):*
+- **R137. The split** above, with Plan.md's group table and CLAUDE.md's count.
+- **R138. `ChatFormats`** lives in `fleet_core::chat::format`, re-exported from `chat`.
+  - **Constants:** `MAX_CHAT_FORMATS` (8), `ChatFormats::MAX_LEN` (64 characters as written, so an escape `{{` counts 2), `MAX_ANY` (32).
+  - **API:** `try_new`, `iter()` as written and in order, `len`, `is_empty`, `sender_of` and `matched`. `matched` gives the format's index for the preview. Both answer `None` for any line that isn't `System`, so no caller can parse a player's line.
+  - **Errors:** S80's list plus `Empty`, each with the format's `index` and, where it has one, the character `position`; never the text.
+  - **Braces (U59):** `{{` and `}}` are literal braces. Any other `{` or `}` is `UnknownPlaceholder` at that brace: an unknown name, an unclosed `{` or a lone `}`. So `{{sender}` reads as `{`, `sender`, then a lone `}`.
+  - **Check order:**
+    1. empty;
+    2. length;
+    3. a forbidden character;
+    4. a left-to-right scan, the first problem by position winning;
+    5. the end checks: no `{sender}`, no separator, a separator starting with a name character.
+  - **Matching** reads at most a constant number of the text's first characters, so neither its work nor its answer depends on anything past them.
+  - It derives `Debug, Clone, Default, PartialEq, Eq`.
+- **R139. Storage.**
+  - **The migration:** `0020` adds `chat_formats TEXT NOT NULL DEFAULT '[]'`, a JSON array by CHECK.
+  - **No "a row holds something" CHECK:** what "something" means grows again with U60's ideas, and SQLite can't drop a CHECK without rebuilding the table.
+  - **The stored form:** the formats as written, in order, duplicates kept. Read back only when `try_new` takes them and `iter()` equals them, otherwise `Corrupt` at `chat_formats`.
+  - **The reconciler** never reads the column (ADR-0013).
+- **R140. The API.**
+  - **The field:** `chat_formats` is required in both requests (R135) and in every answer, as written.
+  - **The cross-field rule** sits on `conflict_texts` as a garde field rule reading `self.chat_formats`, and the handler's `checked()` takes the formats too.
+  - **No-ops:** an edit is a no-op only when the server, the texts and the formats are all unchanged; formats compare as an ordered list.
+  - **Constants:** `CHAT_FORMATS_MAX` and `CHAT_FORMAT_MAX_CHARS` are mirrored in `limits.ts`.
+- **R141. The audit:**
+  - create gains `formats`;
+  - update gains `formats`, `previous_formats` and `formats_changed`;
+  - delete gains `formats`.
+  - Counts and a flag, never a format. Every real commit hints `Change::Store`.
+- **R142. The preview** is `POST /server-settings/chat-format-preview`.
+  - **Access:** authed, Standard, `ConfigureServerSettings`; no entry, no hint.
+  - **The request:** `PreviewChatFormatsRequest { chat_formats, line }`. `line` has at most 1024 characters, by the approved text, and is cleaned by `IncomingChat::system`.
+  - **The answer:** `PreviewChatFormatsResponse { sender?, format? }`, `format` counting from 0 as field paths do (the app and the console show n + 1).
+  - **The service:** `ServerSettingsService::preview`, pure.
+- **R143. fleet-client's `preview_chat_formats`; the console's verbs.**
+  - `new-server` and `edit-server` take `chat_formats`.
+  - `servers` prints ` formats {n}`.
+  - The new `preview-formats <json>` never prints the line back.
+  - In H8, `history` and `events` print a parsed sender as ` (format: {name})` after the kind, never where a player's name goes.
+- **R144. The app in H7.**
+  - **The editor:** it keeps a row's formats in its form state, unseen, and sends them back, so saving texts never clears them; Add sends `[]`.
+  - **zod** mirrors 8 and 64.
+  - **The list** shows the parts a row has (the user's change above).
+  - **The e2e fake** stores formats and applies the cross-field rule.
+- **R145. PR #80's review, point e** (above).
+- **R146 (H8). A bot's formats** are its current `server_address`'s, keyed by `ServerKey`. There's no fallback to the last sent spec, which nothing stores (S79).
+  - **The history:** reads the row's formats by key.
+  - **The rights:** `Access` gains each bot's resolved formats, read in the same transaction, held as `BotId → Arc<ChatFormats>`, so the snapshot still holds no address.
+- **R147 (H8). Nothing in the app is invalidated after a format change.** The chat query is stale at once, so opening a bot's screen reads its history again. Live lines after the commit use the new formats, through S43's re-read.
+- **R148 (H8). "Try a line":**
+  - It sends the form's current formats and the line through a mutation hook (no secret).
+  - A 422 at `chat_formats[i]` shows at that field, one at `line` under the box, anything else `describeError` there.
+  - The result clears when a format or the line changes, and Try stays usable while "Confirm it's you" is up.
+- **R149 (H8). U55's look:**
+  - `senderOf` gains a `parsed` look: the icon (`aria-hidden`) in a `title`d span with a screen-reader label, outside `Capped`, then the name in the foreground color at the players' weight, never `text-primary`.
+  - The line isn't muted italic; unmatched system lines keep U44's look.
+
+*The texts:* everything friends read is in H4's table, with the user's change to the list's count above. The preview's `line` past 1024 characters reuses the approved "must be at most 1024 characters".
+
+### As built (group H7)
+Built on H7's planning (S81, R137–R149) and H4's (U55, U58–U60, S78–S80, R134, R135), with nothing asked again, in one PR on `p11/p11.9-chat-format` and seven commits:
+- PR #80's review (above);
+- the planning record;
+- fleet-core's `ChatFormats`;
+- the column;
+- the API, the preview and the app's carry;
+- fleet-client and the console's verb;
+- the docs.
+
+Each new test ran red before its code, against a stub with the real signature, or, for a test that pins working code or that a stub couldn't turn red, by a mutation restored from a saved copy and checked by checksum. The stubs:
+- `try_new` taking everything, matching that found nothing;
+- a repository storing `[]` and reading back none;
+- DTO rules that let everything through;
+- a preview answering a fixed 404;
+- an editor that dropped a row's formats and a list that counted only texts;
+- a client method answering `NoSession`, and a console verb doing nothing.
+
+*Choices made while building:*
+- **`ConflictTextsProblem` became `ListProblem`,** since the formats' problems share its shape (an index or none, and a message).
+- **`READ_MAX` is exactly S80's 137:** a format's 64 characters less `{sender}`'s 8, two `{any}` of 32, and a name run up to its 17th character.
+- **The name-character rule is shared:** `McUsername` and the parser call one `is_name_char`.
+- **The largest request comes to about 50 KiB,** not the note's 51: 50,892 bytes with the longest server, 16 texts of 1024 three-byte characters and 8 formats at their cap.
+- **The desktop bridge's `ServerPorts`** needed the reconciler's timing too; the review's commit missed it (its search covered `crates/` alone), and the API's commit adds it.
+- **The e2e fake** reads a request's formats as written and takes a missing list as none, as it takes texts; the server's 400 for it is fleet-server's to test.
+
+*Mutations* (each failed its tests, then was restored):
+- M7.1: the editor's fields, Remove and Add text not locked while "Confirm it's you" is up.
+- M7.2 and M7.3: the form synced with the row (RHF's `values`); the version taken from the row, not the state.
+- M7.4 and M7.5: serve without `.with_reconcile` on `ServerSettingsService`, then on `ModeService`, each failing 3 runs of 3 ("not within 10s, so no hint started a pass").
+- M7.6: any kind of line read, not only a system line.
+- M7.7 and M7.8: the text after `{sender}` compared ignoring case; leading spaces skipped before a literal.
+- M7.9: no check of the text after `{sender}`.
+- M7.10 and M7.11: a long name cut to 16; a short one padded.
+- M7.12: `is_empty` inverted.
+- M7.13: an error naming the next place in the list.
+- M7.14: a name not read from the text.
+- M7.15: an unbounded `{any}` over the whole text.
+- M7.16: `0020` without its CHECK.
+- M7.17: the fleet's read treating unreadable formats as unreadable settings.
+- M7.18: `chat_formats` defaulted in a create.
+- M7.19: a row needing a text whatever its formats.
+- M7.20: a preview's line refused for a control character.
+- M7.21: a preview's answer writing `null` for what it lacks.
+- M7.22: the e2e fake's old empty-row message.
+- M7.23: the no-op check without the formats.
+- M7.24: the update's entry without the formats.
+- M7.25: the answer's formats sorted.
+- M7.26: the auth harness's body limit lowered to 50,000 bytes.
+- M7.27: the preview's formats unvalidated.
+- M7.28: the preview without its authorization.
+
+*Snapshots:*
+- the migrations' checksums, `20 chat formats`;
+- the created and edited answers, `auth__server_settings__server_settings_created` and `…_edited`, each with its formats;
+- the OpenAPI document: `chat_formats` in both requests and the answer (required), the preview's two schemas and its path.
+
+*Size:* about 3,530 lines added and 330 removed, the docs included, about 350 of them generated query data, types and snapshots; the plan said about 4,900 to 5,300. PR #80's review came to about 310 of them.
+
 ### Notes for later groups
 - **B2 (P11.3's history):** built (above).
 - **C (P11.4):** decided at C's planning (above), built in C1, C2 and C3.
@@ -1759,11 +1942,12 @@ The texts' plurals ran red by a mutation (M6.9: the bare number).
 - **E (P11.6):** `user` rows are deleted by age and size like other chat; no chat text in the audit to scrub (S6); a deleted user's lines keep no sender (U3). *From D:* P11.7's WebSocket client opens the socket through fleet-client's `events_handshake` (R16); a retention commit counts toward S30's and S31's counter on its own. *From D2:* a retention delete publishes nothing (S42: chat is fetched, not pushed again), but each of its commits moves the count, so the sockets read the rights once more and check their sessions; short batches keep that cheap. P11.7 sees a start and a stop as `bot` frames (S42), the bot's Online as the `bot` frame its status report makes, and a line as `chat` before its `chat_sent`; it compares a frame with `GET /bots/{id}` at that moment, never with an expected literal, and tolerates a repeated `bot` frame (the reconciler's pass hints too). *Planned at group E's planning (above): P11.7 moved to G (U18), and this note's P11.7 parts with it (R56); the `events_handshake` route above is not taken.* *Built (above).*
 - **F (P11.9's backend):** *Planned at group F's planning (above): U23, U24, S47–S51, R64–R69; built (above).* From D2: `agent release` over the API goes through `AgentService::release`, which already tells the sockets its bots (S42); `GET /audit` publishes nothing; a grants review at a role change rides on what exists: the role change sends `RoleChanged` (R11), and every grant it rewrites tells its bot after the commit. A new audited write labels itself in `every_audit_action_is_labelled_with_what_it_tells_the_sockets`, which fails until it does. *From E:* `GET /audit` lists `retention.purge` entries, the server's own (no actor, IP or target), their integers within `SafeInt`; an older entry may name an invite or an enrollment token the retention has deleted (S46), or a session, which a row no longer shows.
 - **G (P11.8), from D:** fleet-client mints a ticket for every connect and never reuses one; it sends the access token on the handshake (S28), marks that header sensitive and never logs the URL; it reconnects with backoff and a new ticket after 1001, 1013, 4000, 4002 or a lost connection, asks for a new ticket on 4001 (its refresh decides whether the session lives), waits `Retry-After` on `too_many_connections`, and expects one 4001 per access TTL (U13); it refetches its snapshots after `ready` and after `resync`, holding events that come while the refetch runs; it ignores an unknown kind and treats a known kind missing its field, or a frame that doesn't read, as a resync (S36); it sends only a close, and treats 30 s without a ping as a dead server. The TLS of its socket checks the server exactly as reqwest does, since the access token rides on the handshake. *From D1 and PR #66's review:* the app's socket is opened inside fleet-client, with tokio-tungstenite as its normal dependency (as Plan.md §5 planned), so the token never leaves it; G removes the `dev-console` feature and R16's exception (U15). tokio-tungstenite 0.29's client logs the whole handshake request, the URL's ticket and `Authorization: Bearer` included, at `trace`: tungstenite's "Request:" line (`handshake/client.rs:197`, target `tungstenite::handshake::client`), and a header marked sensitive doesn't change that. tungstenite's `debug` line with the URI is in its blocking client's `connect_to_some`, which tokio-tungstenite never calls *(corrected in group D2's first commit)*. The app's log filter caps tungstenite's targets below `debug`, as both binaries cap `azalea_auth`, and its log test checks the bearer as well as the ticket. A connect's 404 means "mint a new ticket and back off"; a user holds as many unspent tickets as sockets (R26). D2's 4002 test and G's client share D1's in-memory pipes (R27). *From D2:* a `bot` frame is the whole `BotResponse` and replaces the cached bot; the same frame can come twice, and a `bot_removed` for a bot not cached does nothing. `chat_failed` without `failure` means the viewer may not see why, or no reason was given (R35). A `resync` can land after frames already sent from the old state (R40's deviation): fetch everything at it, wherever it lands. Frames may wait during a burst of commits (S43), and a long one can lag into a `resync` every 5 s at most (S40). *From E (U18, R56):* G builds P11.7 too, over the reconnecting socket it gives fleet-client: start a bot through fleet-client, see it Online, chat in and out, stop, in fleet-integration over the existing harness (`World`, the `Ledger` connector, `Logs`). Each frame is compared with `GET /bots/{id}` at that moment, never with a literal; a repeated `bot` frame is tolerated (the reconciler's pass hints too); a line arrives as `chat` before its `chat_sent`. Every wait goes through `Logs::until` or `within` (U9), so the reader logs one line per frame, which wakes them. Which dependencies fleet-integration needs then is G's question; U15's exception isn't extended. *Planned at group G's planning (above): split into G1 and G2; U25–U30, S53–S60, R73–R80; fleet-integration needs no new dependency (S58).* *G1 built (above): the socket, the console over it and P11.7; G2 built the app's side (above).*
-- **J (P11.9's admin screens):** *From H's planning (S67):* the role rules go in `admin/permissions.ts` with the shared matrix helpers; `agent` shows by presence. *From F's planning (R69):* every `Open<…>` (the audit's action, target kind and outcome, an agent's status) gets a default branch; `retention.purge` shows as the server's, with no actor; a metadata value may come as text, a number or a flag; the release and leaving go through `useStepUpAction`, the release's text (the operator vouches the agent's host is stopped) the user's then, and `agent_not_disabled` shows its message and refetches the agent; the review panel reads the held grants first, then each shared account's grants lazily, revoking through the existing route; Leave is offered from a grant's `level`; S48's filter, if J's UX wants one, is added then. J's new commands change build.rs's `COMMANDS`, the capability, `tauri-hardening.mjs`, `ipc-contract.json`, `ApiClient`, `TauriApiClient` and `FakeApiClient` together. *From G1's first commit (S52):* each audit page's `unreadable` IDs show in their place among the entries by ID, marked, with no time, actor or action (the server's log names why); the wording is the user's then.
+- **J (P11.9's admin screens):** *From H's planning (S67):* the role rules go in `admin/permissions.ts` with the shared matrix helpers; `agent` shows by presence. *From F's planning (R69):* every `Open<…>` (the audit's action, target kind and outcome, an agent's status) gets a default branch; `retention.purge` shows as the server's, with no actor; a metadata value may come as text, a number or a flag; the release and leaving go through `useStepUpAction`, the release's text (the operator vouches the agent's host is stopped) the user's then, and `agent_not_disabled` shows its message and refetches the agent; the review panel reads the held grants first, then each shared account's grants lazily, revoking through the existing route; Leave is offered from a grant's `level`; S48's filter, if J's UX wants one, is added then. J's new commands change every place CLAUDE.md's "A new command changes …" line names, together *(PR #80's review: the line, not a list here that can fall behind)*. *From G1's first commit (S52):* each audit page's `unreadable` IDs show in their place among the entries by ID, marked, with no time, actor or action (the server's log names why); the wording is the user's then.
 - **H (P11.9):** *Planned at group H's planning (above): split into H1, H2 and H3, with H4 added; U32–U52, S66–S72, R87–R97. H3's planning (above) moved the DoD's kit to a new H5; R112–R126. H5 built (above): the kit, U50, R127–R130.* *From G's planning (S59, S60):* H adds the bot, chat and mode read commands, each the user's approval with its grant, and binds `useBots`, `useBot` and `useChat` to G2's keys; pairs `chat_sent` and `chat_failed` with their line by `request` (the `chat` patch then keeps `request`); shows `bot_died` and `bot_alert` as notices; adds the e2e build's push hook (in `e2e/app` only, named in the bundle guard) with its first live spec; and drops an update from a watch that's no longer current *(built in G2, S62)*. *From G2:* the layer (`app/live.ts`) patches H's keys once their queries exist; a stopped watch never restarts by itself (S61), so H's "Reconnect" control, if any, is one more trigger and its wording the user's; an `Ok` of the current watch while signed in can mean a broken channel (S64). *From D2:* the dashboard and the bot detail update from `bot` frames, each the bot as `GET /bots/{id}` shows it to this viewer; the detail's chat merges `chat` frames into the history by the line's ID and pairs a user's line with its `chat_sent` or `chat_failed` by `request`; `bot_died` and `bot_alert` (with its `state` and `reason`) are for H's notices, whose wordings are the user's. The send box: a spinner of at most 6 s, a 202 as sent with a pending mark, `chat_unavailable` without a "try again", the resend to `/command` on the pointer (S8); a user's line shown as asked, never as said (S7), a hidden command's mark outside its text (S9), names and `mine` (U3), the wordings the user's; U1's folder and recipes, the cleanup and its test. The history is in commit order (U5): the console keeps the API's order and never sorts by `at`; whether to mark that a line's time disagrees with its neighbours' is the user's then. A line's text arrives with its line breaks as ` | ` (S11): plain text, one block per message, no `white-space: pre*`. A bot's `respawn_failed` comes up to 60 s after its `Died` (S23), with the bot Online in between. *From E:* a bot's history can page short or end early once the retention deleted its old lines, and lines it deleted stay on an open screen until it fetches again; nothing on the socket says so (S42).
 - **H4 (P11.9's per-server settings), from H's planning (S66):** the per-server conflict texts first (a table keyed by a normalized server identity, a new permission, its step-up a question there, routes with their rate class and audit, the reconciler's `spec_of` resolving each bot's texts, a `Change::Store` hint, fleet-client, the console and Tauri commands with the user's grants, a settings screen), then the chat format: a fleet-core parser (no regex without the user's approval of a dependency), parsing at ingest or at read decided there, a parsed sender in its own optional `ChatLine` field built through `chat_line`, never in `sender`, and the console's distinct rendering, its looks the user's. Split at its plan review if it passes about 5,300 lines. *Planned at group H4's planning (above): split into H4 (the conflict texts' server side), H6 (their screens) and H7 (the chat format); U54–U60, S74–S80, R131–R136.*
 - **H6 (P11.9's Minecraft-servers screens), from H4's planning:** U56's four commands change build.rs's `COMMANDS`, the capability, `tauri-hardening.mjs`, `ipc-contract.json`, `ApiClient` with `API_METHODS`, `TauriApiClient`, `FakeApiClient`, `UnavailableApiClient`, `validated.ts` and the e2e fake's `COMMANDS` together; `limits.ts` gains the texts' 16 and 1024 and the 100 rows, which `tests/limits.rs` checks. U57's list and screen follow R136 and the texts above; the editor sends the answer's lines back joined by line breaks (S77), and builds every request from its form state. An e2e story adds a server with a text after the step-up, sees it listed, edits it and deletes it. *Built (above), with U61: Add opens the new entry, Save stays; the page is 10 rows since PR #79's review.*
-- **H7 (P11.9's chat format), from H4's planning:** S79, S80 with U59, R134 and R135; U55's icon in `senderOf`'s new look; the preview's route and `preview_chat_formats` (54 grants, U58); `0020` adds the column, read back exactly; the audit's metadata gains `formats`, `previous_formats` and `formats_changed`; S78's empty rule becomes "no text without a format"; P13.2 gains two fuzz targets (the constructor over any list of strings, the matcher over any format and text: no panic, and a `Some` is a valid `McUsername` read from the text's head). *From H6:* the editor's formats section goes between the texts and Save, its fields built from the form state as the texts are, and its field errors at `chat_formats[i]`; the list adds " · 1 chat format" / " · {n} chat formats" to an entry's count. A row's answer grows by at most about 2 KiB with 8 formats of 64 four-byte characters, so a page of 10 still fits a client's answer cap (about 680 KB), and the largest request with formats in three-byte characters stays about 51 KiB, under the 64 KiB body limit. *The user's later ideas (U60), not built in H7:* a `{clan}` part shown in its own console column, and per-server highlight rules (for example tpa requests) with their own look. H7's syntax and stored shape must not block them: braces are reserved (U59), so `{clan}` is free, and the stored lists leave room for another column beside them.
+- **H7 (P11.9's chat format), from H4's planning:** S79, S80 with U59, R134 and R135; U55's icon in `senderOf`'s new look; the preview's route and `preview_chat_formats` (54 grants, U58); `0020` adds the column, read back exactly; the audit's metadata gains `formats`, `previous_formats` and `formats_changed`; S78's empty rule becomes "no text without a format"; P13.2 gains two fuzz targets (the constructor over any list of strings, the matcher over any format and text: no panic, and a `Some` is a valid `McUsername` read from the text's head). *From H6:* the editor's formats section goes between the texts and Save, its fields built from the form state as the texts are, and its field errors at `chat_formats[i]`; the list adds " · 1 chat format" / " · {n} chat formats" to an entry's count. A row's answer grows by at most about 2 KiB with 8 formats of 64 four-byte characters, so a page of 10 still fits a client's answer cap (about 680 KB), and the largest request with formats in three-byte characters stays about 51 KiB, under the 64 KiB body limit. *Planned at group H7's planning (above): split into H7 (the formats as a setting) and H8 (parsed senders end to end, the editor's formats); S81, R137–R149.* *The user's later ideas (U60), not built in H7:* a `{clan}` part shown in its own console column, and per-server highlight rules (for example tpa requests) with their own look. H7's syntax and stored shape must not block them: braces are reserved (U59), so `{clan}` is free, and the stored lists leave room for another column beside them.
+- **H8 (P11.9's parsed senders), from H7's planning:** S79 with R146 and S81 (the six tests named there), the console's label (R143), the 54th command `preview_chat_formats` in every place CLAUDE.md's "A new command changes …" line names (54 grants, U58), the editor's formats section between the texts and Save (`useFieldArray`, "Chat format {n}", Remove described by its label, "Add format", at 8 "At most 8 formats.", locked like the texts) with "Try a line" (R148), U55's look (R149), and an e2e story: the Owner adds a format and tries a line, a bot on that server shows the matched line with the icon, and deleting the format shows it as the server's again. The fake reads formats at the chat's read with a small matcher of its own. The user's hands-on, on the dev stack: lines typed in `docker compose --file deploy/compose.dev.yaml exec minecraft rcon-cli`, a matched line, an unmatched one, the spoof `[x] Admin : hi`, the preview box, and deleting the format correcting the history.
 - **I (P11.9's mode editor):** *From H's planning (S68):* the editor shares the every-page modes query and may show `unlisted_command` as a mark; it never echoes the field back (R5; `deny_unknown_fields` makes an echo a 400). the editor binds to S12's types and opens a mode with an unknown `type` read-only; it shows a mode editable, deletable or with a visibility switch from S14's flags, and never copies `authorize()`; it builds each request from its form state, never by echoing an answer (R5), and marks a cut command outside its text (S15); on `mode_needs_step_up` it resends the same body to the `/with-commands` twin through `useStepUpAction` (S16), and `DELETE` goes through it directly; it keeps the loaded `version` and handles `mode_changed`, `mode_in_use_by_others` and `mode_in_use` (S17, S18). *The user's note at the plan review:* the editor shows hotbar slots as 1 to 9, the keys players know, and maps them to the API's 0 to 8. The wordings of its marks, the 409s' handling and "save as copy" are the user's then. *From C3:* the editor shows each step's schedule, `on_respawn` among them, and explains what a respawn does: the bot lets go of the use button and stops sneaking first, and an on-respawn chat is skipped within 30 s of the last; its wording is the user's then.
 - **L (P11.11):** *After H3, the user's note:* the app looks poor throughout. Button placement, spacing and general styling need rework on every screen, and L's brief starts from it.
 - **M:** U1's 24-hour run on the same folder, logging JSON at `info` to files. *From H5's check (above):* it passed on 2026-10-28, and `target/dod-run/` holds the linked account for the run, where the user logs in again. *From H5:* the kit's recipes are the run's too (`dod-server`, `dod-agent`, `dod-app`, its own ports, release builds); M adds the log files, through the recipes' exports or a recipe of its own, which `scripts/dod-kit.test.mjs` and the config tests then cover; `deploy/dod/agent.toml`'s `public_targets = false` stays until M decides (U50); `dod-clean` refuses while the agent's heartbeat is fresh or the database's `-wal` is there; the steps' part two ends the DoD. *From H3's planning:* the first check runs on H5's branch, through H5's `dod-*` recipes, and the server's own `rcon-cli list` confirms the bot; M's run can confirm the same way. *From H's planning:* the run decides whether it changes `public_targets` (U50); "every event shows up live" reads as every event outside a gap the timeline marks (S71); about 96 routine reconnects a day each open a sub-second gap; the DoD exes are release builds (S72); the end follows U51's second part. *From C3:* at `info` a respawn shows only when the server didn't confirm one in 5 s (`warn`); a confirmed one logs at `debug`. *From E:* the 24-hour run sees the retention at work: a `debug` line per run that deleted something, and one `retention.purge` entry an hour that deleted anything, plus one at the stop. J's audit screen shows that entry as the server's, with its counts; its wording is the user's then.

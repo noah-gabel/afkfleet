@@ -49,8 +49,8 @@ use crate::me::{MeResponse, PasswordChangeRequest};
 use crate::mfa::{MfaConfirmRequest, MfaConfirmResponse, MfaEnrollResponse, MfaResetResponse};
 use crate::modes::{CreateModeRequest, ModePage, ModeResponse, UpdateModeRequest};
 use crate::server_settings::{
-    CreateServerSettingsRequest, ServerSettingsPage, ServerSettingsResponse,
-    UpdateServerSettingsRequest,
+    CreateServerSettingsRequest, PreviewChatFormatsRequest, PreviewChatFormatsResponse,
+    ServerSettingsPage, ServerSettingsResponse, UpdateServerSettingsRequest,
 };
 use crate::sessions::SessionPage;
 use crate::users::{UserPage, UserPatchRequest, UserResponse};
@@ -228,7 +228,9 @@ fn write_api(config: &Config) -> Result<(), TypeScriptError> {
     ServerSettingsPage::export_all(config).map_err(TypeScriptError::Export)?;
     ServerSettingsResponse::export_all(config).map_err(TypeScriptError::Export)?;
     CreateServerSettingsRequest::export_all(config).map_err(TypeScriptError::Export)?;
-    UpdateServerSettingsRequest::export_all(config).map_err(TypeScriptError::Export)
+    UpdateServerSettingsRequest::export_all(config).map_err(TypeScriptError::Export)?;
+    PreviewChatFormatsRequest::export_all(config).map_err(TypeScriptError::Export)?;
+    PreviewChatFormatsResponse::export_all(config).map_err(TypeScriptError::Export)
 }
 
 /// Writes the app's root IPC types, and every type they use.

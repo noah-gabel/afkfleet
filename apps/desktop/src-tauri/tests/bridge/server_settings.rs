@@ -4,7 +4,7 @@
 
 use fleet_api_types::app::CommandErrorCode;
 use fleet_api_types::server_settings::{
-    ConflictTextsInput, CreateServerSettingsRequest, SERVER_SETTINGS_PAGE_MAX,
+    ChatFormatsInput, ConflictTextsInput, CreateServerSettingsRequest, SERVER_SETTINGS_PAGE_MAX,
     UpdateServerSettingsRequest,
 };
 use fleet_api_types::{BoundedText, ErrorCode, ServerSettingsId};
@@ -15,6 +15,7 @@ fn create(server: &str, texts: &[&str]) -> CreateServerSettingsRequest {
     CreateServerSettingsRequest {
         server: server.to_owned(),
         conflict_texts: ConflictTextsInput(texts.iter().map(|&text| text.to_owned()).collect()),
+        chat_formats: ChatFormatsInput::default(),
     }
 }
 
@@ -23,6 +24,7 @@ fn update(version: u32, server: &str, texts: &[&str]) -> UpdateServerSettingsReq
         version,
         server: server.to_owned(),
         conflict_texts: ConflictTextsInput(texts.iter().map(|&text| text.to_owned()).collect()),
+        chat_formats: ChatFormatsInput::default(),
     }
 }
 

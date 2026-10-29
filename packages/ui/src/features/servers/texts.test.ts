@@ -4,12 +4,14 @@ import {
   AT_MOST_TEXTS,
   added,
   CAP_REACHED,
+  chatFormatCount,
   conflictTextCount,
   conflictTextLabel,
   deleted,
   deleteQuestion,
   openServer,
   serversFailed,
+  settingsCount,
 } from "./texts";
 
 describe("the Minecraft servers' texts", () => {
@@ -20,6 +22,26 @@ describe("the Minecraft servers' texts", () => {
   ])("counts %i text(s) as %s", (count, words) => {
     expect(conflictTextCount(count)).toBe(words);
   });
+
+  it.each([
+    [1, "1 chat format"],
+    [2, "2 chat formats"],
+    [8, "8 chat formats"],
+  ])("counts %i format(s) as %s", (count, words) => {
+    expect(chatFormatCount(count)).toBe(words);
+  });
+
+  it.each([
+    [3, 0, "3 conflict texts"],
+    [0, 2, "2 chat formats"],
+    [1, 1, "1 conflict text · 1 chat format"],
+    [16, 8, "16 conflict texts · 8 chat formats"],
+  ])(
+    "shows an entry of %i text(s) and %i format(s) as %s, only the parts it has",
+    (texts, formats, words) => {
+      expect(settingsCount(texts, formats)).toBe(words);
+    },
+  );
 
   it("names each text from 1 and each entry by its server", () => {
     expect(conflictTextLabel(1)).toBe("Conflict text 1");

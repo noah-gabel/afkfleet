@@ -68,6 +68,7 @@
 //! | `POST /api/v1/server-settings` | user + step-up (Admin+) | a server's new settings: 201 |
 //! | `PUT /api/v1/server-settings/{id}` | user + step-up (Admin+) | the settings as they should be, at the version read |
 //! | `DELETE /api/v1/server-settings/{id}` | user + step-up (Admin+) | deletes a server's settings: 204 |
+//! | `POST /api/v1/server-settings/chat-format-preview` | user (Admin+) | which sender unsaved chat formats read from a line; nothing stored |
 //! | `POST /api/v1/events/ticket` | user | a single-use ticket for one live events socket of this session, 30 s |
 //! | `GET /api/v1/events` | user, with a ticket of this session | the live events socket (101); any other ticket 404, the user's sockets all open 429 |
 //! | `GET /api/openapi.json` | public | the `OpenAPI` document, only in dev mode ([`openapi`](super::openapi)) |
@@ -311,6 +312,7 @@ pub fn api_routes(routes: Routes) -> Routes {
         .step_up_route(RateClass::Standard, routes!(server_settings::create))
         .step_up_route(RateClass::Standard, routes!(server_settings::update))
         .step_up_route(RateClass::Standard, routes!(server_settings::delete))
+        .authed_route(RateClass::Standard, routes!(server_settings::preview))
         .authed_route(RateClass::Standard, routes!(events::ticket))
         .authed_route(RateClass::Standard, routes!(events::connect))
 }

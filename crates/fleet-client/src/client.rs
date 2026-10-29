@@ -34,8 +34,9 @@ use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaConfirmResponse, MfaEnrollResponse};
 use fleet_api_types::modes::{CreateModeRequest, ModePage, ModeResponse, UpdateModeRequest};
 use fleet_api_types::server_settings::{
-    CreateServerSettingsRequest, ServerSettingsPage, ServerSettingsPageQuery,
-    ServerSettingsResponse, UpdateServerSettingsRequest,
+    CreateServerSettingsRequest, PreviewChatFormatsRequest, PreviewChatFormatsResponse,
+    ServerSettingsPage, ServerSettingsPageQuery, ServerSettingsResponse,
+    UpdateServerSettingsRequest,
 };
 use fleet_api_types::sessions::SessionPage;
 use fleet_api_types::users::{UserPage, UserPatchRequest, UserResponse};
@@ -916,6 +917,23 @@ impl<S: SessionStore> Client<S> {
     /// [`ClientError::Api`]; any other error as for every authenticated call.
     pub async fn delete_server_settings(&self, id: ServerSettingsId) -> Result<(), ClientError> {
         self.core.delete_server_settings(id).await
+    }
+
+    /// `POST /server-settings/chat-format-preview`: which sender unsaved chat
+    /// formats read from a line, and which format fitted first, counted from
+    /// 0; nothing is stored. Admins and the Owner, no step-up (P11.9;
+    /// ADR-0020, U58, R134).
+    ///
+    /// # Errors
+    /// The server's 403 (`forbidden`: not an Admin or the Owner) or 422 (a
+    /// format that breaks its rule, at its path, or a line past 1024
+    /// characters at `line`), as [`ClientError::Api`]; any other error as for
+    /// every authenticated call.
+    pub async fn preview_chat_formats(
+        &self,
+        request: &PreviewChatFormatsRequest,
+    ) -> Result<PreviewChatFormatsResponse, ClientError> {
+        self.core.preview_chat_formats(request).await
     }
 
     /// The live events socket of this client's session (P11.8; ADR-0020,

@@ -42,6 +42,11 @@ impl McUsername {
     }
 }
 
+/// Whether `c` may be in a Minecraft name: `A`–`Z`, `a`–`z`, `0`–`9` or `_`.
+pub(crate) const fn is_name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
 impl TryFrom<&str> for McUsername {
     type Error = McUsernameError;
 
@@ -50,10 +55,7 @@ impl TryFrom<&str> for McUsername {
         if !(Self::MIN_LEN..=Self::MAX_LEN).contains(&len) {
             return Err(McUsernameError::InvalidLength { len });
         }
-        if let Some(index) = text
-            .chars()
-            .position(|c| !(c.is_ascii_alphanumeric() || c == '_'))
-        {
+        if let Some(index) = text.chars().position(|c| !is_name_char(c)) {
             return Err(McUsernameError::InvalidChar { index });
         }
         Ok(Self(text.to_owned()))

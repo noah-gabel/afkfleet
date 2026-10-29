@@ -1,5 +1,5 @@
 //! The servers' settings' use cases (Plan.md P11.9; ADR-0020, U54,
-//! S74–S78): what every bot on one Minecraft server shares, whoever's bot
+//! S74–S80, R141, R142): what every bot on one Minecraft server shares, whoever's bot
 //! it is. Admins and the Owner read them and, after a step-up, write them.
 //!
 //! - **Listing** ([`ServerSettingsService::list`]): every row, newest
@@ -9,27 +9,33 @@
 //!   `ConfigureServerSettings`, counts the rows against the cap (S78),
 //!   checks that the server has no row yet, stores the row at version 1
 //!   and records `server_settings.create` with the server and how many
-//!   texts; never a text.
+//!   texts and chat formats; never a text or a format.
 //! - **Editing** ([`ServerSettingsService::update`]): the same re-read and
 //!   authorization, then the row, a missing one being `NotFound`. An edit
 //!   that changes nothing writes nothing (S21's order: before the version).
 //!   Otherwise it refuses a stale `version` (S77) and a server another row
 //!   has, writes the next version only over the version it read, and
 //!   records `server_settings.update` with the server, the previous one when
-//!   it changed, and the counts.
+//!   it changed, and the counts of texts and formats, and whether each
+//!   changed.
 //! - **Deleting** ([`ServerSettingsService::delete`]): the same re-read and
 //!   authorization, the row, then the delete and `server_settings.delete`
-//!   with the version, the server and the count.
+//!   with the version, the server and the counts.
+//! - **Previewing** ([`ServerSettingsService::preview`]): which of unsaved
+//!   formats fits a sample line, cleaned as received chat is (U58, R134);
+//!   pure, so nothing is read, written or recorded.
 //!
 //! Every write that commits tells the reconciler (`Change::Store`), so each
-//! bot on the server, old and new, gets its texts at once. No live events
-//! socket is told: no frame shows the settings (S78).
+//! bot on the server, old and new, gets its texts at once; a change of the
+//! formats alone hints too. No live events socket is told: no frame shows
+//! the settings (S78).
 
 use core::num::NonZeroU32;
 use std::sync::Arc;
 
 use fleet_core::audit::{AuditAction, AuditError, AuditMetadata, AuditOutcome, AuditTarget};
 use fleet_core::authz::{AuthzError, Permission, ResourceContext, authorize};
+use fleet_core::chat::{ChatFormats, FormatMatch, IncomingChat};
 use fleet_core::disconnect::ConflictTexts;
 use fleet_core::id::ServerSettingsId;
 use fleet_core::server_settings::server_settings_cap_reached;
@@ -83,6 +89,8 @@ pub struct ServerSettingsEdit {
     pub server: ServerKey,
     /// The conflict texts.
     pub conflict_texts: ConflictTexts,
+    /// The chat formats.
+    pub chat_formats: ChatFormats,
 }
 
 /// What an edit did; either way the settings are answered as they now are.
@@ -214,8 +222,8 @@ impl ServerSettingsService {
         ))
     }
 
-    /// Gives `server` the conflict texts `texts` for `by`; see the
-    /// [module docs](self).
+    /// Gives `server` the conflict texts `texts` and the chat formats
+    /// `formats` for `by`; see the [module docs](self).
     ///
     /// # Errors
     /// [`CreateServerSettingsError::SessionGone`],
@@ -227,6 +235,7 @@ impl ServerSettingsService {
         by: &ActingUser,
         server: ServerKey,
         texts: ConflictTexts,
+        formats: ChatFormats,
     ) -> Result<StoredServerSettings, CreateServerSettingsError> {
         let now = self.clock.now();
         let id: ServerSettingsId = mint(now, self.random.as_ref())?;
@@ -253,6 +262,7 @@ impl ServerSettingsService {
             id,
             server,
             conflict_texts: texts,
+            chat_formats: formats,
             created_at: now,
         };
         tx.server_settings()
@@ -268,7 +278,8 @@ impl ServerSettingsService {
             "server_port",
             &settings.server,
         )?
-        .int("texts", count(&settings.conflict_texts))?;
+        .int("texts", count(&settings.conflict_texts))?
+        .int("formats", formats_count(&settings.chat_formats))?;
         let entry = self
             .audit
             .entry(AuditAction::SERVER_SETTINGS_CREATE, AuditOutcome::Success)
@@ -283,6 +294,7 @@ impl ServerSettingsService {
             id,
             server: settings.server,
             conflict_texts: settings.conflict_texts,
+            chat_formats: settings.chat_formats,
             version: NonZeroU32::MIN,
             created_at: now,
             updated_at: now,
@@ -322,7 +334,10 @@ impl ServerSettingsService {
         let Some(stored) = tx.server_settings().find(id).await? else {
             return Err(UpdateServerSettingsError::NotFound);
         };
-        if stored.server == edit.server && stored.conflict_texts == edit.conflict_texts {
+        if stored.server == edit.server
+            && stored.conflict_texts == edit.conflict_texts
+            && stored.chat_formats == edit.chat_formats
+        {
             // Dropping the transaction writes nothing (S21).
             return Ok(EditedSettings::Unchanged(stored));
         }
@@ -348,6 +363,7 @@ impl ServerSettingsService {
             version,
             server: edit.server,
             conflict_texts: edit.conflict_texts,
+            chat_formats: edit.chat_formats,
             updated_at: now,
         };
         let wrote = tx
@@ -377,6 +393,7 @@ impl ServerSettingsService {
             id,
             server: change.server,
             conflict_texts: change.conflict_texts,
+            chat_formats: change.chat_formats,
             version,
             created_at: stored.created_at,
             updated_at: now,
@@ -416,7 +433,8 @@ impl ServerSettingsService {
         }
         let metadata = AuditMetadata::new().int("version", i64::from(stored.version.get()))?;
         let metadata = with_server(metadata, "server_host", "server_port", &stored.server)?
-            .int("texts", count(&stored.conflict_texts))?;
+            .int("texts", count(&stored.conflict_texts))?
+            .int("formats", formats_count(&stored.chat_formats))?;
         let entry = self
             .audit
             .entry(AuditAction::SERVER_SETTINGS_DELETE, AuditOutcome::Success)
@@ -428,6 +446,14 @@ impl ServerSettingsService {
         self.reconcile.changed(Change::Store);
         info!(user_id = %by.actor.id, server_settings_id = %id, "a server's settings were deleted");
         Ok(())
+    }
+
+    /// Which of `formats` fits `line` first, and the sender it reads:
+    /// the line cleaned as received chat is, since it stands in for a
+    /// server's text (ADR-0020, U58, R134). Nothing is read or written.
+    #[must_use]
+    pub fn preview(&self, formats: &ChatFormats, line: &str) -> Option<FormatMatch> {
+        formats.matched(&IncomingChat::system(line))
     }
 }
 
@@ -461,7 +487,8 @@ fn with_server(
 }
 
 /// `server_settings.update`'s metadata: the version written, the server,
-/// the one before only when it changed, and the counts.
+/// the one before only when it changed, and the counts, never a text or a
+/// format (S78, R141).
 fn edited(
     stored: &StoredServerSettings,
     change: &ServerSettingsChange,
@@ -482,10 +509,21 @@ fn edited(
         .flag(
             "texts_changed",
             change.conflict_texts != stored.conflict_texts,
+        )?
+        .int("formats", formats_count(&change.chat_formats))?
+        .int("previous_formats", formats_count(&stored.chat_formats))?
+        .flag(
+            "formats_changed",
+            change.chat_formats != stored.chat_formats,
         )
 }
 
 /// How many texts `texts` holds, for an entry's metadata.
 fn count(texts: &ConflictTexts) -> i64 {
     i64::try_from(texts.iter().count()).unwrap_or(i64::MAX)
+}
+
+/// How many formats `formats` holds, for an entry's metadata.
+fn formats_count(formats: &ChatFormats) -> i64 {
+    i64::try_from(formats.len()).unwrap_or(i64::MAX)
 }
