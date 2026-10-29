@@ -752,11 +752,12 @@ export class FakeBackend {
         { path: "conflict_texts", message: "must hold at least one text" },
       ]);
     }
-    if (this.#settings.some((one) => one.server === server)) {
-      return api(422, "validation_failed", [{ path: "server", message: "already has settings" }]);
-    }
+    // The server's order: the cap, then a taken server.
     if (this.#settings.length >= 100) {
       return api(409, "conflict");
+    }
+    if (this.#settings.some((one) => one.server === server)) {
+      return api(422, "validation_failed", [{ path: "server", message: "already has settings" }]);
     }
     const settings: Settings = { id: id(this.#next()), server, texts, version: 1 };
     this.#settings = [settings, ...this.#settings];

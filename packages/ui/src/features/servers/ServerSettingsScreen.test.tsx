@@ -380,3 +380,161 @@ describe("a Minecraft server's settings", () => {
     expect(calls(app, "updateServerSettings")).toEqual([]);
   });
 });
+
+describe("a Minecraft server's settings, PR #80's review", () => {
+  it("keeps the notice and the edits when Load again can't read the servers", async () => {
+    let failing = false;
+    // The fake's rows once `atEditor` returns them; the first read comes before.
+    const kept: { rows?: () => ServerSettingsResponse[] } = {};
+    const { app, state } = await atEditor(ROW.id, {
+      rows: [ROW],
+      handlers: {
+        serverSettings: async () => {
+          if (failing) {
+            throw refusal(500, "internal");
+          }
+          return { items: kept.rows?.() ?? [ROW] };
+        },
+      },
+    });
+    kept.rows = () => state.rows;
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+    state.rows = [settings(1, "mc.example.com:25565", [["Someone else's"]], 2)];
+    await app.user.clear(text(1));
+    await app.user.type(text(1), "Mine");
+    await app.user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText(CHANGED)).toBeDefined();
+
+    failing = true;
+    await app.user.click(screen.getByRole("button", { name: "Load again" }));
+
+    const failed = await screen.findByText(/^Couldn't load the servers: /);
+    expect(screen.getByText(CHANGED)).toBeDefined();
+    expect(failed.closest('[role="alert"]')).toBe(
+      screen.getByText(CHANGED).closest('[role="alert"]'),
+    );
+    expect(text(1).value).toBe("Mine");
+    expect(text(2).value).toBe("You logged in\nfrom another location");
+  });
+
+  it("locks the fields, Remove and Add text while Confirm it's you is up, and the retry sends what's shown", async () => {
+    const { app } = await atEditor(ROW.id, { rows: [ROW], stamped: false });
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+    await app.user.type(text(1), " now");
+    await app.user.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByLabelText("Current password");
+
+    const address = screen.getByLabelText("Server address") as HTMLInputElement;
+    expect(address.readOnly).toBe(true);
+    expect(text(1).readOnly).toBe(true);
+    expect(text(2).readOnly).toBe(true);
+    for (const remove of screen.getAllByRole("button", { name: "Remove" })) {
+      expect((remove as HTMLButtonElement).disabled).toBe(true);
+    }
+    expect((screen.getByRole("button", { name: "Add text" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    await app.user.type(address, "x");
+    await app.user.type(text(1), " later");
+    await app.user.type(screen.getByLabelText("Current password"), PASSWORD);
+    await app.user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(
+      await screen.findByText("Saved. Bots on this server use the change at once."),
+    ).toBeDefined();
+
+    const shown = {
+      version: 1,
+      server: "mc.example.com:25565",
+      conflict_texts: ["Already connected now", "You logged in\nfrom another location"],
+    };
+    expect(calls(app, "updateServerSettings")).toEqual([
+      [ROW.id, shown],
+      [ROW.id, shown],
+    ]);
+  });
+
+  it("never lets a background read overwrite what's being typed, and saves it at the version read", async () => {
+    const { app, state } = await atEditor(ROW.id, { rows: [ROW] });
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+    await app.user.clear(screen.getByLabelText("Server address"));
+    await app.user.type(screen.getByLabelText("Server address"), "play.example.com");
+    await app.user.clear(text(1));
+    await app.user.type(text(1), "Typed");
+    state.rows = [settings(1, "other.example.com:25565", [["Someone else's"]], 2)];
+
+    await act(() => app.runtime.queryClient.invalidateQueries({ queryKey: ["server-settings"] }));
+    await vi.waitFor(() => expect(calls(app, "serverSettings")).toHaveLength(2));
+
+    expect((screen.getByLabelText("Server address") as HTMLInputElement).value).toBe(
+      "play.example.com",
+    );
+    expect(text(1).value).toBe("Typed");
+    expect(text(2).value).toBe("You logged in\nfrom another location");
+    await app.user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText(CHANGED)).toBeDefined();
+    expect(calls(app, "updateServerSettings")).toEqual([
+      [
+        ROW.id,
+        {
+          version: 1,
+          server: "play.example.com",
+          conflict_texts: ["Typed", "You logged in\nfrom another location"],
+        },
+      ],
+    ]);
+  });
+
+  it("describes each Remove by its text's label", async () => {
+    await atEditor(ROW.id, { rows: [ROW] });
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+
+    expect(
+      screen.getByRole("button", { name: "Remove", description: "Conflict text 1" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Remove", description: "Conflict text 2" }),
+    ).toBeDefined();
+  });
+
+  it("adds a refusal of the list itself to the texts' description", async () => {
+    const { app } = await atEditor(ROW.id, {
+      rows: [ROW],
+      handlers: {
+        updateServerSettings: async () => {
+          throw refusal(422, "validation_failed", {
+            fields: [{ path: "conflict_texts", message: "must hold at most 16 texts" }],
+          });
+        },
+      },
+    });
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+    expect(
+      screen.getByRole("group", { name: "Conflict texts", description: TEXTS_HINT }),
+    ).toBeDefined();
+
+    await app.user.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("must hold at most 16 texts");
+
+    expect(
+      screen.getByRole("group", {
+        name: "Conflict texts",
+        description: `${TEXTS_HINT} must hold at most 16 texts`,
+      }),
+    ).toBeDefined();
+  });
+
+  it("announces the changed settings through one live region", async () => {
+    const { app, state } = await atEditor(ROW.id, { rows: [ROW] });
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+    state.rows = [settings(1, "mc.example.com:25565", [["Someone else's"]], 2)];
+
+    await app.user.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText(CHANGED);
+
+    const regions = screen
+      .getAllByRole("alert")
+      .filter((region) => region.textContent?.includes(CHANGED) === true);
+    expect(regions).toHaveLength(1);
+    expect(within(regions[0] as HTMLElement).queryAllByRole("alert")).toEqual([]);
+  });
+});

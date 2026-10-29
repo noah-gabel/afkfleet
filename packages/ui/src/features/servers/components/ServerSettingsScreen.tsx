@@ -4,8 +4,10 @@
 // echoing an answer, at the `version` read. Each write goes through `useStepUpAction`: a new
 // server's Save opens its own screen, an edit's stays with what the server saved (U61), and
 // Delete asks first, then goes back to the list. A 409 `server_settings_changed` shows the
-// server's text with "Load again", which reads the row again; a 404 says the settings are
-// gone. Nothing but "Load again" and a save resets the form, so a refetch never loses edits.
+// server's text with "Load again", which reads the row again: only a read that succeeded
+// fills the form, and a failed one keeps the notice and the edits and says why. A 404 says the
+// settings are gone. Nothing but "Load again" and a save resets the form, so a refetch never
+// loses edits.
 import { zodResolver } from "@hookform/resolvers/zod";
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -181,6 +183,7 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
   const [version, setVersion] = useState(row?.version ?? 1);
   const [formError, setFormError] = useState<string>();
   const [stale, setStale] = useState<string | null>(null);
+  const [reloadFailed, setReloadFailed] = useState<string | null>(null);
   const [gone, setGone] = useState(false);
   const writes = useStepUpAction();
   const form = useForm<SettingsValues>({
@@ -215,6 +218,7 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
     }
     setFormError(undefined);
     setStale(null);
+    setReloadFailed(null);
     wait.reset();
     const server = values.server;
     const conflictTexts = values.texts.map((entry) => entry.text);
@@ -258,17 +262,35 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
     });
   });
 
-  /** Reads the row again after a 409 and fills the form from it; a row gone shows so. */
+  /**
+   * Reads the row again after a 409 and fills the form from it; a row gone shows so. A read
+   * that fails changes nothing but saying why: the notice and the edits stay, and the list's
+   * cache still holds the old row, which must never be shown as current.
+   */
   async function loadAgain(): Promise<void> {
     if (row === undefined) {
       return;
     }
+    setReloadFailed(null);
+    try {
+      await queryClient.refetchQueries(
+        { queryKey: SERVER_SETTINGS_KEY, exact: true },
+        { throwOnError: true },
+      );
+    } catch (rejection) {
+      if (alive.current) {
+        setReloadFailed(serversFailed(describeError(toApiError(rejection).error)));
+      }
+      return;
+    }
+    if (!alive.current) {
+      return;
+    }
     setStale(null);
-    await queryClient.refetchQueries({ queryKey: SERVER_SETTINGS_KEY, exact: true });
     const fresh = queryClient
       .getQueryData<ServerSettingsResponse[]>(SERVER_SETTINGS_KEY)
       ?.find((one) => one.id === row.id);
-    if (fresh !== undefined && alive.current) {
+    if (fresh !== undefined) {
       setVersion(fresh.version);
       form.reset(valuesOf(fresh));
     }
@@ -283,6 +305,7 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
   const readOnly = locked || !configure;
   const errors = form.formState.errors;
   const full = texts.fields.length >= CONFLICT_TEXTS_MAX;
+  const listError = errors.texts?.message ?? errors.texts?.root?.message;
   return (
     <main className="flex max-w-3xl flex-col gap-6 p-6">
       <h1 className="text-2xl font-semibold tracking-tight">{row?.server ?? ADD_SERVER}</h1>
@@ -302,7 +325,14 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
             />
           )}
         </FormField>
-        <fieldset className="flex flex-col gap-4" aria-describedby={`${formId}-texts-hint`}>
+        <fieldset
+          className="flex flex-col gap-4"
+          aria-describedby={
+            listError === undefined
+              ? `${formId}-texts-hint`
+              : `${formId}-texts-hint ${formId}-texts-error`
+          }
+        >
           <legend className="mb-2 text-lg font-semibold">{TEXTS_HEADING}</legend>
           <p id={`${formId}-texts-hint`} className="text-sm text-muted-foreground">
             {TEXTS_HINT}
@@ -329,6 +359,7 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
                   size="sm"
                   className="self-start"
                   disabled={locked}
+                  aria-describedby={`${formId}-text-${field.id}-label`}
                   onClick={() => texts.remove(index)}
                 >
                   {REMOVE}
@@ -336,10 +367,7 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
               ) : null}
             </div>
           ))}
-          <FieldMessage
-            id={`${formId}-texts-error`}
-            message={errors.texts?.message ?? errors.texts?.root?.message}
-          />
+          <FieldMessage id={`${formId}-texts-error`} message={listError} />
           {configure ? (
             <div className="flex flex-wrap items-center gap-3">
               <Button
@@ -361,9 +389,11 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
           </p>
         )}
         {stale === null ? null : (
+          // One live region: the Alert's own.
           <Alert>
             <AlertDescription className="flex flex-col gap-2 text-foreground">
-              <p role="alert">{stale}</p>
+              <p>{stale}</p>
+              {reloadFailed === null ? null : <p className="text-destructive">{reloadFailed}</p>}
               <Button
                 type="button"
                 variant="outline"

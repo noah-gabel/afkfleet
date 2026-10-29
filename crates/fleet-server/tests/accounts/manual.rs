@@ -39,6 +39,7 @@ use fleet_core::system::{Clock, SecureRandom as _};
 use fleet_core::time::{add, elapsed};
 use fleet_server::cli::serve::ServerPorts;
 use fleet_server::config::{AccountsConfig, RateLimitConfig};
+use fleet_server::grpc::reconciler::ReconcileTimings;
 use fleet_server::infra::crypto::vault::{VaultKeys, XChaChaVault};
 use fleet_server::infra::msauth::ReqwestMicrosoftAuth;
 use fleet_server::infra::system::{MonotonicClock, OsRandom, SystemClock, TokioPace};
@@ -568,6 +569,7 @@ async fn manual_link_flow_member_then_owner() {
                 random: Arc::new(OsRandom),
                 microsoft: Arc::new(adapter()),
                 pace: Arc::new(TokioPace),
+                reconcile: ReconcileTimings::default(),
                 clock,
             },
         )

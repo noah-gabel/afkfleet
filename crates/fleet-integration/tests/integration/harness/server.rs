@@ -45,6 +45,7 @@ use fleet_server::config::{
     AccountsConfig, AuditConfig, AuthConfig, ChatConfig, DatabaseConfig, GrpcConfig, Heartbeats,
     HttpConfig, LogConfig, LogFormat, PkiPaths, RateLimitConfig, ServerConfig, VaultConfig,
 };
+use fleet_server::grpc::reconciler::ReconcileTimings;
 use fleet_server::grpc::registry::AgentRegistry;
 use fleet_server::http::rate_limit::TrustedProxies;
 use fleet_server::infra::crypto::passwords::Argon2Passwords;
@@ -80,6 +81,10 @@ pub(crate) struct ServerOptions {
     /// `[grpc] heartbeat_interval_secs` and `heartbeat_timeout_secs`: the
     /// production 10 s and 30 s, but where a case measures them.
     pub(crate) heartbeats: Heartbeats,
+    /// The reconciler's timing: the production one, but where a case must
+    /// tell a hinted pass from a periodic one
+    /// ([`QUIET_RECONCILE`](super::logs::QUIET_RECONCILE)).
+    pub(crate) reconcile: ReconcileTimings,
 }
 
 /// What the managed check's server runs on, beside the real clock and the OS's
@@ -124,6 +129,7 @@ pub(crate) struct Server {
     manual: Option<ManualClock>,
     random: Arc<dyn SecureRandom>,
     microsoft: Arc<dyn MicrosoftAuthProvider>,
+    reconcile: ReconcileTimings,
     keys: Keys,
     /// The API's listener, bound once for the server's whole life: each
     /// serve gets a clone of it, so a restart never frees its port and the
@@ -175,6 +181,7 @@ struct Running {
 /// Everything a first start needs.
 struct Begin {
     heartbeats: Heartbeats,
+    reconcile: ReconcileTimings,
     allow_offline: bool,
     clock: Arc<dyn Clock>,
     manual: Option<ManualClock>,
@@ -193,6 +200,7 @@ impl Server {
             dir,
             Begin {
                 heartbeats: options.heartbeats,
+                reconcile: options.reconcile,
                 allow_offline: true,
                 clock: Arc::new(manual.clone()),
                 // Never called: the cases' accounts are offline ones.
@@ -217,6 +225,7 @@ impl Server {
             dir,
             Begin {
                 heartbeats: Heartbeats::default(),
+                reconcile: ReconcileTimings::default(),
                 allow_offline: false,
                 clock: Arc::new(SystemClock),
                 manual: None,
@@ -289,6 +298,7 @@ impl Server {
             manual: begin.manual,
             random: begin.random,
             microsoft: begin.microsoft,
+            reconcile: begin.reconcile,
             keys: begin.keys,
             ca_fingerprint,
             running: None,
@@ -323,6 +333,7 @@ impl Server {
             random: Arc::clone(&self.random),
             microsoft: Arc::clone(&self.microsoft),
             pace: Arc::new(TokioPace),
+            reconcile: self.reconcile,
         };
         let (opened, ca) = open(
             ControlPlane {

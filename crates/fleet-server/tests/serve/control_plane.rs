@@ -40,6 +40,7 @@ use fleet_server::cli::serve::{self, ControlPlane, Exit, GrpcPort, ServerPorts, 
 use fleet_server::config::{GrpcConfig, PkiPaths, ServerConfig};
 use fleet_server::grpc::control::SHUTTING_DOWN;
 use fleet_server::grpc::listener as grpc_listener;
+use fleet_server::grpc::reconciler::ReconcileTimings;
 use fleet_server::infra::crypto::passwords::Argon2Passwords;
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
 use fleet_server::infra::crypto::vault::{DerivedKey, XChaChaVault};
@@ -786,6 +787,7 @@ async fn app_and_port(
         random: Arc::new(OsRandom),
         microsoft,
         pace: Arc::new(TokioPace),
+        reconcile: ReconcileTimings::default(),
     };
     let mut app = serve::app_with(
         config,

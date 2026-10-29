@@ -36,6 +36,7 @@ use fleet_server::config::{
     Heartbeats, HttpConfig, LogConfig, LogFormat, PkiPaths, RateLimitConfig, ServerConfig,
     VaultConfig,
 };
+use fleet_server::grpc::reconciler::ReconcileTimings;
 use fleet_server::http::rate_limit::TrustedProxies;
 use fleet_server::infra::crypto::passwords::Argon2Passwords;
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
@@ -566,6 +567,7 @@ impl HttpSetup {
             random: Arc::new(random),
             microsoft: fake.clone(),
             pace: pace.clone(),
+            reconcile: ReconcileTimings::default(),
         };
         Self {
             server: Server::start_with(

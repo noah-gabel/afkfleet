@@ -36,6 +36,7 @@ const SLACK: Duration = Duration::from_secs(3);
 async fn a_silent_connection_frees_the_agent_and_it_reconnects_and_resyncs() {
     let world = World::new(ServerOptions {
         heartbeats: Heartbeats::try_from_secs(1, 2).unwrap(),
+        ..ServerOptions::default()
     })
     .await;
     let mut agent = world.agent("agent-a").await;

@@ -242,6 +242,24 @@ test("keeps the servers' settings: writes after a step-up, the key, the version,
   expect(gone).toMatchObject({ ok: false, error: { api: { status: 404 } } });
 });
 
+test("checks the cap before a taken server, as the server does", async () => {
+  const backend = new FakeBackend();
+  backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(OWNER) });
+  backend.handle("step_up", { request: { password: PASSWORD } });
+  for (let n = 0; n < 100; n += 1) {
+    await backend.handle("create_server_settings", {
+      request: { server: `mc${n}.example.com`, conflict_texts: ["a"] },
+    });
+  }
+
+  const taken = await backend.handle("create_server_settings", {
+    request: { server: "mc0.example.com", conflict_texts: ["a"] },
+  });
+
+  expect(taken).toMatchObject({ ok: false, error: { api: { status: 409, code: "conflict" } } });
+});
+
 test("lets only Admins and the Owner read the servers' settings", async () => {
   const backend = new FakeBackend();
   backend.handle("login", { request: { username: MEMBER, password: PASSWORD } });
