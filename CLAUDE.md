@@ -20,13 +20,14 @@ Where things are:
 - **Threat model:** `docs/threat-model.md`. Its "Verified by" cells cite tests as Rust paths (`module::test_name`); `scripts/threat-model-citations.mjs` checks that each exists (`just scripts-test`). Rename a cited test only together with the threat model.
 - **Operations:** `docs/runbook.md`
 - **Project overview and status:** `README.md` (kept current, see step 6 below)
+- **Topic rules:** `.claude/rules/` holds the rules for parts of the work, moved here from this file word for word: the full commands table (`commands.md`), dependencies (`dependencies.md`), Rust details (`rust.md`), fleet-server (`server.md`), tests (`testing.md`) and the frontend (`frontend.md`). Each loads when you open a file it covers. Every plan names the `.claude/rules` files for the areas it touches, reads them before planning, and lists them in its Context, so the plan review can see it. Older ADRs and Plan.md notes cite some of these rules as "CLAUDE.md's …" (its time rule, its wait line, its "A new command changes …" line, its exemption list).
 
 ## How to work with Plan.md
 1. **Find the current phase.** It's the first phase with unchecked tasks. Don't work on later phases unless the user asks.
 2. **Pick the task.** Take the next unchecked task, or the one the user names (e.g. "do P4.3"). Before coding, restate its goal and acceptance criteria in 2–4 lines.
 3. **Branch.**
    - Start from an up-to-date `main`: `git switch main`, then `git pull`.
-   - Create the task branch `p<phase>/<task-id>-<slug>`, e.g. `p2/p2.6-bot-state-machine`. Phases 0 and 1 each use one branch for the whole phase: `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each, with one commit per task (Plan.md, the note under Phase 2). Phase 3 does the same with five group branches, plus one task branch for P3.9 (Plan.md, the note under Phase 3). Phase 4 uses five group branches (Plan.md, the note under Phase 4). Phase 5 uses four group branches (Plan.md, the note under Phase 5). Phase 6 uses five group branches (Plan.md, the note under Phase 6). Phase 7 uses five group branches (Plan.md, the note under Phase 7). Phase 8 uses five group branches (Plan.md, the note under Phase 8). Phase 9 uses six group branches (Plan.md, the note under Phase 9). Phase 10 uses eight group branches (Plan.md, the note under Phase 10). Phase 11 uses twenty-five group branches, groups B, D and G in two, C in three and H in eight (Plan.md, the note under Phase 11).
+   - Create the task branch `p<phase>/<task-id>-<slug>`, e.g. `p2/p2.6-bot-state-machine`. Phases 0 and 1 each used one branch for the whole phase (`p0/foundation`, `p1/azalea-spike`). From Phase 2 on, a phase's work goes in group branches, one PR each, named in the note under the phase in Plan.md; a group split at its plan review gets the branches its planning names.
    - One task, or one Phase 2 group, per branch. If the previous PR isn't merged yet, stop and tell the user instead of stacking branches.
 4. **TDD.**
    1. Write the tests first.
@@ -42,7 +43,7 @@ Where things are:
    - Note any deviation under the task as `> Note (P4.3): …`.
    - Write an ADR (`docs/adr/NNNN-title.md`) for any design decision.
    - Update `README.md` whenever setup steps, commands, configuration or user-visible behavior change. When a phase is finished, update its **Status** section.
-   - Keep the commands table below in sync with the `justfile`.
+   - Keep `.claude/rules/commands.md` in sync with the `justfile`.
 7. **Commit, push, open a PR.**
    - Small commits with messages like `P2.6: add Stop transition`.
    - Push only the task branch: `git push -u origin <branch>`.
@@ -65,69 +66,21 @@ Where things are:
 - **Stay in this repository.** Never read, change or run anything in other folders or other repositories.
 - **Never ask the user to paste tokens, passwords, keys or real account data** into the chat. Steps that need real credentials (P1.8, P9 account linking) are done by the user.
 
-## Commands (`justfile`, created in P0.7; keep this table in sync)
-Recipes run in **PowerShell 7** (`pwsh`) on Windows and in `sh` on Linux CI, so every recipe line must work in both:
-- one command per line; no `&&` or `||`
-- set environment variables with just's `export` or a `$`-parameter, never with shell syntax (`$env:X` or `X=…`)
-- anything more complex goes into a small script under `scripts/`
+## Commands
+The full table, with every recipe and how to write one, is in `.claude/rules/commands.md`, which loads when you open the `justfile` or `scripts/`. The ones most tasks need:
+- `just check`: formatting, clippy, docs, nextest, doctests, the generated-code and hardening checks, the `scripts/` tests, biome, `tsc`, Vitest and `just e2e`. **Run it before saying a task is done.**
+- `just test [crate]`: nextest for the workspace or one crate.
+- `just test-slow`: the container tests (needs Docker), after touching `fleet-mc`, Docker files or anything container-based.
+- `just fmt`; `just gen` after changing a DTO; `just db-prepare` after changing a query or adding a migration.
+- `just cov` (the coverage gates) and, on Windows, `just cov-desktop` (the desktop crate's gate).
 
-On Linux, every workspace-wide Rust recipe adds `--exclude afkfleet-desktop`: the desktop app ships only for Windows and would need WebKitGTK there. Windows covers it: clippy and test on windows-latest and CI's `tauri-build` job (ADR-0017). Doctests leave it out on every platform: tauri-build's static VC++ runtime stub breaks the other crates' doctest links, and it has no doctests.
-
-| Command | What it does |
-|---|---|
-| `just check` | `cargo fmt --check`, clippy (`--all-targets -D warnings`), `cargo doc --no-deps --workspace` with `RUSTDOCFLAGS="-D warnings"`, nextest default profile, doctests, `db-check`, `gen-check`, `testkit-check`, `tauri-check`, the `scripts/` tests, biome, `tsc --noEmit` and Vitest in every frontend package, and `just e2e`. **Run before saying a task is done.** |
-| `just test [crate]` | nextest for the workspace or one crate |
-| `just test-slow` | Pulls the server image and builds the agent's image, then runs the nextest `slow` profile with fleet-mc's test-only `fault-injection` feature, one Minecraft container or compose stack at a time (needs Docker) |
-| `just test-real-account` | **The user only; the AI never runs it.** nextest `manual` profile: the user's real token from `secrets/p1.8-account.txt` joins a local online-mode container and sends signed chat (needs Docker) |
-| `just test-ms-account [filter]` | **The user only; the AI never runs it.** nextest `manual` profile with `--no-capture`, fleet-server only: the Microsoft adapter, and the link flow through serve's own routes, against the user's own account. The adapter's checks stay in memory; the link flow's database is a temporary folder, deleted at every end and sealed with a vault key drawn for the run and kept in memory. It prints a link and a code, then pass or FAIL per step; `filter` picks `account_check`, `declined_link` or `link_flow` (ADR-0018) |
-| `just test-managed-account` | **The user only; the AI never runs it.** Pulls the Minecraft image, then the nextest `manual` profile with `--no-capture`, fleet-integration's one check: in managed mode, a bot with the user's own Microsoft account goes Online on a local online-mode Minecraft container through the API, and offline through stop. The server and the agent run in-process; their files live in a temporary folder, deleted at every end and sealed with a vault key drawn for the run and kept in memory. It prints a link and a code, then pass or FAIL per step (needs Docker; ADR-0019, S73) |
-| `just dod-mc-up` / `just dod-mc-down` | **The user only; the AI never runs it.** The DoD checks' online-mode Minecraft server (`deploy/compose.dod.yaml`, project `afkfleet-dod`, published only on `127.0.0.1:25566`, RCON unpublished), waiting until it's healthy / removed with its volume, which holds the player's name (ADR-0020, U1, S72) |
-| `just dod-build` | **The user only; the AI never runs it.** `cargo build --release` of exactly the server and the agent the DoD recipes run, before the stack starts, so no build runs while an enrollment token's 15 minutes do; it touches nothing in `target/dod-run/`, and cargo shows its progress (PR #78's review) |
-| `just dod-server` | **The user only; the AI never runs it.** The DoD checks' server, a release build with `deploy/dod/server.toml` (not dev mode, offline accounts refused, HTTP `127.0.0.1:8090`, gRPC `127.0.0.1:7453`, `info`): its database, vault key and PKI in `target/dod-run/`, the key and the PKI created when missing, never overwritten (ADR-0020, U1, S72, R126) |
-| `just dod-owner username` | **The user only; the AI never runs it.** The Owner `username` in the DoD checks' database, the password typed twice, hidden; the same six paths as `dod-server` (R126) |
-| `just dod-enrollment-token` / `just dod-enroll` | **The user only; the AI never runs it.** An enrollment token in the DoD checks' database, the bundle alone on stdout (`$bundle = just dod-enrollment-token`) / the DoD agent enrolled with `deploy/dod/agent.toml`, the bundle on stdin (`$bundle | just dod-enroll`), its key and certificate into `target/dod-run/agent/`; one line, never replacing an identity. The bundle is a secret: never print or paste it elsewhere |
-| `just dod-agent` | **The user only; the AI never runs it.** The DoD checks' managed agent, a release build with `deploy/dod/agent.toml`: the identity `dod-enroll` left, its heartbeat in `target/dod-run/agent/`, its bot dialling only `127.0.0.1`, never a public address (`public_targets = false`, the user's rule, U50, which the recipe also exports itself, so the shell can't flip it) |
-| `just dod-app` | **The user only; the AI never runs it.** `app-build`, then the release exe, printing the address to enter, `http://127.0.0.1:8090`; it returns once the app starts (R125) |
-| `just dod-clean` | **The user only; the AI never runs it.** Deletes exactly this repository's `target/dod-run/` once the DoD is finished (after the account is unlinked in the app), through `scripts/dod-clean.mjs`: it refuses another path, a `target/` or `dod-run` that is a link or junction, an `afkfleet.db-wal` (`dod-server` running, or a crash) and an agent heartbeat under 30 s old, each saying what to do; it removes links as entries, never followed, and never touches Docker (ADR-0020, U1, U33, U52, R130) |
-| `just cov` | cargo-llvm-cov with the coverage gates (per-crate and per-module gates are checked by a script over the JSON report) |
-| `just cov-desktop` | Windows only (on Linux it prints a note and succeeds): cargo-llvm-cov over the desktop crate alone, with `--no-rustc-wrapper` (the default wrapper leaves its lib's unit-test binary uninstrumented on Windows), checked against the desktop gate by `coverage-gates.mjs --report desktop` (CI's `tauri-build` job; ADR-0017) |
-| `just deny` | `cargo deny check` in two passes with the same `deny.toml`: the workspace without the desktop crate on every target, then the desktop crate alone on Windows (ADR-0017) |
-| `just fmt` | `cargo fmt` + biome format |
-| `just gen` | Exports fleet-api-types' TypeScript types (ts-rs) to `packages/ui/src/generated/`, from a fresh export in `target/gen/`. It deletes only files ts-rs generated and stops on anything else in the folder. Run it after changing a DTO, and commit the result. The gRPC code isn't exported or committed: fleet-proto's build script generates it at every build, and a snapshot test pins its wire schema (ADR-0019) |
-| `just gen-check` | Fails if `packages/ui/src/generated/` isn't exactly a fresh export (the `ts-types-fresh` job) |
-| `just db-prepare` | Rebuilds the throwaway `target/sqlx-prepare.db` from the migrations and runs `cargo sqlx prepare -- --all-targets` in `crates/fleet-server`, writing the offline query data to `crates/fleet-server/.sqlx/` (needs sqlx-cli 0.9.0). Run it after changing a query or adding a migration |
-| `just db-check` | The same database, then `cargo sqlx prepare --check`: fails if `.sqlx/` is missing or differs from a query (the `sqlx-offline` job) |
-| `just migrations-check` | Fails if a migration that exists on `origin/main` was modified, deleted or renamed. Needs an up-to-date `origin/main`; CI fetches it |
-| `just mc-up` / `just mc-down` | Local offline-mode Minecraft server (`itzg/minecraft-server`); `mc-down` stops the agent too and deletes the world |
-| `just stack-up` | Builds the agent's image and starts the local server plus the agent (`deploy/dev/agent.compose.toml`) in Docker, waiting until both are healthy |
-| `just dev-server` / `just dev-agent` | Run the server with `deploy/dev/server.toml` (dev mode; its database, its vault key and its PKI in `target/dev-server/`, or the absolute paths given; it creates the key when it's missing and the PKI with `pki init` when its four files are missing, never overwriting either, and turns `[grpc]` on at `127.0.0.1:7443`; ADR-0019) / the agent with `deploy/dev/agent.toml` |
-| `just dev-enrollment-token` / `just dev-enroll [dir]` | An enrollment token in `dev-server`'s database through `agent create-enrollment-token`, the bundle alone on stdout (`$bundle = just dev-enrollment-token`) / `afkfleet-agent enroll` with `deploy/dev/agent.managed.toml`, the bundle on stdin (`$bundle \| just dev-enroll`), the key and certificate into `target/dev-agent/` or `dir`, which it creates; never replaces an identity (ADR-0019). Its one line runs `scripts/dev-enroll.mjs`, which creates the folder and starts the agent on its own stdin: every recipe line gets just's stdin, so an earlier line could take the bundle. The bundle is a secret: never print or paste it elsewhere |
-| `just dev-agents` / `just dev-disable-agent id` / `just dev-release-agent id` | `agent list` on `dev-server`'s database: every agent with its bots count, tab-separated after a header / `agent disable --id id` there: the agent disabled for good, its certificates revoked; a running `dev-server` ends its stream within 10 s / `agent release --id id` there: the disabled agent's bots released, which a running `dev-server` places within 30 s; only once its host and bots are stopped (ADR-0019). Same paths as `dev-server`; none creates or migrates the database |
-| `just dev-owner username` | Create the Owner `username` in `dev-server`'s database with `user create-owner`, the password typed twice at the terminal (same paths as `dev-server`) |
-| `just dev-managed-agent [dir]` | A managed agent with `deploy/dev/agent.managed.toml`: the identity `dev-enroll` left in `dir` (`target/dev-agent` by default), dev-server's CA, its heartbeat file in `dir`; its bots dial only public addresses and `127.0.0.1` (ADR-0019, S71) |
-| `just dev-bots username [server]` | A console for dev-server's bot, mode and admin endpoints (users, the audit log, agents, grants) over fleet-client's `Client`: the password, the 2FA code and a step-up typed hidden, never an argument; `bots`, `bot <id>`, `offline <name>`, `server <id> <address>`, `start <id>`, `stop <id>`, `mode <id> <mode>`, `chat <id> <text>`, `command <id> <text>` (the text the rest of the line, never printed back), `history <id> [before]`, `modes`, `new-mode <json>` (a mode's JSON, the rest of the line; its steps never printed), `edit-mode <id> <json>` (the same, with the `version` read), `delete-mode <id>`, `events` (the live events until Enter, over fleet-client's own socket, which reconnects by itself, over https too; it never sees the ticket or the token), `users`, `audit [before]`, `agents`, `release <agent-id>`, `held <user-id> [before]`, `shared <user-id> [before]`, `leave <account-id>`, `servers`, `new-server <json>`, `edit-server <id> <json>`, `delete-server <id>` (a server's settings' JSON, the rest of the line, its texts and chat formats never printed; release, leave and the server-settings writes asking for a step-up, hidden), `preview-formats <json>` (unsaved chat formats tried on a line, the rest of the line; the line never printed), `quit`. It needs a terminal, so the AI doesn't run it (ADR-0019, S71; ADR-0020, R80) |
-| `just dev-vault-status` / `just dev-rotate-key` / `just dev-server-rotated` | `vault status` on `dev-server`'s database (key 1; no key file read) / copy that database to `target/dev-server/rotation/` (refused when the folder exists or a `-wal` shows `dev-server` running), create `vault-key-2` when it's missing and `vault rotate-key` the copy to it (keys 1 and 2) / serve the copy with key 2 alone. Overridable absolute paths, like `dev-server`'s (ADR-0018) |
-| `just demo-agent [minutes]` | Phase 5's demo: the compose stack (project `afkfleet-demo`) for 60 minutes, or `minutes`, with one server restart at half time; prints a summary and a verdict, saves its logs under `target/demo-agent/` (needs Docker) |
-| `just dev-app` | `tauri dev` in `apps/desktop`: Vite's dev server on `localhost:1420` and the app, with hot reload |
-| `just app-build [args]` | `tauri build` in `apps/desktop`: the frontend, then the exe with it embedded (`target/release/`; `--debug` for a debug exe with devtools). No installer yet |
-| `just icons` | Renders `apps/desktop/src-tauri/icons/icon.ico` from `icon.svg` with `tauri icon`, through a fresh folder in `target/`, keeping only `icon.ico` (`scripts/icons.mjs`) |
-| `just ui-test` / `just e2e` | Vitest in every frontend package / the e2e suite: builds both shipped bundles into `target/e2e/` and the e2e bundle, runs `scripts/e2e-bundle-guard.mjs`, then Playwright in the installed Edge (`channel: "msedge"`, nothing downloaded) under the release CSP (part of `check` and `ci`; ADR-0017) |
-| `just ci` | Everything CI runs |
-| `just testkit-check` | Fails if any workspace member depends on fleet-testkit outside its dev-dependencies (`cargo tree`, through `scripts/testkit-check.mjs`; ADR-0015) |
-| `just tauri-check` | Fails if the desktop app's hardening changed: the CSP and every other `app.security` setting, `withGlobalTauri`, the windows and the dev URL, the one capability and what it grants, build.rs's command list and the empty default permission, and tauri's resolved features (`cargo tree`; never `devtools`, `dynamic-acl` or `custom-protocol`), and fleet-client's in the app (exactly none, `CLIENT_FEATURES`; ADR-0020, S57). Through `scripts/tauri-hardening.mjs`, whose expected values change only together with an ADR (ADR-0017) |
-| `just fmt-check` · `clippy` · `docs` · `doctest` · `test-ci` · `stable-check` · `db-check` · `migrations-check` · `gen-check` · `testkit-check` · `tauri-check` · `scripts-test` · `ui-check` · `ui-audit` | The building blocks of `check` and `ci`. Each CI job runs one of them, so local and CI runs can't drift apart |
-
+**The user only; the AI never runs them:** `just test-real-account`, `just test-ms-account`, `just test-managed-account`, every `just dod-*` recipe, and the `manual` nextest profile. `just dev-bots` needs a terminal, so the AI doesn't run it either.
 
 ## Architecture rules
 **Crates and dependencies** (full table in Plan.md §4):
 - `fleet-core` is pure: no IO, no tokio, no azalea. It contains domain types, the bot state machine, policies, `authorize()` and the Minecraft port traits.
 - **Only `fleet-mc` may depend on `azalea`. No member depends on `azalea-auth` directly**: it enters only through azalea's own crates, and a `deny.toml` wrapper entry enforces it (ADR-0018).
-  - `fleet-mc` may use only `azalea::auth::sessionserver` and `azalea::auth::certs`, through azalea's re-export, to join with a server-issued Minecraft token.
-  - The Microsoft flows (device code, Microsoft tokens, refresh, the Minecraft session) belong to `fleet-server` alone, in its own adapter (`infra/msauth`, reqwest with its own requests; ADR-0018). `fleet-mc`'s `clippy.toml` bans azalea's Microsoft flows (ADR-0011).
-  - Only `infra/msauth/client.rs` names reqwest's client types, through the one builder; fleet-server's `clippy.toml` bans them elsewhere, along with reqwest's unbounded body readers (ADR-0018).
 - azalea code runs only on the MC host threads in `fleet-mc` (current-thread runtime + `LocalSet`). Never call azalea from a normal tokio task.
-- `fleet-integration` holds only tests: the real server and the real managed agent together, in-process (P10.9's loopback suite, Phase 10's DoD check, P11.7's full flow). Nothing depends on it, and everything it uses is a dev-dependency; it isn't in `stable_crates`, since azalea comes in through fleet-agent (ADR-0019, U19, U21).
-- `fleet-startup` holds only the binaries' process start-up and lifecycle code: the config loader and its errors, the `[log]` types, the log layer, the panic hook, the stop signals (`OsSignals`) and the secret-file loader (`secret_file`, which reads every `*_file` secret of both binaries with one set of rules; ADR-0016). Internally it depends only on `fleet-core`. Its filter always caps `azalea_auth`, `tungstenite` and `tokio_tungstenite` at `info` and lets panic reports through; a binary only adds rules through `FilterRules` (ADR-0015, ADR-0020).
 
 **Bot lifecycle:**
 - Every lifecycle change goes through `fleet_core::bot::transition()`. Actors execute the effects it returns and never decide state themselves.
@@ -140,115 +93,21 @@ On Linux, every workspace-wide Rust recipe adds `--exclude afkfleet-desktop`: th
 **Server layering:** `http/handlers` → `app` services → `ports` → `infra`.
 - Handlers only parse input, authorize, call a service and map the result. No business logic, no SQL.
 - Services own use cases, transactions and audit entries.
-- Writes go through `Store::write()`, a `WriteTx` on the one write connection. Its `commit(entry)` takes the audit entry, so nothing commits unaudited, except through `commit_unaudited(UnauditedWrite)`, whose named exemptions (`SessionTouch`, `SessionRotate`, `LoginAttemptsPurge`, the ingest's `EventBatch`, which writes only chat rows and a held bot's sticky crossing, U17) each have an ADR note, and through the retention task's own transaction, `Store::retention_batch()`, which can only delete, one table per batch, summed up in an hourly `retention.purge` entry (U20), and which only `app::retention` opens (R57); a new exemption needs the user's approval and its own note (ADR-0015, ADR-0016, ADR-0019, ADR-0020). Keep it short: no password hashing, crypto or network calls while it's open (ADR-0015).
-
-**The gRPC port:**
-- Its listener bounds each connection's age itself: 80 s, lifted only while an agent's welcomed stream lives. fleet-server's `clippy.toml` bans tonic's server-wide `max_connection_age`, its grace and `Server::timeout`, which would cut agents' streams (ADR-0019, U7).
-- An agent's identity comes only from its client certificate's fingerprint and SAN, never from what it sends (ADR-0019).
+- Writes go through `Store::write()`, a `WriteTx` on the one write connection, whose `commit(entry)` takes the audit entry. Its few named exemptions, each with the user's approval and an ADR note, and the rule for a new one, are in `.claude/rules/server.md`.
 
 **Shared types:**
 - Every API DTO lives in `fleet-api-types` (serde + garde + ts-rs + utoipa). A test keeps its `OpenAPI` schemas equal to the TypeScript export.
-- The desktop app's IPC types (`CommandError`, the login step, the logout outcome, the server profile's types, the live events' updates) live in `fleet-api-types::app`: exported by `just gen` with the DTOs, left out of the `OpenAPI` document (ADR-0017).
 - Never hand-write a TypeScript type that mirrors a Rust DTO.
 
 **Config:**
 - figment, with secrets only through `*_file` paths.
 - Binaries stay thin: `main.rs` wires things up; logic lives in the library part.
 
-Server module layout:
-```
-fleet-server/src/
-  main.rs  lib.rs  config.rs
-  cli/        # serve, migrate, healthcheck, user create-owner, vault status, vault rotate-key, pki init, pki server-cert, agent create-enrollment-token, agent list, agent disable, agent release, backup
-  app/        # services: auth, users, accounts, bots, modes, server_settings, agents, enrollment, audit, events, event_tickets, retention, vault
-  ports/      # repository and provider traits
-  infra/      # sqlite/ (sqlx repos), crypto/ (vault, tokens, passwords), msauth/ (Microsoft's account flows over HTTP), pki/ (the CA, certificates, CSRs)
-  http/       # router.rs, middleware/, extractors/, handlers/<resource>.rs, error.rs, openapi.rs, ws.rs
-  grpc/       # listener.rs, status.rs, enrollment.rs, control/ (gate, session, grants, outbound), registry.rs, reconciler.rs (the scheduler's choice is fleet-core's placement)
-```
-
 ## Crate registry: one crate per concern
-**Never add a dependency or swap a crate without asking the user first.** If they approve, write an ADR and update Plan.md §5 and this list.
-- Add dependencies only in `[workspace.dependencies]`; members use `dep.workspace = true`. Declare a crate there when the first member uses it, with the version and feature constraints from Plan.md §5. Cargo warns about unused workspace dependencies.
-- **Default features in `fleet-core`:** disable them and enable only what you need. Some crates pull in IO or tokio by default (for example `backon` with its tokio sleeper). `cargo tree -p fleet-core` must show no tokio and no IO crates.
-- Every crate inherits `license` (`GPL-3.0-or-later`) and `publish = false` from `[workspace.package]` (`license.workspace = true`, `publish.workspace = true`).
-- **npm packages are at least 3 days old.** `pnpm-workspace.yaml` sets `minimumReleaseAge: 4320` (minutes), so pnpm refuses any younger release when it resolves, transitive ones included, and also checks the whole lockfile at every install. A fix that can't wait goes into `minimumReleaseAgeExclude`, with a comment saying why and the user's approval; nothing else goes there (ADR-0017).
+**Never add a dependency or swap a crate without asking the user first.** If they approve, write an ADR and update Plan.md §5 and the registry in `.claude/rules/dependencies.md`.
 - Before using any crate API, **check it on docs.rs for the pinned version**. These crates changed recently: sqlx 0.9, tonic 0.14 (+ `tonic-prost`), rand 0.10, argon2 0.6, chacha20poly1305 0.11, sha2 0.11, reqwest 0.13, keyring v4, azalea.
+- The registry's tables (every Rust crate and npm package allowed, by concern) and how to declare a dependency are in `.claude/rules/dependencies.md`.
 
-**Rust crates**
-
-| Area | Concern | Crate |
-|---|---|---|
-| Domain & runtime | Minecraft | `azalea` (fleet-mc only) |
-| | Chat components, translations | `azalea-chat`, `azalea-language` (fleet-mc only, for its bounded renderer) |
-| | MS auth | fleet-server's own adapter over `reqwest`; never `azalea-auth` directly (ADR-0018) |
-| | Async runtime | `tokio` |
-| | Cancellation | `tokio-util` (`CancellationToken`, `TaskTracker`) |
-| | Streams | `tokio-stream` (fleet-server's and fleet-agent's gRPC streams) |
-| | Sink/Stream traits | `futures-util` |
-| | dyn async ports | `async-trait` |
-| | Retry | `backon` |
-| | Rate limits | `governor` (fleet-server's HTTP limits too, behind its own middleware; no `tower_governor`, ADR-0016) |
-| | Cache / single-flight | `moka` |
-| Errors, config, observability | Errors | `thiserror` (libraries), `anyhow` (`main.rs` only) |
-| | Serialization | `serde`, `serde_json` |
-| | Config | `figment` |
-| | Validation | `garde` (DTOs/config); value objects use constructors in core |
-| | Logging | `tracing`, `tracing-subscriber` |
-| | Metrics | `metrics`, `metrics-exporter-prometheus` |
-| | IDs | `uuid` v7 |
-| | Time | `chrono` (UTC) |
-| | CLI | `clap` |
-| | Password prompt | `rpassword` |
-| API, transport, persistence | HTTP | `axum` (+ws), `axum-extra`, `tower`, `tower-http` |
-| | OpenAPI | `utoipa`, `utoipa-axum` |
-| | DB | `sqlx` (sqlite) |
-| | gRPC | `tonic`, `tonic-prost`, `prost`, `tonic-prost-build`, `protox` |
-| | TLS | `rustls` (**aws-lc-rs provider only**) |
-| | PKI | `rcgen` (Ed25519 keys from getrandom bytes only, never `KeyPair::generate`; ADR-0019) |
-| | Certificate parsing | `x509-parser` (fleet-server; rcgen 0.14 no longer reads certificates; ADR-0019) |
-| | HTTP client | `reqwest` (rustls) |
-| | WS client | `tokio-tungstenite` |
-| | TS types | `ts-rs` |
-| Security | Password hashing | `argon2` |
-| | Encryption | `chacha20poly1305` |
-| | Hashing | `sha2` |
-| | Keyed hashing (HMAC) | `hmac` |
-| | Constant-time | `subtle` |
-| | Encoding | `base64` |
-| | Secrets | `secrecy`, `zeroize` |
-| | Secure randomness | `getrandom` |
-| | Non-security randomness | `rand` |
-| | 2FA | `totp-rs` |
-| | QR code | `qrcodegen` (fleet-server writes the SVG itself) |
-| | Password strength | `zxcvbn` |
-| Desktop | Shell | `tauri` ≥ 2.11.1, `tauri-build` |
-| | Plugins | `tauri-plugin-opener`, `tauri-plugin-single-instance`, `tauri-plugin-updater` |
-| | Keychain | `keyring-core` + `windows-native-keyring-store` |
-| Tests | Testing crates | `rstest`, `proptest`, `insta`, `mockall`, `testcontainers`, tokio `test-util`, `log` (dev only: fleet-testkit's log capture and fleet-agent's telemetry, each to prove the `log` bridge; fleet-server's one normal use is sqlx's `LevelFilter`, and its logging macros are banned there), `tempfile` (fleet-server's database tests, fleet-integration's cases), `ipnet` (dev only: fleet-server's property test of fleet-core's `IpNet`), `hyper-util` (dev only, `tokio`: fleet-server's in-memory control-plane test hands tonic's client a pipe through `rt::TokioIo`) |
-| | Fuzzing | `libfuzzer-sys`, `arbitrary` |
-
-**Frontend packages**
-
-| Concern | Package |
-|---|---|
-| Package manager | pnpm |
-| Build | `vite`, `@vitejs/plugin-react` |
-| UI framework | `react` 19 (+ `@types/react`, `@types/react-dom`) |
-| Language | `typescript` 7 (strict) |
-| Server state | `@tanstack/react-query` |
-| Routing | `@tanstack/react-router` |
-| UI state | `zustand` |
-| Validation | `zod` |
-| Forms | `react-hook-form` + `@hookform/resolvers` |
-| Styling | `tailwindcss`, `@tailwindcss/vite` |
-| Components | shadcn/ui (radix-nova), copied from its registry with `cn`, `class-variance-authority` and single Radix packages (`@radix-ui/react-slot`, `@radix-ui/react-label`; never the `radix-ui` umbrella) |
-| Icons | `lucide-react` |
-| Toasts | `sonner` |
-| Tests | `vitest`, `jsdom`, `@testing-library/react` (+ its peer `@testing-library/dom`), `@testing-library/user-event`, `msw` with `@msw/playwright` (in the Playwright process only), `@playwright/test` (the installed Edge), `@types/node` (`apps/desktop`'s e2e config and specs) |
-| Lint & format | `@biomejs/biome` |
-| Tauri bridge | `@tauri-apps/api` (`apps/desktop` only) |
-| Tauri CLI | `@tauri-apps/cli` (`apps/desktop` dev only) |
 
 ## Rust rules
 **Idioms**
@@ -265,8 +124,6 @@ fleet-server/src/
 - `as` casts that can truncate; use `TryFrom`
 
 Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[expect(lint, reason = "…")]`, and only with the user's approval.
-
-**Crate-local `clippy.toml` files** (`fleet-core`, `fleet-mc`, …) must repeat every setting of the root `clippy.toml`: the test allowances and the `disallowed-methods` bans. Clippy reads only the nearest file and doesn't merge them. `just scripts-test` fails when one is missing (`scripts/clippy-config.mjs`, ADR-0011).
 
 **The one pre-approved exception: generated code.** The prost/tonic output in `fleet-proto` is included in a dedicated module, e.g. `pub mod generated`, with a comment saying it's generated. That module may carry `#[allow(missing_docs, unreachable_pub, clippy::pedantic, …)]`. Use `#[allow]` there, not `#[expect]`, because generated code may or may not trigger each lint. Never put hand-written code in that module.
 
@@ -299,10 +156,7 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 - **Channels are always bounded.** No `unbounded_channel`: clippy's `disallowed-methods` bans it. The only exceptions are the two channels azalea's API forces on `fleet-mc`, each marked with an approved `#[expect]` (ADR-0011).
 - **Never hold a `std::sync::Mutex` guard across `.await`.** Prefer message passing to shared locks.
 - **Every spawned task has an owner** (`JoinSet` / `TaskTracker`) and a child `CancellationToken`. No fire-and-forget `tokio::spawn`. There are four exceptions:
-  - fleet-mc's host threads: their jobs belong to the thread's `JoinSet` and end with its stop signal (ADR-0011).
-  - the bot actor's teardown task: its `JoinSet` owns it, it runs to the end because the port guarantees `disconnect()` finishes, and an aborted actor aborts it too (ADR-0013).
-  - fleet-client's refresh and code-step tasks: once their request may reach the server, the request, the save and the adoption run in a task of their own, so a dropped caller can't lose a rotated refresh token or orphan a session. The caller awaits its handle; it runs to the end, bounded by its request's and its store calls' timeouts (ADR-0017).
-  - the desktop keychain's blocking calls: a call that outlives fleet-client's 5 s store timeout runs on in its `spawn_blocking` thread until the OS returns. It holds its entry's turn (a tokio mutex per origin, shared by every store of that entry, taken before the thread starts), so the next call on that entry starts only after it ends, and a call that timed out while waiting never runs (ADR-0017).
+  - four approved exceptions, each owned and ended in its own way: fleet-mc's host threads, the bot actor's teardown task, fleet-client's refresh and code-step tasks, and the desktop keychain's blocking calls (ADR-0011, ADR-0013, ADR-0017; the details are in `.claude/rules/rust.md`).
 - **`tokio::select!` branches must be cancel-safe**, or have a comment explaining why it's fine.
 - **Overload is an explicit error.** When a queue is full or a rate limit is hit, return `QueueFull`, `RateLimited` or `429`. Never wait forever.
 
@@ -350,24 +204,17 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 - Names describe behavior, e.g. `login_with_wrong_password_returns_401_and_counts_attempt`.
 - Arrange / Act / Assert, one behavior per test. Use `rstest` `#[case]` for tables.
 - **Time:** `#[tokio::test(start_paused = true)]` plus `tokio::time::advance`. Never a real `sleep`.
-  - **The one exception: the four `manual_` tests that wait on Microsoft.** fleet-server's three wait Microsoft's real poll interval: the adapter's two checks at most 8 minutes each, the link flow's at most 4 minutes for each of its two codes, reading the flow's status every 2 s (ADR-0018). fleet-integration's Phase 10 check reads its link's status every 2 s for at most 4 minutes, then the bot every 2 s for at most 90 s until it's Online and 60 s until it's offline, beside the container's start of at most 300 s (the user's choice, ADR-0019, U22). Its steps stop at 520 s, and the whole check, teardown included, ends within 580 s of the profile's 600 s.
-  - **fleet-integration's one wait helper** (`Logs::until`, real time: the cases run sqlx and real TLS) wakes at every log line and re-checks in-process state at most every 100 ms, always bounded by `PATIENCE`; never a fixed delay before an assertion. Its proxy pauses 100 ms after an accept error, as serve's own port does, so a repeating error can't spin it (the user's choice, ADR-0019, U23). `Logs::within(bound)` is the same wait with a shorter bound than `PATIENCE`, for a case that tries something again, and says whether it came; the slow on-respawn case re-reads the container through RCON at each of its wakes (the user's choice, ADR-0020, U9).
-  - **Tests over real sockets run on real time** (the Microsoft adapter against its local fakes), with short bounds and never a sleep; paused time would fire their timeouts early (ADR-0018).
   - **Never paused time with sqlx.** It runs each SQLite connection on a worker thread, so the runtime looks idle while it waits, and paused time would jump ahead and fire its timeouts early. A test that waits for a pool timeout lowers it (`DatabaseOptions`) instead (ADR-0015).
-  - **The desktop keychain's tests run on real time** for the same reason: its blocking calls run on Tauri's runtime, outside the test's. Short bounds (100 ms for a call that must time out, 5 s for everything else), never a sleep (ADR-0017).
   - `governor` (rate limits) and `moka` (caches with expiry) keep their own clocks, which paused tokio time doesn't control. Inject a clock for them (governor supports custom clocks), or ask the user before testing them another way.
+  - The approved real-time exceptions (the `manual_` tests that wait on Microsoft, fleet-integration's one wait helper, tests over real sockets, the desktop keychain's tests) are in `.claude/rules/testing.md`.
 - **Randomness:** seeded `StdRng`.
 - **The server's time and randomness** come through fleet-core's `Clock` and `SecureRandom` ports. Tests use fleet-testkit's `ManualClock` and `SeededRandom` (`fail_next` for a failing source) and never hard-code `SeededRandom`'s bytes or the IDs made from them; snapshots redact them (ADR-0015).
 - **Property tests:** proptest's default is 256 cases. CI sets `PROPTEST_CASES=1000`.
 
 **Doubles and fixtures**
 - Fakes come from `fleet-testkit`. Use `mockall` only to assert interactions.
-- Config tests run inside figment's `Jail` through `fleet_testkit::jail::in_jail`, which carries the workspace's one approved `#[expect(clippy::result_large_err)]`. Don't write a second helper (ADR-0015).
-- Tests of what a log layer prints write into a `fleet_testkit::log_buffer::LogBuffer`. Checks that a secret never reaches a log use `fleet_testkit::log_capture` instead.
 - DB tests use `#[sqlx::test]`, which gives each test a fresh SQLite with migrations applied.
-- HTTP:
-  - **Handler tests:** use `tower::ServiceExt::oneshot`.
-  - **Full-stack tests:** run `fleet-client` against an in-process server on `127.0.0.1:0`.
+- Config tests, log tests and HTTP tests have helpers of their own: see `.claude/rules/testing.md`.
 
 **Assertions**
 - Snapshots use `insta` with redactions for IDs and timestamps. **Never accept them blindly.** You can't use the interactive `cargo insta review`, so:
@@ -382,42 +229,14 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 - Coverage gates: `fleet-core` ≥ 90 %, `fleet-runtime` ≥ 85 %, auth and vault modules ≥ 90 %, the Microsoft accounts' modules ≥ 90 % (`msauth`), the control plane ≥ 90 % (`control-plane`: fleet-server's `infra/pki/`, `app/enrollment.rs`, `app/agents/` and `grpc/`; ADR-0019), the agent's control plane ≥ 90 % (`agent-control-plane`: fleet-agent's `managed/` and `enroll/`; ADR-0019, U20), `fleet-client` ≥ 90 %, the desktop crate ≥ 90 % (Windows, `just cov-desktop`), workspace ≥ 80 %.
 
 ## Frontend rules
-**Structure**
-- `packages/ui` doesn't know about the platform: it **never imports `@tauri-apps/*`**.
-- `apps/desktop` implements `ApiClient` as `TauriApiClient`, with `invoke` injected, and passes it to `<App apiClient={…} />`. It imports only `@tauri-apps/api/core`: any other Tauri API needs a capability grant and an ADR. Biome's `noRestrictedImports` enforces both rules (ADR-0017).
-- A new command changes build.rs's `COMMANDS`, `lib.rs`'s `generate_handler!`, `capabilities/main.json`, `scripts/tauri-hardening.mjs`, `src-tauri/tests/ipc-contract.json`, `ApiClient` with `API_METHODS`, `TauriApiClient`, `FakeApiClient`, `UnavailableApiClient`, `validated.ts`, `app/watched.ts` and the e2e fake's `COMMANDS` together.
-- Organize by feature: `src/features/<feature>/{components,hooks,routes}` with tests alongside. Shared primitives go in `src/components/ui` (shadcn).
-- `apps/desktop/e2e` is the e2e build: the app's UI with the real `TauriApiClient` over a fetch-based `invoke`, its fake backend answering through MSW in the Playwright process. It never ships: Biome refuses any import of it in `apps/desktop/src`, and `just e2e`'s bundle guard checks both shipped bundles (ADR-0017).
-- **shadcn components are copied from the registry** (`https://ui.shadcn.com/r/styles/radix-nova/<name>.json`), never added with the CLI, which installs packages of its own choosing. The copy gets the CLI's edits (aliases, no `"use client"`), its `radix-ui` import becomes the single `@radix-ui/react-*` package, and a lint finding gets a minimal code fix, never an ignore comment; the file's header lists every edit (ADR-0017).
-
-**Data and state**
-- Components use hooks (`useBots()`, …) built on TanStack Query over the injected `ApiClient`. **Never call `fetch` or `invoke` inside a component.**
-- TanStack Query holds server state; small `zustand` stores hold UI-only state, one set per `App` (`app/stores.ts`).
-- **A call whose request or answer carries a secret** (a password, a TOTP secret or QR code, recovery codes, an invite code, a Microsoft link's user code) **is a direct call** through `useApiClient()`, never a TanStack query or mutation, which would keep it in their caches: `login`, `register`, `loginMfa`, `mfaEnroll`, `mfaConfirm`, `mfaReset`, `stepUp`, `changePassword`, `createInvite`, `startLink`, `relinkAccount`, `sendChat`, `sendCommand` (a typed command can hold a password). The secret lives only in the component's state and is dropped when its step ends (ADR-0017, ADR-0018). The chat history (`botChat`) stays a cached query: a command's arguments reach only Manage holders (S6, S9), it lives in memory only, and it's dropped at the session's end and at `bot_removed` (the user's choice, ADR-0020, U34).
-- Every call goes through the watched client (`app/watched.ts`): it raises the banner on `unreachable`/`timed_out`/`certificate` and ends a signed-in session on `no_session`. Don't handle those codes again in a screen.
-- Forms use react-hook-form with zod schemas that mirror the server's limits (`src/api/schemas.ts`). The server stays authoritative.
-- `App` wraps its client in `validated()`, so every input passes its zod schema before any call. `src/api/limits.ts` holds only numeric constants named like the Rust ones; fleet-api-types' `tests/limits.rs` keeps them equal.
-- Every API call rejects with an `ApiError` holding a `CommandError`. A switch on its `code` is exhaustive (it's closed: the Rust side ships with the UI); a switch on `api.code`, or on any other open value, always has a default branch that shows the message and the request ID (`describeError`).
-- API types come only from `src/generated/` (ts-rs). **Never edit generated files**; run `just gen`. Biome ignores `src/generated/`.
-
-**Safety**
-- Never use `dangerouslySetInnerHTML`, `eval` or `new Function`. Nor may a library at runtime: the release CSP has no 'unsafe-eval'. zod is imported only from `src/api/zod.ts`, which makes it jitless (Biome enforces it; `src/api/zod.test.ts` checks it).
-- **No runtime styles.** The release CSP has `style-src 'self'`, so a `<style>` element or a constructed stylesheet added at runtime is blocked in the real build while `just dev-app` shows nothing wrong. Every Vitest test ends with a check that the document holds none (`src/test/styleGuard.ts`). sonner is patched for this (`patches/sonner@<version>.patch`); a sonner bump redoes the patch and runs `Toaster.test.tsx` (ADR-0017). Check a new UI dependency in `just app-build --debug` too.
-- Chat is rendered as plain text.
-- External links open only through the Rust-side opener command.
-
-**Quality**
-- TypeScript strict; no `any`; no non-null `!` without a comment.
-- Tests use Testing Library (query by role or label), with a `FakeApiClient` or MSW standing in for the API. Playwright covers flows.
+The frontend's rules (structure, data and state, safety, quality, and every place a new Tauri command changes) are in `.claude/rules/frontend.md`, which loads when you open a file under `packages/` or `apps/desktop/`. Read it before planning frontend work.
+- A call whose request or answer carries a secret is a direct call, never a TanStack query or mutation (ADR-0017, ADR-0018); the full list is in `.claude/rules/frontend.md`.
 
 ## Environment
 - **Dev machine:** Windows 11, already set up by the user.
   - **Your shell tool is Git Bash.** Claude Code's PowerShell tool is turned off in the user's settings. Write POSIX shell commands.
   - The `justfile` runs recipes with **PowerShell 7** (`pwsh`) on Windows and `sh` on Linux.
   - Docker Desktop (WSL 2 backend) runs the Minecraft test server and the compose stack. It must be running for `just mc-up` and `just test-slow`; if Docker isn't reachable, ask the user to start it.
-  - Tauri needs MSVC Build Tools ("Desktop development with C++") and WebView2 (built into Windows 11). Both are installed.
-  - aws-lc-rs needs NASM, which is installed and on `PATH`. CMake isn't needed (it's only for FIPS builds).
-  - Installed: Git, GitHub CLI, PowerShell 7, `just`, rustup, Node 24 + pnpm, Docker Desktop. Cargo tools (nextest, llvm-cov, deny, insta) may still need installing in Phase 0. sqlx-cli 0.9.0 is installed SQLite-only: `cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features sqlite`.
 - **Toolchain:** `rust-toolchain.toml` pins a **dated nightly**, and rustup installs it automatically.
   - Change it only in a deliberate Minecraft-version bump.
   - That bump changes nightly, azalea and the test server's `VERSION` together, as in `docs/runbook.md`.

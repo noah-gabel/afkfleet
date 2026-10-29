@@ -552,7 +552,7 @@ Always safe to share: the app's state badge and its "Reason" and "Last disconnec
 - **"Paused: Someone logged in with its account":** someone plays on the account. Leave the game, then Resume.
 - **"Not running: Waiting for an agent with room", or "Agent offline":** `dod-agent` isn't connected. Check its terminal: an exit 5 means the server refused it, and it says why. Safe to share: its last lines' level, target and message.
 
-`just --list` shows every recipe; [`CLAUDE.md`](CLAUDE.md) describes them and the project's working rules.
+`just --list` shows every recipe; [`.claude/rules/commands.md`](.claude/rules/commands.md) describes them, and [`CLAUDE.md`](CLAUDE.md) holds the project's working rules.
 
 Every change goes through a pull request; nobody commits to `main`.
 

@@ -1,4 +1,4 @@
-# afkfleet development commands. Keep the command table in CLAUDE.md in sync.
+# afkfleet development commands. Keep the command table in .claude/rules/commands.md in sync.
 #
 # Recipes run in PowerShell 7 on Windows and in sh on Linux CI, so every line
 # must work in both: one command per line, no `&&` or `||`, environment
