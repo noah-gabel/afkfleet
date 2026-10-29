@@ -13,15 +13,19 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
 use fleet_core::account::AccountStatus;
 use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::authz::{Actor, GrantLevel, Role};
 use fleet_core::bot::{DesiredRunState, FailReason, LastReport, LastState, PauseReason};
-use fleet_core::disconnect::ConflictKind;
-use fleet_core::id::{AccountId, AgentId, BotId, ModeId, UserId};
+use fleet_core::chat::ChatFormats;
+use fleet_core::disconnect::{ConflictKind, ConflictTexts};
+use fleet_core::id::{AccountId, AgentId, BotId, ModeId, ServerSettingsId, UserId};
 use fleet_core::mode::ModePreset;
-use fleet_core::value::{AgentName, ServerAddress, Username};
+use fleet_core::value::{AgentName, ServerAddress, ServerKey, Username};
 use fleet_server::app::events::Rights;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions, MIGRATOR, PoolRole, connect_options};
 use fleet_server::ports::accounts::{AccountCredential, DeletedAccount, McAccount};
@@ -32,6 +36,7 @@ use fleet_server::ports::bots::{
 };
 use fleet_server::ports::grants::AccountGrant;
 use fleet_server::ports::page::{Page, PageLimit};
+use fleet_server::ports::server_settings::NewServerSettings;
 use fleet_server::ports::store::{Store, StoreError};
 use fleet_server::ports::users::{NewUser, PasswordHash};
 use secrecy::SecretString;
@@ -1132,6 +1137,7 @@ async fn access_holds_every_bot_with_its_owner_every_grant_and_every_user(
                 enabled: false,
             },
         ],
+        ..Access::default()
     };
     assert_eq!(sorted(access), sorted(expected));
 }
@@ -1251,4 +1257,162 @@ async fn a_transaction_finds_an_accounts_bot_an_owners_bots_and_an_agents_bots(
         "the agent's, whoever owns them"
     );
     assert_eq!(assigned_to_idle, Vec::new());
+}
+
+// --- Each bot's chat formats in the rights' read (ADR-0020, S79, S81, R146) -------------
+
+/// Puts `bot` on the server `address`.
+async fn on_server(db: &Database, bot: BotId, address: &str) {
+    let mut tx = db.write().await.unwrap();
+    assert!(
+        tx.bots()
+            .set_server(bot, &address.parse().unwrap())
+            .await
+            .unwrap()
+    );
+    tx.commit(setup_entry()).await.unwrap();
+}
+
+/// Stores settings `n` for `server` with the chat formats `formats`.
+async fn add_formats(db: &Database, n: u8, server: &str, formats: &[&str]) -> ServerSettingsId {
+    let id = ServerSettingsId::new_v7(at(T0 + i64::from(n)), [n; 10]).unwrap();
+    let mut tx = db.write().await.unwrap();
+    tx.server_settings()
+        .insert(&NewServerSettings {
+            id,
+            server: ServerKey::from(&server.parse::<ServerAddress>().unwrap()),
+            conflict_texts: ConflictTexts::try_new(&["Already connected"]).unwrap(),
+            chat_formats: ChatFormats::try_new(formats).unwrap(),
+            created_at: at(T0 + i64::from(n)),
+        })
+        .await
+        .unwrap();
+    tx.commit(setup_entry()).await.unwrap();
+    id
+}
+
+/// Each bot gets its current server's formats, one copy shared by every bot
+/// on that server, however its address is written; a bot on a server whose
+/// settings hold no format, on a server without settings, or on none gets
+/// none (R146).
+#[sqlx::test(migrations = false)]
+async fn access_gives_each_bot_its_current_servers_formats_shared_per_server(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user_with(&db, 1, Role::Owner).await;
+    let (_, short) = add_account_with_bot(&db, owner, 10).await;
+    let (_, long) = add_account_with_bot(&db, owner, 11).await;
+    let (_, unformatted) = add_account_with_bot(&db, owner, 12).await;
+    let (_, unset) = add_account_with_bot(&db, owner, 13).await;
+    let (_, nowhere) = add_account_with_bot(&db, owner, 14).await;
+    on_server(&db, short, "mc.example.com").await;
+    on_server(&db, long, "mc.example.com:25565").await;
+    on_server(&db, unformatted, "other.example.com").await;
+    on_server(&db, unset, "third.example.com").await;
+    add_formats(
+        &db,
+        1,
+        "mc.example.com",
+        &["[{any}] {sender} : ", "{sender} : "],
+    )
+    .await;
+    add_formats(&db, 2, "other.example.com", &[]).await;
+
+    let access = db.bots().access().await.unwrap();
+
+    let formats: BTreeMap<BotId, Arc<ChatFormats>> = access
+        .bot_formats
+        .iter()
+        .map(|each| (each.bot, Arc::clone(&each.formats)))
+        .collect();
+    assert_eq!(
+        formats.keys().copied().collect::<BTreeSet<_>>(),
+        BTreeSet::from([short, long]),
+        "none for {unformatted}, {unset} or {nowhere}"
+    );
+    let expected = ChatFormats::try_new(&["[{any}] {sender} : ", "{sender} : "]).unwrap();
+    assert_eq!(*formats[&short], expected);
+    assert!(
+        Arc::ptr_eq(&formats[&short], &formats[&long]),
+        "one copy a server"
+    );
+    assert_eq!(access.unreadable_formats, Vec::new());
+}
+
+/// S81: a settings row whose formats or server don't read back, and a bot
+/// address that doesn't, give only those bots no formats. The read itself
+/// still succeeds, unlike a corrupt ID, role or flag, and names each such
+/// row: by its ID, its server when that reads, and the column that doesn't.
+#[sqlx::test(migrations = false)]
+async fn access_gives_no_formats_for_a_settings_row_or_a_bot_address_that_doesnt_read_back(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user_with(&db, 1, Role::Owner).await;
+    let (_, broken_formats) = add_account_with_bot(&db, owner, 10).await;
+    let (_, broken_server) = add_account_with_bot(&db, owner, 11).await;
+    let (_, broken_address) = add_account_with_bot(&db, owner, 12).await;
+    let (_, fine) = add_account_with_bot(&db, owner, 13).await;
+    on_server(&db, broken_formats, "mc.example.com").await;
+    on_server(&db, broken_server, "other.example.com").await;
+    on_server(&db, fine, "third.example.com").await;
+    let formats = add_formats(&db, 1, "mc.example.com", &["{sender} : "]).await;
+    let server = add_formats(&db, 2, "other.example.com", &["{sender} : "]).await;
+    add_formats(&db, 3, "third.example.com", &["{sender} : "]).await;
+    let (formats_id, server_id) = (formats.to_string(), server.to_string());
+    sqlx::query!(
+        r#"UPDATE server_settings SET chat_formats = '["{Sender} : "]' WHERE id = ?"#,
+        formats_id
+    )
+    .execute(db.write_pool())
+    .await
+    .unwrap();
+    sqlx::query!(
+        "UPDATE server_settings SET server = 'other.example.com' WHERE id = ?",
+        server_id
+    )
+    .execute(db.write_pool())
+    .await
+    .unwrap();
+    let address_bot = broken_address.to_string();
+    sqlx::query!(
+        "UPDATE bots SET server_address = 'not an address' WHERE id = ?",
+        address_bot
+    )
+    .execute(db.write_pool())
+    .await
+    .unwrap();
+
+    let access = db.bots().access().await.unwrap();
+
+    assert_eq!(
+        access
+            .bot_formats
+            .iter()
+            .map(|each| each.bot)
+            .collect::<Vec<_>>(),
+        vec![fine]
+    );
+    let mut unreadable = access.unreadable_formats.clone();
+    unreadable.sort_by_key(|row| row.rowid);
+    assert_eq!(
+        unreadable
+            .iter()
+            .map(|row| (row.id, row.server.clone(), row.column))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                Some(formats),
+                Some(ServerKey::from(
+                    &"mc.example.com".parse::<ServerAddress>().unwrap()
+                )),
+                "chat_formats"
+            ),
+            (Some(server), None, "server"),
+        ]
+    );
+    assert_eq!(access.bots.len(), 4, "every bot still read");
 }

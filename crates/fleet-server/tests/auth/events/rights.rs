@@ -10,13 +10,15 @@ use fleet_api_types::events::SocketClose;
 use fleet_core::authz::{GrantLevel, Role};
 use fleet_core::id::{AccountId, UserId};
 use fleet_core::system::Clock as _;
-use fleet_server::app::events::LiveEventKind;
+use fleet_server::app::events::{LiveEventKind, LiveRights};
 use fleet_server::http::ws::SocketTimings;
 use fleet_server::ports::live_hints::LiveHints as _;
 use fleet_server::ports::store::{Store as _, StoreError};
+use fleet_testkit::log_capture;
 use serde_json::json;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio_tungstenite::tungstenite::Message;
+use tracing::Level;
 
 use super::super::support::{LOGOUT, Options, Setup, setup, setup_entry, setup_with};
 use super::bots::{agent_event, bot_frame, get_bot, watched};
@@ -784,4 +786,93 @@ async fn a_hidden_bots_event_taken_on_stale_rights_leaves_no_trace_in_the_order(
 
     assert_eq!(first["bot_id"], json!(marker.to_string()));
     assert_eq!(kinds, [json!("chat"), json!("bot")]);
+}
+
+// --- Chat formats that don't read back (ADR-0020, S81) ----------------------------------
+
+/// Where the line comes from, and what it says.
+const FORMATS_TARGET: &str = "fleet_server::app::server_settings";
+const UNREADABLE_FORMATS: &str = "chat formats don't read back";
+
+/// A commit, then the rights read again at its count.
+async fn rebuild(setup: &Setup, rights: &LiveRights) {
+    commit_anything(setup).await;
+    rights.at_least(rights.count()).await.unwrap();
+}
+
+/// S81: the rights log a settings row whose formats don't read back once,
+/// when it turns unreadable, the first rebuild included, never at every
+/// rebuild, since every commit moves the count; fixed and broken again, it
+/// logs once more.
+#[sqlx::test(migrations = false)]
+async fn an_unreadable_chat_formats_row_logs_once_when_it_turns_unreadable_not_per_rebuild(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    log_capture::install().unwrap();
+    let setup = setup(options).await;
+    let settings = setup
+        .formats_for(1, "mc.example.com", &["{sender} : "])
+        .await;
+    setup.break_formats(settings, r#"["{Sender} : "]"#).await;
+    let rights = setup.live_events.rights().clone();
+
+    rights.at_least(rights.count()).await.unwrap();
+    for _ in 0..3 {
+        rebuild(&setup, &rights).await;
+    }
+    let while_broken = log_capture::count(FORMATS_TARGET, UNREADABLE_FORMATS);
+    setup.break_formats(settings, r#"["{sender} : "]"#).await;
+    rebuild(&setup, &rights).await;
+    let fixed = log_capture::count(FORMATS_TARGET, UNREADABLE_FORMATS);
+    setup.break_formats(settings, r#"["{Sender} : "]"#).await;
+    rebuild(&setup, &rights).await;
+    rebuild(&setup, &rights).await;
+
+    assert_eq!(while_broken, 1);
+    assert_eq!(fixed, 1);
+    assert_eq!(log_capture::count(FORMATS_TARGET, UNREADABLE_FORMATS), 2);
+}
+
+/// S81: the line names the row by its ID, its server when it reads, its
+/// rowid and the column that doesn't, at `error`, and never holds a
+/// format; a row whose server doesn't read back names no server.
+#[sqlx::test(migrations = false)]
+async fn an_unreadable_formats_line_names_its_row_and_never_a_format(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    log_capture::install().unwrap();
+    let setup = setup(options).await;
+    let formats = setup
+        .formats_for(1, "mc.example.com", &["{sender} : "])
+        .await;
+    let server = setup
+        .formats_for(2, "other.example.com", &["{sender} : "])
+        .await;
+    setup
+        .break_formats(formats, r#"["{Sender} canary-format : "]"#)
+        .await;
+    let id = server.to_string();
+    sqlx::query!(
+        "UPDATE server_settings SET server = 'other.example.com' WHERE id = ?",
+        id
+    )
+    .execute(setup.db.write_pool())
+    .await
+    .unwrap();
+    let rights = setup.live_events.rights().clone();
+
+    rights.at_least(rights.count()).await.unwrap();
+
+    let at_error = |needle: &str| log_capture::count_at(FORMATS_TARGET, Level::ERROR, needle);
+    assert_eq!(at_error(UNREADABLE_FORMATS), 2);
+    assert_eq!(at_error(&format!("server_settings_id={formats}")), 1);
+    assert_eq!(at_error("server=mc.example.com:25565"), 1);
+    assert_eq!(at_error("column=chat_formats"), 1);
+    assert_eq!(at_error(&format!("server_settings_id={server}")), 1);
+    assert_eq!(at_error("column=server"), 1);
+    assert_eq!(at_error("server=other"), 0);
+    assert_eq!(at_error("rowid="), 2);
+    log_capture::check_absent("canary-format").unwrap();
 }

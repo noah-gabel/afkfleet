@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE server_settings SET server = 'other.example.com' WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "4826bc7b1783c273a95d931d32a39c6067d4ef0f16219489fe793a747a6fd099"
+}

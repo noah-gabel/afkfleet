@@ -390,6 +390,14 @@ pub struct ChatLine {
     #[ts(optional)]
     #[schema(nullable = false)]
     pub sender: Option<ChatLineSender>,
+    /// The name a chat format of the bot's server reads from a received
+    /// system line's text (ADR-0020, S79, S80): for display only and the
+    /// same for every viewer. It's never Minecraft's sender, which a system
+    /// line never has, and decides nothing; the text stays whole.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<String>", optional)]
+    #[schema(schema_with = BoundedText::<CHAT_SENDER_MAX_CHARS>::schema, nullable = false)]
+    pub parsed_sender: Option<BoundedText<CHAT_SENDER_MAX_CHARS>>,
     /// Who had a user's line sent: for viewers who see the account's owner,
     /// and only while that user exists (U3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -713,6 +721,7 @@ mod tests {
             truncated: false,
             arguments_hidden: true,
             sender: None,
+            parsed_sender: None,
             sent_by: None,
             mine: true,
         }

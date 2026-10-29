@@ -684,6 +684,10 @@ expression: answer.json()
             "description": "Whether the viewer had this line sent (U3).",
             "type": "boolean"
           },
+          "parsed_sender": {
+            "maxLength": 64,
+            "type": "string"
+          },
           "sender": {
             "$ref": "#/components/schemas/ChatLineSender",
             "description": "Who sent a received player message, as the Minecraft server claims."
@@ -5606,7 +5610,7 @@ expression: answer.json()
                 }
               }
             },
-            "description": "One page of the bot's chat, newest first by ID, which is the order the server stored the lines in. Each line is as the caller may see it: a command's arguments only for Manage holders, and who had a user's line sent only for callers who see the account's owner."
+            "description": "One page of the bot's chat, newest first by ID, which is the order the server stored the lines in. Each line is as the caller may see it: a command's arguments only for Manage holders, and who had a user's line sent only for callers who see the account's owner. A received system line that a chat format of the bot's server fits carries the name it reads as `parsed_sender`, for display only and the same for every caller."
           },
           "400": {
             "content": {

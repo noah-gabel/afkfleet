@@ -61,6 +61,7 @@ use fleet_api_types::events::{EventMessage, EventTicketResponse, EventsQuery};
 use fleet_api_types::{ErrorResponse, SecretText};
 use fleet_core::authz::{Actor, GrantLevel, Permission, ResourceContext, Role, authorize};
 use fleet_core::bot::{BotNotification, LastState};
+use fleet_core::chat::ChatFormats;
 use fleet_core::id::{BotId, ModeId};
 use secrecy::ExposeSecret as _;
 use tokio::time::Instant;
@@ -524,7 +525,9 @@ impl Viewer {
             LiveEventKind::Chat { line, request } => {
                 // A line that doesn't build is the internal error the
                 // history answers; the socket sends nothing.
-                let Ok(shown) = chat_line(&self.actor, level, line) else {
+                let none = ChatFormats::default();
+                let formats = self.rights.formats(event.bot).unwrap_or(&none);
+                let Ok(shown) = chat_line(&self.actor, level, line, formats) else {
                     debug!(bot_id = %event.bot, "a live events socket couldn't build a chat line's frame");
                     return Step::Nothing;
                 };
@@ -909,6 +912,7 @@ mod tests {
                     role: Role::Owner,
                     enabled: true,
                 }],
+                ..Access::default()
             },
         ));
         for n in 0..200_u8 {
@@ -962,6 +966,7 @@ mod tests {
                     role: Role::Owner,
                     enabled: true,
                 }],
+                ..Access::default()
             },
         ));
         for n in 0..10_u8 {
@@ -1030,6 +1035,7 @@ mod tests {
                     role: Role::Owner,
                     enabled: true,
                 }],
+                ..Access::default()
             },
         ));
         viewer.seen = BTreeSet::from([bot(1)]);

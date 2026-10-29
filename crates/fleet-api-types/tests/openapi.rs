@@ -581,6 +581,7 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::event_request("EventMessage", "request", ID_CHARS)]
 #[case::event_mode_id("EventMessage", "mode_id", ID_CHARS)]
 #[case::chat_line_text("ChatLine", "text", CHAT_TEXT_MAX_CHARS)]
+#[case::chat_line_parsed_sender("ChatLine", "parsed_sender", CHAT_SENDER_MAX_CHARS)]
 #[case::chat_sender_name("ChatLineSender", "name", CHAT_SENDER_MAX_CHARS)]
 #[case::chat_sender_uuid("ChatLineSender", "uuid", ID_CHARS)]
 #[case::mode_request_name("CreateModeRequest", "name", MODE_NAME_MAX_CHARS)]
@@ -625,7 +626,7 @@ fn a_text_field_is_capped_at_its_constant(
 }
 
 /// Every text field whose cap the cases above check.
-const CHECKED_TEXTS: [(&str, &str); 131] = [
+const CHECKED_TEXTS: [(&str, &str); 132] = [
     ("ErrorBody", "message"),
     ("ErrorBody", "request_id"),
     ("FieldError", "path"),
@@ -737,6 +738,7 @@ const CHECKED_TEXTS: [(&str, &str); 131] = [
     ("EventMessage", "request"),
     ("EventMessage", "mode_id"),
     ("ChatLine", "text"),
+    ("ChatLine", "parsed_sender"),
     ("ChatLineSender", "name"),
     ("ChatLineSender", "uuid"),
     ("CreateModeRequest", "name"),
@@ -961,6 +963,7 @@ fn an_open_field_lists_exactly_its_enums_known_values() {
 #[case::restriction("LastDisconnect", "restriction")]
 #[case::session_server_failure("LastDisconnect", "session_server_failure")]
 #[case::chat_line_sender("ChatLine", "sender")]
+#[case::chat_line_parsed_sender("ChatLine", "parsed_sender")]
 #[case::chat_line_sent_by("ChatLine", "sent_by")]
 #[case::chat_sender_uuid("ChatLineSender", "uuid")]
 #[case::chat_page_next("ChatPage", "next")]

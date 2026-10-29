@@ -25,6 +25,9 @@
 //!   formats fits a sample line, cleaned as received chat is (U58, R134);
 //!   pure, so nothing is read, written or recorded.
 //!
+//! A row whose chat formats don't read back is logged here for the chat
+//! reads, which give its bots none (`unreadable_formats`, S81).
+//!
 //! Every write that commits tells the reconciler (`Change::Store`), so each
 //! bot on the server, old and new, gets its texts at once; a change of the
 //! formats alone hints too. No live events socket is told: no frame shows
@@ -48,7 +51,8 @@ use super::users::{ActingUser, recheck};
 use crate::ports::page::{Page, Paged};
 use crate::ports::reconcile::{Change, NoReconcile, Reconcile};
 use crate::ports::server_settings::{
-    NewServerSettings, ServerSettingsChange, StoredServerSettings, WriteServerSettingsError,
+    NewServerSettings, ServerSettingsChange, StoredServerSettings, UnreadableFormats,
+    WriteServerSettingsError,
 };
 use crate::ports::store::{Store, StoreError, WriteTx};
 
@@ -526,4 +530,19 @@ fn count(texts: &ConflictTexts) -> i64 {
 /// How many formats `formats` holds, for an entry's metadata.
 fn formats_count(formats: &ChatFormats) -> i64 {
     i64::try_from(formats.len()).unwrap_or(i64::MAX)
+}
+
+/// Logs a settings row whose server or chat formats don't read back, for
+/// the chat reads that give its bots no formats (ADR-0020, S81): its ID and
+/// server when they read, its rowid and the column; never a format. The
+/// history logs it at each read that meets it, the rights when it turns
+/// unreadable.
+pub(crate) fn unreadable_formats(row: &UnreadableFormats) {
+    error!(
+        server_settings_id = row.id.map(tracing::field::display),
+        server = row.server.as_ref().map(tracing::field::display),
+        rowid = row.rowid,
+        column = row.column,
+        "a server's chat formats don't read back: its bots' lines show no parsed sender until they're fixed"
+    );
 }

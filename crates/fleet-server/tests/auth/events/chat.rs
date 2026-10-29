@@ -1,8 +1,10 @@
 //! Chat on the socket, built for each viewer (ADR-0020, S34, S9, S11, U3,
 //! R33, R35): a `chat` frame's line equals that viewer's history line, a
 //! user's line comes before its `chat_sent` or `chat_failed`, a failure's
-//! reason reaches only viewers with Control or more, and a lowered grant
-//! hides the next line's arguments at once.
+//! reason reaches only viewers with Control or more, a lowered grant
+//! hides the next line's arguments at once, and a format created or deleted
+//! reads the next line, unreadable formats giving only their own server's
+//! bots no parsed sender (S79, S81, R147).
 
 use fleet_core::auth::SessionPolicy;
 use fleet_core::authz::{GrantLevel, Role};
@@ -115,13 +117,25 @@ async fn said(
     sender: Option<&str>,
     request: Option<ChatRequestId>,
 ) {
+    said_on(setup, chatting, chatting.bot, entry, sender, request).await;
+}
+
+/// As [`said`], for `bot`: any bot the chatting bot's agent runs.
+async fn said_on(
+    setup: &Setup,
+    chatting: &Chatting,
+    bot: BotId,
+    entry: ChatEntry,
+    sender: Option<&str>,
+    request: Option<ChatRequestId>,
+) {
     let agent = chatting.stream.lease.agent();
     let now = setup.clock.now();
     let mut tx = setup.db.write().await.unwrap();
     let id = tx
         .chat()
         .append(&NewChatMessage {
-            bot: chatting.bot,
+            bot,
             agent,
             at: now,
             entry: entry.clone(),
@@ -131,7 +145,7 @@ async fn said(
         .unwrap();
     tx.commit(setup_entry()).await.unwrap();
     setup.events.publish(LiveEvent {
-        bot: chatting.bot,
+        bot,
         agent,
         generation: chatting.stream.lease.generation(),
         at: now,
@@ -139,7 +153,7 @@ async fn said(
             line: ListedChat {
                 record: ChatRecord {
                     id,
-                    bot: chatting.bot,
+                    bot,
                     at: now,
                     entry,
                 },
@@ -496,4 +510,189 @@ async fn a_line_keeps_its_place_before_its_chat_sent_within_a_merge(
             json!("bot")
         ]
     );
+}
+
+// --- Parsed senders (ADR-0020, S79, S81, R146, R147) ------------------------------------
+
+/// The user's two formats (S80): a clan tag, and none.
+const FORMATS: [&str; 2] = ["[{any}] {sender} : ", "{sender} : "];
+
+/// The chatting bot's server.
+const SERVER: &str = "mc.example.com";
+
+/// Another server.
+const OTHER: &str = "other.example.com";
+
+/// What a broken row holds: a brace the formats refuse.
+const BROKEN_FORMATS: &str = r#"["{Sender} : "]"#;
+
+/// A received system line.
+fn system(text: &str) -> ChatEntry {
+    ChatEntry::Received(IncomingChat::system(text))
+}
+
+/// With a format on the bot's server, each viewer's frame of a matched line
+/// equals their history line, its parsed sender included (S79, R146).
+#[sqlx::test(migrations = false)]
+async fn with_chat_formats_each_viewers_chat_frame_equals_their_history_line(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let chatting = chatting(&setup).await;
+    setup.on_server(chatting.bot, SERVER).await;
+    setup.formats_for(1, SERVER, &FORMATS).await;
+    let served = Served::start(&setup).await;
+    let (mut sockets, _) = sockets(&setup, &served, &chatting).await;
+
+    said(
+        &setup,
+        &chatting,
+        system("[Clan] Notch : hello"),
+        None,
+        None,
+    )
+    .await;
+
+    for ((name, person, _, _), socket) in chatting.viewers().into_iter().zip(&mut sockets) {
+        let history = history(&setup, chatting.bot, person).await;
+        let frame = next_event_after_pings(socket).await;
+        let stored = history
+            .iter()
+            .find(|line| line["id"] == frame["line"]["id"])
+            .unwrap();
+        assert_eq!(
+            frame,
+            json!({ "type": "chat", "bot_id": chatting.bot.to_string(), "line": stored }),
+            "{name}"
+        );
+        assert_eq!(frame["line"]["parsed_sender"], "Notch", "{name}");
+    }
+}
+
+/// A format created, then deleted, reaches the next live line: each commit
+/// moves the count, so the socket reads the rights, and with them the
+/// formats, again before it sends (S43, R147).
+#[sqlx::test(migrations = false)]
+async fn a_format_created_or_deleted_reaches_the_next_live_line(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let chatting = chatting(&setup).await;
+    setup.on_server(chatting.bot, SERVER).await;
+    let served = Served::start(&setup).await;
+    let mut socket = ready(&setup, &served, &chatting.member.token).await;
+
+    said(&setup, &chatting, system("Notch : one"), None, None).await;
+    let before = next_event_after_pings(&mut socket).await;
+    let settings = setup.formats_for(1, SERVER, &["{sender} : "]).await;
+    said(&setup, &chatting, system("Notch : two"), None, None).await;
+    let with = next_event_after_pings(&mut socket).await;
+    setup.settings_gone(settings).await;
+    said(&setup, &chatting, system("Notch : three"), None, None).await;
+    let after = next_event_after_pings(&mut socket).await;
+
+    assert_eq!(before["line"]["text"], "Notch : one");
+    assert_eq!(before["line"].get("parsed_sender"), None);
+    assert_eq!(with["line"]["text"], "Notch : two");
+    assert_eq!(with["line"]["parsed_sender"], "Notch");
+    assert_eq!(after["line"]["text"], "Notch : three");
+    assert_eq!(after["line"].get("parsed_sender"), None);
+}
+
+/// S81: a server whose formats don't read back gives only its own bots'
+/// lines no parsed sender: another server's bot stays read, and the socket
+/// stays open, its rights read again rather than failed.
+#[sqlx::test(migrations = false)]
+async fn a_servers_unreadable_chat_formats_leave_other_bots_parsed_and_the_socket_open(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let chatting = chatting(&setup).await;
+    let (_, other) = setup.bot_of(chatting.member.id, 30).await;
+    // Its lines come through the chatting bot's agent, which the append checks.
+    let mut tx = setup.db.write().await.unwrap();
+    assert!(
+        tx.bots()
+            .assign(other, chatting.stream.lease.agent())
+            .await
+            .unwrap()
+    );
+    tx.commit(setup_entry()).await.unwrap();
+    setup.on_server(chatting.bot, SERVER).await;
+    setup.on_server(other, OTHER).await;
+    let broken = setup.formats_for(1, SERVER, &FORMATS).await;
+    setup.formats_for(2, OTHER, &FORMATS).await;
+    let served = Served::start(&setup).await;
+    let mut socket = ready(&setup, &served, &chatting.member.token).await;
+
+    setup.break_formats(broken, BROKEN_FORMATS).await;
+    said(
+        &setup,
+        &chatting,
+        system("[Clan] Notch : hello"),
+        None,
+        None,
+    )
+    .await;
+    let unread = next_event_after_pings(&mut socket).await;
+    said_on(
+        &setup,
+        &chatting,
+        other,
+        system("[Clan] Notch : hi"),
+        None,
+        None,
+    )
+    .await;
+    let read = next_event_after_pings(&mut socket).await;
+
+    assert_eq!(unread["bot_id"], json!(chatting.bot.to_string()));
+    assert_eq!(unread["line"]["text"], "[Clan] Notch : hello");
+    assert_eq!(unread["line"].get("parsed_sender"), None);
+    assert_eq!(read["bot_id"], json!(other.to_string()));
+    assert_eq!(read["line"]["parsed_sender"], "Notch");
+}
+
+/// S81: with its server's formats unreadable, each viewer's frame of the
+/// line still equals their history line: neither has a parsed sender.
+#[sqlx::test(migrations = false)]
+async fn with_unreadable_chat_formats_each_viewers_chat_frame_still_equals_their_history_line(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let chatting = chatting(&setup).await;
+    setup.on_server(chatting.bot, SERVER).await;
+    let broken = setup.formats_for(1, SERVER, &FORMATS).await;
+    setup.break_formats(broken, BROKEN_FORMATS).await;
+    let served = Served::start(&setup).await;
+    let (mut sockets, _) = sockets(&setup, &served, &chatting).await;
+
+    said(
+        &setup,
+        &chatting,
+        system("[Clan] Notch : hello"),
+        None,
+        None,
+    )
+    .await;
+
+    for ((name, person, _, _), socket) in chatting.viewers().into_iter().zip(&mut sockets) {
+        let history = history(&setup, chatting.bot, person).await;
+        let frame = next_event_after_pings(socket).await;
+        let stored = history
+            .iter()
+            .find(|line| line["id"] == frame["line"]["id"])
+            .unwrap();
+        assert_eq!(
+            frame,
+            json!({ "type": "chat", "bot_id": chatting.bot.to_string(), "line": stored }),
+            "{name}"
+        );
+        assert_eq!(stored.get("parsed_sender"), None, "{name}");
+        assert_eq!(stored["text"], "[Clan] Notch : hello", "{name}");
+    }
 }

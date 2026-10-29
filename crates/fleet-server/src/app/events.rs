@@ -38,13 +38,17 @@ use fleet_core::authz::{
     Actor, GrantLevel, Permission, ResourceContext, UserRef, authorize, effective_level,
 };
 use fleet_core::bot::{BotNotification, BotSnapshot};
+use fleet_core::chat::ChatFormats;
 use fleet_core::id::{AccountId, AgentId, BotId, ChatRequestId, UserId};
+use fleet_core::server_settings::MAX_SERVER_SETTINGS;
 use fleet_proto::control::ChatFailedReason;
 use tokio::sync::{broadcast, watch};
 
+use crate::app::server_settings;
 use crate::ports::bots::{Access, BotAccess, UserAccess};
 use crate::ports::chat::ListedChat;
 use crate::ports::live_hints::{LiveHints, ModeEvent};
+use crate::ports::server_settings::UnreadableFormats;
 use crate::ports::store::{Store, StoreError};
 
 /// How many events the bus keeps for a subscriber that falls behind, as the
@@ -172,12 +176,16 @@ impl EventBus {
 /// Who may see which bot, as one read found it, and the commit count it was
 /// read at (S30). Its rule is `GET /bots/{id}`'s: `authorize(ViewBot)` on the
 /// bot's account, by its owner's role and the viewer's grant, both as read.
+/// It also holds each bot's chat formats, which its live lines are read
+/// with, as the history reads them (S79, R146); not the address they were
+/// found by.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Rights {
     at: u64,
     bots: HashMap<BotId, BotAccess>,
     grants: HashMap<(AccountId, UserId), GrantLevel>,
     users: HashMap<UserId, UserAccess>,
+    formats: HashMap<BotId, Arc<ChatFormats>>,
 }
 
 impl Rights {
@@ -196,6 +204,11 @@ impl Rights {
                 .users
                 .into_iter()
                 .map(|user| (user.user, user))
+                .collect(),
+            formats: access
+                .bot_formats
+                .into_iter()
+                .map(|bot| (bot.bot, bot.formats))
                 .collect(),
         }
     }
@@ -226,6 +239,13 @@ impl Rights {
         )
         .ok()?;
         effective_level(viewer, owner, grant)
+    }
+
+    /// The chat formats `bot`'s lines are read with: its current server's,
+    /// `None` when it has none.
+    #[must_use]
+    pub fn formats(&self, bot: BotId) -> Option<&ChatFormats> {
+        self.formats.get(&bot).map(AsRef::as_ref)
     }
 
     /// Every bot `viewer` may see.
@@ -261,8 +281,10 @@ struct RightsCache {
     commits: watch::Receiver<u64>,
     /// The latest snapshot; never held across an await.
     latest: Mutex<Option<Arc<Rights>>>,
-    /// One rebuild at a time.
-    turn: tokio::sync::Mutex<()>,
+    /// One rebuild at a time, and the settings rows whose formats the last
+    /// rebuild found unreadable, by rowid: a row is logged when it turns
+    /// unreadable, not at every rebuild (S81).
+    turn: tokio::sync::Mutex<BTreeSet<i64>>,
 }
 
 impl LiveRights {
@@ -275,7 +297,7 @@ impl LiveRights {
                 store,
                 commits,
                 latest: Mutex::new(None),
-                turn: tokio::sync::Mutex::new(()),
+                turn: tokio::sync::Mutex::new(BTreeSet::new()),
             }),
         }
     }
@@ -296,7 +318,7 @@ impl LiveRights {
         if let Some(latest) = self.fresh(count) {
             return Ok(latest);
         }
-        let _turn = self.inner.turn.lock().await;
+        let mut logged = self.inner.turn.lock().await;
         if let Some(latest) = self.fresh(count) {
             return Ok(latest);
         }
@@ -304,6 +326,7 @@ impl LiveRights {
         // read's snapshot, or moves the count past it.
         let at = self.count();
         let access = self.inner.store.bots().access().await?;
+        log_turned_unreadable(&mut logged, &access.unreadable_formats);
         let rights = Arc::new(Rights::new(at, access));
         *self.latest() = Some(Arc::clone(&rights));
         Ok(rights)
@@ -323,6 +346,21 @@ impl LiveRights {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// Logs each row of `now` that `logged`, the last rebuild's, doesn't hold,
+/// then keeps `now`'s, at most [`MAX_SERVER_SETTINGS`]: a row is logged when
+/// it turns unreadable, never at each rebuild, since every commit moves the
+/// count (S81).
+fn log_turned_unreadable(logged: &mut BTreeSet<i64>, now: &[UnreadableFormats]) {
+    for row in now.iter().filter(|row| !logged.contains(&row.rowid)) {
+        server_settings::unreadable_formats(row);
+    }
+    *logged = now
+        .iter()
+        .map(|row| row.rowid)
+        .take(usize::try_from(MAX_SERVER_SETTINGS).unwrap_or(usize::MAX))
+        .collect();
 }
 
 impl LiveHints for EventBus {
@@ -487,6 +525,7 @@ mod tests {
                 },
             ],
             users: vec![owner, admin, other_admin, member, other_member],
+            ..Access::default()
         };
         let people = People {
             owner,
@@ -554,6 +593,27 @@ mod tests {
 
         assert_eq!(rights.level(&actor(&p.owner), orphan.bot), None);
         assert_eq!(without_owner.level(&actor(&p.owner), orphan.bot), None);
+    }
+
+    #[test]
+    fn each_bot_is_read_with_its_own_formats_and_one_without_with_none() {
+        use crate::ports::bots::BotFormats;
+        let (p, _) = people();
+        let formats = Arc::new(ChatFormats::try_new(&["{sender} : "]).unwrap());
+        let rights = Rights::new(
+            1,
+            Access {
+                bots: p.bots.to_vec(),
+                bot_formats: vec![BotFormats {
+                    bot: p.bots[0].bot,
+                    formats: Arc::clone(&formats),
+                }],
+                ..Access::default()
+            },
+        );
+
+        assert_eq!(rights.formats(p.bots[0].bot), Some(formats.as_ref()));
+        assert_eq!(rights.formats(p.bots[1].bot), None);
     }
 
     #[test]

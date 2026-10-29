@@ -45,6 +45,13 @@ arguments_hidden: boolean,
  */
 sender?: ChatLineSender, 
 /**
+ * The name a chat format of the bot's server reads from a received
+ * system line's text (ADR-0020, S79, S80): for display only and the
+ * same for every viewer. It's never Minecraft's sender, which a system
+ * line never has, and decides nothing; the text stays whole.
+ */
+parsed_sender?: string, 
+/**
  * Who had a user's line sent: for viewers who see the account's owner,
  * and only while that user exists (U3).
  */
