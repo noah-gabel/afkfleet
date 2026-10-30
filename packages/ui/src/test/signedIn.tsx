@@ -45,6 +45,8 @@ export async function signedIn(handlers: Partial<ApiClient> = {}, options: Signe
 /** The App signed in, then on `to`. */
 export async function atScreen(
   to:
+    | "/modes"
+    | "/modes/new"
     | "/accounts"
     | "/accounts/link"
     | "/profile"

@@ -10,6 +10,7 @@ export type Privilege = "member" | "admin";
 export interface NavItem {
   readonly to:
     | "/home"
+    | "/modes"
     | "/accounts"
     | "/server"
     | "/profile"
@@ -23,6 +24,7 @@ export interface NavItem {
 /** Every entry, in display order. */
 export const NAV_ITEMS: readonly NavItem[] = [
   { to: "/home", label: "Home", privilege: "member" },
+  { to: "/modes", label: "Modes", privilege: "member" },
   { to: "/accounts", label: "Accounts", privilege: "member" },
   { to: "/server", label: "Server", privilege: "member" },
   { to: "/profile", label: "Profile", privilege: "member" },
