@@ -3,10 +3,13 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+import type { ApiClient } from "../../api/ApiClient";
 import { MODES_LIST_KEY } from "../../api/queries";
+import type { BotPage } from "../../generated/BotPage";
 import type { ModeResponse } from "../../generated/ModeResponse";
 import type { UpdateModeRequest } from "../../generated/UpdateModeRequest";
-import { mode, modeId } from "../../test/live";
+import { deferred } from "../../test/fixtures";
+import { bot, botId, mode, modeId } from "../../test/live";
 import { atMode, calls, card, fill, saveButton, shownStep } from "../../test/modes";
 import type { RenderedApp } from "../../test/renderApp";
 import { PASSWORD, refusal } from "../../test/signIn";
@@ -370,6 +373,97 @@ describe("Delete (S16, S17)", () => {
     await screen.findByRole("heading", { name: "Mode 1", level: 1 });
 
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+  });
+});
+
+describe("the bots at mode_in_use (U66, R169)", () => {
+  /** A bot of the viewer's, named `name`, on mode `modeIdOf`. */
+  function onMode(n: number, name: string, modeIdOf: string) {
+    const base = bot(n);
+    return { ...base, mode_id: modeIdOf, account: { ...base.account, name } };
+  }
+
+  /** The App refused at Delete, with `bots` as the bots' reads. */
+  async function refused(bots: ApiClient["bots"]) {
+    const found = await atMode(ROW.id, {
+      rows: [ROW],
+      stamped: true,
+      handlers: {
+        bots,
+        deleteMode: async () => {
+          throw refusal(409, "mode_in_use", { message: IN_USE });
+        },
+      },
+    });
+    await screen.findByRole("heading", { name: "Fishing", level: 1 });
+    await found.app.user.click(screen.getByRole("button", { name: "Delete" }));
+    await found.app.user.click(await screen.findByRole("button", { name: "Delete mode" }));
+    await screen.findByText(IN_USE);
+    return found;
+  }
+
+  it("lists the bots the viewer can see that run it, each linking to its screen", async () => {
+    const first: BotPage = {
+      items: [onMode(3, "AfkBot3", ROW.id), onMode(2, "AfkBot2", modeId(7))],
+      next: botId(2),
+    };
+    const second: BotPage = { items: [onMode(1, "AfkBot1", ROW.id)] };
+    const { app } = await refused(async (before) => (before === undefined ? first : second));
+
+    expect(await screen.findByText("These of the bots you can see run it:")).toBeDefined();
+    const links = screen.getAllByRole("link", { name: /^AfkBot/ });
+    expect(links.map((link) => link.textContent)).toEqual(["AfkBot3", "AfkBot1"]);
+    await app.user.click(links[1] as HTMLElement);
+    await vi.waitFor(() => expect(app.path()).toBe(`/bots/${botId(1)}`));
+  });
+
+  it("reads every page before it says the bot is one the viewer can't see", async () => {
+    const later = deferred<BotPage>();
+    const { app } = await refused(async (before) =>
+      before === undefined ? { items: [], next: botId(1) } : later.promise,
+    );
+    const SAID = "It's a bot you can't see, so its owner has to switch it.";
+
+    await vi.waitFor(() => expect(calls(app, "bots").map((args) => args[0])).toContain(botId(1)));
+    expect(screen.queryByText(SAID)).toBeNull();
+    await act(async () => later.resolve({ items: [] }));
+
+    expect(await screen.findByText(SAID)).toBeDefined();
+  });
+
+  it("keeps the refusal and says so when the bots couldn't be read", async () => {
+    await refused(async () => {
+      throw refusal(500, "internal");
+    });
+
+    expect(await screen.findByText(/^Couldn't read your bots: refused: internal/)).toBeDefined();
+    expect(screen.getByText(IN_USE)).toBeDefined();
+    expect(
+      screen.queryByText("It's a bot you can't see, so its owner has to switch it."),
+    ).toBeNull();
+  });
+
+  it("drops the list at the next try", async () => {
+    const later = deferred<BotPage>();
+    const answers = [async () => ({ items: [onMode(1, "AfkBot1", ROW.id)] }), () => later.promise];
+    const home: BotPage = { items: [] };
+    let delivered = false;
+    const { app } = await refused(async (_before, limit) => {
+      // Home's own read asks without a page size.
+      if (limit === undefined || delivered) {
+        return limit === undefined ? home : (answers[1] as () => Promise<BotPage>)();
+      }
+      delivered = true;
+      return (answers[0] as () => Promise<BotPage>)();
+    });
+    await screen.findByRole("link", { name: "AfkBot1" });
+
+    await app.user.click(screen.getByRole("button", { name: "Delete" }));
+    await app.user.click(await screen.findByRole("button", { name: "Delete mode" }));
+
+    await waitFor(() => expect(calls(app, "deleteMode")).toHaveLength(2));
+    expect(screen.queryByRole("link", { name: "AfkBot1" })).toBeNull();
+    await act(async () => later.resolve({ items: [] }));
   });
 });
 

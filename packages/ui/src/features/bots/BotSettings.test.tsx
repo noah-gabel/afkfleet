@@ -67,6 +67,25 @@ function calls(app: { fake: { calls: { method: string }[] } }, method: keyof Api
   return app.fake.calls.filter((call) => call.method === method).length;
 }
 
+describe("the way to the modes (U74)", () => {
+  it("links to the modes beside the bot's mode drop-down", async () => {
+    const app = await atBot(botId(1), {
+      bot: async () => bot(1, { account: { ...bot(1).account, level: "control" } }),
+      bots: async () => ({ items: [bot(1)] }),
+      modes: async () => ({ items: [] }),
+    });
+    await screen.findByLabelText("Mode");
+
+    await app.user.click(
+      within(screen.getByRole("region", { name: "Settings" })).getByRole("link", {
+        name: "Modes",
+      }),
+    );
+
+    await vi.waitFor(() => expect(app.path()).toBe("/modes"));
+  });
+});
+
 describe("a bot's Settings: the mode", () => {
   it("offer a Control holder the modes they may choose, an unlisted one hidden", async () => {
     await settings(seen("control"));

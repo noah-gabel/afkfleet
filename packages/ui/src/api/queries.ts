@@ -360,6 +360,19 @@ export function recordAnswer(
   );
 }
 
+/**
+ * Every bot the user may see, read through every page now, for an answer that must know them all
+ * (ADR-0020, U66, R169). One failed page fails it all. Not a query: nothing here is kept, and the
+ * bots' own list, a page at a time, stays as it is.
+ */
+export async function readEveryBot(api: ApiClient): Promise<BotResponse[]> {
+  const read = await everyPage(
+    (before) => api.bots(before, PAGE_MAX),
+    new AbortController().signal,
+  );
+  return read.pages.flatMap((page) => page.items);
+}
+
 /** Every page of the modes the user may see, as one list's pages; one failed page fails it all. */
 function everyMode(
   api: ApiClient,
