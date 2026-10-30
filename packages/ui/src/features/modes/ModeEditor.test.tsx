@@ -5,138 +5,30 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ApiClient } from "../../api/ApiClient";
 import { MODES_LIST_KEY } from "../../api/queries";
-import type { CreateModeRequest } from "../../generated/CreateModeRequest";
 import type { ModeActionKind } from "../../generated/ModeActionKind";
 import type { ModeResponse } from "../../generated/ModeResponse";
 import type { ModeScheduleKind } from "../../generated/ModeScheduleKind";
 import type { ModeVisibility } from "../../generated/ModeVisibility";
 import type { UpdateModeRequest } from "../../generated/UpdateModeRequest";
 import { mode, modeId } from "../../test/live";
-import { every, ON_RESPAWN, shownStep } from "../../test/modes";
-import type { RenderedApp } from "../../test/renderApp";
-import { signedIn } from "../../test/signedIn";
+import {
+  atMode,
+  calls,
+  card,
+  every,
+  fill,
+  ON_RESPAWN,
+  SECTION,
+  saveButton,
+  section,
+  shownStep,
+} from "../../test/modes";
 import { PASSWORD, refusal } from "../../test/signIn";
-
-const NEEDS_STEP_UP =
-  "This mode holds a command that needs your password: confirm it's you to save it.";
-const SECTION = {
-  atStart: "When it joins",
-  repeating: "While it's online",
-  onRespawn: "After it respawns",
-} as const;
 
 afterEach(() => {
   vi.useRealTimers();
 });
-
-/**
- * The App on mode `id`'s screen, or a new mode's (`"new"`), over a fake that keeps `rows`, points
- * a command at its twin, and asks for the password there until `stepUp` ran (unless `stamped`).
- */
-async function atMode(
-  id: string,
-  options: {
-    readonly rows?: ModeResponse[];
-    readonly stamped?: boolean;
-    readonly handlers?: Partial<ApiClient>;
-  } = {},
-) {
-  const state = { rows: [...(options.rows ?? [])], stamped: options.stamped ?? false };
-  const holdsCommand = (request: CreateModeRequest) =>
-    request.steps.some((step) => step.action.message?.startsWith("/") === true);
-  const twin = () => {
-    if (!state.stamped) {
-      throw refusal(403, "step_up_required");
-    }
-  };
-  const saved = (request: CreateModeRequest): ModeResponse =>
-    mode(9, {
-      name: request.name.trim(),
-      visibility: request.visibility,
-      steps: request.steps.map((step) => ({
-        ...step,
-        action: { ...step.action, arguments_hidden: false },
-      })),
-      unlisted_command: holdsCommand(request),
-    });
-  const created = (request: CreateModeRequest) => {
-    const made = saved(request);
-    state.rows = [made, ...state.rows];
-    return made;
-  };
-  const updated = (target: string, request: UpdateModeRequest) => {
-    const row = state.rows.find((one) => one.id === target);
-    if (row === undefined) {
-      throw refusal(404, "not_found");
-    }
-    const { version: _read, ...body } = request;
-    const edited = { ...saved(body), id: target, version: row.version + 1 };
-    state.rows = state.rows.map((one) => (one.id === target ? edited : one));
-    return edited;
-  };
-  const app = await signedIn({
-    modes: async () => ({ items: state.rows }),
-    stepUp: async () => {
-      state.stamped = true;
-    },
-    createMode: async (request) => {
-      if (holdsCommand(request)) {
-        throw refusal(403, "mode_needs_step_up", { message: NEEDS_STEP_UP });
-      }
-      return created(request);
-    },
-    createModeWithCommands: async (request) => {
-      twin();
-      return created(request);
-    },
-    updateMode: async (target, request) => {
-      if (holdsCommand(request)) {
-        throw refusal(403, "mode_needs_step_up", { message: NEEDS_STEP_UP });
-      }
-      return updated(target, request);
-    },
-    updateModeWithCommands: async (target, request) => {
-      twin();
-      return updated(target, request);
-    },
-    ...options.handlers,
-  });
-  await act(() =>
-    id === "new"
-      ? app.runtime.router.navigate({ to: "/modes/new" })
-      : app.runtime.router.navigate({ to: "/modes/$id", params: { id } }),
-  );
-  return { app, state };
-}
-
-/** A section of the form. */
-function section(name: keyof typeof SECTION): HTMLElement {
-  return screen.getByRole("group", { name: SECTION[name] });
-}
-
-/** Step `n` of a section, counted from 1. */
-function card(name: keyof typeof SECTION, n: number): HTMLElement {
-  return within(section(name)).getByRole("group", { name: `Step ${n}` });
-}
-
-/** The arguments of `method`'s calls. */
-function calls(app: RenderedApp, method: keyof ApiClient): unknown[][] {
-  return app.fake.calls.filter((call) => call.method === method).map((call) => [...call.args]);
-}
-
-/** `field`'s value replaced by `value`. */
-async function fill(app: RenderedApp, field: HTMLElement, value: string): Promise<void> {
-  await app.user.clear(field);
-  await app.user.click(field);
-  await app.user.paste(value);
-}
-
-/** Save, by role. */
-function saveButton(): HTMLButtonElement {
-  return screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
-}
 
 describe("a new mode", () => {
   it("is private, with no switch, and says the choice comes after saving (U67)", async () => {

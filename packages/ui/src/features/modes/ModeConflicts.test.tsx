@@ -34,6 +34,8 @@ function nameField(): HTMLInputElement {
 
 /** `rows` in the list's cache, as a live frame or a read leaves it. */
 async function listHolds(app: RenderedApp, rows: readonly ModeResponse[]): Promise<void> {
+  // The screen's own read mustn't land after this and write over it.
+  await vi.waitFor(() => expect(app.runtime.queryClient.isFetching()).toBe(0));
   await act(async () =>
     app.runtime.queryClient.setQueryData(MODES_LIST_KEY, {
       pages: [{ items: [...rows] }],
@@ -45,11 +47,15 @@ async function listHolds(app: RenderedApp, rows: readonly ModeResponse[]): Promi
 describe("409 mode_changed (U64, S18)", () => {
   /** The form open with an edit, and a stale Save refused. */
   async function refused() {
+    const control = { refuses: true };
     const found = await atMode(ROW.id, {
       rows: [ROW],
       handlers: {
-        updateMode: async () => {
-          throw refusal(409, "mode_changed", { message: CHANGED });
+        updateMode: async (_id, request) => {
+          if (control.refuses) {
+            throw refusal(409, "mode_changed", { message: CHANGED });
+          }
+          return { ...ROW, name: request.name, version: request.version + 1 };
         },
       },
     });
@@ -57,7 +63,7 @@ describe("409 mode_changed (U64, S18)", () => {
     await fill(found.app, nameField(), "Mine");
     await found.app.user.click(saveButton());
     await screen.findByText(CHANGED);
-    return found;
+    return { ...found, control };
   }
 
   it("shows the server's text with Load again, and keeps the edits", async () => {
@@ -84,10 +90,7 @@ describe("409 mode_changed (U64, S18)", () => {
 
   it("keeps the notice and the edits when Load again's read fails, and says why", async () => {
     const { app, state } = await refused();
-    state.rows = [];
-    app.fake.handlers.modes = async () => {
-      throw refusal(500, "internal");
-    };
+    state.readFails = true;
 
     await app.user.click(screen.getByRole("button", { name: "Load again" }));
 
@@ -110,8 +113,8 @@ describe("409 mode_changed (U64, S18)", () => {
   });
 
   it("takes the notice away at the next Save", async () => {
-    const { app } = await refused();
-    app.fake.handlers.updateMode = async () => ({ ...ROW, name: "Mine", version: 4 });
+    const { app, control } = await refused();
+    control.refuses = false;
 
     await app.user.click(saveButton());
 
@@ -166,7 +169,7 @@ describe("the form while its row changes (S83)", () => {
 
     await listHolds(app, [{ ...ROW, deletable: false, visibility_editable: false }]);
 
-    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Delete" })).toBeNull());
     expect(screen.queryByRole("combobox", { name: "Who can see it" })).toBeNull();
   });
 
@@ -318,15 +321,14 @@ describe("Delete (S16, S17)", () => {
   });
 
   it("shows the gone notice for a 404, and a 403 as its text", async () => {
+    let answer = refusal(403, "forbidden", { message: "You don't have permission to do this." });
     const { app } = await atDelete(async () => {
-      throw refusal(403, "forbidden", { message: "You don't have permission to do this." });
+      throw answer;
     });
 
     await app.user.click(screen.getByRole("button", { name: "Delete mode" }));
     expect(await screen.findByText(/^You don't have permission to do this\./)).toBeDefined();
-    app.fake.handlers.deleteMode = async () => {
-      throw refusal(404, "not_found");
-    };
+    answer = refusal(404, "not_found");
     await app.user.click(screen.getByRole("button", { name: "Delete" }));
     await app.user.click(await screen.findByRole("button", { name: "Delete mode" }));
 

@@ -9,11 +9,16 @@
 // - **A command off the allowlist:** on `mode_needs_step_up` the same request goes to the
 //   `/with-commands` twin through `useStepUpAction`; the form stays locked, so what's sent is what
 //   was shown (S16, R162).
+// - **The 409s:** `mode_changed` shows the server's text with "Load again", which reads the list
+//   again and fills the form from it: only a read that succeeded does, and a failed one keeps the
+//   notice and the edits and says why (U64). `mode_in_use_by_others` shows the server's text with
+//   the app's explanation, and the form stays editable (U65). Nothing but "Load again" and a save
+//   resets the form, so a refetch never loses edits.
 // - **The server stays the authority:** its 422 shows at the field it names, through the order
 //   sent (R158); `validated()` refuses only what the wire can't carry (S82). The form's "resolver"
 //   checks nothing: it makes every submit start clean, so an error the server put on a field never
 //   blocks the next save.
-import { useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useId, useRef, useState } from "react";
 import { type Path, type Resolver, useForm, useWatch } from "react-hook-form";
@@ -23,8 +28,10 @@ import { toApiError } from "../../../api/ApiError";
 import { useApiClient } from "../../../api/context";
 import { describeError } from "../../../api/describeError";
 import { MODE_MAX_STEPS } from "../../../api/limits";
+import { MODES_LIST_KEY } from "../../../api/queries";
 import { FormField } from "../../../components/FormField";
 import { RetryWaitMessage } from "../../../components/RetryWaitMessage";
+import { Alert, AlertDescription } from "../../../components/ui/alert";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import type { CommandError } from "../../../generated/CommandError";
@@ -37,11 +44,15 @@ import { isStepUpRequired } from "../../../lib/stepUp";
 import { StepUpPrompt } from "../../admin/components/StepUpPrompt";
 import { useStepUpAction } from "../../admin/hooks/useStepUpAction";
 import { rememberMode, rereadModes } from "../cache";
-import { type ModeValues, SECTIONS, stepsOf, stepTotal, valuesOf } from "../modeForm";
+import { isEditable, type ModeValues, SECTIONS, stepsOf, stepTotal, valuesOf } from "../modeForm";
 import {
   CANCEL,
   CAP_REACHED,
   created,
+  IN_USE_BY_OTHERS,
+  LEFT_THE_LIST,
+  LOAD_AGAIN,
+  modesFailed,
   NAME_FIELD,
   NEW_MODE,
   NOTHING_TO_SAVE,
@@ -53,6 +64,7 @@ import {
   VISIBILITY_PRIVATE,
   VISIBILITY_SHARED,
 } from "../texts";
+import { DeleteMode } from "./DeleteMode";
 import { BackLink, ModeSummary } from "./ModeParts";
 import { StepSection } from "./StepSection";
 
@@ -62,8 +74,30 @@ const SAVE_KEY = "save";
 /** See the module comment. */
 const startClean: Resolver<ModeValues> = async (values) => ({ values, errors: {} });
 
-/** The form of `row`, or of a new mode without one, starting from `initial`. */
-export function ModeEditor({ row, initial }: { row?: ModeResponse; initial: ModeValues }) {
+/** A 409 the form shows above its Save: the server's text, and what it offers. */
+interface Conflict {
+  readonly kind: "changed" | "others";
+  readonly text: string;
+}
+
+/** The modes the list's cache holds. */
+function cachedModes(queryClient: QueryClient): readonly ModeResponse[] {
+  return (queryClient.getQueryData(MODES_LIST_KEY)?.pages ?? []).flatMap((page) => page.items);
+}
+
+/**
+ * The form of `row`, or of a new mode without one, starting from `initial`. `left`: the row left
+ * the list, so the form stays but nothing here can be saved over it (S83).
+ */
+export function ModeEditor({
+  row,
+  initial,
+  left = false,
+}: {
+  row?: ModeResponse;
+  initial: ModeValues;
+  left?: boolean;
+}) {
   const api = useApiClient();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -75,6 +109,9 @@ export function ModeEditor({ row, initial }: { row?: ModeResponse; initial: Mode
   const [sending, setSending] = useState(false);
   const [formError, setFormError] = useState<string>();
   const [announcement, setAnnouncement] = useState("");
+  const [conflict, setConflict] = useState<Conflict | null>(null);
+  const [reloadFailed, setReloadFailed] = useState<string | null>(null);
+  const [goneToSave, setGoneToSave] = useState(false);
   const writes = useStepUpAction();
   const form = useForm<ModeValues>({ resolver: startClean, defaultValues: initial });
   const paths = useRef<Readonly<Record<string, Path<ModeValues>>>>({});
@@ -91,8 +128,15 @@ export function ModeEditor({ row, initial }: { row?: ModeResponse; initial: Mode
       return;
     }
     const details = error.api;
-    if (details?.status === 409 && row === undefined) {
+    if (details?.status === 409 && details.code === "mode_changed") {
+      setConflict({ kind: "changed", text: details.message });
+    } else if (details?.status === 409 && details.code === "mode_in_use_by_others") {
+      setConflict({ kind: "others", text: details.message });
+    } else if (details?.status === 409 && row === undefined) {
       setFormError(CAP_REACHED);
+    } else if (details?.status === 404 && row !== undefined) {
+      setGoneToSave(true);
+      rereadModes(queryClient);
     } else if (details?.status === 403) {
       setFormError(details.message);
       rereadModes(queryClient);
@@ -163,10 +207,17 @@ export function ModeEditor({ row, initial }: { row?: ModeResponse; initial: Mode
   }
 
   const submit = form.handleSubmit((values) => {
-    if (wait.waiting !== null || (row !== undefined && !form.formState.isDirty)) {
+    if (
+      wait.waiting !== null ||
+      left ||
+      goneToSave ||
+      (row !== undefined && !form.formState.isDirty)
+    ) {
       return;
     }
     setFormError(undefined);
+    setConflict(null);
+    setReloadFailed(null);
     wait.reset();
     const built = stepsOf(values);
     paths.current = built.paths;
@@ -189,6 +240,39 @@ export function ModeEditor({ row, initial }: { row?: ModeResponse; initial: Mode
     }
   });
 
+  /**
+   * Reads the list again after a 409 and fills the form from it. A read that fails changes nothing
+   * but saying why: the notice and the edits stay. A row the form can't hold any more goes to the
+   * locked view, by `ModeScreen` (S83).
+   */
+  async function loadAgain(): Promise<void> {
+    if (row === undefined) {
+      return;
+    }
+    setReloadFailed(null);
+    try {
+      await queryClient.refetchQueries(
+        { queryKey: MODES_LIST_KEY, exact: true },
+        { throwOnError: true },
+      );
+    } catch (rejection) {
+      if (alive.current) {
+        setReloadFailed(modesFailed(describeError(toApiError(rejection).error)));
+      }
+      return;
+    }
+    if (!alive.current) {
+      return;
+    }
+    setConflict(null);
+    const fresh = cachedModes(queryClient).find((one) => one.id === row.id);
+    if (fresh !== undefined && isEditable(fresh)) {
+      setVersion(fresh.version);
+      form.reset(valuesOf(fresh));
+    }
+  }
+
+  const gone = left || goneToSave;
   // While a write runs or the password is asked, what's sent is what's on the screen.
   const locked = sending || writes.prompt !== null || writes.running !== null;
   const view = { readOnly: false, locked, copying: false };
@@ -252,11 +336,34 @@ export function ModeEditor({ row, initial }: { row?: ModeResponse; initial: Mode
             {formError}
           </p>
         )}
+        {conflict === null || gone ? null : (
+          // One live region: the Alert's own.
+          <Alert>
+            <AlertDescription className="flex flex-col gap-2 text-foreground">
+              <p>{conflict.text}</p>
+              {conflict.kind === "others" ? <p>{IN_USE_BY_OTHERS}</p> : null}
+              {reloadFailed === null ? null : <p className="text-destructive">{reloadFailed}</p>}
+              {conflict.kind === "changed" ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="self-start"
+                  onClick={() => void loadAgain()}
+                >
+                  {LOAD_AGAIN}
+                </Button>
+              ) : null}
+            </AlertDescription>
+          </Alert>
+        )}
+        {gone ? <p role="alert">{LEFT_THE_LIST}</p> : null}
         <RetryWaitMessage wait={wait} />
         <div className="flex gap-2">
-          <Button type="submit" disabled={locked || wait.waiting !== null || !canSave}>
-            {SAVE}
-          </Button>
+          {gone ? null : (
+            <Button type="submit" disabled={locked || wait.waiting !== null || !canSave}>
+              {SAVE}
+            </Button>
+          )}
           <Button
             type="button"
             variant="outline"
@@ -284,6 +391,9 @@ export function ModeEditor({ row, initial }: { row?: ModeResponse; initial: Mode
         <p role="alert" className="text-sm text-destructive">
           {writes.failure.message}
         </p>
+      ) : null}
+      {row?.deletable && !gone ? (
+        <DeleteMode mode={row} writes={writes} onGone={() => setGoneToSave(true)} />
       ) : null}
       <BackLink />
     </main>

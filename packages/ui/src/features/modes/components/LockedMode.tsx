@@ -3,14 +3,23 @@
 // disabled, so they keep the normal text color and screen readers read them; nothing to press
 // but what the server's flags offer. A step this version doesn't know is one line. Nothing can
 // be lost here, so it follows the row: `ModeScreen` keys it by what it shows.
-import { useId } from "react";
+import { useId, useState } from "react";
 import { useForm } from "react-hook-form";
 
 import { FormField } from "../../../components/FormField";
 import { Input } from "../../../components/ui/input";
 import type { ModeResponse } from "../../../generated/ModeResponse";
+import { useStepUpAction } from "../../admin/hooks/useStepUpAction";
 import { isKnownMode, type ModeValues, SECTIONS, unknownSteps, valuesOf } from "../modeForm";
-import { NAME_FIELD, OTHER_STEPS, UNKNOWN_MODE, VISIBILITY_FIELD, visibilityText } from "../texts";
+import {
+  MODE_GONE,
+  NAME_FIELD,
+  OTHER_STEPS,
+  UNKNOWN_MODE,
+  VISIBILITY_FIELD,
+  visibilityText,
+} from "../texts";
+import { DeleteMode } from "./DeleteMode";
 import { BackLink, ModeSummary, UnknownSteps } from "./ModeParts";
 import type { StepView } from "./StepCard";
 import { StepSection } from "./StepSection";
@@ -25,6 +34,8 @@ function silent(): void {}
 export function LockedMode({ mode, note }: { mode: ModeResponse; note?: string | undefined }) {
   const formId = useId();
   const form = useForm<ModeValues>({ defaultValues: valuesOf(mode) });
+  const writes = useStepUpAction();
+  const [gone, setGone] = useState(false);
   const unknown = unknownSteps(mode);
   const elsewhere = unknown.filter((section) => section === null).length;
   return (
@@ -58,6 +69,10 @@ export function LockedMode({ mode, note }: { mode: ModeResponse; note?: string |
           </fieldset>
         )}
       </div>
+      {gone ? <p role="alert">{MODE_GONE}</p> : null}
+      {mode.deletable && !gone ? (
+        <DeleteMode mode={mode} writes={writes} onGone={() => setGone(true)} />
+      ) : null}
       <BackLink />
     </main>
   );
