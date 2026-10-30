@@ -79,6 +79,7 @@ import {
   VISIBILITY_FIELD,
   VISIBILITY_PRIVATE,
   VISIBILITY_SHARED,
+  visibilityText,
 } from "../texts";
 import { DeleteMode } from "./DeleteMode";
 import { BackLink, ModeSummary } from "./ModeParts";
@@ -367,11 +368,7 @@ export function ModeEditor({
                   <option value="shared">{VISIBILITY_SHARED}</option>
                 </select>
               ) : (
-                <Input
-                  {...control}
-                  readOnly
-                  value={row.visibility === "shared" ? VISIBILITY_SHARED : VISIBILITY_PRIVATE}
-                />
+                <Input {...control} readOnly value={visibilityText(row.visibility)} />
               )
             }
           </FormField>

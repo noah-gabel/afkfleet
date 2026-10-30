@@ -317,29 +317,101 @@
     {
       "command": "create_mode",
       "method": "createMode",
-      "inputs": [{ "name": "Fishing", "visibility": "private", "steps": [{ "action": { "type": "jump" }, "schedule": { "type": "at_start" }, "probability": 100 }] }],
-      "args": { "request": { "name": "Fishing", "visibility": "private", "steps": [{ "action": { "type": "jump" }, "schedule": { "type": "at_start" }, "probability": 100 }] } },
+      "inputs": [
+        {
+          "name": "Fishing",
+          "visibility": "private",
+          "steps": [
+            { "action": { "type": "jump" }, "schedule": { "type": "at_start" }, "probability": 100 }
+          ]
+        }
+      ],
+      "args": {
+        "request": {
+          "name": "Fishing",
+          "visibility": "private",
+          "steps": [
+            { "action": { "type": "jump" }, "schedule": { "type": "at_start" }, "probability": 100 }
+          ]
+        }
+      },
       "expect": { "error": "no_server" }
     },
     {
       "command": "create_mode_with_commands",
       "method": "createModeWithCommands",
-      "inputs": [{ "name": "Fishing", "visibility": "private", "steps": [{ "action": { "type": "jump" }, "schedule": { "type": "at_start" }, "probability": 100 }] }],
-      "args": { "request": { "name": "Fishing", "visibility": "private", "steps": [{ "action": { "type": "jump" }, "schedule": { "type": "at_start" }, "probability": 100 }] } },
+      "inputs": [
+        {
+          "name": "Fishing",
+          "visibility": "private",
+          "steps": [
+            { "action": { "type": "jump" }, "schedule": { "type": "at_start" }, "probability": 100 }
+          ]
+        }
+      ],
+      "args": {
+        "request": {
+          "name": "Fishing",
+          "visibility": "private",
+          "steps": [
+            { "action": { "type": "jump" }, "schedule": { "type": "at_start" }, "probability": 100 }
+          ]
+        }
+      },
       "expect": { "error": "no_server" }
     },
     {
       "command": "update_mode",
       "method": "updateMode",
-      "inputs": ["01900000-0000-7000-8000-00000000000c", { "version": 1, "name": "Fishing", "visibility": "private", "steps": [{ "action": { "type": "jump" }, "schedule": { "type": "at_start" }, "probability": 100 }] }],
-      "args": { "id": "01900000-0000-7000-8000-00000000000c", "request": { "version": 1, "name": "Fishing", "visibility": "private", "steps": [{ "action": { "type": "jump" }, "schedule": { "type": "at_start" }, "probability": 100 }] } },
+      "inputs": [
+        "01900000-0000-7000-8000-00000000000c",
+        {
+          "version": 1,
+          "name": "Fishing",
+          "visibility": "private",
+          "steps": [
+            { "action": { "type": "jump" }, "schedule": { "type": "at_start" }, "probability": 100 }
+          ]
+        }
+      ],
+      "args": {
+        "id": "01900000-0000-7000-8000-00000000000c",
+        "request": {
+          "version": 1,
+          "name": "Fishing",
+          "visibility": "private",
+          "steps": [
+            { "action": { "type": "jump" }, "schedule": { "type": "at_start" }, "probability": 100 }
+          ]
+        }
+      },
       "expect": { "error": "no_server" }
     },
     {
       "command": "update_mode_with_commands",
       "method": "updateModeWithCommands",
-      "inputs": ["01900000-0000-7000-8000-00000000000c", { "version": 1, "name": "Fishing", "visibility": "private", "steps": [{ "action": { "type": "jump" }, "schedule": { "type": "at_start" }, "probability": 100 }] }],
-      "args": { "id": "01900000-0000-7000-8000-00000000000c", "request": { "version": 1, "name": "Fishing", "visibility": "private", "steps": [{ "action": { "type": "jump" }, "schedule": { "type": "at_start" }, "probability": 100 }] } },
+      "inputs": [
+        "01900000-0000-7000-8000-00000000000c",
+        {
+          "version": 1,
+          "name": "Fishing",
+          "visibility": "private",
+          "steps": [
+            { "action": { "type": "jump" }, "schedule": { "type": "at_start" }, "probability": 100 }
+          ]
+        }
+      ],
+      "args": {
+        "id": "01900000-0000-7000-8000-00000000000c",
+        "request": {
+          "version": 1,
+          "name": "Fishing",
+          "visibility": "private",
+          "steps": [
+            { "action": { "type": "jump" }, "schedule": { "type": "at_start" }, "probability": 100 }
+          ]
+        }
+      },
       "expect": { "error": "no_server" }
     },
     {
