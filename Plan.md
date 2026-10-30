@@ -3845,7 +3845,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >   | H6 | `p11/p11.9-server-settings-screen` | P11.9's Minecraft-servers screens for the conflict texts (split from H4 at its plan review) |
 >   | H7 | `p11/p11.9-chat-format` | P11.9's per-server chat format as a server setting, its preview (split from H4 at its plan review) |
 >   | H8 | `p11/p11.9-parsed-senders` | P11.9's parsed senders end to end and the editor's formats (split from H7 at its plan review) |
->   | I | `p11/p11.9-mode-editor` | P11.9's mode editor |
+>   | I | `p11/p11.9-mode-editor` | P11.9's mode editor and first its `networkMode` fix (one group, about 6,200 lines, the user's at its plan review, U75) |
 >   | J | `p11/p11.9-admin-screens` | P11.9's admin screens (ticked here) |
 >   | K | `p11/p11.10-dark-mode` | P11.10 |
 >   | L | `p11/p11.11-design-pass` | P11.11 |

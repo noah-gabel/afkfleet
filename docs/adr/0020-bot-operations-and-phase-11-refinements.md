@@ -2038,6 +2038,133 @@ Runs red against the code before, not mutations:
 
 *Size:* about 3,370 lines added and 150 removed, the docs included, about 100 of them generated query data, types and snapshots; the plan said about 3,500. PR #81's review came to about 470 of them.
 
+### Group I's planning
+P11.9's mode editor: users create, edit, copy and delete their bots' modes in the app, in Minecraft terms. It measured about 6,200 lines, past the usual 5,300. I proposed a split; the user kept it as one group (U75).
+
+*The user's:*
+- **U62. Five new commands are granted** (54 → 59): `create_mode`, `create_mode_with_commands`, `update_mode`, `update_mode_with_commands`, `delete_mode`.
+- **U63. Copies.**
+  - "Make a copy" sits with the mode's other actions on every mode the viewer can see, and opens the new-mode editor filled from the shown mode's form state, never by echoing the answer (R5): `unlisted_command` and the flags are never sent.
+  - It saves like any new mode: a taken name shows the server's error at Name, and a command off the allowlist goes through the step-up to the twin.
+  - A step the viewer sees only as `/name` (S15) comes in as `/name`, marked outside its text as needing its arguments, and is never filled from anything the viewer doesn't hold.
+  - A mode with a step type this app doesn't know offers no copy, since its form can't hold that step.
+  - "Save as copy" appears in the `mode_changed` and `mode_in_use_by_others` notices and sends the form's current state as a new mode. There's no second button beside Save in the normal editor.
+- **U64. `mode_changed`:** the server's text, "Load again" and "Save as copy". Load again replaces the form with the newest version at once, as the Minecraft-servers editor does; a failed read keeps the notice and the edits and says why.
+- **U65. `mode_in_use_by_others`:** the server's text, an explanation of the app's own and "Save as copy". The form stays editable.
+- **U66. `mode_in_use`:** the server's refusal in place, plus the bots the viewer can see that run this mode, each linking to its screen. The app reads every page of the bots first, so the list is complete; only then does an empty list say the bot is one they can't see. It never names anything else.
+- **U67. A new mode or copy is saved private.** Once saved, its own `visibility_editable` decides whether the switch appears, so an Admin or the Owner shares it in a second step. No role check in the app, nothing copied from `authorize()`.
+- **U68. The layout:** three sections, "When it joins", "While it's online" and "After it respawns", each with its own "Add step", replacing a When drop-down. Each step is a card with only its kind's fields and Remove. Reordering is by drag and drop on a handle, within the step's own section only. The non-drag alternative (WCAG 2.2's dragging rule, which L's design pass must meet too) is keyboard reordering on the handle plus small Move up and Move down, with announcements of the new position. A save sends the sections in order, each in its shown order.
+- **U69. The dependency:** `@dnd-kit/core` 6.3.1, `@dnd-kit/sortable` 10.0.0, `@dnd-kit/utilities` 3.2.2, bringing `@dnd-kit/accessibility` 3.1.1 and `tslib`. MIT, `tslib` 0BSD, about 18.7 KB gzipped, in a commit of its own. Native HTML5 was ruled out: Tauri's docs say `dragDropEnabled` must be off for it on Windows, and the user wouldn't change that setting. `@dnd-kit/react` 0.5.1 is pre-1.0 and was younger than the 3-day rule. *Known limit:* its last release was December 2024; its authors now work on the newer API.
+- **U70.** Every card has a Chance field, in all three sections, 100 for a new step: what's stored stays visible and editable.
+- **U71.** A real save always sends the sections' order (S84's finding, below).
+- **U72.** "Every" and "plus up to" are each a number with a seconds, minutes or hours drop-down. A stored value opens in the largest unit that shows it whole.
+- **U73. Read-only is the same form, locked:** the same sections, cards, labels and values. No Add, Remove, handle or Save. Fields are read-only rather than disabled, in the normal text color, so screen readers still read them. A step of an unknown type is one line. L may restyle it.
+- **U74.** "Modes" sits in the nav right after Home, for everyone, plus a "Modes" link beside a bot's mode drop-down in Settings.
+- **U75.** Group I stays one group and one PR, with separate commits for a commit-by-commit review and the dependency in its own. The cap's text names the limit, kept equal to the server's constant by a test.
+
+*Decided by the review agents, approved by the user at the plan review:*
+- **S82. Numbers the wire can't carry.** Anything the wire type can't hold (not a number, not whole, or outside `u8`/`u32`) is refused locally at its field by `validated()`, checked after seconds become milliseconds. Everything inside the wire type goes to the server, whose 422 answers (0 or 101 percent, 500 degrees, too short an interval). Locally the schemas also check, in the server's own words, the name (not empty, at most 32 once trimmed), at most 32 steps, and the chat message through `chatMessage`. An empty probability is refused locally, since a missing field is a bare 400; an empty angle or interval is left out and gets the server's "is required for this type".
+  - *Rejected:* clamping or rounding (it saves a value nobody typed); mirroring the ranges (it copies rules the user gave the server).
+- **S83 (security). The form while the row changes underneath it.**
+  - **A newer version arrives:** nothing happens until Save's 409, as in the servers editor.
+  - **`editable` turns false:** the open step-up prompt and notices go, and the view switches to the locked row with a line saying the edits weren't kept. Keeping the form would keep showing arguments the server just cut (S15). A form is filled only from an `editable` row with no cut step, so no request can start from a cut step. "Load again" on such a row goes to the locked view.
+  - **The row leaves the list:** the form stays, with a notice, "Save as copy", and no Save or Delete. Removal is judged only on data actually read, never on an empty or reset query, so the form stays mounted, unlike the servers editor's `Existing`.
+  - *Residual:* `mode_removed` can't tell a delete from a lost view (S33), so a copy after a lost view is possible; it discloses nothing the user didn't already have.
+  - *Rejected:* a frozen form in every case (it keeps cut arguments on screen); a notice as soon as a newer version arrives (false alarms from one's own save); the newest row always winning (any refetch loses edits).
+- **S84. Interleaved modes and "only when the form changed".**
+  - **Finding 1, confirmed in the code:** steps due at the same moment behave the same either way. `ModePlan::start` splits by schedule and keeps only each kind's own order; at-start steps finish before the loop; a respawn wins the `biased` select. **The real effect:** the definition is compared in list order, so the first real save of a mode whose order interleaves sections (only the API or the console can make one) restarts its steps on every running bot once, even a name-only save. The user accepted that (U71).
+  - **Finding 2:** the server's no-op check is order-sensitive (`same_as_shown`), so an untouched section-order save of such a mode would be a real edit, with a new version and possible 409s.
+  - **Decision:** a clean existing form sends nothing: Save is disabled while it's clean (a new mode's or copy's stays enabled). "Changed" is react-hook-form's `isDirty` against the loaded values, so going back to them counts as unchanged. `form.reset(valuesOf(answer))` after a save or Load again. A dirty save whose 200 keeps the same `version` says nothing changed (S21).
+  - *Rejected:* remembering each step's stored place (complex, and any step edit restarts bots anyway); relying on the server's no-op; opening such modes read-only.
+
+*Choices made at the plan (mine):*
+- **R157. A mode write is a direct call,** never a TanStack mutation: a chat step can hold `/login <password>`, the reason `sendCommand` is on frontend.md's list, and the four writes join that list. The `modes` query stays cached, as since H1 and like the chat history under U34: arguments reach only editors, in memory only, dropped at the session's end.
+- **R158. The form is three `useFieldArray`s,** so a step can't change section by construction. The request and the map from each `steps[i]…` path to its field are built together, through the order sent. `steps[i]` and `steps[i].action` show at the card's "What it does".
+- **R159. Every field stays a string in the form,** so `isDirty` compares what was loaded. Slot is a native select of 1 to 9, sent as `n - 1`, so a slot off the bar can't be sent. Changing a card's kind keeps its other fields, and a request carries only the fields that kind takes. `arguments_hidden`, `unlisted_command` and the flags never enter the form's type.
+- **R160. What opens locked:** not `editable`; any unknown action or schedule type; an unknown visibility; a step with `arguments_hidden`, even if the row says `editable`. A step with an unknown schedule goes in a block of its own, "Other steps", as one line.
+- **R161. The screen's flags:** edit, delete and the switch come only from `editable`, `deletable`, `visibility_editable`. `ModeOwnership` and `ModeVisibility` are open, so their switches have default branches.
+- **R162. The save follows `ChatSend`.** The plain route first, built once at submit. On `mode_needs_step_up`, the same request object goes to the twin through `useStepUpAction`, and the form stays locked until it answers. Delete goes straight through `useStepUpAction`.
+- **R163. The cache:** the answer goes in through livePatches' `placed`, then the list is invalidated; a delete through `without`, then the same.
+- **R164. Refusals:** a 429 through `useRetryWait`; 422 at the fields; 409 `conflict` on a create as the cap's text; 403 `forbidden` as the server's text with a re-read; 404 as S83's "left the list".
+- **R165. Routes:** `/modes`, `/modes/new`, `/modes/$id`, `/modes/$id/copy`.
+- **R166. The e2e fake's modes** follow the server's order (R3): the body's rules, the lookup, `forbidden`, the pointer, then no-op, version, name, in-use. It gains hooks for "another device changed it" and "another user's bot uses it".
+- **R167. Dragging:** one `DndContext` per section, `PointerSensor` (4 px), `KeyboardSensor` with `sortableKeyboardCoordinates`, `verticalListSortingStrategy`. Move up and Move down call the same `move`.
+- **R168. "Save as copy"'s name:** while the name still equals the loaded one, which would always be refused, the form's name becomes the suggested name before sending, so what's sent is what's on the screen. Any other name is sent as it is.
+- **R169. The bots at `mode_in_use`:** a direct every-page read at the refusal, not cached and never touching `BOTS_LIST_KEY`. If it fails, the refusal stays and the failure line shows.
+- **R170. A cut step's mark in a copy** stays while its message still reads `/name` as it came.
+- **R171.** The local text for a number is one of three (below), kept in `schemas.ts`.
+
+*The texts (the user's approval at the plan review; the cap's as they changed it):*
+
+| Where | Text |
+|---|---|
+| Nav, list heading | Modes |
+| List's intro | A mode is what a bot does while it's online. |
+| List's button, new screen's heading | New mode |
+| List, while loading / failed | Loading modes… / Couldn't load the modes: {why} |
+| A card's link, for screen readers | Open {name} |
+| Whose (card and screen) | Built in / Yours / {owner} / Someone else's |
+| Visibility (card and screen) | Private / Shared |
+| Step count | 1 step / {n} steps / No steps |
+| Mark: off the allowlist | Sends a command off the allowlist: only someone who manages a bot can choose this mode. |
+| Mark: a cut command (beside the field) | Its arguments are hidden: only someone who can edit this mode sees them. |
+| Mark: a cut command in a copy | Add its arguments: the original's are hidden from you. |
+| Name field | Name |
+| Visibility field | Who can see it |
+| The switch's choices | Private / Shared with everyone |
+| On a new mode or copy | New modes start private. If you're allowed to share it, the choice appears after saving. |
+| Section | When it joins |
+| Its hint | Runs once each time the bot joins a server. |
+| Section | While it's online |
+| Its hint | Repeats while the bot is online. The first run comes one wait after it joins. |
+| Section | After it respawns |
+| Its hint: the respawn explanation | After a death, the bot respawns, lets go of the use button and stops sneaking, then runs these steps. A chat step here is skipped if the last one went out less than 30 seconds ago. |
+| A section's button | Add step |
+| Next to it at the most steps | At most 32 steps. |
+| A card's label | Step {n} |
+| Card's controls | Remove / Move up / Move down |
+| What it does (field) | What it does |
+| Its choices | Look in a direction / Look around randomly / Jump / Sneak / Swing arm / Use the held item (right-click) / Hold right-click / Attack what's in front (left-click) / Select a hotbar slot / Send chat or a command |
+| Look | Yaw (left or right, as the F3 screen shows it) / Pitch (up or down, as the F3 screen shows it) |
+| Look around | Turn up to (degrees either way) / Tilt up to (degrees either way) |
+| Sneak | Sneaking: Start / Stop |
+| Hold right-click | Right-click: Hold / Let go |
+| Hotbar | Slot: 1 to 9 |
+| Chat | Message |
+| Timing | Every / Plus up to, at random |
+| Units | seconds / minutes / hours |
+| Chance | Chance (%) |
+| Local: the number's not a number | must be a number |
+| Local: not whole | must be a whole number |
+| Local: past the wire type | is out of range |
+| Save / Delete / Cancel / back link | Save / Delete / Cancel / Modes |
+| Step-up on a save | Enter your password to save a command off the allowlist. It counts for 5 minutes. |
+| After a create | Created {name}. |
+| After a save | Saved. Bots using this mode switch to the change at once. |
+| A dirty save that changed nothing | Nothing to save: the mode already reads like this. |
+| Delete's question / its button | Delete {name}? This can't be undone. / Delete mode |
+| After a delete | Deleted {name}. |
+| The cap (409 `conflict`) | You already have {cap} modes, the most you can have. Delete one to add another. |
+| `mode_changed` | The server's text, then: Load again (a failed read: Couldn't load the modes: {why}) |
+| `mode_in_use_by_others`, the explanation | Someone who can control that bot has to switch it to another mode first. Your edits are still here; you can save them as a copy. |
+| `mode_in_use`'s bots | These of the bots you can see run it: {links, by account name} |
+| No visible bot | It's a bot you can't see, so its owner has to switch it. |
+| The bots couldn't be read | Couldn't read your bots: {why} |
+| A mode that isn't there | This mode doesn't exist any more, or you can't see it. |
+| S83: left the list | This mode was deleted, or you can no longer see it. Your edits are still here; you can save them as a copy. |
+| S83: no longer editable | You can no longer edit this mode, so your edits weren't kept. |
+| Unknown step type (the line) | This app doesn't know this step. |
+| Unknown step type (the screen's note) | This mode has a step this app doesn't know, so it opens read-only. Update the app to edit it. |
+| Block for an unknown schedule | Other steps |
+| Copy's button | Make a copy |
+| Notice's button | Save as copy |
+| Suggested name | {name} copy, shortened to fit 32 characters |
+| After a copy | Saved a copy as {name}. |
+| Settings link | Modes |
+| Drag handle | Drag step {n} |
+| Keyboard instructions | To pick up a step, press Space or Enter. Use the arrow keys to move it, then Space or Enter to drop it, or Escape to cancel. |
+| Announcements | Step {n} moved to position {m} of {count}. / Picked up step {n}. / Put back step {n}. |
+
 ### Group I's first commit
 Scheduled at H8's plan review, and PR #83's review, in one commit.
 
@@ -2070,7 +2197,7 @@ Scheduled at H8's plan review, and PR #83's review, in one commit.
 - **H6 (P11.9's Minecraft-servers screens), from H4's planning:** U56's four commands change build.rs's `COMMANDS`, the capability, `tauri-hardening.mjs`, `ipc-contract.json`, `ApiClient` with `API_METHODS`, `TauriApiClient`, `FakeApiClient`, `UnavailableApiClient`, `validated.ts` and the e2e fake's `COMMANDS` together; `limits.ts` gains the texts' 16 and 1024 and the 100 rows, which `tests/limits.rs` checks. U57's list and screen follow R136 and the texts above; the editor sends the answer's lines back joined by line breaks (S77), and builds every request from its form state. An e2e story adds a server with a text after the step-up, sees it listed, edits it and deletes it. *Built (above), with U61: Add opens the new entry, Save stays; the page is 10 rows since PR #79's review.*
 - **H7 (P11.9's chat format), from H4's planning:** S79, S80 with U59, R134 and R135; U55's icon in `senderOf`'s new look; the preview's route and `preview_chat_formats` (54 grants, U58); `0020` adds the column, read back exactly; the audit's metadata gains `formats`, `previous_formats` and `formats_changed`; S78's empty rule becomes "no text without a format"; P13.2 gains two fuzz targets (the constructor over any list of strings, the matcher over any format and text: no panic, and a `Some` is a valid `McUsername` read from the text's head). *From H6:* the editor's formats section goes between the texts and Save, its fields built from the form state as the texts are, and its field errors at `chat_formats[i]`; the list adds " · 1 chat format" / " · {n} chat formats" to an entry's count. A row's answer grows by at most about 2 KiB with 8 formats of 64 four-byte characters, so a page of 10 still fits a client's answer cap (about 680 KB), and the largest request with formats in three-byte characters stays about 51 KiB, under the 64 KiB body limit. *Planned at group H7's planning (above): split into H7 (the formats as a setting) and H8 (parsed senders end to end, the editor's formats); S81, R137–R149.* *The user's later ideas (U60), not built in H7:* a `{clan}` part shown in its own console column, and per-server highlight rules (for example tpa requests) with their own look. H7's syntax and stored shape must not block them: braces are reserved (U59), so `{clan}` is free, and the stored lists leave room for another column beside them.
 - **H8 (P11.9's parsed senders), from H7's planning:** S79 with R146 and S81 (the six tests named there), the console's label (R143), the 54th command `preview_chat_formats` in every place CLAUDE.md's "A new command changes …" line names (54 grants, U58), the editor's formats section between the texts and Save (`useFieldArray`, "Chat format {n}", Remove described by its label, "Add format", at 8 "At most 8 formats.", locked like the texts) with "Try a line" (R148), U55's look (R149), and an e2e story: the Owner adds a format and tries a line, a bot on that server shows the matched line with the icon, and deleting the format shows it as the server's again. The fake reads formats at the chat's read with a small matcher of its own. The user's hands-on, on the dev stack: lines typed in `docker compose --file deploy/compose.dev.yaml exec minecraft rcon-cli`, a matched line, an unmatched one, the spoof `[x] Admin : hi`, the preview box, and deleting the format correcting the history. *Built (above).*
-- **I (P11.9's mode editor):** *From H's planning (S68):* the editor shares the every-page modes query and may show `unlisted_command` as a mark; it never echoes the field back (R5; `deny_unknown_fields` makes an echo a 400). the editor binds to S12's types and opens a mode with an unknown `type` read-only; it shows a mode editable, deletable or with a visibility switch from S14's flags, and never copies `authorize()`; it builds each request from its form state, never by echoing an answer (R5), and marks a cut command outside its text (S15); on `mode_needs_step_up` it resends the same body to the `/with-commands` twin through `useStepUpAction` (S16), and `DELETE` goes through it directly; it keeps the loaded `version` and handles `mode_changed`, `mode_in_use_by_others` and `mode_in_use` (S17, S18). *The user's note at the plan review:* the editor shows hotbar slots as 1 to 9, the keys players know, and maps them to the API's 0 to 8. The wordings of its marks, the 409s' handling and "save as copy" are the user's then. *From C3:* the editor shows each step's schedule, `on_respawn` among them, and explains what a respawn does: the bot lets go of the use button and stops sneaking first, and an on-respawn chat is skipped within 30 s of the last; its wording is the user's then. *From H8's plan review (the user's):* I's first commit makes the TanStack client's default `networkMode` `"always"` for queries and mutations, with tests of its own. Nothing then pauses while Windows reports offline, as PR #81's review found for "Load again" (a paused read resolves unread), and fleet-client's own unreachable answer, with the banner, decides.
+- **I (P11.9's mode editor):** *From H's planning (S68):* the editor shares the every-page modes query and may show `unlisted_command` as a mark; it never echoes the field back (R5; `deny_unknown_fields` makes an echo a 400). the editor binds to S12's types and opens a mode with an unknown `type` read-only; it shows a mode editable, deletable or with a visibility switch from S14's flags, and never copies `authorize()`; it builds each request from its form state, never by echoing an answer (R5), and marks a cut command outside its text (S15); on `mode_needs_step_up` it resends the same body to the `/with-commands` twin through `useStepUpAction` (S16), and `DELETE` goes through it directly; it keeps the loaded `version` and handles `mode_changed`, `mode_in_use_by_others` and `mode_in_use` (S17, S18). *The user's note at the plan review:* the editor shows hotbar slots as 1 to 9, the keys players know, and maps them to the API's 0 to 8. The wordings of its marks, the 409s' handling and "save as copy" are the user's then. *From C3:* the editor shows each step's schedule, `on_respawn` among them, and explains what a respawn does: the bot lets go of the use button and stops sneaking first, and an on-respawn chat is skipped within 30 s of the last; its wording is the user's then. *From H8's plan review (the user's):* I's first commit makes the TanStack client's default `networkMode` `"always"` for queries and mutations, with tests of its own. Nothing then pauses while Windows reports offline, as PR #81's review found for "Load again" (a paused read resolves unread), and fleet-client's own unreachable answer, with the banner, decides. *Planned at group I's planning (above): U62–U75, S82–S84, R157–R171.*
 - **L (P11.11):** *After H3, the user's note:* the app looks poor throughout. Button placement, spacing and general styling need rework on every screen, and L's brief starts from it.
 - **M:** U1's 24-hour run on the same folder, logging JSON at `info` to files. *From H5's check (above):* it passed on 2026-10-28, and `target/dod-run/` holds the linked account for the run, where the user logs in again. *From H5:* the kit's recipes are the run's too (`dod-server`, `dod-agent`, `dod-app`, its own ports, release builds); M adds the log files, through the recipes' exports or a recipe of its own, which `scripts/dod-kit.test.mjs` and the config tests then cover; `deploy/dod/agent.toml`'s `public_targets = false` stays until M decides (U50); `dod-clean` refuses while the agent's heartbeat is fresh or the database's `-wal` is there; the steps' part two ends the DoD. *From H3's planning:* the first check runs on H5's branch, through H5's `dod-*` recipes, and the server's own `rcon-cli list` confirms the bot; M's run can confirm the same way. *From H's planning:* the run decides whether it changes `public_targets` (U50); "every event shows up live" reads as every event outside a gap the timeline marks (S71); about 96 routine reconnects a day each open a sub-second gap; the DoD exes are release builds (S72); the end follows U51's second part. *From C3:* at `info` a respawn shows only when the server didn't confirm one in 5 s (`warn`); a confirmed one logs at `debug`. *From E:* the 24-hour run sees the retention at work: a `debug` line per run that deleted something, and one `retention.purge` entry an hour that deleted anything, plus one at the stop. J's audit screen shows that entry as the server's, with its counts; its wording is the user's then.
 
