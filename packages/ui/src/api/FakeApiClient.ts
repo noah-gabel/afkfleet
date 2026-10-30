@@ -1,3 +1,5 @@
+import type { CreateModeRequest } from "../generated/CreateModeRequest";
+import type { UpdateModeRequest } from "../generated/UpdateModeRequest";
 // The API client for tests (Plan.md P8.5, ADR-0017): each test scripts only the methods
 // it needs; any other method rejects with an `ApiError` that names it, so a test can't
 // pass by accident. Every call is recorded with its arguments, for checking interactions.
@@ -36,6 +38,7 @@ import type { MeResponse } from "../generated/MeResponse";
 import type { MfaConfirmResponse } from "../generated/MfaConfirmResponse";
 import type { MfaEnrollResponse } from "../generated/MfaEnrollResponse";
 import type { ModePage } from "../generated/ModePage";
+import type { ModeResponse } from "../generated/ModeResponse";
 import type { PasswordChangeRequest } from "../generated/PasswordChangeRequest";
 import type { PreviewChatFormatsRequest } from "../generated/PreviewChatFormatsRequest";
 import type { PreviewChatFormatsResponse } from "../generated/PreviewChatFormatsResponse";
@@ -252,6 +255,26 @@ export class FakeApiClient implements ApiClient {
     request: UpdateServerSettingsRequest,
   ): Promise<ServerSettingsResponse> {
     return this.#handler("updateServerSettings", [id, request])(id, request);
+  }
+
+  async createMode(request: CreateModeRequest): Promise<ModeResponse> {
+    return this.#handler("createMode", [request])(request);
+  }
+
+  async createModeWithCommands(request: CreateModeRequest): Promise<ModeResponse> {
+    return this.#handler("createModeWithCommands", [request])(request);
+  }
+
+  async updateMode(id: string, request: UpdateModeRequest): Promise<ModeResponse> {
+    return this.#handler("updateMode", [id, request])(id, request);
+  }
+
+  async updateModeWithCommands(id: string, request: UpdateModeRequest): Promise<ModeResponse> {
+    return this.#handler("updateModeWithCommands", [id, request])(id, request);
+  }
+
+  async deleteMode(id: string): Promise<void> {
+    return this.#handler("deleteMode", [id])(id);
   }
 
   async deleteServerSettings(id: string): Promise<void> {

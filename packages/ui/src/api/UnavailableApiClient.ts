@@ -41,6 +41,11 @@ export class UnavailableApiClient implements ApiClient {
   bots = unavailable;
   bot = unavailable;
   modes = unavailable;
+  createMode = unavailable;
+  createModeWithCommands = unavailable;
+  updateMode = unavailable;
+  updateModeWithCommands = unavailable;
+  deleteMode = unavailable;
   patchBot = unavailable;
   setBotMode = unavailable;
   startBot = unavailable;

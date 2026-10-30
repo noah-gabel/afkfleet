@@ -22,6 +22,7 @@ pub(crate) mod links;
 pub(crate) mod live;
 pub(crate) mod me;
 pub(crate) mod mfa;
+pub(crate) mod modes;
 pub(crate) mod server;
 pub(crate) mod server_settings;
 pub(crate) mod users;

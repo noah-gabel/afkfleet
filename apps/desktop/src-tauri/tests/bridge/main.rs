@@ -13,6 +13,7 @@ mod auth;
 mod bots;
 mod chat;
 mod live;
+mod modes;
 mod server_settings;
 mod support;
 mod switch;

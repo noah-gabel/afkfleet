@@ -18,6 +18,7 @@ import type { CreatedInviteResponse } from "../generated/CreatedInviteResponse";
 import type { CreatedOfflineAccountResponse } from "../generated/CreatedOfflineAccountResponse";
 import type { CreateGrantRequest } from "../generated/CreateGrantRequest";
 import type { CreateInviteRequest } from "../generated/CreateInviteRequest";
+import type { CreateModeRequest } from "../generated/CreateModeRequest";
 import type { CreateOfflineAccountRequest } from "../generated/CreateOfflineAccountRequest";
 import type { CreateServerSettingsRequest } from "../generated/CreateServerSettingsRequest";
 import type { GrantPage } from "../generated/GrantPage";
@@ -33,6 +34,7 @@ import type { MeResponse } from "../generated/MeResponse";
 import type { MfaConfirmResponse } from "../generated/MfaConfirmResponse";
 import type { MfaEnrollResponse } from "../generated/MfaEnrollResponse";
 import type { ModePage } from "../generated/ModePage";
+import type { ModeResponse } from "../generated/ModeResponse";
 import type { PasswordChangeRequest } from "../generated/PasswordChangeRequest";
 import type { PreviewChatFormatsRequest } from "../generated/PreviewChatFormatsRequest";
 import type { PreviewChatFormatsResponse } from "../generated/PreviewChatFormatsResponse";
@@ -46,6 +48,7 @@ import type { ServerSettingsResponse } from "../generated/ServerSettingsResponse
 import type { SessionPage } from "../generated/SessionPage";
 import type { SetupStepResponse } from "../generated/SetupStepResponse";
 import type { StepUpRequest } from "../generated/StepUpRequest";
+import type { UpdateModeRequest } from "../generated/UpdateModeRequest";
 import type { UpdateServerSettingsRequest } from "../generated/UpdateServerSettingsRequest";
 import type { UserPage } from "../generated/UserPage";
 import type { UserPatchRequest } from "../generated/UserPatchRequest";
@@ -140,6 +143,16 @@ export interface ApiClient {
   bot(id: string): Promise<BotResponse>;
   /** A page of the modes the caller may see, newest first. */
   modes(before?: string, limit?: number): Promise<ModePage>;
+  /** A new mode of the caller's, whose steps send no command off the allowlist (S16). */
+  createMode(request: CreateModeRequest): Promise<ModeResponse>;
+  /** A new mode of the caller's, whatever its steps send, after a step-up (S16). */
+  createModeWithCommands(request: CreateModeRequest): Promise<ModeResponse>;
+  /** The mode as it should be, at the version read, sending no command off the allowlist. */
+  updateMode(id: string, request: UpdateModeRequest): Promise<ModeResponse>;
+  /** The mode as it should be, at the version read, whatever it sends, after a step-up (S16). */
+  updateModeWithCommands(id: string, request: UpdateModeRequest): Promise<ModeResponse>;
+  /** Deletes a mode no bot uses, after a step-up (S16, S17). */
+  deleteMode(id: string): Promise<void>;
   /**
    * Sets the bot's server (Manage, after a step-up, ADR-0019, S47): the bot as it reads
    * after. A 403 `step_up_required` asks for the password first.
@@ -232,6 +245,11 @@ export const API_METHODS = [
   "bots",
   "bot",
   "modes",
+  "createMode",
+  "createModeWithCommands",
+  "updateMode",
+  "updateModeWithCommands",
+  "deleteMode",
   "patchBot",
   "setBotMode",
   "startBot",
