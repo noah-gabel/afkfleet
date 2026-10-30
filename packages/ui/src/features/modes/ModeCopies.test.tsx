@@ -201,8 +201,8 @@ describe("Make a copy (U63)", () => {
 });
 
 describe("Save as copy (U63, R168)", () => {
-  /** An edit refused by a 409 `code`, on the form with `edit`. */
-  async function refusedBy(code: string, edit: (typed: HTMLInputElement) => Promise<void>) {
+  /** A step edited, and the edit refused by a 409 `code`; the name stays. */
+  async function refusedBy(code: string) {
     const found = await atMode(MINE.id, {
       rows: [MINE],
       handlers: {
@@ -212,7 +212,10 @@ describe("Save as copy (U63, R168)", () => {
       },
     });
     await screen.findByRole("heading", { name: "Fishing", level: 1 });
-    await edit(nameField());
+    await found.app.user.selectOptions(
+      within(card("atStart", 1)).getByLabelText("What it does"),
+      "Swing arm",
+    );
     await found.app.user.click(saveButton());
     await screen.findByText(`refused: ${code}`);
     return found;
@@ -221,13 +224,7 @@ describe("Save as copy (U63, R168)", () => {
   it.each(["mode_changed", "mode_in_use_by_others"])(
     "is in %s's notice, and sends the form as a new private mode, under the suggested name",
     async (code) => {
-      const { app } = await refusedBy(code, async () => {
-        await app_type();
-      });
-
-      async function app_type(): Promise<void> {
-        // The name stays; only a step changes.
-      }
+      const { app } = await refusedBy(code);
 
       await app.user.click(screen.getByRole("button", { name: SAVE_AS_COPY }));
 
@@ -236,7 +233,7 @@ describe("Save as copy (U63, R168)", () => {
         name: "Fishing copy",
         visibility: "private",
         steps: [
-          { action: { type: "jump" }, schedule: { type: "at_start" }, probability: 100 },
+          { action: { type: "swing_arm" }, schedule: { type: "at_start" }, probability: 100 },
         ],
       });
       expect(calls(app, "updateMode")).toHaveLength(1);

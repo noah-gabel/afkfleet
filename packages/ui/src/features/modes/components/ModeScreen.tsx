@@ -2,6 +2,9 @@
 // the every-page list, there being no single-mode route. An editable row gets the form, any other
 // the locked view.
 //
+// "Make a copy" opens the mode's values here as a new mode, what they were when it was pressed
+// (U63). They stay in this component's state alone, since a chat step can hold a password (R157).
+//
 // While the form is open, the list can change under it (S83):
 // - a newer version changes nothing but the flags it offers by: Save's 409 says so;
 // - a row it can no longer hold, one whose commands may be cut for this viewer, drops to the locked
@@ -9,14 +12,14 @@
 // - a row gone keeps the form, with its notice: a delete and a lost view look the same, and the
 //   edits can still be saved as a copy. Only data actually read says a row is gone, never an
 //   empty or reset query, so the form stays mounted through those.
-import { useRef } from "react";
+import { useRef, useState } from "react";
 
 import { toApiError } from "../../../api/ApiError";
 import { describeError } from "../../../api/describeError";
 import { useModes } from "../../../api/queries";
 import type { ModeResponse } from "../../../generated/ModeResponse";
 import { modesOf } from "../../bots/facts";
-import { isEditable, newValues, valuesOf } from "../modeForm";
+import { isEditable, type ModeValues, newValues, valuesOf } from "../modeForm";
 import { LOADING_MODES, MODE_GONE, modesFailed, NO_LONGER_EDITABLE } from "../texts";
 import { LockedMode } from "./LockedMode";
 import { ModeEditor } from "./ModeEditor";
@@ -38,8 +41,12 @@ export function ModeScreen({ id }: { id: string }) {
   const known = modesOf(query);
   // The row a form opened on, and last showed: what it stays on while no row is read.
   const opened = useRef<ModeResponse | null>(null);
+  const [copy, setCopy] = useState<ModeValues | null>(null);
   const read = typeof known === "string" ? undefined : known.find((mode) => mode.id === id);
 
+  if (copy !== null) {
+    return <ModeEditor key="copy" initial={copy} copying />;
+  }
   if (read === undefined) {
     if (opened.current !== null) {
       return (
@@ -76,10 +83,15 @@ export function ModeScreen({ id }: { id: string }) {
   }
   if (isEditable(read)) {
     opened.current = read;
-    return <ModeEditor row={read} initial={valuesOf(read)} left={false} />;
+    return <ModeEditor row={read} initial={valuesOf(read)} left={false} onCopy={setCopy} />;
   }
   const lost = opened.current !== null;
   return (
-    <LockedMode key={lockedKey(read)} mode={read} note={lost ? NO_LONGER_EDITABLE : undefined} />
+    <LockedMode
+      key={lockedKey(read)}
+      mode={read}
+      note={lost ? NO_LONGER_EDITABLE : undefined}
+      onCopy={setCopy}
+    />
   );
 }

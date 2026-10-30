@@ -7,11 +7,20 @@ import { useId, useState } from "react";
 import { useForm } from "react-hook-form";
 
 import { FormField } from "../../../components/FormField";
+import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import type { ModeResponse } from "../../../generated/ModeResponse";
 import { useStepUpAction } from "../../admin/hooks/useStepUpAction";
-import { isKnownMode, type ModeValues, SECTIONS, unknownSteps, valuesOf } from "../modeForm";
 import {
+  copyValues,
+  isKnownMode,
+  type ModeValues,
+  SECTIONS,
+  unknownSteps,
+  valuesOf,
+} from "../modeForm";
+import {
+  MAKE_A_COPY,
   MODE_GONE,
   NAME_FIELD,
   OTHER_STEPS,
@@ -30,8 +39,19 @@ const READ_ONLY: StepView = { readOnly: true, locked: false, copying: false };
 /** Nothing to announce: nothing moves. */
 function silent(): void {}
 
-/** `mode`, locked; `note` says why it's locked when that needs saying. */
-export function LockedMode({ mode, note }: { mode: ModeResponse; note?: string | undefined }) {
+/**
+ * `mode`, locked; `note` says why it's locked when that needs saying, and `onCopy` opens a copy
+ * of it, if this version can hold it (U63).
+ */
+export function LockedMode({
+  mode,
+  note,
+  onCopy,
+}: {
+  mode: ModeResponse;
+  note?: string | undefined;
+  onCopy: (values: ModeValues) => void;
+}) {
   const formId = useId();
   const form = useForm<ModeValues>({ defaultValues: valuesOf(mode) });
   const writes = useStepUpAction();
@@ -70,6 +90,16 @@ export function LockedMode({ mode, note }: { mode: ModeResponse; note?: string |
         )}
       </div>
       {gone ? <p role="alert">{MODE_GONE}</p> : null}
+      {isKnownMode(mode) ? (
+        <Button
+          type="button"
+          variant="outline"
+          className="self-start"
+          onClick={() => onCopy(copyValues(mode))}
+        >
+          {MAKE_A_COPY}
+        </Button>
+      ) : null}
       {mode.deletable && !gone ? (
         <DeleteMode mode={mode} writes={writes} onGone={() => setGone(true)} />
       ) : null}

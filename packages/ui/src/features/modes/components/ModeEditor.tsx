@@ -14,6 +14,10 @@
 //   notice and the edits and says why (U64). `mode_in_use_by_others` shows the server's text with
 //   the app's explanation, and the form stays editable (U65). Nothing but "Load again" and a save
 //   resets the form, so a refetch never loses edits.
+// - **Copies:** "Make a copy" hands the form's values to `ModeScreen`, which opens them as a new
+//   mode. "Save as copy", in the two notices and on a row that left the list, sends the form as a
+//   new private mode; a name still the loaded one, which would always be refused, becomes the
+//   suggested one on the form first, so what's sent is what's on the screen (U63, U67, R168).
 // - **The server stays the authority:** its 422 shows at the field it names, through the order
 //   sent (R158); `validated()` refuses only what the wire can't carry (S82). The form's "resolver"
 //   checks nothing: it makes every submit start clean, so an error the server put on a field never
@@ -44,22 +48,34 @@ import { isStepUpRequired } from "../../../lib/stepUp";
 import { StepUpPrompt } from "../../admin/components/StepUpPrompt";
 import { useStepUpAction } from "../../admin/hooks/useStepUpAction";
 import { rememberMode, rereadModes } from "../cache";
-import { isEditable, type ModeValues, SECTIONS, stepsOf, stepTotal, valuesOf } from "../modeForm";
+import {
+  copyOfValues,
+  isEditable,
+  type ModeValues,
+  SECTIONS,
+  stepsOf,
+  stepTotal,
+  valuesOf,
+} from "../modeForm";
 import {
   CANCEL,
   CAP_REACHED,
+  copyName,
   created,
   IN_USE_BY_OTHERS,
   LEFT_THE_LIST,
   LOAD_AGAIN,
+  MAKE_A_COPY,
   modesFailed,
   NAME_FIELD,
   NEW_MODE,
   NOTHING_TO_SAVE,
   SAVE,
+  SAVE_AS_COPY,
   SAVE_STEP_UP,
   SAVED,
   STARTS_PRIVATE,
+  savedCopy,
   VISIBILITY_FIELD,
   VISIBILITY_PRIVATE,
   VISIBILITY_SHARED,
@@ -87,16 +103,21 @@ function cachedModes(queryClient: QueryClient): readonly ModeResponse[] {
 
 /**
  * The form of `row`, or of a new mode without one, starting from `initial`. `left`: the row left
- * the list, so the form stays but nothing here can be saved over it (S83).
+ * the list, so the form stays but nothing here can be saved over it (S83). `copying`: the new
+ * mode is a copy, a cut command the user's to complete. `onCopy` opens a copy of the form.
  */
 export function ModeEditor({
   row,
   initial,
   left = false,
+  copying = false,
+  onCopy,
 }: {
   row?: ModeResponse;
   initial: ModeValues;
   left?: boolean;
+  copying?: boolean;
+  onCopy?: (values: ModeValues) => void;
 }) {
   const api = useApiClient();
   const queryClient = useQueryClient();
@@ -123,7 +144,7 @@ export function ModeEditor({
   });
 
   /** What a refusal other than the step-up's shows: a wait, a field's text, or a line. */
-  function show(error: CommandError): void {
+  function show(error: CommandError, creating: boolean): void {
     if (wait.start(error)) {
       return;
     }
@@ -132,9 +153,9 @@ export function ModeEditor({
       setConflict({ kind: "changed", text: details.message });
     } else if (details?.status === 409 && details.code === "mode_in_use_by_others") {
       setConflict({ kind: "others", text: details.message });
-    } else if (details?.status === 409 && row === undefined) {
+    } else if (details?.status === 409 && creating) {
       setFormError(CAP_REACHED);
-    } else if (details?.status === 404 && row !== undefined) {
+    } else if (details?.status === 404 && !creating) {
       setGoneToSave(true);
       rereadModes(queryClient);
     } else if (details?.status === 403) {
@@ -149,13 +170,13 @@ export function ModeEditor({
   }
 
   /** What a save's answer changes: the list, a toast, and the screen. */
-  function answered(saved: ModeResponse): void {
+  function answered(saved: ModeResponse, creating: boolean): void {
     rememberMode(queryClient, saved);
     if (!alive.current) {
       return;
     }
-    if (row === undefined) {
-      toast.success(created(saved.name));
+    if (creating) {
+      toast.success(copying || row !== undefined ? savedCopy(saved.name) : created(saved.name));
       void navigate({ to: "/modes/$id", params: { id: saved.id }, replace: true });
     } else {
       toast.success(saved.version === version ? NOTHING_TO_SAVE : SAVED);
@@ -165,19 +186,19 @@ export function ModeEditor({
   }
 
   /** The twin, after the step-up it asks for (S16). */
-  function throughTwin(send: () => Promise<ModeResponse>): void {
+  function throughTwin(send: () => Promise<ModeResponse>, creating: boolean): void {
     void writes.attempt({
       key: SAVE_KEY,
       run: async () => {
         try {
-          answered(await send());
+          answered(await send(), creating);
         } catch (rejection) {
           const error = toApiError(rejection).error;
           if (isStepUpRequired(error)) {
             throw rejection;
           }
           if (alive.current) {
-            show(error);
+            show(error, creating);
           }
         }
       },
@@ -188,16 +209,17 @@ export function ModeEditor({
   async function save(
     plain: () => Promise<ModeResponse>,
     twin: () => Promise<ModeResponse>,
+    creating: boolean,
   ): Promise<void> {
     setSending(true);
     try {
-      answered(await plain());
+      answered(await plain(), creating);
     } catch (rejection) {
       const error = toApiError(rejection).error;
       if (error.api?.code === "mode_needs_step_up") {
-        throughTwin(twin);
+        throughTwin(twin, creating);
       } else if (alive.current) {
-        show(error);
+        show(error, creating);
       }
     } finally {
       if (alive.current) {
@@ -230,15 +252,41 @@ export function ModeEditor({
       void save(
         () => api.createMode(body),
         () => api.createModeWithCommands(body),
+        true,
       );
     } else {
       const request = { version, ...body };
       void save(
         () => api.updateMode(row.id, request),
         () => api.updateModeWithCommands(row.id, request),
+        false,
       );
     }
   });
+
+  /** The form as a new private mode, under the suggested name if it still has the loaded one. */
+  function saveAsCopy(): void {
+    if (form.getValues("name").trim() === form.formState.defaultValues?.name) {
+      form.setValue("name", copyName(form.getValues("name").trim()), { shouldDirty: true });
+    }
+    form.clearErrors();
+    setFormError(undefined);
+    setReloadFailed(null);
+    wait.reset();
+    const values = form.getValues();
+    const built = stepsOf(values);
+    paths.current = built.paths;
+    const body: CreateModeRequest = {
+      name: values.name,
+      visibility: "private",
+      steps: built.steps,
+    };
+    void save(
+      () => api.createMode(body),
+      () => api.createModeWithCommands(body),
+      true,
+    );
+  }
 
   /**
    * Reads the list again after a 409 and fills the form from it. A read that fails changes nothing
@@ -275,7 +323,18 @@ export function ModeEditor({
   const gone = left || goneToSave;
   // While a write runs or the password is asked, what's sent is what's on the screen.
   const locked = sending || writes.prompt !== null || writes.running !== null;
-  const view = { readOnly: false, locked, copying: false };
+  const view = { readOnly: false, locked, copying };
+  const keepAsCopy = (
+    <Button
+      type="button"
+      variant="outline"
+      className="self-start"
+      disabled={locked || wait.waiting !== null}
+      onClick={saveAsCopy}
+    >
+      {SAVE_AS_COPY}
+    </Button>
+  );
   const errors = form.formState.errors;
   const canSave = row === undefined || form.formState.isDirty;
   return (
@@ -353,10 +412,16 @@ export function ModeEditor({
                   {LOAD_AGAIN}
                 </Button>
               ) : null}
+              {keepAsCopy}
             </AlertDescription>
           </Alert>
         )}
-        {gone ? <p role="alert">{LEFT_THE_LIST}</p> : null}
+        {gone ? (
+          <div className="flex flex-col gap-2">
+            <p role="alert">{LEFT_THE_LIST}</p>
+            {keepAsCopy}
+          </div>
+        ) : null}
         <RetryWaitMessage wait={wait} />
         <div className="flex gap-2">
           {gone ? null : (
@@ -392,6 +457,17 @@ export function ModeEditor({
           {writes.failure.message}
         </p>
       ) : null}
+      {onCopy === undefined || gone ? null : (
+        <Button
+          type="button"
+          variant="outline"
+          className="self-start"
+          disabled={locked}
+          onClick={() => onCopy(copyOfValues(form.getValues()))}
+        >
+          {MAKE_A_COPY}
+        </Button>
+      )}
       {row?.deletable && !gone ? (
         <DeleteMode mode={row} writes={writes} onGone={() => setGoneToSave(true)} />
       ) : null}

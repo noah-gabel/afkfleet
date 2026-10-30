@@ -202,9 +202,14 @@ export function valuesOf(mode: ModeResponse): ModeValues {
   return values;
 }
 
-/** What a copy of `mode` starts from: its steps, the suggested name, and private (U63, U67). */
+/** What a copy of a form holding `values` starts from: the suggested name, and private (U63, U67). */
+export function copyOfValues(values: ModeValues): ModeValues {
+  return { ...values, name: copyName(values.name), visibility: "private" };
+}
+
+/** What a copy of `mode` starts from. */
 export function copyValues(mode: ModeResponse): ModeValues {
-  return { ...valuesOf(mode), name: copyName(mode.name), visibility: "private" };
+  return copyOfValues(valuesOf(mode));
 }
 
 /** The steps of `mode` the form can't hold, by the section they belong in, if any. */
