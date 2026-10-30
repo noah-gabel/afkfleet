@@ -177,10 +177,11 @@ export function StepCard({
 
   return (
     <fieldset className="flex flex-col gap-3 rounded-md border border-input p-4">
-      <legend id={legendId} className="flex items-center gap-2 px-1 text-sm font-medium">
-        {handle}
+      <legend id={legendId} className="px-1 text-sm font-medium">
         {stepLabel(index + 1)}
       </legend>
+      {/* Beside the legend, not in it: the group's name is its legend, for a screen reader. */}
+      {handle}
       {choice(
         "kind",
         WHAT_IT_DOES,

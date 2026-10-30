@@ -80,7 +80,7 @@ function DraggableStep({ id, index, place }: { id: string; index: number; place:
           <button
             ref={setActivatorNodeRef}
             type="button"
-            className="cursor-grab touch-none rounded-sm text-muted-foreground disabled:cursor-default"
+            className="cursor-grab touch-none self-start rounded-sm text-muted-foreground disabled:cursor-default"
             {...attributes}
             {...listeners}
             aria-label={dragStep(index + 1)}

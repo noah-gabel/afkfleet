@@ -494,6 +494,15 @@ describe("dragging a step (U68, R167)", () => {
     steps: [shownStep({ type: "jump" }, every(10)), shownStep({ type: "swing_arm" }, every(20))],
   });
 
+  it("keeps the handle out of the card's name", async () => {
+    await atMode(TWO.id, { rows: [TWO] });
+    await screen.findByRole("heading", { name: "Mode 1", level: 1 });
+
+    const handle = within(card("repeating", 1)).getByRole("button", { name: "Drag step 1" });
+
+    expect(handle.closest("legend")).toBeNull();
+  });
+
   it("gives each card a named handle, within its section", async () => {
     await atMode(TWO.id, { rows: [TWO] });
     await screen.findByRole("heading", { name: "Mode 1", level: 1 });

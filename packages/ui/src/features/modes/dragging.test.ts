@@ -21,6 +21,13 @@ describe("dragAnnouncements", () => {
     expect(said.onDragEnd(arguments_)).toBe("Step 3 moved to position 1 of 3.");
   });
 
+  it("says the pick-up, not a move, while it's over itself", () => {
+    const itself = { active: active("b"), over: over("b") };
+
+    expect(said.onDragOver(itself)).toBe("Picked up step 2.");
+    expect(said.onDragEnd(itself)).toBe("Put back step 2.");
+  });
+
   it("says it's back when it's over no step or the drag is cancelled", () => {
     expect(said.onDragOver({ active: active("c"), over: null })).toBeUndefined();
     expect(said.onDragEnd({ active: active("c"), over: null })).toBe("Put back step 3.");
