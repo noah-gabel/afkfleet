@@ -31,7 +31,7 @@ use fleet_api_types::chat::{
 use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaConfirmResponse, MfaEnrollResponse};
-use fleet_api_types::modes::ModePage;
+use fleet_api_types::modes::{CreateModeRequest, ModePage, ModeResponse, UpdateModeRequest};
 use fleet_api_types::server_settings::{
     CreateServerSettingsRequest, PreviewChatFormatsRequest, PreviewChatFormatsResponse,
     ServerSettingsPage, ServerSettingsPageQuery, ServerSettingsResponse,
@@ -552,6 +552,95 @@ impl<F: StoreFactory> AppState<F> {
         let query = page(before, limit)?;
         let conn = self.conn.read().await;
         conn.client()?.modes(&query).await.map_err(error::client)
+    }
+
+    /// The `create_mode` command: a new mode of the caller's, whose steps send
+    /// no command off the server's allowlist.
+    ///
+    /// # Errors
+    /// `invalid_input` for a field the server would refuse, `no_server`,
+    /// `no_session`, or `api` 403 (`mode_needs_step_up`, or `forbidden`),
+    /// 409 (`conflict`: the caller owns the most modes), 422 or 429.
+    pub async fn create_mode(
+        &self,
+        request: CreateModeRequest,
+    ) -> Result<ModeResponse, CommandError> {
+        validate(&request)?;
+        let conn = self.conn.read().await;
+        conn.client()?
+            .create_mode(&request)
+            .await
+            .map_err(error::client)
+    }
+
+    /// The `create_mode_with_commands` command: a new mode of the caller's,
+    /// whatever its steps send, after `step_up` within 5 minutes (ADR-0020,
+    /// S16).
+    ///
+    /// # Errors
+    /// As `create_mode`, with 403 `step_up_required` in place of
+    /// `mode_needs_step_up`.
+    pub async fn create_mode_with_commands(
+        &self,
+        request: CreateModeRequest,
+    ) -> Result<ModeResponse, CommandError> {
+        validate(&request)?;
+        let conn = self.conn.read().await;
+        conn.client()?
+            .create_mode_with_commands(&request)
+            .await
+            .map_err(error::client)
+    }
+
+    /// The `update_mode` command: the mode `id` as it should be from now on,
+    /// at the `version` read, its steps sending no command off the server's
+    /// allowlist (ADR-0020, S16–S18).
+    ///
+    /// # Errors
+    /// `invalid_input` for a field the server would refuse, `no_server`,
+    /// `no_session`, or `api` 403 (`mode_needs_step_up`, or `forbidden`),
+    /// 404, 409 (`mode_changed`, `mode_in_use_by_others`), 422 or 429.
+    pub async fn update_mode(
+        &self,
+        id: ModeId,
+        request: UpdateModeRequest,
+    ) -> Result<ModeResponse, CommandError> {
+        validate(&request)?;
+        let conn = self.conn.read().await;
+        conn.client()?
+            .update_mode(id, &request)
+            .await
+            .map_err(error::client)
+    }
+
+    /// The `update_mode_with_commands` command: as `update_mode`, whatever
+    /// its steps send, after `step_up` within 5 minutes (ADR-0020, S16).
+    ///
+    /// # Errors
+    /// As `update_mode`, with 403 `step_up_required` in place of
+    /// `mode_needs_step_up`.
+    pub async fn update_mode_with_commands(
+        &self,
+        id: ModeId,
+        request: UpdateModeRequest,
+    ) -> Result<ModeResponse, CommandError> {
+        validate(&request)?;
+        let conn = self.conn.read().await;
+        conn.client()?
+            .update_mode_with_commands(id, &request)
+            .await
+            .map_err(error::client)
+    }
+
+    /// The `delete_mode` command: the mode `id` removed, after `step_up`
+    /// within 5 minutes (ADR-0020, S16, S17).
+    ///
+    /// # Errors
+    /// `no_server`, `no_session`, or `api` 403 (`step_up_required`, or
+    /// `forbidden`), 404, 409 (`mode_in_use`) or 429.
+    pub async fn delete_mode(&self, id: ModeId) -> Result<(), CommandError> {
+        let conn = self.conn.read().await;
+        conn.client()?.delete_mode(id).await.map_err(error::client)
     }
 
     /// The `patch_bot` command: the bot's server, after `step_up` within 5

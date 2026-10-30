@@ -7,7 +7,7 @@
 //   the list lacks it, and a choice only when the viewer may choose it. The current mode is
 //   never sent. A 403 says only a manager may choose that mode and reads the bot and the
 //   modes again; a 422 shows its field text and reads the modes again; a 404 reads the bot
-//   again, as the controls do.
+//   again, as the controls do. A link beside it leads to the modes (U74).
 // - **The server** (Manage): the address with Change, which opens a field in place; Save asks
 //   for the password when the server wants it (useStepUpAction), and spends the bot's limit,
 //   whose 429 counts down on Save. While a save runs or the password is asked, the field and
@@ -15,6 +15,7 @@
 // Every answer reads the bot again rather than writing over the cache (R102).
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { useId, useState } from "react";
 import { useForm } from "react-hook-form";
 
@@ -36,6 +37,7 @@ import { fieldErrorsOf, showFieldErrors } from "../../../lib/formErrors";
 import { isStepUpRequired } from "../../../lib/stepUp";
 import { StepUpPrompt } from "../../admin/components/StepUpPrompt";
 import { useStepUpAction } from "../../admin/hooks/useStepUpAction";
+import { MODES_HEADING } from "../../modes/texts";
 import { modeLabel, modesOf } from "../facts";
 import { type BotActions, botActions, mayChoose } from "../permissions";
 import { HIDDEN_MODE, modeName, SETTINGS } from "../texts";
@@ -153,6 +155,9 @@ function ModeSetting({ bot, actions }: { bot: BotResponse; actions: BotActions }
             </option>
           ))}
         </select>
+        <Button asChild variant="link" size="sm" className="px-0">
+          <Link to="/modes">{MODES_HEADING}</Link>
+        </Button>
         {picked === null ? null : (
           <span role="status" className="text-sm text-muted-foreground">
             {SETTINGS.switching}

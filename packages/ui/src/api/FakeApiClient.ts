@@ -20,6 +20,7 @@ import type { CreatedInviteResponse } from "../generated/CreatedInviteResponse";
 import type { CreatedOfflineAccountResponse } from "../generated/CreatedOfflineAccountResponse";
 import type { CreateGrantRequest } from "../generated/CreateGrantRequest";
 import type { CreateInviteRequest } from "../generated/CreateInviteRequest";
+import type { CreateModeRequest } from "../generated/CreateModeRequest";
 import type { CreateOfflineAccountRequest } from "../generated/CreateOfflineAccountRequest";
 import type { CreateServerSettingsRequest } from "../generated/CreateServerSettingsRequest";
 import type { FieldError } from "../generated/FieldError";
@@ -36,6 +37,7 @@ import type { MeResponse } from "../generated/MeResponse";
 import type { MfaConfirmResponse } from "../generated/MfaConfirmResponse";
 import type { MfaEnrollResponse } from "../generated/MfaEnrollResponse";
 import type { ModePage } from "../generated/ModePage";
+import type { ModeResponse } from "../generated/ModeResponse";
 import type { PasswordChangeRequest } from "../generated/PasswordChangeRequest";
 import type { PreviewChatFormatsRequest } from "../generated/PreviewChatFormatsRequest";
 import type { PreviewChatFormatsResponse } from "../generated/PreviewChatFormatsResponse";
@@ -49,6 +51,7 @@ import type { ServerSettingsResponse } from "../generated/ServerSettingsResponse
 import type { SessionPage } from "../generated/SessionPage";
 import type { SetupStepResponse } from "../generated/SetupStepResponse";
 import type { StepUpRequest } from "../generated/StepUpRequest";
+import type { UpdateModeRequest } from "../generated/UpdateModeRequest";
 import type { UpdateServerSettingsRequest } from "../generated/UpdateServerSettingsRequest";
 import type { UserPage } from "../generated/UserPage";
 import type { UserPatchRequest } from "../generated/UserPatchRequest";
@@ -252,6 +255,26 @@ export class FakeApiClient implements ApiClient {
     request: UpdateServerSettingsRequest,
   ): Promise<ServerSettingsResponse> {
     return this.#handler("updateServerSettings", [id, request])(id, request);
+  }
+
+  async createMode(request: CreateModeRequest): Promise<ModeResponse> {
+    return this.#handler("createMode", [request])(request);
+  }
+
+  async createModeWithCommands(request: CreateModeRequest): Promise<ModeResponse> {
+    return this.#handler("createModeWithCommands", [request])(request);
+  }
+
+  async updateMode(id: string, request: UpdateModeRequest): Promise<ModeResponse> {
+    return this.#handler("updateMode", [id, request])(id, request);
+  }
+
+  async updateModeWithCommands(id: string, request: UpdateModeRequest): Promise<ModeResponse> {
+    return this.#handler("updateModeWithCommands", [id, request])(id, request);
+  }
+
+  async deleteMode(id: string): Promise<void> {
+    return this.#handler("deleteMode", [id])(id);
   }
 
   async deleteServerSettings(id: string): Promise<void> {

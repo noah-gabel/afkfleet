@@ -58,8 +58,12 @@ import type { LogoutResponse } from "@afkfleet/ui/generated/LogoutResponse";
 import type { MeResponse } from "@afkfleet/ui/generated/MeResponse";
 import type { MfaConfirmResponse } from "@afkfleet/ui/generated/MfaConfirmResponse";
 import type { MfaEnrollResponse } from "@afkfleet/ui/generated/MfaEnrollResponse";
+import type { ModeActionKind } from "@afkfleet/ui/generated/ModeActionKind";
+import type { ModeActionRequest } from "@afkfleet/ui/generated/ModeActionRequest";
 import type { ModePage } from "@afkfleet/ui/generated/ModePage";
 import type { ModeResponse } from "@afkfleet/ui/generated/ModeResponse";
+import type { ModeStepRequest } from "@afkfleet/ui/generated/ModeStepRequest";
+import type { ModeVisibility } from "@afkfleet/ui/generated/ModeVisibility";
 import type { PreviewChatFormatsResponse } from "@afkfleet/ui/generated/PreviewChatFormatsResponse";
 import type { RegisterResponse } from "@afkfleet/ui/generated/RegisterResponse";
 import type { ServerProfileState } from "@afkfleet/ui/generated/ServerProfileState";
@@ -129,6 +133,11 @@ export const COMMANDS = [
   "bots",
   "bot",
   "modes",
+  "create_mode",
+  "create_mode_with_commands",
+  "update_mode",
+  "update_mode_with_commands",
+  "delete_mode",
   "patch_bot",
   "set_bot_mode",
   "start_bot",
@@ -175,6 +184,12 @@ const API_MESSAGES: Partial<Record<ErrorCode, string>> = {
   command_needs_step_up: "This command needs your password: confirm it's you to send it.",
   server_settings_changed:
     "These settings changed since you opened them. Load them again to see the change.",
+  mode_needs_step_up:
+    "This mode holds a command that needs your password: confirm it's you to save it.",
+  mode_changed: "This mode changed since you opened it. Load it again to see the change.",
+  mode_in_use_by_others: "A bot you can't set this mode on uses it, so this change can't be saved.",
+  mode_in_use:
+    "A bot uses this mode, so it can't be deleted. Switch every bot to another mode first.",
 };
 
 /** A refusal of the Rust side. */
@@ -254,17 +269,62 @@ interface Bot {
   readonly chat: ChatLine[];
 }
 
+/** Who owns the shared `warp`: a user who never logs in. */
+const WARP_OWNER = "01900000-0000-7000-8000-0000000000fa";
+
+/** A mode the fake keeps, whole; what a viewer sees of it is `modeResponse`'s. */
+interface StoredMode {
+  readonly id: string;
+  name: string;
+  visibility: ModeVisibility;
+  /** Its owner; none for a built-in mode. */
+  readonly ownerId: string | null;
+  version: number;
+  readonly created_at: string;
+  updated_at: string;
+  steps: ModeStepRequest[];
+}
+
+/** A stored mode's dates. */
+const MODE_TIME = "2026-10-13T08:00:00.000Z";
+
 /** The modes, newest first: another user's shared `warp`, then the built-in ones with the IDs
  * the server's seeds give them. */
-const MODES: readonly ModeResponse[] = [
-  {
-    ...builtIn("01a14202-2800-7000-8000-000000000003", "warp"),
-    ownership: "someone_else",
-    unlisted_command: true,
-  },
-  builtIn("01a14202-2800-7000-8000-000000000002", "farm"),
-  builtIn("01a14202-2800-7000-8000-000000000001", "afk"),
-];
+function storedModes(): StoredMode[] {
+  const stored = (id: string, name: string, ownerId: string | null, steps: ModeStepRequest[]) => ({
+    id,
+    name,
+    visibility: "shared" as const,
+    ownerId,
+    version: 1,
+    created_at: MODE_TIME,
+    updated_at: MODE_TIME,
+    steps,
+  });
+  return [
+    stored("01a14202-2800-7000-8000-000000000003", "warp", WARP_OWNER, [
+      {
+        action: { type: "send_chat", message: "/warp farm" },
+        schedule: { type: "at_start" },
+        probability: 100,
+      },
+    ]),
+    stored("01a14202-2800-7000-8000-000000000002", "farm", null, [
+      {
+        action: { type: "attack_facing_entity" },
+        schedule: { type: "every", interval_ms: 1_000, jitter_ms: 0 },
+        probability: 100,
+      },
+    ]),
+    stored("01a14202-2800-7000-8000-000000000001", "afk", null, [
+      {
+        action: { type: "rotate_random", max_yaw: 30, max_pitch: 10 },
+        schedule: { type: "every", interval_ms: 45_000, jitter_ms: 75_000 },
+        probability: 100,
+      },
+    ]),
+  ];
+}
 
 /** The server's `[chat] command_allowlist`: commands a Control holder may send. */
 const ALLOWLIST: readonly string[] = ["/spawn"];
@@ -272,22 +332,94 @@ const ALLOWLIST: readonly string[] = ["/spawn"];
 /** The mode a new bot runs: `afk`. */
 const AFK = "01a14202-2800-7000-8000-000000000001";
 
-/** A built-in mode: no owner, read-only for everyone. */
-function builtIn(id: string, name: string): ModeResponse {
-  return {
-    id,
-    name,
-    visibility: "shared",
-    ownership: "built_in",
-    editable: false,
-    deletable: false,
-    visibility_editable: false,
-    unlisted_command: false,
-    version: 1,
-    created_at: "2026-10-13T08:00:00.000Z",
-    updated_at: "2026-10-13T08:00:00.000Z",
-    steps: [],
-  };
+/** Whether `steps` send a command off the allowlist (S16). */
+function holdsUnlisted(steps: readonly ModeStepRequest[]): boolean {
+  return steps.some((step) => {
+    const message = step.action.message?.trim() ?? "";
+    return message.startsWith("/") && !ALLOWLIST.includes(message.split(/\s/, 1)[0] ?? "");
+  });
+}
+
+/** The fields each action type needs (S12). */
+const ACTION_NEEDS: Partial<Record<ModeActionKind, readonly (keyof ModeActionRequest)[]>> = {
+  look: ["yaw", "pitch"],
+  rotate_random: ["max_yaw", "max_pitch"],
+  sneak: ["on"],
+  hold_use: ["on"],
+  select_hotbar_slot: ["slot"],
+  send_chat: ["message"],
+};
+
+/** A limited step's words in the server's refusal of a second one; other kinds repeat freely. */
+function limitedStep(step: ModeStepRequest): string | undefined {
+  const what =
+    step.action.type === "send_chat"
+      ? "chat step"
+      : step.action.type === "attack_facing_entity"
+        ? "attack step"
+        : undefined;
+  if (what === undefined) {
+    return undefined;
+  }
+  switch (step.schedule.type) {
+    case "at_start":
+      return `${what} at start`;
+    case "every":
+      return `repeating ${what}`;
+    default:
+      return `${what} on respawn`;
+  }
+}
+
+/**
+ * The first rule `steps` break, in step order, at its own path, as `ModeSteps::definition` says
+ * it, in small: the fields a type needs, the chance, the shortest waits, a second limited step.
+ */
+function stepsRefused(steps: readonly ModeStepRequest[]): ApiErrorDetails["fields"] | undefined {
+  const seen = new Set<string>();
+  for (const [index, step] of steps.entries()) {
+    const at = `steps[${index}]`;
+    for (const field of ACTION_NEEDS[step.action.type] ?? []) {
+      if (step.action[field] === undefined) {
+        return [{ path: `${at}.action.${field}`, message: "is required for this type" }];
+      }
+    }
+    if (step.schedule.type === "every") {
+      const { interval_ms: interval, jitter_ms: jitter } = step.schedule;
+      if (interval === undefined || jitter === undefined) {
+        const field = interval === undefined ? "interval_ms" : "jitter_ms";
+        return [{ path: `${at}.schedule.${field}`, message: "is required for this type" }];
+      }
+      const path = `${at}.schedule.interval_ms`;
+      if (step.action.type === "send_chat" && interval < 30_000) {
+        return [{ path, message: "must be at least 30 seconds for chat" }];
+      }
+      if (interval < 250) {
+        return [{ path, message: "must be at least 250 ms" }];
+      }
+    }
+    if (step.probability < 1 || step.probability > 100) {
+      return [{ path: `${at}.probability`, message: "must be from 1 to 100 percent" }];
+    }
+    const limited = limitedStep(step);
+    if (limited !== undefined && seen.has(limited)) {
+      return [{ path: at, message: `is a second ${limited}; a mode can have only one` }];
+    }
+    if (limited !== undefined) {
+      seen.add(limited);
+    }
+  }
+  return undefined;
+}
+
+/** A body's rules, as the extractor checks them before anything is read (R3). */
+function modeBodyRefused(request: Record<string, unknown>): Outcome | undefined {
+  const name = String(request.name).trim().toLowerCase();
+  if (name === "afk" || name === "farm") {
+    return api(422, "validation_failed", [{ path: "name", message: "is a built-in mode's name" }]);
+  }
+  const fields = stepsRefused(request.steps as ModeStepRequest[]);
+  return fields === undefined ? undefined : api(422, "validation_failed", fields);
 }
 
 /** The one link flow: its user, the account it links again, and its reads. */
@@ -404,6 +536,102 @@ function senderOf(format: string, line: string): string | undefined {
   return rest.slice(name.length).startsWith(parts.separator) ? name : undefined;
 }
 
+/** The texts of what the server refuses a format for (ADR-0020's table, H7). */
+const FORMAT_RULE = {
+  empty: "must not be empty",
+  long: "must be at most 64 characters",
+  line: "must be one line, without control characters, formatting codes, text-direction marks or invisible characters",
+  brace: "can hold only {sender} and {any}; write a brace as {{ or }}",
+  sender: "must hold {sender} exactly once",
+  twice: "can hold {any} at most twice",
+  after: "can hold {any} only before {sender}",
+  text: "must have text right after each {any}",
+  separator: "must have text after {sender} that doesn't start with a letter, a digit or _",
+} as const;
+
+/**
+ * What the server refuses `written` for, in the order `ChatFormats::try_new` checks it, as the
+ * real app answers a preview (PR #83's review); nothing for a format it takes.
+ */
+function formatRefused(written: string): string | undefined {
+  if (written === "") {
+    return FORMAT_RULE.empty;
+  }
+  if ([...written].length > 64) {
+    return FORMAT_RULE.long;
+  }
+  if (/[\p{Cc}\p{Cf}\u00a7]/u.test(written)) {
+    return FORMAT_RULE.line;
+  }
+  let sender = false;
+  let separator = "";
+  let pendingAny = false;
+  let wildcards = 0;
+  let rest = written;
+  while (rest !== "") {
+    if (rest.startsWith(SENDER)) {
+      if (pendingAny) {
+        return FORMAT_RULE.text;
+      }
+      if (sender) {
+        return FORMAT_RULE.sender;
+      }
+      sender = true;
+      rest = rest.slice(SENDER.length);
+    } else if (rest.startsWith(ANY)) {
+      if (pendingAny) {
+        return FORMAT_RULE.text;
+      }
+      if (sender) {
+        return FORMAT_RULE.after;
+      }
+      if (wildcards === 2) {
+        return FORMAT_RULE.twice;
+      }
+      wildcards += 1;
+      pendingAny = true;
+      rest = rest.slice(ANY.length);
+    } else {
+      const escaped = rest.startsWith("{{") || rest.startsWith("}}");
+      const piece = String.fromCodePoint(rest.codePointAt(0) ?? 0);
+      if (!escaped && (piece === "{" || piece === "}")) {
+        return pendingAny ? FORMAT_RULE.text : FORMAT_RULE.brace;
+      }
+      pendingAny = false;
+      if (sender) {
+        if (separator === "" && /^[A-Za-z0-9_]$/.test(piece)) {
+          return FORMAT_RULE.separator;
+        }
+        separator += piece;
+      }
+      rest = rest.slice(escaped ? 2 : piece.length);
+    }
+  }
+  if (pendingAny) {
+    return FORMAT_RULE.text;
+  }
+  if (!sender) {
+    return FORMAT_RULE.sender;
+  }
+  return separator === "" ? FORMAT_RULE.separator : undefined;
+}
+
+/** The refusal of the first of `formats` the server wouldn't take, at its own path. */
+function formatsRefused(formats: readonly string[]): Outcome | undefined {
+  if (formats.length > 8) {
+    return api(422, "validation_failed", [
+      { path: "chat_formats", message: "must hold at most 8 formats" },
+    ]);
+  }
+  for (const [index, written] of formats.entries()) {
+    const message = formatRefused(written);
+    if (message !== undefined) {
+      return api(422, "validation_failed", [{ path: `chat_formats[${index}]`, message }]);
+    }
+  }
+  return undefined;
+}
+
 /** What the first of `formats` that fits reads from `line`, and its place from 0. */
 function preview(formats: readonly string[], line: string): PreviewChatFormatsResponse {
   for (const [format, written] of formats.entries()) {
@@ -452,6 +680,9 @@ export class FakeBackend {
   #watch: ((outcome: Outcome) => void) | null = null;
   #pending: Pending | null = null;
   readonly #accounts: Account[] = [];
+  #modes: StoredMode[] = storedModes();
+  /** The modes a bot of another user uses, one this fake doesn't keep (`usedByOthers`). */
+  readonly #usedByOthers = new Set<string>();
   /** The servers' settings, newest first. */
   #settings: Settings[] = [];
   #flow: Flow | null = null;
@@ -642,9 +873,10 @@ export class FakeBackend {
           }),
         );
       case "preview_chat_formats":
-        return this.#admin(() =>
-          value(preview(formatsOf(request.chat_formats), String(request.line ?? ""))),
-        );
+        return this.#admin(() => {
+          const formats = formatsOf(request.chat_formats);
+          return formatsRefused(formats) ?? value(preview(formats, String(request.line ?? "")));
+        });
       default:
         return this.#accountCommand(command as Command, args);
     }
@@ -978,6 +1210,226 @@ export class FakeBackend {
       return "manage";
     }
     return account.grants.get(user.id)?.level ?? null;
+  }
+
+  /** Whether `user` manages a private mode of `owner`: their own, the Owner, or an Admin's Member. */
+  #managesMode(user: User, ownerId: string): boolean {
+    const owner = this.#users.find((one) => one.id === ownerId);
+    return (
+      ownerId === user.id ||
+      user.role === "owner" ||
+      (user.role === "admin" && owner?.role === "member")
+    );
+  }
+
+  /** Whether `user` sees `mode`. */
+  #seesMode(user: User, mode: StoredMode): boolean {
+    return (
+      mode.visibility === "shared" ||
+      (mode.ownerId !== null && this.#managesMode(user, mode.ownerId))
+    );
+  }
+
+  /** Whether `user` may edit `mode` if it had `visibility`, as `authorize()` says it (S14). */
+  #editsMode(user: User, mode: StoredMode, visibility: ModeVisibility): boolean {
+    if (mode.ownerId === null) {
+      return false;
+    }
+    return visibility === "private"
+      ? this.#managesMode(user, mode.ownerId)
+      : user.role === "owner" || (mode.ownerId === user.id && user.role === "admin");
+  }
+
+  /** `mode` as `user` sees it (S14, S15, S68). */
+  #modeResponse(user: User, mode: StoredMode): ModeResponse {
+    const editable = this.#editsMode(user, mode, mode.visibility);
+    const other = mode.visibility === "private" ? "shared" : "private";
+    const owner = this.#users.find((one) => one.id === mode.ownerId);
+    return {
+      id: mode.id,
+      name: mode.name,
+      visibility: mode.visibility,
+      ownership:
+        mode.ownerId === null ? "built_in" : mode.ownerId === user.id ? "mine" : "someone_else",
+      ...(owner !== undefined && user.role !== "member"
+        ? { owner: { id: owner.id, username: owner.username } }
+        : {}),
+      editable,
+      deletable: editable,
+      visibility_editable: editable && this.#editsMode(user, mode, other),
+      unlisted_command: holdsUnlisted(mode.steps),
+      version: mode.version,
+      created_at: mode.created_at,
+      updated_at: mode.updated_at,
+      steps: mode.steps.map((step) => {
+        const message = step.action.message ?? "";
+        // As the server's `without_arguments`: a bare command has nothing to cut.
+        const cut = !editable && message.startsWith("/") && /\s/.test(message);
+        return {
+          ...step,
+          action: {
+            ...step.action,
+            ...(cut ? { message: message.split(/\s/, 1)[0] ?? "" } : {}),
+            arguments_hidden: cut,
+          },
+        };
+      }),
+    };
+  }
+
+  /** Whether a mode called `name` clashes, `except` itself (S13). */
+  #modeNameTaken(
+    ownerId: string,
+    name: string,
+    visibility: ModeVisibility,
+    except?: string,
+  ): boolean {
+    const wanted = name.trim().toLowerCase();
+    return this.#modes.some(
+      (one) =>
+        one.id !== except &&
+        one.name.toLowerCase() === wanted &&
+        (one.ownerId === ownerId || (visibility === "shared" && one.visibility === "shared")),
+    );
+  }
+
+  /** A new mode, in the server's order (R3); `twin` is the step-up route. */
+  #createMode(user: User, request: Record<string, unknown>, twin: boolean): Outcome {
+    const body = modeBodyRefused(request);
+    if (body !== undefined) {
+      return body;
+    }
+    const visibility = request.visibility as ModeVisibility;
+    if (visibility === "shared" && user.role === "member") {
+      return api(403, "forbidden");
+    }
+    const steps = request.steps as ModeStepRequest[];
+    if (holdsUnlisted(steps) && !twin) {
+      return api(403, "mode_needs_step_up");
+    }
+    if (this.#modes.filter((one) => one.ownerId === user.id).length >= 50) {
+      return api(409, "conflict");
+    }
+    const name = String(request.name).trim();
+    if (this.#modeNameTaken(user.id, name, visibility)) {
+      return api(422, "validation_failed", [
+        { path: "name", message: "is already another mode's name" },
+      ]);
+    }
+    const mode: StoredMode = {
+      id: `01b00000-0000-7000-8000-${String(this.#next()).padStart(12, "0")}`,
+      name,
+      visibility,
+      ownerId: user.id,
+      version: 1,
+      created_at: MODE_TIME,
+      updated_at: MODE_TIME,
+      steps,
+    };
+    this.#modes = [mode, ...this.#modes];
+    return value(this.#modeResponse(user, mode));
+  }
+
+  /** Whether `user` couldn't set `mode`'s new `steps` on a bot that uses it (S17). */
+  #blockedByABot(user: User, mode: StoredMode, steps: readonly ModeStepRequest[]): boolean {
+    const needed: GrantLevel = holdsUnlisted(steps) ? "manage" : "control";
+    return (
+      this.#usedByOthers.has(mode.id) ||
+      this.#accounts.some((account) => {
+        if (account.bot.modeId !== mode.id) {
+          return false;
+        }
+        const level = this.#level(user, account);
+        return level !== "manage" && (needed === "manage" || level !== "control");
+      })
+    );
+  }
+
+  /** Mode `target` as an edit leaves it, in the server's order (R3). */
+  #updateMode(
+    user: User,
+    target: string,
+    request: Record<string, unknown>,
+    twin: boolean,
+  ): Outcome {
+    const body = modeBodyRefused(request);
+    if (body !== undefined) {
+      return body;
+    }
+    const mode = this.#modes.find((one) => one.id === target);
+    if (mode === undefined || !this.#seesMode(user, mode)) {
+      return api(404, "not_found");
+    }
+    const visibility = request.visibility as ModeVisibility;
+    if (!this.#editsMode(user, mode, mode.visibility) || !this.#editsMode(user, mode, visibility)) {
+      return api(403, "forbidden");
+    }
+    const steps = request.steps as ModeStepRequest[];
+    if (holdsUnlisted(steps) && !twin) {
+      return api(403, "mode_needs_step_up");
+    }
+    const name = String(request.name).trim();
+    if (
+      name === mode.name &&
+      visibility === mode.visibility &&
+      JSON.stringify(steps) === JSON.stringify(mode.steps)
+    ) {
+      return value(this.#modeResponse(user, mode));
+    }
+    if (request.version !== mode.version) {
+      return api(409, "mode_changed");
+    }
+    if (mode.ownerId !== null && this.#modeNameTaken(mode.ownerId, name, visibility, mode.id)) {
+      return api(422, "validation_failed", [
+        { path: "name", message: "is already another mode's name" },
+      ]);
+    }
+    if (this.#blockedByABot(user, mode, steps)) {
+      return api(409, "mode_in_use_by_others");
+    }
+    mode.name = name;
+    mode.visibility = visibility;
+    mode.steps = steps;
+    mode.version += 1;
+    return value(this.#modeResponse(user, mode));
+  }
+
+  /** Deletes mode `target`: never one in use, whoever's bot it is (S17). */
+  #deleteMode(user: User, target: string): Outcome {
+    const mode = this.#modes.find((one) => one.id === target);
+    if (mode === undefined || !this.#seesMode(user, mode)) {
+      return api(404, "not_found");
+    }
+    if (!this.#editsMode(user, mode, mode.visibility)) {
+      return api(403, "forbidden");
+    }
+    if (
+      this.#usedByOthers.has(mode.id) ||
+      this.#accounts.some((account) => account.bot.modeId === mode.id)
+    ) {
+      return api(409, "mode_in_use");
+    }
+    this.#modes = this.#modes.filter((one) => one !== mode);
+    return value();
+  }
+
+  /** Mode `name` changed by another device (R166): the next edit at its old version is stale. */
+  changeMode(name: string, change: { readonly name?: string }): void {
+    const mode = this.#modes.find((one) => one.name === name);
+    if (mode === undefined) {
+      throw new Error(`no mode ${name}`);
+    }
+    mode.name = change.name ?? mode.name;
+    mode.version += 1;
+  }
+
+  /** Mode `name` now also runs on another user's bot, one this fake doesn't keep (R166). */
+  usedByOthers(name: string): void {
+    const mode = this.#modes.find((one) => one.name === name);
+    if (mode === undefined) {
+      throw new Error(`no mode ${name}`);
+    }
+    this.#usedByOthers.add(mode.id);
   }
 
   /** Whether `user` may review `account`: someone above its owner, never its owner. */
@@ -1443,7 +1895,27 @@ export class FakeBackend {
             : value(this.#botResponse(session.user, account));
         });
       case "modes":
-        return this.#signedIn(() => value({ items: [...MODES] } satisfies ModePage));
+        return this.#signedIn((session) =>
+          value({
+            items: this.#modes
+              .filter((mode) => this.#seesMode(session.user, mode))
+              .map((mode) => this.#modeResponse(session.user, mode)),
+          } satisfies ModePage),
+        );
+      case "create_mode":
+        return this.#signedIn((session) => this.#createMode(session.user, request, false));
+      case "create_mode_with_commands":
+        return this.#steppedUp((session) => this.#createMode(session.user, request, true));
+      case "update_mode":
+        return this.#signedIn((session) =>
+          this.#updateMode(session.user, String(args.id), request, false),
+        );
+      case "update_mode_with_commands":
+        return this.#steppedUp((session) =>
+          this.#updateMode(session.user, String(args.id), request, true),
+        );
+      case "delete_mode":
+        return this.#steppedUp((session) => this.#deleteMode(session.user, String(args.id)));
       case "patch_bot":
         return this.#steppedUp((session) =>
           this.#botWrite(session, args.id, "manage", (account) => {
@@ -1454,13 +1926,13 @@ export class FakeBackend {
       case "set_bot_mode":
         return this.#signedIn((session) =>
           this.#botWrite(session, args.id, "control", (account, level) => {
-            const mode = MODES.find((one) => one.id === String(request.mode_id));
-            if (mode === undefined) {
+            const mode = this.#modes.find((one) => one.id === String(request.mode_id));
+            if (mode === undefined || !this.#seesMode(session.user, mode)) {
               return api(422, "validation_failed", [
                 { path: "mode_id", message: "isn't a mode you can use" },
               ]);
             }
-            if (mode.unlisted_command && level !== "manage") {
+            if (holdsUnlisted(mode.steps) && level !== "manage") {
               return api(403, "forbidden");
             }
             account.bot.modeId = mode.id;

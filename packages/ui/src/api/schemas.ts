@@ -3,6 +3,7 @@
 // validates everything again and stays authoritative. Lengths count Unicode code points
 // (chars), as the Rust side does; the server profile's caps count UTF-8 bytes.
 
+import type { ModeActionKind } from "../generated/ModeActionKind";
 import {
   CA_PEM_MAX_BYTES,
   CHAT_FORMAT_MAX_CHARS,
@@ -15,6 +16,8 @@ import {
   ID_CHARS,
   MC_NAME_MAX_CHARS,
   MC_NAME_MIN_CHARS,
+  MODE_MAX_STEPS,
+  MODE_NAME_MAX_CHARS,
   NEW_PASSWORD_MAX_CHARS,
   NEW_PASSWORD_MIN_CHARS,
   PAGE_MAX,
@@ -272,6 +275,102 @@ export const chatMessage = z
   );
 
 export const chatSendRequest = z.strictObject({ message: chatMessage });
+
+/** A number the wire can't carry: the three local texts (ADR-0020, S82, R171). */
+const NOT_A_NUMBER = "must be a number";
+const NOT_WHOLE = "must be a whole number";
+const OUT_OF_RANGE = "is out of range";
+
+/** The largest number a request's `u8` holds. */
+const WIRE_U8_MAX = 255;
+/** The largest number a request's `u32` holds. */
+const WIRE_U32_MAX = 4_294_967_295;
+
+/**
+ * A whole number from 0 to `max`, what the wire type takes: anything else would be the server's
+ * bare 400, with no field and no text (S82). Every rule inside that range is the server's.
+ */
+function wireInteger(max: number) {
+  return z.number({ error: NOT_A_NUMBER }).superRefine((value, context) => {
+    if (!Number.isInteger(value)) {
+      context.addIssue({ code: "custom", message: NOT_WHOLE });
+    } else if (value < 0 || value > max) {
+      context.addIssue({ code: "custom", message: OUT_OF_RANGE });
+    }
+  });
+}
+
+/** A finite angle: its range is the server's (S82). */
+const modeAngle = z.number({ error: NOT_A_NUMBER }).optional();
+
+/**
+ * Every action type this version knows (S12), by the generated `ModeActionKind`: a kind added
+ * there, or gone, doesn't compile here.
+ */
+const MODE_ACTION_KINDS: { readonly [K in ModeActionKind]: K } = {
+  look: "look",
+  rotate_random: "rotate_random",
+  jump: "jump",
+  sneak: "sneak",
+  swing_arm: "swing_arm",
+  use_item: "use_item",
+  hold_use: "hold_use",
+  attack_facing_entity: "attack_facing_entity",
+  select_hotbar_slot: "select_hotbar_slot",
+  send_chat: "send_chat",
+};
+
+const modeActionKind = z.enum(MODE_ACTION_KINDS);
+
+/** A mode's name, once trimmed, in the server's words; its characters are the server's (S13). */
+const modeName = z
+  .string()
+  .refine((name) => name.trim().length > 0, "must not be empty")
+  .refine(
+    (name) => chars(name.trim()) <= MODE_NAME_MAX_CHARS,
+    `must be at most ${MODE_NAME_MAX_CHARS} characters`,
+  );
+
+/**
+ * One step of a request: closed types and no other field, since either is a bare 400 (S12), and
+ * numbers the wire can carry. Which fields a type takes, and every value rule, are the server's.
+ */
+const modeStepRequest = z.strictObject({
+  action: z.strictObject({
+    type: modeActionKind,
+    yaw: modeAngle,
+    pitch: modeAngle,
+    max_yaw: modeAngle,
+    max_pitch: modeAngle,
+    on: z.boolean().optional(),
+    slot: wireInteger(WIRE_U8_MAX).optional(),
+    message: chatMessage.optional(),
+  }),
+  schedule: z.strictObject({
+    type: z.enum(["at_start", "every", "on_respawn"]),
+    interval_ms: wireInteger(WIRE_U32_MAX).optional(),
+    jitter_ms: wireInteger(WIRE_U32_MAX).optional(),
+  }),
+  probability: wireInteger(WIRE_U8_MAX),
+});
+
+/** A mode's steps: at most `MODE_MAX_STEPS`, in the server's words. */
+const modeSteps = z
+  .array(modeStepRequest)
+  .refine((steps) => steps.length <= MODE_MAX_STEPS, `must hold at most ${MODE_MAX_STEPS} steps`);
+
+export const createModeRequest = z.strictObject({
+  name: modeName,
+  visibility: z.enum(["private", "shared"]),
+  steps: modeSteps,
+});
+
+export const updateModeRequest = z.strictObject({
+  version: z.number().int().min(1),
+  name: modeName,
+  visibility: z.enum(["private", "shared"]),
+  steps: modeSteps,
+});
 
 /** A command for `/command`: a chat line that starts with `/` once trimmed (S8). */
 export const chatCommandRequest = z.strictObject({

@@ -9,6 +9,7 @@
 //     /home          the bots' dashboard
 //       /bots/$id    one bot
 //     /server
+//     /modes /modes/new /modes/$id   the modes the user may see, a new one, one
 //     /accounts      the Microsoft accounts the user may see
 //       /accounts/link /accounts/$id /accounts/$id/link-again
 //     /profile       the user's own account, sessions and warnings
@@ -28,6 +29,7 @@ import { adminRoute, invitesRoute, usersRoute } from "../features/admin/routes";
 import { loginRoute, registerRoute } from "../features/auth/routes";
 import { botRoute } from "../features/bots/routes";
 import { homeRoute } from "../features/home/routes";
+import { modeRoute, modesRoute, newModeRoute } from "../features/modes/routes";
 import { mfaRoute, passwordRoute, profileRoute } from "../features/profile/routes";
 import { serverRoute, setupRoute } from "../features/server/routes";
 import { newServerRoute, serverSettingsRoute, serversRoute } from "../features/servers/routes";
@@ -45,6 +47,9 @@ const routeTree = rootRoute.addChildren([
   appRoute.addChildren([
     homeRoute,
     botRoute,
+    modesRoute,
+    newModeRoute,
+    modeRoute,
     accountsRoute,
     linkRoute,
     accountRoute,

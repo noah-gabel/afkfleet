@@ -1,15 +1,22 @@
 // The app's TanStack Query client (Plan.md P8.6, ADR-0017). Nothing retries by itself:
 // fleet-client already bounds every request, an error should show at once, and the
 // banner's own check brings things back (ConnectionBanner). Nothing refetches on focus or
-// on reconnect either; the banner's recovery refetches the active queries instead.
+// on reconnect either; the banner's recovery refetches the active queries instead. Nothing
+// pauses while Windows reports offline (`networkMode: "always"`, ADR-0020's note for I):
+// fleet-client's own unreachable answer, with the banner, decides.
 import { QueryClient } from "@tanstack/react-query";
 
 /** A fresh client with the app's defaults. */
 export function createQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
-      queries: { retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false },
-      mutations: { retry: false },
+      queries: {
+        retry: false,
+        refetchOnWindowFocus: false,
+        refetchOnReconnect: false,
+        networkMode: "always",
+      },
+      mutations: { retry: false, networkMode: "always" },
     },
   });
 }

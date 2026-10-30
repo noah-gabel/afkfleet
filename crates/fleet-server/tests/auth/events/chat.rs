@@ -601,6 +601,60 @@ async fn a_format_created_or_deleted_reaches_the_next_live_line(
     assert_eq!(after["line"].get("parsed_sender"), None);
 }
 
+/// A format edited reaches the next live line: its commit moves the count, so
+/// the socket reads the rights, and with them the new formats, before it
+/// sends (S43, R147; PR #83's review).
+#[sqlx::test(migrations = false)]
+async fn a_format_edited_reaches_the_next_live_line(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let chatting = chatting(&setup).await;
+    setup.on_server(chatting.bot, SERVER).await;
+    let settings = setup.formats_for(1, SERVER, &["<{sender}> "]).await;
+    let served = Served::start(&setup).await;
+    let mut socket = ready(&setup, &served, &chatting.member.token).await;
+
+    said(&setup, &chatting, system("Notch : one"), None, None).await;
+    let before = next_event_after_pings(&mut socket).await;
+    setup.formats_edited(settings, &["{sender} : "]).await;
+    said(&setup, &chatting, system("Notch : two"), None, None).await;
+    let after = next_event_after_pings(&mut socket).await;
+
+    assert_eq!(before["line"]["text"], "Notch : one");
+    assert_eq!(before["line"].get("parsed_sender"), None);
+    assert_eq!(after["line"]["text"], "Notch : two");
+    assert_eq!(after["line"]["parsed_sender"], "Notch");
+}
+
+/// A bot moving to a server that has formats reads its next live line with
+/// them: formats follow the bot's current server, read with the rights (R146;
+/// PR #83's review).
+#[sqlx::test(migrations = false)]
+async fn a_bot_moving_to_a_server_with_formats_reads_its_next_live_line_with_them(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let chatting = chatting(&setup).await;
+    setup.on_server(chatting.bot, SERVER).await;
+    setup.formats_for(1, OTHER, &["{sender} : "]).await;
+    let served = Served::start(&setup).await;
+    let mut socket = ready(&setup, &served, &chatting.member.token).await;
+
+    said(&setup, &chatting, system("Notch : one"), None, None).await;
+    let before = next_event_after_pings(&mut socket).await;
+    setup.on_server(chatting.bot, OTHER).await;
+    said(&setup, &chatting, system("Notch : two"), None, None).await;
+    let after = next_event_after_pings(&mut socket).await;
+
+    assert_eq!(before["line"]["text"], "Notch : one");
+    assert_eq!(before["line"].get("parsed_sender"), None);
+    assert_eq!(after["line"]["text"], "Notch : two");
+    assert_eq!(after["line"]["parsed_sender"], "Notch");
+}
+
 /// S81: a server whose formats don't read back gives only its own bots'
 /// lines no parsed sender: another server's bot stays read, and the socket
 /// stays open, its rights read again rather than failed.

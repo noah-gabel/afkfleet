@@ -1,7 +1,8 @@
 // One labelled form field (Plan.md P8.7): the label, the control, an optional hint and the
 // field's error, with the control's `aria-describedby` and `aria-invalid` set from them. The
 // label's ID is `{id}-label`, so a control beside the field, such as a list entry's Remove, can
-// be described by it.
+// be described by it. A field whose error comes without the user leaving it, such as a preview's
+// refusal, asks for `errorRole`, so a screen reader hears it.
 import type { ReactNode } from "react";
 
 import { FieldMessage } from "./FieldMessage";
@@ -20,12 +21,14 @@ export function FormField({
   label,
   hint,
   error,
+  errorRole,
   children,
 }: {
   id: string;
   label: string;
   hint?: string;
   error: string | undefined;
+  errorRole?: "alert";
   children: (props: ControlProps) => ReactNode;
 }) {
   const described = [
@@ -47,7 +50,7 @@ export function FormField({
           {hint}
         </p>
       )}
-      <FieldMessage id={`${id}-error`} message={error} />
+      <FieldMessage id={`${id}-error`} message={error} role={errorRole} />
     </div>
   );
 }

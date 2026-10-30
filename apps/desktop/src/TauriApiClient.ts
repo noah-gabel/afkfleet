@@ -22,6 +22,7 @@ import type { CreatedInviteResponse } from "@afkfleet/ui/generated/CreatedInvite
 import type { CreatedOfflineAccountResponse } from "@afkfleet/ui/generated/CreatedOfflineAccountResponse";
 import type { CreateGrantRequest } from "@afkfleet/ui/generated/CreateGrantRequest";
 import type { CreateInviteRequest } from "@afkfleet/ui/generated/CreateInviteRequest";
+import type { CreateModeRequest } from "@afkfleet/ui/generated/CreateModeRequest";
 import type { CreateOfflineAccountRequest } from "@afkfleet/ui/generated/CreateOfflineAccountRequest";
 import type { CreateServerSettingsRequest } from "@afkfleet/ui/generated/CreateServerSettingsRequest";
 import type { GrantPage } from "@afkfleet/ui/generated/GrantPage";
@@ -37,6 +38,7 @@ import type { MeResponse } from "@afkfleet/ui/generated/MeResponse";
 import type { MfaConfirmResponse } from "@afkfleet/ui/generated/MfaConfirmResponse";
 import type { MfaEnrollResponse } from "@afkfleet/ui/generated/MfaEnrollResponse";
 import type { ModePage } from "@afkfleet/ui/generated/ModePage";
+import type { ModeResponse } from "@afkfleet/ui/generated/ModeResponse";
 import type { PasswordChangeRequest } from "@afkfleet/ui/generated/PasswordChangeRequest";
 import type { PreviewChatFormatsRequest } from "@afkfleet/ui/generated/PreviewChatFormatsRequest";
 import type { PreviewChatFormatsResponse } from "@afkfleet/ui/generated/PreviewChatFormatsResponse";
@@ -50,6 +52,7 @@ import type { ServerSettingsResponse } from "@afkfleet/ui/generated/ServerSettin
 import type { SessionPage } from "@afkfleet/ui/generated/SessionPage";
 import type { SetupStepResponse } from "@afkfleet/ui/generated/SetupStepResponse";
 import type { StepUpRequest } from "@afkfleet/ui/generated/StepUpRequest";
+import type { UpdateModeRequest } from "@afkfleet/ui/generated/UpdateModeRequest";
 import type { UpdateServerSettingsRequest } from "@afkfleet/ui/generated/UpdateServerSettingsRequest";
 import type { UserPage } from "@afkfleet/ui/generated/UserPage";
 import type { UserPatchRequest } from "@afkfleet/ui/generated/UserPatchRequest";
@@ -241,6 +244,26 @@ export class TauriApiClient implements ApiClient {
 
   sendCommand(id: string, request: ChatCommandRequest): Promise<ChatSendResponse> {
     return this.#call("send_command", { id, request });
+  }
+
+  createMode(request: CreateModeRequest): Promise<ModeResponse> {
+    return this.#call("create_mode", { request });
+  }
+
+  createModeWithCommands(request: CreateModeRequest): Promise<ModeResponse> {
+    return this.#call("create_mode_with_commands", { request });
+  }
+
+  updateMode(id: string, request: UpdateModeRequest): Promise<ModeResponse> {
+    return this.#call("update_mode", { id, request });
+  }
+
+  updateModeWithCommands(id: string, request: UpdateModeRequest): Promise<ModeResponse> {
+    return this.#call("update_mode_with_commands", { id, request });
+  }
+
+  deleteMode(id: string): Promise<void> {
+    return this.#call("delete_mode", { id });
   }
 
   serverSettings(before?: string, limit?: number): Promise<ServerSettingsPage> {

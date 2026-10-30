@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-
+import { ACTION_KINDS } from "../features/modes/modeForm";
 import type { ApiClient } from "./ApiClient";
 import { ApiError } from "./ApiError";
 import { FakeApiClient } from "./FakeApiClient";
@@ -70,6 +70,11 @@ function client() {
     bots: ok,
     bot: ok,
     modes: ok,
+    createMode: ok,
+    createModeWithCommands: ok,
+    updateMode: ok,
+    updateModeWithCommands: ok,
+    deleteMode: ok,
     patchBot: ok,
     setBotMode: ok,
     startBot: ok,
@@ -315,6 +320,185 @@ describe("validated", () => {
     expect(await refusedFields(api.bot("x"))).toEqual(["id"]);
     expect(await refusedFields(api.modes(undefined, PAGE_MAX + 1))).toEqual(["limit"]);
     expect(fake.calls).toEqual([]);
+  });
+
+  describe("the mode writes (S82)", () => {
+    const step = {
+      action: { type: "look", yaw: -12.5, pitch: 0 },
+      schedule: { type: "every", interval_ms: 45_000, jitter_ms: 0 },
+      probability: 100,
+    } as const;
+    const create = { name: "Fishing", visibility: "private", steps: [step] } as const;
+    const update = { version: 2, ...create };
+
+    /** What the local check says about `request`, by path. */
+    async function refusals(request: unknown): Promise<[string, string][]> {
+      const { api } = client();
+      try {
+        await api.createMode(request as Parameters<typeof api.createMode>[0]);
+      } catch (rejection) {
+        return ((rejection as ApiError).error.fields ?? []).map((field) => [
+          field.path,
+          field.message,
+        ]);
+      }
+      return [];
+    }
+
+    /** `create` with its one step changed by `change`. */
+    const stepWith = (change: object) => ({ ...create, steps: [{ ...step, ...change }] });
+
+    it("passes valid writes through unchanged, an action of every kind's fields", async () => {
+      const { fake, api } = client();
+      const steps = [
+        step,
+        {
+          action: { type: "rotate_random", max_yaw: 30, max_pitch: 10 },
+          schedule: { type: "at_start" },
+          probability: 1,
+        },
+        { action: { type: "sneak", on: true }, schedule: { type: "on_respawn" }, probability: 255 },
+        {
+          action: { type: "select_hotbar_slot", slot: 8 },
+          schedule: { type: "at_start" },
+          probability: 0,
+        },
+        {
+          action: { type: "send_chat", message: "/spawn" },
+          schedule: { type: "at_start" },
+          probability: 50,
+        },
+      ] as const;
+      const all = { name: "Fishing", visibility: "shared", steps: [...steps] } as const;
+
+      await api.createMode(all as never);
+      await api.createModeWithCommands(create as never);
+      await api.updateMode(ID, update as never);
+      await api.updateModeWithCommands(ID, update as never);
+      await api.deleteMode(ID);
+
+      expect(fake.calls.map((call) => [call.method, call.args])).toEqual([
+        ["createMode", [all]],
+        ["createModeWithCommands", [create]],
+        ["updateMode", [ID, update]],
+        ["updateModeWithCommands", [ID, update]],
+        ["deleteMode", [ID]],
+      ]);
+    });
+
+    it("takes every action the generated type holds", async () => {
+      for (const type of ACTION_KINDS) {
+        expect(await refusals(stepWith({ action: { type } }))).toEqual([]);
+      }
+    });
+
+    it("leaves every rule inside the wire type to the server", async () => {
+      for (const request of [
+        stepWith({ probability: 0 }),
+        stepWith({ probability: 101 }),
+        stepWith({ probability: 255 }),
+        stepWith({ action: { type: "look", yaw: 500, pitch: -500 } }),
+        stepWith({ action: { type: "select_hotbar_slot", slot: 255 } }),
+        stepWith({ schedule: { type: "every", interval_ms: 0, jitter_ms: 4_294_967_295 } }),
+        // A field a type needs but doesn't have: the server's "is required for this type".
+        stepWith({ action: { type: "look" }, schedule: { type: "every" } }),
+        // A field a type doesn't take: the server's "isn't used by this type".
+        stepWith({ action: { type: "jump", yaw: 1 } }),
+      ]) {
+        expect(await refusals(request)).toEqual([]);
+      }
+    });
+
+    it.each([
+      ["no chance at all", { probability: Number.NaN }, "steps[0].probability", "must be a number"],
+      [
+        "a part of a percent",
+        { probability: 50.5 },
+        "steps[0].probability",
+        "must be a whole number",
+      ],
+      ["a chance past a byte", { probability: 256 }, "steps[0].probability", "is out of range"],
+      ["a chance below zero", { probability: -1 }, "steps[0].probability", "is out of range"],
+      [
+        "an infinite chance",
+        { probability: Number.POSITIVE_INFINITY },
+        "steps[0].probability",
+        "must be a number",
+      ],
+      [
+        "an angle that isn't a number",
+        { action: { type: "look", yaw: Number.NaN, pitch: 0 } },
+        "steps[0].action.yaw",
+        "must be a number",
+      ],
+      [
+        "an infinite angle",
+        { action: { type: "rotate_random", max_yaw: Number.POSITIVE_INFINITY, max_pitch: 0 } },
+        "steps[0].action.max_yaw",
+        "must be a number",
+      ],
+      [
+        "a wait past 32 bits",
+        { schedule: { type: "every", interval_ms: 4_294_967_296, jitter_ms: 0 } },
+        "steps[0].schedule.interval_ms",
+        "is out of range",
+      ],
+      [
+        "a wait that isn't whole milliseconds",
+        { schedule: { type: "every", interval_ms: 1_000, jitter_ms: 0.5 } },
+        "steps[0].schedule.jitter_ms",
+        "must be a whole number",
+      ],
+    ])("refuses %s at its field", async (_name, change, path, message) => {
+      expect(await refusals(stepWith(change))).toEqual([[path, message]]);
+    });
+
+    it("checks the name, the steps' count and a chat line in the server's words", async () => {
+      expect(await refusals({ ...create, name: "   " })).toEqual([["name", "must not be empty"]]);
+      expect(await refusals({ ...create, name: "x".repeat(33) })).toEqual([
+        ["name", "must be at most 32 characters"],
+      ]);
+      expect(await refusals({ ...create, name: ` ${"x".repeat(32)} ` })).toEqual([]);
+      expect(await refusals({ ...create, steps: Array.from({ length: 33 }, () => step) })).toEqual([
+        ["steps", "must hold at most 32 steps"],
+      ]);
+      expect(await refusals(stepWith({ action: { type: "send_chat", message: "  " } }))).toEqual([
+        ["steps[0].action.message", "must not be empty"],
+      ]);
+    });
+
+    it("refuses an answer's shape: an unknown field or type never reaches the server", async () => {
+      const { fake, api } = client();
+      const send = (request: unknown) => api.createMode(request as never);
+
+      expect(await refusedFields(send({ ...create, unlisted_command: false }))).toEqual([""]);
+      expect(
+        await refusedFields(
+          send(stepWith({ action: { type: "send_chat", message: "/x", arguments_hidden: true } })),
+        ),
+      ).toEqual(["steps[0].action"]);
+      expect(await refusedFields(send(stepWith({ action: { type: "dance" } })))).toEqual([
+        "steps[0].action.type",
+      ]);
+      expect(await refusedFields(send(stepWith({ schedule: { type: "at_dawn" } })))).toEqual([
+        "steps[0].schedule.type",
+      ]);
+      expect(await refusedFields(send({ ...create, visibility: "secret" }))).toEqual([
+        "visibility",
+      ]);
+      expect(fake.calls).toEqual([]);
+    });
+
+    it("refuses an edit's version and ID", async () => {
+      const { fake, api } = client();
+
+      expect(await refusedFields(api.updateMode("x", { ...update, version: 0 } as never))).toEqual([
+        "id",
+        "version",
+      ]);
+      expect(await refusedFields(api.deleteMode("x"))).toEqual(["id"]);
+      expect(fake.calls).toEqual([]);
+    });
   });
 
   it("passes the servers' settings' valid pages and writes through unchanged", async () => {

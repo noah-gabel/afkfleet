@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import type { BotPage } from "@afkfleet/ui/generated/BotPage";
 import type { ChatPage } from "@afkfleet/ui/generated/ChatPage";
 import type { ModePage } from "@afkfleet/ui/generated/ModePage";
+import type { ModeResponse } from "@afkfleet/ui/generated/ModeResponse";
 import type { ServerSettingsResponse } from "@afkfleet/ui/generated/ServerSettingsResponse";
 import { expect, test } from "@playwright/test";
 
@@ -405,6 +406,259 @@ test("lets only Admins and the Owner try chat formats", async () => {
   });
 
   expect(tried).toMatchObject({ ok: false, error: { api: { status: 403, code: "forbidden" } } });
+});
+
+test("refuses a preview's format as the server does, at the format it names", async () => {
+  const backend = new FakeBackend();
+  backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(OWNER) });
+  const refused = (chat_formats: readonly string[]) =>
+    backend.handle("preview_chat_formats", { request: { chat_formats, line: "Notch : hi" } });
+
+  for (const [format, message] of [
+    ["", "must not be empty"],
+    ["x".repeat(65), "must be at most 64 characters"],
+    [
+      "{sender}\n: ",
+      "must be one line, without control characters, formatting codes, text-direction marks or invisible characters",
+    ],
+    ["{Sender} : ", "can hold only {sender} and {any}; write a brace as {{ or }}"],
+    ["no placeholder", "must hold {sender} exactly once"],
+    ["{sender} {sender} : ", "must hold {sender} exactly once"],
+    ["{sender} : {any}", "can hold {any} only before {sender}"],
+    ["{any}a{any}b{any}c{sender} : ", "can hold {any} at most twice"],
+    ["{any}{sender} : ", "must have text right after each {any}"],
+    ["{sender}", "must have text after {sender} that doesn't start with a letter, a digit or _"],
+    ["{sender}x", "must have text after {sender} that doesn't start with a letter, a digit or _"],
+  ] as const) {
+    expect(await refused(["{sender} : ", format])).toMatchObject({
+      ok: false,
+      error: {
+        api: {
+          status: 422,
+          code: "validation_failed",
+          fields: [{ path: "chat_formats[1]", message }],
+        },
+      },
+    });
+  }
+  expect(await refused(Array.from({ length: 9 }, () => "{sender} : "))).toMatchObject({
+    ok: false,
+    error: { api: { fields: [{ path: "chat_formats", message: "must hold at most 8 formats" }] } },
+  });
+  expect(await refused(["{sender} : "])).toEqual({
+    ok: true,
+    value: { sender: "Notch", format: 0 },
+  });
+});
+
+/** A signed-in backend for `who`, with its handle. */
+function signedIn(who: string) {
+  const backend = new FakeBackend();
+  backend.handle("login", { request: { username: who, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(who) });
+  return backend;
+}
+
+const JUMP = { action: { type: "jump" }, schedule: { type: "at_start" }, probability: 100 };
+const WARP = {
+  action: { type: "send_chat", message: "/warp home" },
+  schedule: { type: "at_start" },
+  probability: 100,
+};
+
+/** A new private mode's request. */
+const newMode = (name: string, steps: readonly object[] = [JUMP]) => ({
+  name,
+  visibility: "private",
+  steps,
+});
+
+/** The fake's answer's value, which must be one. */
+function answered(outcome: unknown): ModeResponse {
+  expect(outcome).toMatchObject({ ok: true });
+  return (outcome as { value: ModeResponse }).value;
+}
+
+test("a mode's create answers it for its viewer, with its flags and at version 1", async () => {
+  const backend = signedIn(MEMBER);
+
+  const mode = answered(await backend.handle("create_mode", { request: newMode("Fishing") }));
+
+  expect(mode).toMatchObject({
+    name: "Fishing",
+    visibility: "private",
+    ownership: "mine",
+    editable: true,
+    deletable: true,
+    visibility_editable: false,
+    unlisted_command: false,
+    version: 1,
+  });
+  expect(mode.steps[0]?.action.arguments_hidden).toBe(false);
+  const listed = (await backend.handle("modes", {})) as { value: ModePage };
+  expect(listed.value.items[0]?.id).toBe(mode.id);
+});
+
+test("a mode write refuses in the server's order", async () => {
+  const backend = signedIn(MEMBER);
+  const refused = (command: string, request: object) => backend.handle(command, { request });
+
+  expect(await refused("create_mode", newMode("AFK"))).toMatchObject({
+    error: {
+      api: { status: 422, fields: [{ path: "name", message: "is a built-in mode's name" }] },
+    },
+  });
+  expect(
+    await refused("create_mode", newMode("Fishing", [{ ...JUMP, probability: 0 }])),
+  ).toMatchObject({
+    error: { api: { fields: [{ path: "steps[0].probability" }] } },
+  });
+  expect(
+    await refused(
+      "create_mode",
+      newMode("Fishing", [{ action: { type: "look" }, schedule: JUMP.schedule, probability: 100 }]),
+    ),
+  ).toMatchObject({
+    error: {
+      api: { fields: [{ path: "steps[0].action.yaw", message: "is required for this type" }] },
+    },
+  });
+  expect(await refused("create_mode", newMode("Fishing", [WARP, WARP]))).toMatchObject({
+    error: {
+      api: {
+        fields: [
+          { path: "steps[1]", message: "is a second chat step at start; a mode can have only one" },
+        ],
+      },
+    },
+  });
+  expect(
+    await refused("create_mode", { ...newMode("Fishing"), visibility: "shared" }),
+  ).toMatchObject({
+    error: { api: { status: 403, code: "forbidden" } },
+  });
+  expect(await refused("create_mode", newMode("Fishing", [WARP]))).toMatchObject({
+    error: { api: { status: 403, code: "mode_needs_step_up" } },
+  });
+  expect(await refused("create_mode_with_commands", newMode("Fishing", [WARP]))).toMatchObject({
+    error: { api: { status: 403, code: "step_up_required" } },
+  });
+  await refused("create_mode", newMode("Fishing"));
+  expect(await refused("create_mode", newMode("FISHING"))).toMatchObject({
+    error: {
+      api: { status: 422, fields: [{ path: "name", message: "is already another mode's name" }] },
+    },
+  });
+});
+
+test("a mode's owner holds at most 50", async () => {
+  const backend = signedIn(MEMBER);
+  for (let n = 0; n < 50; n += 1) {
+    answered(await backend.handle("create_mode", { request: newMode(`Mode ${n}`) }));
+  }
+
+  expect(await backend.handle("create_mode", { request: newMode("One more") })).toMatchObject({
+    error: { api: { status: 409, code: "conflict" } },
+  });
+});
+
+test("a mode's edit is a no-op, stale, in use or written, and its version moves", async () => {
+  const backend = signedIn(OWNER);
+  const mode = answered(await backend.handle("create_mode", { request: newMode("Fishing") }));
+  const edit = (request: object) =>
+    backend.handle("update_mode", {
+      id: mode.id,
+      request: { version: 1, ...newMode("Fishing"), ...request },
+    });
+
+  expect(answered(await edit({})).version).toBe(1);
+  expect(answered(await edit({ name: "Fishing 2" })).version).toBe(2);
+  expect(await edit({ name: "Stale" })).toMatchObject({
+    error: { api: { status: 409, code: "mode_changed" } },
+  });
+  // Another device's change: the version the form holds goes stale.
+  backend.changeMode("Fishing 2", { name: "Elsewhere" });
+  expect(await edit({ version: 2, name: "Mine" })).toMatchObject({
+    error: { api: { status: 409, code: "mode_changed" } },
+  });
+  backend.usedByOthers("Elsewhere");
+  expect(await edit({ version: 3, name: "Mine" })).toMatchObject({
+    error: { api: { status: 409, code: "mode_in_use_by_others" } },
+  });
+  expect(await backend.handle("delete_mode", { id: mode.id })).toMatchObject({
+    error: { api: { status: 403, code: "step_up_required" } },
+  });
+});
+
+test("a bot on a mode keeps it from being deleted, and a command off the list needs the twin", async () => {
+  const backend = signedIn(OWNER);
+  backend.addAccount(OWNER);
+  const bot = backend.bot("AfkBot1");
+  const mode = answered(await backend.handle("create_mode", { request: newMode("Fishing") }));
+  await backend.handle("step_up", { request: { password: PASSWORD } });
+  answered(await backend.handle("set_bot_mode", { id: bot.id, request: { mode_id: mode.id } }));
+
+  expect(await backend.handle("delete_mode", { id: mode.id })).toMatchObject({
+    error: { api: { status: 409, code: "mode_in_use" } },
+  });
+  expect(
+    await backend.handle("update_mode", {
+      id: mode.id,
+      request: { version: 1, ...newMode("Fishing", [WARP]) },
+    }),
+  ).toMatchObject({ error: { api: { status: 403, code: "mode_needs_step_up" } } });
+  const edited = answered(
+    await backend.handle("update_mode_with_commands", {
+      id: mode.id,
+      request: { version: 1, ...newMode("Fishing", [WARP]) },
+    }),
+  );
+  expect(edited.unlisted_command).toBe(true);
+  answered(await backend.handle("set_bot_mode", { id: bot.id, request: { mode_id: edited.id } }));
+  await backend.handle("set_bot_mode", {
+    id: bot.id,
+    request: { mode_id: "01a14202-2800-7000-8000-000000000001" },
+  });
+  expect(await backend.handle("delete_mode", { id: mode.id })).toEqual({ ok: true });
+});
+
+test("a viewer who can't edit a shared mode sees its command cut, and may not change it", async () => {
+  const backend = signedIn(MEMBER);
+  const listed = (await backend.handle("modes", {})) as { value: ModePage };
+  const warp = listed.value.items.find((mode) => mode.name === "warp");
+
+  expect(warp).toMatchObject({ editable: false, deletable: false, unlisted_command: true });
+  expect(warp?.steps[0]?.action).toMatchObject({ message: "/warp", arguments_hidden: true });
+  expect(
+    await backend.handle("update_mode", {
+      id: warp?.id,
+      request: { version: 1, ...newMode("warp") },
+    }),
+  ).toMatchObject({ error: { api: { status: 403, code: "forbidden" } } });
+});
+
+test("cuts only a command with arguments, as the server's without_arguments does", async () => {
+  const backend = signedIn(OWNER);
+  await backend.handle("step_up", { request: { password: PASSWORD } });
+  const shared = (name: string, message: string) => ({
+    name,
+    visibility: "shared",
+    steps: [{ ...WARP, action: { type: "send_chat", message } }],
+  });
+  await backend.handle("create_mode_with_commands", { request: shared("Bare", "/spawn") });
+  await backend.handle("create_mode_with_commands", { request: shared("Full", "/warp home") });
+  await backend.handle("create_mode_with_commands", { request: shared("Chat", "hello there") });
+  await backend.handle("logout", {});
+  backend.handle("login", { request: { username: MEMBER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(MEMBER) });
+
+  const { value } = (await backend.handle("modes", {})) as { value: ModePage };
+  const action = (name: string) => value.items.find((mode) => mode.name === name)?.steps[0]?.action;
+
+  expect(action("Bare")).toMatchObject({ message: "/spawn", arguments_hidden: false });
+  expect(action("Full")).toMatchObject({ message: "/warp", arguments_hidden: true });
+  expect(action("Chat")).toMatchObject({ message: "hello there", arguments_hidden: false });
 });
 
 test("lets only Admins and the Owner read the servers' settings", async () => {

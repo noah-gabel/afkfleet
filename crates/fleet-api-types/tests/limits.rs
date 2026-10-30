@@ -26,6 +26,7 @@ use fleet_api_types::server_settings::{
     CONFLICT_TEXTS_MAX, SERVER_SETTINGS_MAX, SERVER_SETTINGS_PAGE_MAX,
 };
 use fleet_core::auth::{NewPassword, STEP_UP_WINDOW};
+use fleet_core::mode::MAX_MODES_PER_OWNER;
 use fleet_core::value::{McUsername, Username};
 
 /// Every limit the UI mirrors, by its name in both languages.
@@ -48,6 +49,7 @@ fn expected() -> BTreeMap<&'static str, u64> {
         ("MC_NAME_MAX_CHARS", usize(MC_NAME_MAX_CHARS)),
         ("MODE_NAME_MAX_CHARS", usize(MODE_NAME_MAX_CHARS)),
         ("MODE_MAX_STEPS", usize(MODE_MAX_STEPS)),
+        ("MAX_MODES_PER_OWNER", u64::from(MAX_MODES_PER_OWNER)),
         ("SERVER_ADDRESS_MAX_CHARS", usize(SERVER_ADDRESS_MAX_CHARS)),
         ("CHAT_MESSAGE_MAX_UNITS", usize(CHAT_MESSAGE_MAX_UNITS)),
         ("CONFLICT_TEXTS_MAX", usize(CONFLICT_TEXTS_MAX)),

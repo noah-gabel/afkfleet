@@ -153,8 +153,9 @@ pub struct Fleet {
 /// every bot with its account and the account's owner, every grant, and
 /// every user's role and whether they're enabled; with each bot's chat
 /// formats, its current server's (S79, R146). Nothing else: no names, no
-/// addresses, nothing a viewer is sent but the parsed senders the formats
-/// read.
+/// addresses except the keys of the settings rows that don't read back, for
+/// their log line (S81), and nothing a viewer is sent but the parsed senders
+/// the formats read.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Access {
     /// Every bot.

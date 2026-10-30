@@ -454,7 +454,7 @@ describe("a Minecraft server's settings, PR #80's review", () => {
     expect(text(2).value).toBe("You logged in\nfrom another location");
   });
 
-  it("keeps the notice and the edits when Load again's read is paused, since nothing was read", async () => {
+  it("reads the row and fills the form at Load again while Windows reports no network", async () => {
     const { app, state } = await atEditor(ROW.id, { rows: [ROW] });
     await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
     state.rows = [settings(1, "mc.example.com:25565", [["Someone else's"]], 2)];
@@ -463,18 +463,12 @@ describe("a Minecraft server's settings, PR #80's review", () => {
     await app.user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText(CHANGED)).toBeDefined();
 
-    // Windows reporting no network: TanStack pauses the read and resolves its refetch unread.
+    // The read isn't paused any more: fleet-client's own answer decides (ADR-0020, H8's note).
     onlineManager.setOnline(false);
     await app.user.click(screen.getByRole("button", { name: "Load again" }));
 
-    const failed = await screen.findByText(
-      "Couldn't load the servers: Windows reports no network connection, so the app didn't ask the server. Try again.",
-    );
-    expect(failed.closest('[role="alert"]')).toBe(
-      screen.getByText(CHANGED).closest('[role="alert"]'),
-    );
-    expect(text(1).value).toBe("Mine");
-    expect(text(2).value).toBe("You logged in\nfrom another location");
+    await vi.waitFor(() => expect(screen.queryByText(CHANGED)).toBeNull());
+    expect(text(1).value).toBe("Someone else's");
   });
 
   it("locks the fields, Remove and Add text while Confirm it's you is up, and the retry sends what's shown", async () => {
@@ -851,6 +845,74 @@ describe("a Minecraft server's chat formats and Try a line (H8)", () => {
 
     expect(await screen.findByText(/^refused: forbidden \(request /)).toBeDefined();
     expect(screen.queryByText("must be at most 1024 characters")).toBeNull();
+  });
+
+  it("marks no field when a refusal comes after a Remove changed the formats", async () => {
+    const three = settings(1, "mc.example.com:25565", [["Already connected"]], 1, [
+      "<{sender}> ",
+      "[{any}] {sender} : ",
+      "{sender} : ",
+    ]);
+    const late = deferred<{ sender?: string; format?: number }>();
+    const { app } = await atEditor(three.id, {
+      rows: [three],
+      handlers: { previewChatFormats: () => late.promise },
+    });
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+
+    await fill(app, screen.getByLabelText("Try a line"), "a line");
+    await app.user.click(screen.getByRole("button", { name: "Try" }));
+    await app.user.click(
+      within(section()).getAllByRole("button", { name: "Remove" })[0] as HTMLElement,
+    );
+    await act(async () =>
+      late.reject(
+        refusal(422, "validation_failed", {
+          fields: [{ path: "chat_formats[1]", message: "must hold {sender} exactly once" }],
+        }),
+      ),
+    );
+
+    expect(screen.queryByText("must hold {sender} exactly once")).toBeNull();
+    expect(format(1).getAttribute("aria-invalid")).toBe("false");
+    expect(format(2).getAttribute("aria-invalid")).toBe("false");
+  });
+
+  it("disables Try while its request runs", async () => {
+    const late = deferred<{ sender?: string; format?: number }>();
+    const { app } = await atEditor(WITH_FORMATS.id, {
+      rows: [WITH_FORMATS],
+      handlers: { previewChatFormats: () => late.promise },
+    });
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+    const tryButton = () => screen.getByRole("button", { name: "Try" }) as HTMLButtonElement;
+
+    await fill(app, screen.getByLabelText("Try a line"), "a line");
+    await app.user.click(tryButton());
+    await vi.waitFor(() => expect(tryButton().disabled).toBe(true));
+    await act(async () => late.resolve({}));
+
+    await vi.waitFor(() => expect(tryButton().disabled).toBe(false));
+  });
+
+  it("announces a refusal at the sample line to screen readers", async () => {
+    const { app } = await atEditor(WITH_FORMATS.id, {
+      rows: [WITH_FORMATS],
+      handlers: {
+        previewChatFormats: async () => {
+          throw refusal(422, "validation_failed", {
+            fields: [{ path: "line", message: "must be at most 1024 characters" }],
+          });
+        },
+      },
+    });
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+
+    await fill(app, screen.getByLabelText("Try a line"), "a line");
+    await app.user.click(screen.getByRole("button", { name: "Try" }));
+
+    const said = await screen.findByText("must be at most 1024 characters");
+    expect(said.getAttribute("role")).toBe("alert");
   });
 
   it("drops the answer once a format or the line changes, and never shows a late one", async () => {

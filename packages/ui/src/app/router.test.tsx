@@ -55,10 +55,10 @@ describe("the router", () => {
     await waitFor(() => expect(app.path()).toBe(to));
   });
 
-  it("shows a Member Home, Accounts, Server and Profile, nothing of the admin's", async () => {
+  it("shows a Member Home, Modes, Accounts, Server and Profile, nothing of the admin's", async () => {
     await signedInAs("member");
 
-    expect(navLinks()).toEqual(["Home", "Accounts", "Server", "Profile"]);
+    expect(navLinks()).toEqual(["Home", "Modes", "Accounts", "Server", "Profile"]);
   });
 
   it.each<UserRole>(["admin", "owner"])("shows an %s the admin screens too", async (role) => {
@@ -66,6 +66,7 @@ describe("the router", () => {
 
     expect(navLinks()).toEqual([
       "Home",
+      "Modes",
       "Accounts",
       "Server",
       "Profile",
@@ -117,7 +118,7 @@ describe("the router", () => {
   it("gives a role this app doesn't know only a Member's rights", async () => {
     const app = await signedInAs("superuser" as UserRole);
 
-    expect(navLinks()).toEqual(["Home", "Accounts", "Server", "Profile"]);
+    expect(navLinks()).toEqual(["Home", "Modes", "Accounts", "Server", "Profile"]);
     await act(() => app.runtime.router.navigate({ to: "/admin/users" }));
     expect(await screen.findByText(NOT_FOUND)).toBeDefined();
   });

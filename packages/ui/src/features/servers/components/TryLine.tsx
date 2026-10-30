@@ -103,7 +103,7 @@ export function TryLine({
   const shown = answered !== null && same(answered, formats, line) ? answered : null;
   return (
     <div className="flex flex-col gap-2">
-      <FormField id={id} label={TRY_LINE} error={shown?.lineError}>
+      <FormField id={id} label={TRY_LINE} error={shown?.lineError} errorRole="alert">
         {(control) => (
           <Input
             {...control}

@@ -87,6 +87,7 @@ Moved from `CLAUDE.md` word for word; it points here. CLAUDE.md keeps the rule: 
 | Components | shadcn/ui (radix-nova), copied from its registry with `cn`, `class-variance-authority` and single Radix packages (`@radix-ui/react-slot`, `@radix-ui/react-label`; never the `radix-ui` umbrella) |
 | Icons | `lucide-react` |
 | Toasts | `sonner` |
+| Drag and drop | `@dnd-kit/core`, `@dnd-kit/sortable`, `@dnd-kit/utilities` (the modes' steps, on pointer events: Tauri's `dragDropEnabled` stays on, so HTML5 drag events never fire on Windows; ADR-0020, U69) |
 | Tests | `vitest`, `jsdom`, `@testing-library/react` (+ its peer `@testing-library/dom`), `@testing-library/user-event`, `msw` with `@msw/playwright` (in the Playwright process only), `@playwright/test` (the installed Edge), `@types/node` (`apps/desktop`'s e2e config and specs) |
 | Lint & format | `@biomejs/biome` |
 | Tauri bridge | `@tauri-apps/api` (`apps/desktop` only) |

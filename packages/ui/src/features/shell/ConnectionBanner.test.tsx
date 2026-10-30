@@ -1,3 +1,4 @@
+import { onlineManager } from "@tanstack/react-query";
 import { act, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -52,12 +53,22 @@ async function signedIn(check: () => Promise<void>) {
 describe("the connection banner", () => {
   afterEach(() => {
     vi.useRealTimers();
+    onlineManager.setOnline(true);
   });
 
   it.each(["unreachable", "timed_out"] as const)("comes up on %s", async (code) => {
     const { fail } = await signedIn(async () => {});
 
     await fail(code);
+
+    expect(await screen.findByText(DOWN)).toBeDefined();
+  });
+
+  it("comes up from fleet-client's own answer while Windows reports no network", async () => {
+    const { fail } = await signedIn(async () => {});
+    onlineManager.setOnline(false);
+
+    await fail("unreachable");
 
     expect(await screen.findByText(DOWN)).toBeDefined();
   });

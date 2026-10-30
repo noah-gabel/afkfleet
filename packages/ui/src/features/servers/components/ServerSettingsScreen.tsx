@@ -58,7 +58,6 @@ import {
   FORMATS_HINT,
   LOAD_AGAIN,
   LOADING_SERVERS,
-  RELOAD_PAUSED,
   REMOVE,
   SAVE,
   SAVED,
@@ -305,16 +304,13 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
   /**
    * Reads the row again after a 409 and fills the form from it; a row gone shows so. A read
    * that fails changes nothing but saying why: the notice and the edits stay, and the list's
-   * cache still holds the old row, which must never be shown as current. A read counts only
-   * when the list's `dataUpdatedAt` moved forward: while Windows reports no network, TanStack
-   * pauses the read and resolves the refetch without reading (PR #81's review, c).
+   * cache still holds the old row, which must never be shown as current.
    */
   async function loadAgain(): Promise<void> {
     if (row === undefined) {
       return;
     }
     setReloadFailed(null);
-    const before = queryClient.getQueryState(SERVER_SETTINGS_KEY)?.dataUpdatedAt ?? 0;
     try {
       await queryClient.refetchQueries(
         { queryKey: SERVER_SETTINGS_KEY, exact: true },
@@ -327,10 +323,6 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
       return;
     }
     if (!alive.current) {
-      return;
-    }
-    if ((queryClient.getQueryState(SERVER_SETTINGS_KEY)?.dataUpdatedAt ?? 0) <= before) {
-      setReloadFailed(RELOAD_PAUSED);
       return;
     }
     setStale(null);
