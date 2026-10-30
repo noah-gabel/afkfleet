@@ -116,14 +116,17 @@ describe("a new mode", () => {
   });
 
   it("offers 32 steps over its sections, then says so", async () => {
-    const { app } = await atMode("new");
-    await screen.findByRole("heading", { name: "New mode", level: 1 });
+    const seeded = mode(1, {
+      steps: Array.from({ length: 31 }, () => shownStep({ type: "jump" })),
+    });
+    const { app } = await atMode(seeded.id, { rows: [seeded] });
+    await screen.findByRole("heading", { name: "Mode 1", level: 1 });
     const add = () =>
       within(section("repeating")).getByRole("button", { name: "Add step" }) as HTMLButtonElement;
 
-    for (let n = 0; n < 32; n += 1) {
-      await app.user.click(add());
-    }
+    expect(add().disabled).toBe(false);
+    expect(within(section("repeating")).queryByText("At most 32 steps.")).toBeNull();
+    await app.user.click(add());
 
     expect(add().disabled).toBe(true);
     expect(
@@ -131,7 +134,7 @@ describe("a new mode", () => {
         .disabled,
     ).toBe(true);
     expect(within(section("repeating")).getByText("At most 32 steps.")).toBeDefined();
-  }, 30_000);
+  });
 });
 
 describe("a step's card (S12, U68, U70, U72)", () => {
@@ -241,7 +244,7 @@ describe("a step's card (S12, U68, U70, U72)", () => {
     ).toBeDefined();
     expect(
       within(section("repeating")).getByText(
-        "Repeats while the bot is online. The first run comes one wait after it joins.",
+        "Repeats while the bot is online, starting one wait after it joins.",
       ),
     ).toBeDefined();
   });
@@ -259,8 +262,15 @@ describe("a step's card (S12, U68, U70, U72)", () => {
     const button = (n: number, name: string) =>
       within(card("repeating", n)).getByRole("button", { name }) as HTMLButtonElement;
 
-    expect(button(1, "Move up").disabled).toBe(true);
-    expect(button(3, "Move down").disabled).toBe(true);
+    // At an edge they stay focusable, so a step moved there doesn't lose the keyboard's place.
+    expect(button(1, "Move up").disabled).toBe(false);
+    expect(button(1, "Move up").getAttribute("aria-disabled")).toBe("true");
+    expect(button(3, "Move down").disabled).toBe(false);
+    expect(button(3, "Move down").getAttribute("aria-disabled")).toBe("true");
+    expect(button(2, "Move up").getAttribute("aria-disabled")).toBeNull();
+    await app.user.click(button(1, "Move up"));
+    await app.user.click(button(3, "Move down"));
+    expect(screen.queryByText(/^Step \d moved/)).toBeNull();
     await app.user.click(button(3, "Move up"));
 
     expect(screen.getByText("Step 3 moved to position 2 of 3.").getAttribute("role")).toBe(
@@ -893,11 +903,10 @@ describe("the locked view (U73, R160, R161)", () => {
 
     const message = within(card("atStart", 1)).getByLabelText("Message") as HTMLInputElement;
     expect(message.value).toBe("/warp");
-    expect(
-      within(card("atStart", 1)).getByText(
-        "Its arguments are hidden: only someone who can edit this mode sees them.",
-      ),
-    ).toBeDefined();
+    const said = within(card("atStart", 1)).getByText(
+      "Its arguments are hidden: only someone who can edit this mode sees them.",
+    );
+    expect(message.getAttribute("aria-describedby")).toContain(said.id);
   });
 
   it("locks a cut command's mode even if the row says editable", async () => {

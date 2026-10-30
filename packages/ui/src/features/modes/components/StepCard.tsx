@@ -64,6 +64,12 @@ export interface StepView {
 /** A native select, as the bot's mode drop-down is. */
 const SELECT = "h-9 rounded-md border border-input bg-transparent px-3 text-sm";
 
+/**
+ * Move up or down at its edge: it looks disabled, but only `aria-disabled`, so a step just moved
+ * there keeps the keyboard's place on the button (a disabled one would drop the focus).
+ */
+const EDGE = "aria-disabled:cursor-default aria-disabled:opacity-50";
+
 /** The choices of `on` for a kind that starts and stops. */
 function onChoices(starts: string, stops: string) {
   return [
@@ -209,23 +215,21 @@ export function StepCard({
           )
         : null}
       {step.kind === "send_chat" ? (
-        <>
-          <FormField id={`${baseId}-message`} label={MESSAGE_FIELD} error={errorOf("message")}>
-            {(control) => (
-              <Input
-                {...control}
-                autoComplete="off"
-                readOnly={view.readOnly || view.locked}
-                {...form.register(pathOf("message"))}
-              />
-            )}
-          </FormField>
-          {cut ? (
-            <p className="text-sm text-muted-foreground">
-              {view.copying ? MARK_CUT_IN_COPY : MARK_CUT}
-            </p>
-          ) : null}
-        </>
+        <FormField
+          id={`${baseId}-message`}
+          label={MESSAGE_FIELD}
+          error={errorOf("message")}
+          {...(cut ? { hint: view.copying ? MARK_CUT_IN_COPY : MARK_CUT } : {})}
+        >
+          {(control) => (
+            <Input
+              {...control}
+              autoComplete="off"
+              readOnly={view.readOnly || view.locked}
+              {...form.register(pathOf("message"))}
+            />
+          )}
+        </FormField>
       ) : null}
       {section === "repeating" ? (
         <>
@@ -240,9 +244,15 @@ export function StepCard({
             type="button"
             variant="outline"
             size="sm"
-            disabled={view.locked || index === 0}
+            className={EDGE}
+            disabled={view.locked}
+            aria-disabled={index === 0 ? true : undefined}
             aria-describedby={legendId}
-            onClick={() => onMove(index, index - 1)}
+            onClick={() => {
+              if (index > 0) {
+                onMove(index, index - 1);
+              }
+            }}
           >
             {MOVE_UP}
           </Button>
@@ -250,9 +260,15 @@ export function StepCard({
             type="button"
             variant="outline"
             size="sm"
-            disabled={view.locked || index === count - 1}
+            className={EDGE}
+            disabled={view.locked}
+            aria-disabled={index === count - 1 ? true : undefined}
             aria-describedby={legendId}
-            onClick={() => onMove(index, index + 1)}
+            onClick={() => {
+              if (index < count - 1) {
+                onMove(index, index + 1);
+              }
+            }}
           >
             {MOVE_DOWN}
           </Button>

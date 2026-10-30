@@ -131,7 +131,7 @@ test("the Owner creates a mode, drags a step, and meets each conflict", async ({
       "A bot uses this mode, so it can't be deleted. Switch every bot to another mode first.",
     ),
   ).toBeVisible();
-  await expect(main.getByText("These of the bots you can see run it:")).toBeVisible();
+  await expect(main.getByText("Bots you can see that use this mode:")).toBeVisible();
   await main.getByRole("link", { name: "AfkBot1" }).click();
   await main.getByLabel("Mode", { exact: true }).selectOption({ label: "afk (built in)" });
   await expect(main.getByLabel("Mode", { exact: true })).toBeEnabled();
@@ -213,4 +213,15 @@ test("a step moves with the keyboard on its handle, within its section", async (
 
   await expect(step(1).getByLabel("What it does")).toHaveValue("jump");
   await expect(step(2).getByLabel("What it does")).toHaveValue("sneak");
+
+  // Move up to the top edge: the button stays focused, and Enter there does nothing.
+  await step(2).getByRole("button", { name: "Move up" }).click();
+  await expect(step(1).getByLabel("What it does")).toHaveValue("sneak");
+  await expect(step(1).getByRole("button", { name: "Move up" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(step(1).getByLabel("What it does")).toHaveValue("sneak");
+  // And Move down, whose own card is the one the list moves.
+  await step(1).getByRole("button", { name: "Move down" }).click();
+  await expect(step(2).getByLabel("What it does")).toHaveValue("sneak");
+  await expect(step(2).getByRole("button", { name: "Move down" })).toBeFocused();
 });

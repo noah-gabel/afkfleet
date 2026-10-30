@@ -1262,13 +1262,14 @@ export class FakeBackend {
       created_at: mode.created_at,
       updated_at: mode.updated_at,
       steps: mode.steps.map((step) => {
-        const message = step.action.message;
-        const cut = message?.startsWith("/") === true && !editable;
+        const message = step.action.message ?? "";
+        // As the server's `without_arguments`: a bare command has nothing to cut.
+        const cut = !editable && message.startsWith("/") && /\s/.test(message);
         return {
           ...step,
           action: {
             ...step.action,
-            ...(cut ? { message: message?.split(/\s/, 1)[0] ?? "" } : {}),
+            ...(cut ? { message: message.split(/\s/, 1)[0] ?? "" } : {}),
             arguments_hidden: cut,
           },
         };

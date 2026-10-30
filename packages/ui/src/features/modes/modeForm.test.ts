@@ -228,6 +228,8 @@ describe("the time fields (U72, S82)", () => {
     ["2", "hours", 7_200_000],
     ["0.1", "seconds", 100],
     ["0.25", "seconds", 250],
+    ["1.1", "minutes", 66_000],
+    ["0.07", "hours", 252_000],
     // Not whole milliseconds: it stays so, for the local refusal, rather than being rounded.
     ["0.0005", "seconds", 0.5],
   ])("sends %s %s as %s ms", (every, everyUnit, ms) => {
@@ -235,6 +237,15 @@ describe("the time fields (U72, S82)", () => {
     values.repeating.push({ ...newStep(), every, everyUnit, jitter: "0" });
 
     expect(stepsOf(values).steps[0]?.schedule.interval_ms).toBe(ms);
+  });
+
+  it("rounds away only a value's own binary noise, however large or small", () => {
+    const values = newValues();
+    values.repeating.push({ ...newStep(), every: "1.0000000001", jitter: "0" });
+
+    const ms = stepsOf(values).steps[0]?.schedule.interval_ms;
+
+    expect(Number.isInteger(ms)).toBe(false);
   });
 
   it("keeps a loaded wait's meaning when it's sent back", () => {

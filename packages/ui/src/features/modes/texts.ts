@@ -82,7 +82,7 @@ export const SECTION_TEXT = {
   },
   repeating: {
     heading: "While it's online",
-    hint: "Repeats while the bot is online. The first run comes one wait after it joins.",
+    hint: "Repeats while the bot is online, starting one wait after it joins.",
   },
   onRespawn: {
     heading: "After it respawns",
@@ -220,7 +220,7 @@ export function savedCopy(name: string): string {
 }
 
 /** The bots at a `mode_in_use` (U66). */
-export const BOTS_THAT_RUN_IT = "These of the bots you can see run it:";
+export const BOTS_THAT_USE_IT = "Bots you can see that use this mode:";
 export const A_BOT_YOU_CANT_SEE = "It's a bot you can't see, so its owner has to switch it.";
 
 /** When the bots at a `mode_in_use` couldn't be read. */

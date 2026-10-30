@@ -222,9 +222,13 @@ function numberOf(text: string): number | undefined {
   return text.trim() === "" ? undefined : Number(text);
 }
 
+/** How many steps of a double's own precision count as binary noise, not as what was typed. */
+const NOISE_STEPS = 4;
+
 /**
  * `text` in `unit` as milliseconds; nothing for an empty field. Only binary fractions' noise is
- * rounded away, so a value that isn't whole milliseconds stays so and is refused (S82).
+ * rounded away, relative to the value, so one that isn't whole milliseconds stays so and is
+ * refused (S82).
  */
 function millis(text: string, unit: TimeUnit): number | undefined {
   const value = numberOf(text);
@@ -233,7 +237,7 @@ function millis(text: string, unit: TimeUnit): number | undefined {
   }
   const ms = value * UNIT_MS[unit];
   const near = Math.round(ms);
-  return Math.abs(ms - near) < 1e-6 ? near : ms;
+  return Math.abs(ms - near) <= NOISE_STEPS * Number.EPSILON * Math.abs(ms) ? near : ms;
 }
 
 /** `key` set to `value`, or nothing without a value: a request's field left out. */

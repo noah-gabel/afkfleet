@@ -2116,7 +2116,7 @@ P11.9's mode editor: users create, edit, copy and delete their bots' modes in th
 | Section | When it joins |
 | Its hint | Runs once each time the bot joins a server. |
 | Section | While it's online |
-| Its hint | Repeats while the bot is online. The first run comes one wait after it joins. |
+| Its hint | Repeats while the bot is online, starting one wait after it joins. |
 | Section | After it respawns |
 | Its hint: the respawn explanation | After a death, the bot respawns, lets go of the use button and stops sneaking, then runs these steps. A chat step here is skipped if the last one went out less than 30 seconds ago. |
 | A section's button | Add step |
@@ -2147,7 +2147,7 @@ P11.9's mode editor: users create, edit, copy and delete their bots' modes in th
 | The cap (409 `conflict`) | You already have {cap} modes, the most you can have. Delete one to add another. |
 | `mode_changed` | The server's text, then: Load again (a failed read: Couldn't load the modes: {why}) |
 | `mode_in_use_by_others`, the explanation | Someone who can control that bot has to switch it to another mode first. Your edits are still here; you can save them as a copy. |
-| `mode_in_use`'s bots | These of the bots you can see run it: {links, by account name} |
+| `mode_in_use`'s bots | Bots you can see that use this mode: {links, by account name} |
 | No visible bot | It's a bot you can't see, so its owner has to switch it. |
 | The bots couldn't be read | Couldn't read your bots: {why} |
 | A mode that isn't there | This mode doesn't exist any more, or you can't see it. |
@@ -2166,7 +2166,7 @@ P11.9's mode editor: users create, edit, copy and delete their bots' modes in th
 | Announcements | Step {n} moved to position {m} of {count}. / Picked up step {n}. / Put back step {n}. |
 
 ### As built (group I)
-Built on the planning above, with nothing asked again, in one PR on `p11/p11.9-mode-editor` and thirteen commits: the first commit (above), this record, the five commands, the form's logic, the list, the editor, the 409s with Delete and S83, the dependency, dragging, copies, the bots at `mode_in_use` with the Settings link, the e2e stories, the docs.
+Built on the planning above, with nothing asked again, in one PR on `p11/p11.9-mode-editor` and fourteen commits: the first commit (above), this record, the five commands, the form's logic, the list, the editor, the 409s with Delete and S83, the dependency, dragging, copies, the bots at `mode_in_use` with the Settings link, the e2e stories, d34c882 (`ipc-contract.json`'s format and one word for a mode's visibility), the docs; and PR #85's review (below) as one more.
 
 *Deviations and choices made while building:*
 - **"Make a copy" opens in place, not on `/modes/$id/copy`** (R165's fourth route is dropped). U63 fills it from "the shown mode's form state", so on an editor it must carry unsaved edits. Those stay in `ModeScreen`'s state alone, rather than in a route's state or a store, since a chat step can hold a password (R157).
@@ -2193,6 +2193,21 @@ Built on the planning above, with nothing asked again, in one PR on `p11/p11.9-m
 *Snapshots:* none. No server type, route or query changed but what PR #83's review asked for.
 
 *Size:* about 7,060 lines added and 90 removed, the docs included; the plan said about 6,200. About 4,180 of them are tests and the e2e fake, and about 300 docs and generated files. PR #83's review and `networkMode` came to about 470.
+
+*From PR #85's review (the user's), one more commit, each red first or as said:*
+1. **S83 (security): a form the screen dropped never comes back.** `ModeScreen`'s `opened` kept the old editable row after the drop to the locked view. So when that row then left the list, or the query reset, a `ModeEditor` remounted from it, showing the now-cut arguments in full, and "Save as copy" could make a copy holding them. The locked branch now clears `opened`, and the note has a ref of its own, `dropped`; only an editable row opens a form again. Tests: editable, locked, then removed shows the gone screen with no full command and no copy; a reset query with its read hanging doesn't remount the editor; the note stays when that read lands; a row editable again opens a fresh form. Red against the code before, and by M9.18, the row kept.
+2. **Nothing changes the form while a password is asked.** "Load again" wasn't disabled by it; "Save as copy" and the fields already were. Tests with a notice up and "Save as copy"'s prompt, and with Delete's. Red against the code before, and by M9.19. *Mine, the same hole:* a Save pressed while Load again's read ran could reach the prompt, and the answer would then write over the form it had sent. That read now locks the form too (`reloading`, M9.20).
+3. **Two texts:** "Repeats while the bot is online, starting one wait after it joins." and "Bots you can see that use this mode:", in the table above. They're the user's; the message I had at the plan review changed only the cap's, so I shipped my drafts.
+4. **The reset-query test could not fail.** It awaited the refetch, so the row was back before it asserted, and with the read held out it still passed: TanStack tells its observers on a zero timeout, so the assertions ran on the screen from before the reset. Its read now hangs, a second case has it fail, each waits for that notification (`screenSawIt`), and so does `listHolds`, for every test of a row changing under the form. Red by M9.17, the form dropped while no data is read, which the first version of the fix still passed, and by M9.24, a newer version resetting the form.
+5. **"Offers 32 steps"** seeds 31 steps and adds the 32nd, with no raised timeout: its test time went from about 11 s here (the reviewer measured about 28 s) to under 1 s. It still tests the limit: red by M9.23.
+6. *The nits:*
+   - The e2e fake cuts only a command with arguments, as `without_arguments` does, so `/spawn` reads `arguments_hidden: false`. Red against the fake before.
+   - Move up and Move down use `aria-disabled` at the edges and do nothing there, so focus stays. The e2e case checks it in a real browser, for a step moved to the top and to the bottom; `disabled` stays only for the moments the form is locked. Red against the code before, and by M9.21.
+   - The cut step's mark is the Message field's hint, so it joins its `aria-describedby`. Red against the code before.
+   - The `mode_in_use` bots' read drops an answer from an older attempt. Red against the code before.
+   - `millis`' tolerance is relative to the value (four steps of a double's own precision), so `1.0000000001` seconds stays not whole and is refused, while `1.1` minutes is still 66,000. Red against the code before.
+   - `schemas.ts`' action kinds are a mapped type over the generated `ModeActionKind`, so a kind added or gone doesn't compile, and a test passes each one through. Red by M9.22.
+   - `FakeApiClient.ts`' header comment comes first again, above the imports my script had put there.
 
 ### Group I's first commit
 Scheduled at H8's plan review, and PR #83's review, in one commit.

@@ -55,6 +55,8 @@ export async function atMode(
     rows: [...(options.rows ?? [])],
     stamped: options.stamped ?? false,
     readFails: false,
+    /** While set, the modes' reads wait for it. */
+    hold: null as Promise<void> | null,
   };
   const holdsCommand = (request: CreateModeRequest) =>
     request.steps.some((step) => step.action.message?.startsWith("/") === true);
@@ -90,6 +92,7 @@ export async function atMode(
   };
   const app = await signedIn({
     modes: async () => {
+      await state.hold;
       if (state.readFails) {
         throw refusal(500, "internal");
       }

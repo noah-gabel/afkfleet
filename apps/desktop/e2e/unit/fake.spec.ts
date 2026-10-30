@@ -638,6 +638,29 @@ test("a viewer who can't edit a shared mode sees its command cut, and may not ch
   ).toMatchObject({ error: { api: { status: 403, code: "forbidden" } } });
 });
 
+test("cuts only a command with arguments, as the server's without_arguments does", async () => {
+  const backend = signedIn(OWNER);
+  await backend.handle("step_up", { request: { password: PASSWORD } });
+  const shared = (name: string, message: string) => ({
+    name,
+    visibility: "shared",
+    steps: [{ ...WARP, action: { type: "send_chat", message } }],
+  });
+  await backend.handle("create_mode_with_commands", { request: shared("Bare", "/spawn") });
+  await backend.handle("create_mode_with_commands", { request: shared("Full", "/warp home") });
+  await backend.handle("create_mode_with_commands", { request: shared("Chat", "hello there") });
+  await backend.handle("logout", {});
+  backend.handle("login", { request: { username: MEMBER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(MEMBER) });
+
+  const { value } = (await backend.handle("modes", {})) as { value: ModePage };
+  const action = (name: string) => value.items.find((mode) => mode.name === name)?.steps[0]?.action;
+
+  expect(action("Bare")).toMatchObject({ message: "/spawn", arguments_hidden: false });
+  expect(action("Full")).toMatchObject({ message: "/warp", arguments_hidden: true });
+  expect(action("Chat")).toMatchObject({ message: "hello there", arguments_hidden: false });
+});
+
 test("lets only Admins and the Owner read the servers' settings", async () => {
   const backend = new FakeBackend();
   backend.handle("login", { request: { username: MEMBER, password: PASSWORD } });

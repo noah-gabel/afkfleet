@@ -125,7 +125,9 @@ describe("Make a copy (U63)", () => {
 
     expect(message.value).toBe("/warp");
     expect(message.readOnly).toBe(false);
-    expect(within(step).getByText(CUT_IN_COPY)).toBeDefined();
+    expect(message.getAttribute("aria-describedby")).toContain(
+      within(step).getByText(CUT_IN_COPY).id,
+    );
     await fill(app, message, "/warp home");
     expect(within(step).queryByText(CUT_IN_COPY)).toBeNull();
   });

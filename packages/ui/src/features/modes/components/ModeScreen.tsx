@@ -8,7 +8,8 @@
 // While the form is open, the list can change under it (S83):
 // - a newer version changes nothing but the flags it offers by: Save's 409 says so;
 // - a row it can no longer hold, one whose commands may be cut for this viewer, drops to the locked
-//   view, the edits gone, so what the server just cut isn't kept on the screen;
+//   view, the edits gone, so what the server just cut isn't kept on the screen, and that form
+//   never comes back: only an editable row opens one again;
 // - a row gone keeps the form, with its notice: a delete and a lost view look the same, and the
 //   edits can still be saved as a copy. Only data actually read says a row is gone, never an
 //   empty or reset query, so the form stays mounted through those.
@@ -39,8 +40,11 @@ function lockedKey(mode: ModeResponse): string {
 export function ModeScreen({ id }: { id: string }) {
   const query = useModes();
   const known = modesOf(query);
-  // The row a form opened on, and last showed: what it stays on while no row is read.
+  // The row an open form last showed: what it stays on while no row is read. Dropping the form
+  // drops this, which holds arguments the server has since cut (S83).
   const opened = useRef<ModeResponse | null>(null);
+  // Whether a form was dropped, and the locked view says why.
+  const dropped = useRef(false);
   const [copy, setCopy] = useState<ModeValues | null>(null);
   const read = typeof known === "string" ? undefined : known.find((mode) => mode.id === id);
 
@@ -83,14 +87,18 @@ export function ModeScreen({ id }: { id: string }) {
   }
   if (isEditable(read)) {
     opened.current = read;
+    dropped.current = false;
     return <ModeEditor row={read} initial={valuesOf(read)} left={false} onCopy={setCopy} />;
   }
-  const lost = opened.current !== null;
+  if (opened.current !== null) {
+    opened.current = null;
+    dropped.current = true;
+  }
   return (
     <LockedMode
       key={lockedKey(read)}
       mode={read}
-      note={lost ? NO_LONGER_EDITABLE : undefined}
+      note={dropped.current ? NO_LONGER_EDITABLE : undefined}
       onCopy={setCopy}
     />
   );

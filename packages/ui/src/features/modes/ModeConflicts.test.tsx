@@ -35,6 +35,14 @@ function nameField(): HTMLInputElement {
   return screen.getByLabelText("Name") as HTMLInputElement;
 }
 
+/**
+ * Lets the screen render what the query's state just became: TanStack tells its observers on a
+ * zero timeout, so an assertion right after a state change would still see the screen before it.
+ */
+async function screenSawIt(): Promise<void> {
+  await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+}
+
 /** `rows` in the list's cache, as a live frame or a read leaves it. */
 async function listHolds(app: RenderedApp, rows: readonly ModeResponse[]): Promise<void> {
   // The screen's own read mustn't land after this and write over it.
@@ -45,6 +53,7 @@ async function listHolds(app: RenderedApp, rows: readonly ModeResponse[]): Promi
       pageParams: [undefined],
     }),
   );
+  await screenSawIt();
 }
 
 describe("409 mode_changed (U64, S18)", () => {
@@ -121,6 +130,109 @@ describe("409 mode_changed (U64, S18)", () => {
 
     await app.user.click(saveButton());
 
+    await waitFor(() => expect(screen.queryByText(CHANGED)).toBeNull());
+  });
+});
+
+describe("what's confirmed with the password is what's shown (PR #85's review)", () => {
+  const COMMAND = mode(1, {
+    name: "Warp",
+    steps: [shownStep({ type: "send_chat", message: "/warp home" })],
+  });
+
+  /** A 409 notice up, then Save as copy waiting at "Confirm it's you". */
+  async function asked() {
+    const found = await atMode(COMMAND.id, {
+      rows: [COMMAND],
+      handlers: {
+        updateModeWithCommands: async () => {
+          throw refusal(409, "mode_changed", { message: CHANGED });
+        },
+      },
+      stamped: true,
+    });
+    await screen.findByRole("heading", { name: "Warp", level: 1 });
+    await fill(found.app, nameField(), "Mine");
+    await found.app.user.click(saveButton());
+    await screen.findByText(CHANGED);
+    found.state.stamped = false;
+    await found.app.user.click(screen.getByRole("button", { name: "Save as copy" }));
+    await screen.findByLabelText("Current password");
+    return found;
+  }
+
+  /** `name`, a button. */
+  const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
+
+  it("disables Load again and Save as copy, and locks the fields", async () => {
+    await asked();
+
+    expect(screen.getByText(CHANGED)).toBeDefined();
+    expect(button("Load again").disabled).toBe(true);
+    expect(button("Save as copy").disabled).toBe(true);
+    expect(nameField().readOnly).toBe(true);
+    expect(within(card("atStart", 1)).getByLabelText("Message").hasAttribute("readonly")).toBe(
+      true,
+    );
+    expect(
+      (within(card("atStart", 1)).getByLabelText("What it does") as HTMLSelectElement).disabled,
+    ).toBe(true);
+    expect(button("Move up").disabled).toBe(true);
+    expect(button("Move down").disabled).toBe(true);
+    expect(button("Remove").disabled).toBe(true);
+    expect(button("Drag step 1").disabled).toBe(true);
+  });
+
+  it("disables them while Delete's password is asked too", async () => {
+    const { app, state } = await atMode(COMMAND.id, {
+      rows: [COMMAND],
+      stamped: true,
+      handlers: {
+        updateModeWithCommands: async () => {
+          throw refusal(409, "mode_changed", { message: CHANGED });
+        },
+        deleteMode: async () => {
+          throw refusal(403, "step_up_required");
+        },
+      },
+    });
+    await screen.findByRole("heading", { name: "Warp", level: 1 });
+    await fill(app, nameField(), "Mine");
+    await app.user.click(saveButton());
+    await screen.findByText(CHANGED);
+    state.stamped = false;
+
+    await app.user.click(screen.getByRole("button", { name: "Delete" }));
+    await app.user.click(await screen.findByRole("button", { name: "Delete mode" }));
+    await screen.findByLabelText("Current password");
+
+    expect(button("Load again").disabled).toBe(true);
+    expect(button("Save as copy").disabled).toBe(true);
+  });
+
+  it("offers nothing that would change the form while Load again's read runs", async () => {
+    const { app, state } = await atMode(COMMAND.id, {
+      rows: [COMMAND],
+      stamped: true,
+      handlers: {
+        updateModeWithCommands: async () => {
+          throw refusal(409, "mode_changed", { message: CHANGED });
+        },
+      },
+    });
+    await screen.findByRole("heading", { name: "Warp", level: 1 });
+    await fill(app, nameField(), "Mine");
+    await app.user.click(saveButton());
+    await screen.findByText(CHANGED);
+    const read = deferred<void>();
+    state.hold = read.promise;
+
+    await app.user.click(button("Load again"));
+
+    await vi.waitFor(() => expect(button("Load again").disabled).toBe(true));
+    expect(saveButton().disabled).toBe(true);
+    expect(button("Save as copy").disabled).toBe(true);
+    await act(async () => read.resolve());
     await waitFor(() => expect(screen.queryByText(CHANGED)).toBeNull());
   });
 });
@@ -226,17 +338,126 @@ describe("the form while its row changes (S83)", () => {
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
   });
 
-  it("keeps the form through a reset query: only data read says a row left", async () => {
-    const { app } = await atMode(ROW.id, { rows: [ROW] });
+  it("keeps the form through a reset query while its read hangs: only data read says a row left", async () => {
+    const { app, state } = await atMode(ROW.id, { rows: [ROW] });
     await screen.findByRole("heading", { name: "Fishing", level: 1 });
     await fill(app, nameField(), "Mine");
+    await vi.waitFor(() => expect(app.runtime.queryClient.isFetching()).toBe(0));
+    const read = deferred<void>();
+    state.hold = read.promise;
+
+    await act(async () => {
+      void app.runtime.queryClient.resetQueries({ queryKey: MODES_LIST_KEY, exact: true });
+    });
+    await vi.waitFor(() =>
+      expect(app.runtime.queryClient.getQueryData(MODES_LIST_KEY)).toBeUndefined(),
+    );
+    await screenSawIt();
+
+    expect(screen.queryByText("Loading modes…")).toBeNull();
+    expect(screen.queryByText(LEFT)).toBeNull();
+    expect(nameField().value).toBe("Mine");
+    await act(async () => read.resolve());
+  });
+
+  it("keeps the form when a reset query's read fails: a failed read says nothing of the row", async () => {
+    const { app, state } = await atMode(ROW.id, { rows: [ROW] });
+    await screen.findByRole("heading", { name: "Fishing", level: 1 });
+    await fill(app, nameField(), "Mine");
+    await vi.waitFor(() => expect(app.runtime.queryClient.isFetching()).toBe(0));
+    state.readFails = true;
 
     await act(async () => {
       await app.runtime.queryClient.resetQueries({ queryKey: MODES_LIST_KEY, exact: true });
     });
+    await vi.waitFor(() =>
+      expect(app.runtime.queryClient.getQueryState(MODES_LIST_KEY)?.status).toBe("error"),
+    );
+    await screenSawIt();
 
+    expect(screen.queryByText(/^Couldn't load the modes/)).toBeNull();
     expect(screen.queryByText(LEFT)).toBeNull();
     expect(nameField().value).toBe("Mine");
+  });
+
+  describe("a form the screen dropped never comes back (PR #85's review)", () => {
+    const WHOLE = mode(1, {
+      name: "Warp",
+      steps: [shownStep({ type: "send_chat", message: "/login my-secret" })],
+    });
+    const CUT = {
+      ...WHOLE,
+      editable: false,
+      deletable: false,
+      visibility_editable: false,
+      steps: [shownStep({ type: "send_chat", message: "/login", arguments_hidden: true })],
+    };
+
+    /** The form open on the whole row, then dropped to the locked row. */
+    async function dropped() {
+      const found = await atMode(WHOLE.id, { rows: [WHOLE] });
+      await screen.findByRole("heading", { name: "Warp", level: 1 });
+      await listHolds(found.app, [CUT]);
+      found.state.rows = [CUT];
+      await screen.findByText(NOT_EDITABLE);
+      return found;
+    }
+
+    it("shows the gone screen when the row then leaves, with no full command and no copy", async () => {
+      const { app, state } = await dropped();
+
+      state.rows = [];
+      await listHolds(app, []);
+
+      expect(
+        await screen.findByText("This mode doesn't exist any more, or you can't see it."),
+      ).toBeDefined();
+      expect(screen.queryByDisplayValue("/login my-secret")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Save as copy" })).toBeNull();
+      expect(screen.queryByText(LEFT)).toBeNull();
+    });
+
+    it("doesn't remount the editor through a reset query while its read hangs", async () => {
+      const { app, state } = await dropped();
+      const read = deferred<void>();
+      state.hold = read.promise;
+
+      await act(async () => {
+        void app.runtime.queryClient.resetQueries({ queryKey: MODES_LIST_KEY, exact: true });
+      });
+      await vi.waitFor(() =>
+        expect(app.runtime.queryClient.getQueryData(MODES_LIST_KEY)).toBeUndefined(),
+      );
+
+      expect(await screen.findByText("Loading modes…")).toBeDefined();
+      expect(screen.queryByDisplayValue("/login my-secret")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+      await act(async () => read.resolve());
+    });
+
+    it("keeps the no-longer-editable note after that reset's read lands", async () => {
+      const { app, state } = await dropped();
+      const read = deferred<void>();
+      state.hold = read.promise;
+
+      await act(async () => {
+        void app.runtime.queryClient.resetQueries({ queryKey: MODES_LIST_KEY, exact: true });
+      });
+      await screen.findByText("Loading modes…");
+      await act(async () => read.resolve());
+
+      expect(await screen.findByText(NOT_EDITABLE)).toBeDefined();
+    });
+
+    it("opens a fresh form, without the note, if the row can be edited again", async () => {
+      const { app, state } = await dropped();
+
+      state.rows = [{ ...WHOLE, version: 2 }];
+      await listHolds(app, state.rows);
+
+      expect(await screen.findByRole("button", { name: "Save" })).toBeDefined();
+      expect(screen.queryByText(NOT_EDITABLE)).toBeNull();
+    });
   });
 
   it("shows the gone notice for a Save's 404, and reads the modes again", async () => {
@@ -410,7 +631,7 @@ describe("the bots at mode_in_use (U66, R169)", () => {
     const second: BotPage = { items: [onMode(1, "AfkBot1", ROW.id)] };
     const { app } = await refused(async (before) => (before === undefined ? first : second));
 
-    expect(await screen.findByText("These of the bots you can see run it:")).toBeDefined();
+    expect(await screen.findByText("Bots you can see that use this mode:")).toBeDefined();
     const links = screen.getAllByRole("link", { name: /^AfkBot/ });
     expect(links.map((link) => link.textContent)).toEqual(["AfkBot3", "AfkBot1"]);
     await app.user.click(links[1] as HTMLElement);
@@ -429,6 +650,27 @@ describe("the bots at mode_in_use (U66, R169)", () => {
     await act(async () => later.resolve({ items: [] }));
 
     expect(await screen.findByText(SAID)).toBeDefined();
+  });
+
+  it("ignores an answer from an older attempt", async () => {
+    const older = deferred<BotPage>();
+    let reads = 0;
+    const { app } = await refused(async (_before, limit) => {
+      if (limit === undefined) {
+        return { items: [] };
+      }
+      reads += 1;
+      return reads === 1 ? older.promise : { items: [] };
+    });
+
+    await app.user.click(screen.getByRole("button", { name: "Delete" }));
+    await app.user.click(await screen.findByRole("button", { name: "Delete mode" }));
+    const SAID = "It's a bot you can't see, so its owner has to switch it.";
+    expect(await screen.findByText(SAID)).toBeDefined();
+    await act(async () => older.resolve({ items: [onMode(1, "AfkBot1", ROW.id)] }));
+
+    expect(screen.queryByRole("link", { name: "AfkBot1" })).toBeNull();
+    expect(screen.getByText(SAID)).toBeDefined();
   });
 
   it("keeps the refusal and says so when the bots couldn't be read", async () => {

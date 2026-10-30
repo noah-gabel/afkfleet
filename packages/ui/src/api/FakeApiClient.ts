@@ -1,5 +1,3 @@
-import type { CreateModeRequest } from "../generated/CreateModeRequest";
-import type { UpdateModeRequest } from "../generated/UpdateModeRequest";
 // The API client for tests (Plan.md P8.5, ADR-0017): each test scripts only the methods
 // it needs; any other method rejects with an `ApiError` that names it, so a test can't
 // pass by accident. Every call is recorded with its arguments, for checking interactions.
@@ -22,6 +20,7 @@ import type { CreatedInviteResponse } from "../generated/CreatedInviteResponse";
 import type { CreatedOfflineAccountResponse } from "../generated/CreatedOfflineAccountResponse";
 import type { CreateGrantRequest } from "../generated/CreateGrantRequest";
 import type { CreateInviteRequest } from "../generated/CreateInviteRequest";
+import type { CreateModeRequest } from "../generated/CreateModeRequest";
 import type { CreateOfflineAccountRequest } from "../generated/CreateOfflineAccountRequest";
 import type { CreateServerSettingsRequest } from "../generated/CreateServerSettingsRequest";
 import type { FieldError } from "../generated/FieldError";
@@ -52,6 +51,7 @@ import type { ServerSettingsResponse } from "../generated/ServerSettingsResponse
 import type { SessionPage } from "../generated/SessionPage";
 import type { SetupStepResponse } from "../generated/SetupStepResponse";
 import type { StepUpRequest } from "../generated/StepUpRequest";
+import type { UpdateModeRequest } from "../generated/UpdateModeRequest";
 import type { UpdateServerSettingsRequest } from "../generated/UpdateServerSettingsRequest";
 import type { UserPage } from "../generated/UserPage";
 import type { UserPatchRequest } from "../generated/UserPatchRequest";

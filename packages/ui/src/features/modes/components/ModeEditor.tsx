@@ -133,6 +133,7 @@ export function ModeEditor({
   const [announcement, setAnnouncement] = useState("");
   const [conflict, setConflict] = useState<Conflict | null>(null);
   const [reloadFailed, setReloadFailed] = useState<string | null>(null);
+  const [reloading, setReloading] = useState(false);
   const [goneToSave, setGoneToSave] = useState(false);
   const writes = useStepUpAction();
   const form = useForm<ModeValues>({ resolver: startClean, defaultValues: initial });
@@ -299,6 +300,7 @@ export function ModeEditor({
       return;
     }
     setReloadFailed(null);
+    setReloading(true);
     try {
       await queryClient.refetchQueries(
         { queryKey: MODES_LIST_KEY, exact: true },
@@ -309,6 +311,10 @@ export function ModeEditor({
         setReloadFailed(modesFailed(describeError(toApiError(rejection).error)));
       }
       return;
+    } finally {
+      if (alive.current) {
+        setReloading(false);
+      }
     }
     if (!alive.current) {
       return;
@@ -322,8 +328,9 @@ export function ModeEditor({
   }
 
   const gone = left || goneToSave;
-  // While a write runs or the password is asked, what's sent is what's on the screen.
-  const locked = sending || writes.prompt !== null || writes.running !== null;
+  // While a write runs or the password is asked, what's sent is what's on the screen; and while
+  // Load again reads, nothing starts that its answer would write over.
+  const locked = sending || reloading || writes.prompt !== null || writes.running !== null;
   const view = { readOnly: false, locked, copying };
   const keepAsCopy = (
     <Button
@@ -404,6 +411,7 @@ export function ModeEditor({
                   type="button"
                   variant="outline"
                   className="self-start"
+                  disabled={locked}
                   onClick={() => void loadAgain()}
                 >
                   {LOAD_AGAIN}

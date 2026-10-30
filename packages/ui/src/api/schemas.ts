@@ -3,6 +3,7 @@
 // validates everything again and stays authoritative. Lengths count Unicode code points
 // (chars), as the Rust side does; the server profile's caps count UTF-8 bytes.
 
+import type { ModeActionKind } from "../generated/ModeActionKind";
 import {
   CA_PEM_MAX_BYTES,
   CHAT_FORMAT_MAX_CHARS,
@@ -302,19 +303,24 @@ function wireInteger(max: number) {
 /** A finite angle: its range is the server's (S82). */
 const modeAngle = z.number({ error: NOT_A_NUMBER }).optional();
 
-/** Every action type this version knows (`ModeActionKind`, S12). */
-const modeActionKind = z.enum([
-  "look",
-  "rotate_random",
-  "jump",
-  "sneak",
-  "swing_arm",
-  "use_item",
-  "hold_use",
-  "attack_facing_entity",
-  "select_hotbar_slot",
-  "send_chat",
-]);
+/**
+ * Every action type this version knows (S12), by the generated `ModeActionKind`: a kind added
+ * there, or gone, doesn't compile here.
+ */
+const MODE_ACTION_KINDS: { readonly [K in ModeActionKind]: K } = {
+  look: "look",
+  rotate_random: "rotate_random",
+  jump: "jump",
+  sneak: "sneak",
+  swing_arm: "swing_arm",
+  use_item: "use_item",
+  hold_use: "hold_use",
+  attack_facing_entity: "attack_facing_entity",
+  select_hotbar_slot: "select_hotbar_slot",
+  send_chat: "send_chat",
+};
+
+const modeActionKind = z.enum(MODE_ACTION_KINDS);
 
 /** A mode's name, once trimmed, in the server's words; its characters are the server's (S13). */
 const modeName = z

@@ -2,10 +2,10 @@
 // flag, it asks first, then goes straight through `useStepUpAction`; afterwards, back to the list.
 // A refusal shows in place, and the mode stays. `mode_in_use` also lists the bots the viewer can
 // see that run the mode, from every page of their bots, read then and kept nowhere else. Only that
-// whole read may say the bot is one they can't see.
+// whole read may say the bot is one they can't see, and only the latest attempt's answer shows.
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { toApiError } from "../../../api/ApiError";
@@ -23,7 +23,7 @@ import type { useStepUpAction } from "../../admin/hooks/useStepUpAction";
 import { forgetMode } from "../cache";
 import {
   A_BOT_YOU_CANT_SEE,
-  BOTS_THAT_RUN_IT,
+  BOTS_THAT_USE_IT,
   botsFailed,
   CANCEL,
   DELETE,
@@ -57,17 +57,21 @@ export function DeleteMode({
   const [asking, setAsking] = useState(false);
   const [failure, setFailure] = useState<string>();
   const [usedBy, setUsedBy] = useState<UsedBy | null>(null);
+  // The attempt whose bots may show: an older read's answer is dropped.
+  const attempt = useRef(0);
   const busy = writes.prompt !== null || writes.running !== null;
 
   /** Reads which of the viewer's bots run the mode, for the refusal on the screen. */
   async function readUsers(): Promise<void> {
+    const mine = attempt.current;
+    const current = () => alive.current && attempt.current === mine;
     try {
       const bots = (await readEveryBot(api)).filter((bot) => bot.mode_id === mode.id);
-      if (alive.current) {
+      if (current()) {
         setUsedBy({ state: "read", bots });
       }
     } catch (rejection) {
-      if (alive.current) {
+      if (current()) {
         setUsedBy({ state: "failed", why: describeError(toApiError(rejection).error) });
       }
     }
@@ -77,6 +81,7 @@ export function DeleteMode({
     setAsking(false);
     setFailure(undefined);
     setUsedBy(null);
+    attempt.current += 1;
     void writes.attempt({
       key: DELETE_KEY,
       run: async () => {
@@ -168,7 +173,7 @@ function UsedByList({ usedBy }: { usedBy: UsedBy }) {
   }
   return (
     <div className="flex flex-col gap-1 text-sm">
-      <p>{BOTS_THAT_RUN_IT}</p>
+      <p>{BOTS_THAT_USE_IT}</p>
       <ul className="flex flex-col gap-1">
         {usedBy.bots.map((bot) => (
           <li key={bot.id}>

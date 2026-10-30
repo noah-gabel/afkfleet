@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-
+import { ACTION_KINDS } from "../features/modes/modeForm";
 import type { ApiClient } from "./ApiClient";
 import { ApiError } from "./ApiError";
 import { FakeApiClient } from "./FakeApiClient";
@@ -384,6 +384,12 @@ describe("validated", () => {
         ["updateModeWithCommands", [ID, update]],
         ["deleteMode", [ID]],
       ]);
+    });
+
+    it("takes every action the generated type holds", async () => {
+      for (const type of ACTION_KINDS) {
+        expect(await refusals(stepWith({ action: { type } }))).toEqual([]);
+      }
     });
 
     it("leaves every rule inside the wire type to the server", async () => {
