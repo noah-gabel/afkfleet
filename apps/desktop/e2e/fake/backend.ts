@@ -404,6 +404,102 @@ function senderOf(format: string, line: string): string | undefined {
   return rest.slice(name.length).startsWith(parts.separator) ? name : undefined;
 }
 
+/** The texts of what the server refuses a format for (ADR-0020's table, H7). */
+const FORMAT_RULE = {
+  empty: "must not be empty",
+  long: "must be at most 64 characters",
+  line: "must be one line, without control characters, formatting codes, text-direction marks or invisible characters",
+  brace: "can hold only {sender} and {any}; write a brace as {{ or }}",
+  sender: "must hold {sender} exactly once",
+  twice: "can hold {any} at most twice",
+  after: "can hold {any} only before {sender}",
+  text: "must have text right after each {any}",
+  separator: "must have text after {sender} that doesn't start with a letter, a digit or _",
+} as const;
+
+/**
+ * What the server refuses `written` for, in the order `ChatFormats::try_new` checks it, as the
+ * real app answers a preview (PR #83's review); nothing for a format it takes.
+ */
+function formatRefused(written: string): string | undefined {
+  if (written === "") {
+    return FORMAT_RULE.empty;
+  }
+  if ([...written].length > 64) {
+    return FORMAT_RULE.long;
+  }
+  if (/[\p{Cc}\p{Cf}\u00a7]/u.test(written)) {
+    return FORMAT_RULE.line;
+  }
+  let sender = false;
+  let separator = "";
+  let pendingAny = false;
+  let wildcards = 0;
+  let rest = written;
+  while (rest !== "") {
+    if (rest.startsWith(SENDER)) {
+      if (pendingAny) {
+        return FORMAT_RULE.text;
+      }
+      if (sender) {
+        return FORMAT_RULE.sender;
+      }
+      sender = true;
+      rest = rest.slice(SENDER.length);
+    } else if (rest.startsWith(ANY)) {
+      if (pendingAny) {
+        return FORMAT_RULE.text;
+      }
+      if (sender) {
+        return FORMAT_RULE.after;
+      }
+      if (wildcards === 2) {
+        return FORMAT_RULE.twice;
+      }
+      wildcards += 1;
+      pendingAny = true;
+      rest = rest.slice(ANY.length);
+    } else {
+      const escaped = rest.startsWith("{{") || rest.startsWith("}}");
+      const piece = String.fromCodePoint(rest.codePointAt(0) ?? 0);
+      if (!escaped && (piece === "{" || piece === "}")) {
+        return pendingAny ? FORMAT_RULE.text : FORMAT_RULE.brace;
+      }
+      pendingAny = false;
+      if (sender) {
+        if (separator === "" && /^[A-Za-z0-9_]$/.test(piece)) {
+          return FORMAT_RULE.separator;
+        }
+        separator += piece;
+      }
+      rest = rest.slice(escaped ? 2 : piece.length);
+    }
+  }
+  if (pendingAny) {
+    return FORMAT_RULE.text;
+  }
+  if (!sender) {
+    return FORMAT_RULE.sender;
+  }
+  return separator === "" ? FORMAT_RULE.separator : undefined;
+}
+
+/** The refusal of the first of `formats` the server wouldn't take, at its own path. */
+function formatsRefused(formats: readonly string[]): Outcome | undefined {
+  if (formats.length > 8) {
+    return api(422, "validation_failed", [
+      { path: "chat_formats", message: "must hold at most 8 formats" },
+    ]);
+  }
+  for (const [index, written] of formats.entries()) {
+    const message = formatRefused(written);
+    if (message !== undefined) {
+      return api(422, "validation_failed", [{ path: `chat_formats[${index}]`, message }]);
+    }
+  }
+  return undefined;
+}
+
 /** What the first of `formats` that fits reads from `line`, and its place from 0. */
 function preview(formats: readonly string[], line: string): PreviewChatFormatsResponse {
   for (const [format, written] of formats.entries()) {
@@ -642,9 +738,10 @@ export class FakeBackend {
           }),
         );
       case "preview_chat_formats":
-        return this.#admin(() =>
-          value(preview(formatsOf(request.chat_formats), String(request.line ?? ""))),
-        );
+        return this.#admin(() => {
+          const formats = formatsOf(request.chat_formats);
+          return formatsRefused(formats) ?? value(preview(formats, String(request.line ?? "")));
+        });
       default:
         return this.#accountCommand(command as Command, args);
     }

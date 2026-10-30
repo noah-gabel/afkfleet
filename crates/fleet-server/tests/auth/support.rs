@@ -2021,6 +2021,29 @@ impl Setup {
         id
     }
 
+    /// Replaces settings `id`'s chat formats, as an edit would, in a commit
+    /// of its own (PR #83's review): the row stays at its server and has no
+    /// conflict text.
+    pub(crate) async fn formats_edited(&self, id: ServerSettingsId, formats: &[&str]) {
+        let mut tx = self.db.write().await.unwrap();
+        let stored = tx.server_settings().find(id).await.unwrap().unwrap();
+        let changed = tx
+            .server_settings()
+            .update(&ServerSettingsChange {
+                id,
+                expected: stored.version,
+                version: stored.version.checked_add(1).unwrap(),
+                server: stored.server,
+                conflict_texts: stored.conflict_texts,
+                chat_formats: ChatFormats::try_new(formats).unwrap(),
+                updated_at: at(T0),
+            })
+            .await
+            .unwrap();
+        assert!(changed);
+        tx.commit(setup_entry()).await.unwrap();
+    }
+
     /// Deletes settings `id`, in a commit of its own.
     pub(crate) async fn settings_gone(&self, id: ServerSettingsId) {
         let mut tx = self.db.write().await.unwrap();

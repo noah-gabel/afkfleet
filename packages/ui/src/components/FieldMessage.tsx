@@ -3,13 +3,21 @@
 // the field. The text is the rule the field broke (the zod schema's, or the Rust side's
 // `fields`), never the value; several rules come one per line.
 
-/** The message `id` names, or nothing without one. */
-export function FieldMessage({ id, message }: { id: string; message: string | undefined }) {
+/** The message `id` names, or nothing without one; `role` announces it when it shows. */
+export function FieldMessage({
+  id,
+  message,
+  role,
+}: {
+  id: string;
+  message: string | undefined;
+  role?: "alert" | undefined;
+}) {
   if (message === undefined) {
     return null;
   }
   return (
-    <p id={id} className="text-sm whitespace-pre-line text-destructive">
+    <p id={id} role={role} className="text-sm whitespace-pre-line text-destructive">
       {message}
     </p>
   );

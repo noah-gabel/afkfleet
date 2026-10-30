@@ -407,6 +407,50 @@ test("lets only Admins and the Owner try chat formats", async () => {
   expect(tried).toMatchObject({ ok: false, error: { api: { status: 403, code: "forbidden" } } });
 });
 
+test("refuses a preview's format as the server does, at the format it names", async () => {
+  const backend = new FakeBackend();
+  backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(OWNER) });
+  const refused = (chat_formats: readonly string[]) =>
+    backend.handle("preview_chat_formats", { request: { chat_formats, line: "Notch : hi" } });
+
+  for (const [format, message] of [
+    ["", "must not be empty"],
+    ["x".repeat(65), "must be at most 64 characters"],
+    [
+      "{sender}\n: ",
+      "must be one line, without control characters, formatting codes, text-direction marks or invisible characters",
+    ],
+    ["{Sender} : ", "can hold only {sender} and {any}; write a brace as {{ or }}"],
+    ["no placeholder", "must hold {sender} exactly once"],
+    ["{sender} {sender} : ", "must hold {sender} exactly once"],
+    ["{sender} : {any}", "can hold {any} only before {sender}"],
+    ["{any}a{any}b{any}c{sender} : ", "can hold {any} at most twice"],
+    ["{any}{sender} : ", "must have text right after each {any}"],
+    ["{sender}", "must have text after {sender} that doesn't start with a letter, a digit or _"],
+    ["{sender}x", "must have text after {sender} that doesn't start with a letter, a digit or _"],
+  ] as const) {
+    expect(await refused(["{sender} : ", format])).toMatchObject({
+      ok: false,
+      error: {
+        api: {
+          status: 422,
+          code: "validation_failed",
+          fields: [{ path: "chat_formats[1]", message }],
+        },
+      },
+    });
+  }
+  expect(await refused(Array.from({ length: 9 }, () => "{sender} : "))).toMatchObject({
+    ok: false,
+    error: { api: { fields: [{ path: "chat_formats", message: "must hold at most 8 formats" }] } },
+  });
+  expect(await refused(["{sender} : "])).toEqual({
+    ok: true,
+    value: { sender: "Notch", format: 0 },
+  });
+});
+
 test("lets only Admins and the Owner read the servers' settings", async () => {
   const backend = new FakeBackend();
   backend.handle("login", { request: { username: MEMBER, password: PASSWORD } });

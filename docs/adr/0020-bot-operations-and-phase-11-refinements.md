@@ -2038,6 +2038,21 @@ Runs red against the code before, not mutations:
 
 *Size:* about 3,370 lines added and 150 removed, the docs included, about 100 of them generated query data, types and snapshots; the plan said about 3,500. PR #81's review came to about 470 of them.
 
+### Group I's first commit
+Scheduled at H8's plan review, and PR #83's review, in one commit.
+
+*`networkMode: "always"` (the user's):* the TanStack client's default for queries and mutations, so nothing pauses while Windows reports offline, and fleet-client's own unreachable answer, with the banner, decides. R156's hook takes it with every other hook.
+- **Tests of its own:** a query reads and a mutation runs with `onlineManager` offline, and the banner comes up from a failed read then. Each ran red before the change: the read and the write were never called, and the banner never came.
+- **Now dead, and removed:** `RELOAD_PAUSED`, the user's approved text at H8's plan review ("Couldn't load the servers: Windows reports no network connection, so the app didn't ask the server. Try again."), which only a paused "Load again" could show; the `dataUpdatedAt` check in `loadAgain`, and its comment. The test of a paused read became one where Load again reads the row and fills the form with Windows reporting offline.
+
+*PR #83's review:*
+- **"Try a line":** a deferred 422 at `chat_formats[1]`, then a Remove, then the answer: no field marked. It uses three formats, so the path still names a field after the Remove (with two it would pass whatever the code did). Red by M9.2, the check of what's on the screen removed. Try is disabled while its request runs: red by M9.3.
+- **A refusal at the sample line is announced:** `FormField` takes `errorRole`, used only there.
+- **The e2e fake's preview** refuses a format as the server does, in `ChatFormats::try_new`'s order and in its words, so `{Sender}` gives the field error, not "No format fits this line.". Red by M9.1, the check removed.
+- **`LiveRights`' log-once set** loses its `.take(100)`: the read bounds its rows. Red against the old code: a unit test of 101 rows kept 100.
+- **`Access`'s doc** says it holds no addresses except the keys of unreadable rows, for their log line.
+- **Two live tests:** a format edit reaches the next live line, and so does a bot moving to a server that has formats (the harness gains `formats_edited`). Red by M9.4b, no bot given formats. The first try, M9.4, `LiveRights` never reading again, hung with the socket's read in the server rather than failing an assertion, so it was stopped by hand and replaced.
+
 ### Notes for later groups
 - **B2 (P11.3's history):** built (above).
 - **C (P11.4):** decided at C's planning (above), built in C1, C2 and C3.

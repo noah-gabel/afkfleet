@@ -40,7 +40,6 @@ use fleet_core::authz::{
 use fleet_core::bot::{BotNotification, BotSnapshot};
 use fleet_core::chat::ChatFormats;
 use fleet_core::id::{AccountId, AgentId, BotId, ChatRequestId, UserId};
-use fleet_core::server_settings::MAX_SERVER_SETTINGS;
 use fleet_proto::control::ChatFailedReason;
 use tokio::sync::{broadcast, watch};
 
@@ -349,18 +348,14 @@ impl LiveRights {
 }
 
 /// Logs each row of `now` that `logged`, the last rebuild's, doesn't hold,
-/// then keeps `now`'s, at most [`MAX_SERVER_SETTINGS`]: a row is logged when
-/// it turns unreadable, never at each rebuild, since every commit moves the
-/// count (S81).
+/// then keeps `now`'s: a row is logged when it turns unreadable, never at each
+/// rebuild, since every commit moves the count (S81). The read bounds `now` at
+/// the table's most rows.
 fn log_turned_unreadable(logged: &mut BTreeSet<i64>, now: &[UnreadableFormats]) {
     for row in now.iter().filter(|row| !logged.contains(&row.rowid)) {
         server_settings::unreadable_formats(row);
     }
-    *logged = now
-        .iter()
-        .map(|row| row.rowid)
-        .take(usize::try_from(MAX_SERVER_SETTINGS).unwrap_or(usize::MAX))
-        .collect();
+    *logged = now.iter().map(|row| row.rowid).collect();
 }
 
 impl LiveHints for EventBus {
@@ -593,6 +588,23 @@ mod tests {
 
         assert_eq!(rights.level(&actor(&p.owner), orphan.bot), None);
         assert_eq!(without_owner.level(&actor(&p.owner), orphan.bot), None);
+    }
+
+    #[test]
+    fn the_log_once_set_keeps_every_unreadable_row_it_was_given() {
+        let rows: Vec<UnreadableFormats> = (0..101)
+            .map(|rowid| UnreadableFormats {
+                rowid,
+                id: None,
+                server: None,
+                column: "chat_formats",
+            })
+            .collect();
+        let mut logged = BTreeSet::new();
+
+        log_turned_unreadable(&mut logged, &rows);
+
+        assert_eq!(logged.len(), rows.len());
     }
 
     #[test]

@@ -20,11 +20,6 @@ export function serversFailed(why: string): string {
   return `Couldn't load the servers: ${why}`;
 }
 
-/** "Load again" when the read was paused, so nothing was read (PR #81's review, c). */
-export const RELOAD_PAUSED = serversFailed(
-  "Windows reports no network connection, so the app didn't ask the server. Try again.",
-);
-
 /** An entry's link, for screen readers. */
 export function openServer(server: string): string {
   return `Open ${server}`;
