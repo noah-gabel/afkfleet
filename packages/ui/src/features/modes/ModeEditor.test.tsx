@@ -489,6 +489,68 @@ describe("editing a mode (S14, S18, S84)", () => {
   });
 });
 
+describe("dragging a step (U68, R167)", () => {
+  const TWO = mode(1, {
+    steps: [shownStep({ type: "jump" }, every(10)), shownStep({ type: "swing_arm" }, every(20))],
+  });
+
+  it("gives each card a named handle, within its section", async () => {
+    await atMode(TWO.id, { rows: [TWO] });
+    await screen.findByRole("heading", { name: "Mode 1", level: 1 });
+
+    expect(within(card("repeating", 1)).getByRole("button", { name: "Drag step 1" })).toBeDefined();
+    expect(within(card("repeating", 2)).getByRole("button", { name: "Drag step 2" })).toBeDefined();
+  });
+
+  it("tells a screen reader how, and that it's a step that's sorted", async () => {
+    await atMode(TWO.id, { rows: [TWO] });
+    await screen.findByRole("heading", { name: "Mode 1", level: 1 });
+
+    const handle = within(card("repeating", 1)).getByRole("button", { name: "Drag step 1" });
+    const instructions = document.getElementById(handle.getAttribute("aria-describedby") ?? "");
+
+    expect(instructions?.textContent).toBe(
+      "To pick up a step, press Space or Enter. Use the arrow keys to move it, then Space or Enter to drop it, or Escape to cancel.",
+    );
+    expect(handle.getAttribute("aria-roledescription")).toBe("sortable");
+  });
+
+  it("has no handle on a locked mode", async () => {
+    const locked = { ...TWO, editable: false };
+    await atMode(locked.id, { rows: [locked] });
+    await screen.findByRole("heading", { name: "Mode 1", level: 1 });
+
+    expect(screen.queryByRole("button", { name: /^Drag step/ })).toBeNull();
+  });
+
+  it("disables the handle while Confirm it's you is up", async () => {
+    const { app } = await atMode(TWO.id, {
+      rows: [TWO],
+      handlers: {
+        updateMode: async () => {
+          throw refusal(403, "mode_needs_step_up");
+        },
+        updateModeWithCommands: async () => {
+          throw refusal(403, "step_up_required");
+        },
+      },
+    });
+    await screen.findByRole("heading", { name: "Mode 1", level: 1 });
+    await fill(app, screen.getByLabelText("Name"), "Renamed");
+
+    await app.user.click(saveButton());
+    await screen.findByLabelText("Current password");
+
+    expect(
+      (
+        within(card("repeating", 1)).getByRole("button", {
+          name: "Drag step 1",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+  });
+});
+
 describe("a command off the allowlist (S16, R162)", () => {
   const COMMAND = mode(1, { steps: [shownStep({ type: "send_chat", message: "hello" })] });
   const PROMPT =
