@@ -125,6 +125,22 @@ describe("the router", () => {
     expect(app.fake.calls.map((call) => call.method)).not.toContain("serverSettings");
   });
 
+  it("answers a Member on a user's grants review with not found, never reading it", async () => {
+    const app = await signedInAs("member");
+
+    await act(() =>
+      app.runtime.router.navigate({
+        to: "/admin/users/$id/grants",
+        params: { id: "01900000-0000-7000-8000-000000000002" },
+      }),
+    );
+
+    expect(await screen.findByText(NOT_FOUND)).toBeDefined();
+    const calls = app.fake.calls.map((call) => call.method);
+    expect(calls).not.toContain("userGrants");
+    expect(calls).not.toContain("sharedAccounts");
+  });
+
   it("gives a role this app doesn't know only a Member's rights", async () => {
     const app = await signedInAs("superuser" as UserRole);
 

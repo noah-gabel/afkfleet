@@ -15,7 +15,7 @@
 //     /profile       the user's own account, sessions and warnings
 //       /profile/password /profile/2fa   one route per flow, beside the overview
 //     /admin         Admins and the Owner only; anyone else gets "not found"
-//       /admin/users /admin/invites
+//       /admin/users /admin/users/$id/grants /admin/invites
 //       /admin/servers /admin/servers/new /admin/servers/$id   the Minecraft servers' settings
 //       /admin/agents  the agents; a disabled one's bots released
 //       /admin/audit   the audit log, its search a target's kind and ID
@@ -27,7 +27,13 @@ import {
   linkAgainRoute,
   linkRoute,
 } from "../features/accounts/routes";
-import { adminRoute, agentsRoute, invitesRoute, usersRoute } from "../features/admin/routes";
+import {
+  adminRoute,
+  agentsRoute,
+  grantsReviewRoute,
+  invitesRoute,
+  usersRoute,
+} from "../features/admin/routes";
 import { auditRoute } from "../features/audit/routes";
 import { loginRoute, registerRoute } from "../features/auth/routes";
 import { botRoute } from "../features/bots/routes";
@@ -63,6 +69,7 @@ const routeTree = rootRoute.addChildren([
     mfaRoute,
     adminRoute.addChildren([
       usersRoute,
+      grantsReviewRoute,
       invitesRoute,
       serversRoute,
       newServerRoute,

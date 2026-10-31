@@ -8,6 +8,8 @@
 //   (useStepUpAction), and the change goes once more.
 // - An account whose 2FA isn't set up was registered but never logged in: whoever first
 //   logs in with its password sets it up, so an Admin can disable it (ADR-0016).
+// - The Owner reviews a user's grants on a screen of its own: from the row, and offered once a
+//   role changed, staying here (ADR-0020, U79). "Audit" opens the log narrowed to the user (U81).
 // Nothing here carries a secret but the step-up's password, which StepUpForm holds: the list
 // is a query and each change a mutation.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -62,6 +64,13 @@ function doneText(change: Change, username: string): string {
   return `${username} is ${change.disabled ? "disabled" : "enabled"}.`;
 }
 
+/** What the row says once `change` made `username` an Admin or a Member (U79). */
+function reviewOffer(role: "member" | "admin", username: string): string {
+  return role === "admin"
+    ? `${username} is now an Admin. Grants made before this stay.`
+    : `${username} is now a Member. Grants they hold count again.`;
+}
+
 /** The changes `actor` may make to `user`, as buttons. */
 function changesFor(actor: Actor, user: UserResponse): readonly Change[] {
   const allowed = userActions(actor, user);
@@ -92,11 +101,13 @@ export function UsersScreen() {
     onSettled: refetch,
   });
   const [asking, setAsking] = useState<{ id: string; change: Change } | null>(null);
+  const [offer, setOffer] = useState<{ id: string; role: "member" | "admin" } | null>(null);
   const rows = users.data?.pages.flatMap((page) => page.items) ?? [];
   const busy = writes.running !== null || writes.prompt !== null;
 
   function run(user: UserResponse, change: Change): void {
     setAsking(null);
+    setOffer(null);
     const request: UserPatchRequest =
       change.kind === "role" ? { role: change.role } : { disabled: change.disabled };
     void writes.attempt({
@@ -104,6 +115,9 @@ export function UsersScreen() {
       run: async () => {
         await patch.mutateAsync({ id: user.id, request });
         toast.success(doneText(change, user.username));
+        if (change.kind === "role") {
+          setOffer({ id: user.id, role: change.role });
+        }
       },
     });
   }
@@ -148,6 +162,8 @@ export function UsersScreen() {
             const changes = actor === undefined ? [] : changesFor(actor, user);
             const pending = asking?.id === user.id ? asking.change : null;
             const failure = writes.failure?.key === user.id ? writes.failure.message : undefined;
+            const offered = offer?.id === user.id ? offer.role : null;
+            const reviewable = actor !== undefined && userActions(actor, user).reviewGrants;
             return (
               <Fragment key={user.id}>
                 <tr className="border-t">
@@ -170,6 +186,17 @@ export function UsersScreen() {
                           Audit
                         </Link>
                       </Button>
+                      {reviewable ? (
+                        <Button asChild size="sm" variant="outline">
+                          <Link
+                            to="/admin/users/$id/grants"
+                            params={{ id: user.id }}
+                            aria-label={`Review grants of ${user.username}`}
+                          >
+                            Review grants
+                          </Link>
+                        </Button>
+                      ) : null}
                       {changes.map((change) => (
                         <Button
                           key={label(change)}
@@ -185,7 +212,10 @@ export function UsersScreen() {
                     </div>
                   </td>
                 </tr>
-                {pending === null && writes.prompt !== user.id && failure === undefined ? null : (
+                {pending === null &&
+                writes.prompt !== user.id &&
+                failure === undefined &&
+                offered === null ? null : (
                   <tr>
                     <td colSpan={7} className="pb-3">
                       {pending === null ? null : (
@@ -223,6 +253,16 @@ export function UsersScreen() {
                       {failure === undefined ? null : (
                         <p role="alert" className="text-sm text-destructive">
                           {failure}
+                        </p>
+                      )}
+                      {offered === null ? null : (
+                        <p className="flex flex-wrap items-center gap-2 text-sm">
+                          <span>{reviewOffer(offered, user.username)}</span>
+                          <Button asChild size="sm" variant="link" className="h-auto p-0">
+                            <Link to="/admin/users/$id/grants" params={{ id: user.id }}>
+                              Review grants
+                            </Link>
+                          </Button>
                         </p>
                       )}
                     </td>
