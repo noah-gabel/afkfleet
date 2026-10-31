@@ -1,7 +1,8 @@
 // One account's screen (Plan.md P9.8, the user's U11 at group F's plan review): its facts as
 // the viewer may see them, a pending link's note or review, the re-auth prompt, "Who has
-// access" for a Manage holder, then Link again and Delete. Deleting asks first, then "Confirm
-// it's you" when the server wants it, and goes back to the list.
+// access" for a Manage holder, then Link again and Delete, or Leave for a View or Control holder
+// (ADR-0020, U23, S51, S86). Deleting and leaving ask first, then "Confirm it's you" when the
+// server wants it, and go back to the list.
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
@@ -10,9 +11,10 @@ import { toast } from "sonner";
 import { toApiError } from "../../../api/ApiError";
 import { useApiClient } from "../../../api/context";
 import { describeError } from "../../../api/describeError";
-import { ACCOUNTS_KEY, useAccount, useMe } from "../../../api/queries";
+import { ACCOUNTS_KEY, BOTS_LIST_KEY, useAccount, useMe } from "../../../api/queries";
 import { Alert, AlertDescription } from "../../../components/ui/alert";
 import { Button } from "../../../components/ui/button";
+import { isStepUpRequired } from "../../../lib/stepUp";
 import { formatTime } from "../../../lib/time";
 import { StepUpPrompt } from "../../admin/components/StepUpPrompt";
 import { useAccountWrites } from "../hooks/useAccountWrites";
@@ -20,9 +22,12 @@ import { useAwaitingApproval } from "../hooks/useAwaitingApproval";
 import { accountActions } from "../permissions";
 import {
   accessLabel,
+  alreadyGone,
   deleted,
   deleteQuestion,
   kindLabel,
+  leaveQuestion,
+  left,
   NOT_FOUND,
   PENDING_NOTE,
   statusLabel,
@@ -102,6 +107,7 @@ export function AccountScreen({ id }: { id: string }) {
         ) : null}
       </div>
       {actions.delete ? <DeleteAction id={data.id} name={data.name} writes={writes} /> : null}
+      {actions.leave ? <LeaveAction id={data.id} name={data.name} writes={writes} /> : null}
       <BackLink />
     </main>
   );
@@ -171,6 +177,91 @@ function DeleteAction({
       {writes.prompt === key ? (
         <StepUpPrompt
           id="step-up-delete"
+          pending={writes.running !== null}
+          onConfirm={writes.confirm}
+          onCancel={writes.cancel}
+        />
+      ) : null}
+      {writes.failure?.key === key ? (
+        <p role="alert" className="text-sm text-destructive">
+          {writes.failure.message}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** Leave, with its question, prompt and failure. */
+function LeaveAction({
+  id,
+  name,
+  writes,
+}: {
+  id: string;
+  name: string;
+  writes: ReturnType<typeof useAccountWrites>;
+}) {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const [asking, setAsking] = useState(false);
+  const key = "leave";
+
+  /** Goes back first, so the account's own read never answers its 404 on this screen (R179). */
+  async function goBack(): Promise<void> {
+    await navigate({ to: "/accounts" });
+    void queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY });
+    void queryClient.invalidateQueries({ queryKey: BOTS_LIST_KEY });
+  }
+
+  function leave() {
+    setAsking(false);
+    writes.attempt(key, async () => {
+      try {
+        await api.leaveAccount(id);
+      } catch (rejection) {
+        const error = toApiError(rejection).error;
+        if (isStepUpRequired(error) || error.api?.status !== 404) {
+          throw rejection;
+        }
+        toast.info(alreadyGone(name));
+        await goBack();
+        return;
+      }
+      toast.success(left(name));
+      await goBack();
+    });
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        className="self-start"
+        disabled={writes.busy}
+        onClick={() => setAsking(true)}
+      >
+        Leave
+      </Button>
+      {asking ? (
+        <Alert>
+          <AlertDescription className="flex flex-col gap-2 text-foreground">
+            <p>{leaveQuestion(name)}</p>
+            <div className="flex gap-2">
+              <Button type="button" variant="destructive" disabled={writes.busy} onClick={leave}>
+                Leave account
+              </Button>
+              <Button type="button" variant="outline" onClick={() => setAsking(false)}>
+                Cancel
+              </Button>
+            </div>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      {writes.prompt === key ? (
+        <StepUpPrompt
+          id="step-up-leave"
           pending={writes.running !== null}
           onConfirm={writes.confirm}
           onCancel={writes.cancel}

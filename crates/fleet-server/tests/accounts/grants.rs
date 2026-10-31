@@ -1003,3 +1003,35 @@ async fn leaving_spends_the_users_limit(_pool: SqlitePoolOptions, options: Sqlit
     assert_eq!(seen.status, 429, "{}", seen.text);
     assert!(setup.grant_of(id, bob.id).await.is_some());
 }
+
+/// A Manage grantee leaves through Revoke on their own row: the app offers
+/// them no Leave, since their level can't tell a grant from implicit Manage
+/// (ADR-0020, S86). The account is gone from their view at once.
+#[sqlx::test(migrations = false)]
+async fn a_manage_grantee_revokes_their_own_grant_and_loses_the_account(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = HttpSetup::new(options).await;
+    let alice = setup.person(1, Role::Member).await;
+    let bob = setup.stepped_up(2, Role::Member).await;
+    let id = setup.add_account(alice.id, 3, None).await;
+    setup
+        .add_grant(id, bob.id, GrantLevel::Manage, alice.id)
+        .await;
+
+    let revoked = revoke(&setup, &bob, id, bob.id).await;
+    let seen = list(&setup, &bob, id).await;
+
+    assert_eq!(revoked.status, 204, "{}", revoked.text);
+    assert_eq!(setup.grant_of(id, bob.id).await, None);
+    assert_eq!(seen.status, 404, "{}", seen.text);
+    let entries = setup.entries(&AuditAction::GRANT_REVOKE).await;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        meta(&entries[0], "grantee"),
+        Some(text(&bob.id.to_string()))
+    );
+    assert_eq!(meta(&entries[0], "level"), Some(text("manage")));
+    assert_eq!(meta(&entries[0], "via"), None);
+}

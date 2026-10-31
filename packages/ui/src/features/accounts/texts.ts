@@ -221,6 +221,17 @@ export function deleteQuestion(name: string): string {
 export function deleted(name: string): string {
   return `${name} deleted.`;
 }
+/** What asking before leaving says (ADR-0020, U23, S51). */
+export function leaveQuestion(name: string): string {
+  return `Leave ${name}? You lose access to it and its bot. Only someone who manages it can give it back.`;
+}
+export function left(name: string): string {
+  return `You left ${name}.`;
+}
+/** A leave whose grant was revoked meanwhile. */
+export function alreadyGone(name: string): string {
+  return `You no longer have access to ${name}.`;
+}
 
 /** The sharing section's texts. */
 export const NOBODY_ELSE = "Nobody else has access.";
