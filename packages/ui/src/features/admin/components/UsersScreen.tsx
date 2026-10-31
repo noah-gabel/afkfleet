@@ -11,6 +11,7 @@
 // Nothing here carries a secret but the step-up's password, which StepUpForm holds: the list
 // is a query and each change a mutation.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { Fragment, useState } from "react";
 import { toast } from "sonner";
 
@@ -160,6 +161,15 @@ export function UsersScreen() {
                   <td className="py-2">{formatTime(user.created_at)}</td>
                   <td className="py-2">
                     <div className="flex justify-end gap-2">
+                      <Button asChild size="sm" variant="outline">
+                        <Link
+                          to="/admin/audit"
+                          search={{ kind: "user", id: user.id }}
+                          aria-label={`Audit of ${user.username}`}
+                        >
+                          Audit
+                        </Link>
+                      </Button>
                       {changes.map((change) => (
                         <Button
                           key={label(change)}

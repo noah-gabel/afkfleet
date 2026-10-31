@@ -12,6 +12,7 @@ import {
   type Actor,
   canRevoke,
   canRevokeRole,
+  fleetAccess,
   inviteRoles,
   serverSettingsAccess,
   userActions,
@@ -130,6 +131,53 @@ describe("canRevoke", () => {
     for (const state of ["used", "revoked", "expired"] as const) {
       expect(canRevoke("owner", invite("member", state))).toBe(false);
     }
+  });
+});
+
+describe("fleetAccess", () => {
+  const fleet = table("## Fleet-wide");
+  const row = (name: string) => fleet.rows.find(([permission]) => permission === name) ?? [];
+  const PERMISSIONS = [
+    ["ViewAuditLog", "viewAudit"],
+    ["ViewAgents", "viewAgents"],
+    ["DisableAgent", "disableAgent"],
+    ["ReleaseAgent", "releaseAgent"],
+  ] as const;
+
+  it("reads the matrix's rows of the agents and the audit log as they are", () => {
+    for (const [name] of PERMISSIONS) {
+      expect(row(name)).toEqual([name, "ok", "ok", "403"]);
+    }
+    expect(fleet.rows.map(([permission]) => permission)).not.toContain("EnrollAgent");
+  });
+
+  it("allows exactly what the matrix allows, for every role", () => {
+    for (const [name, field] of PERMISSIONS) {
+      const [, ...cells] = row(name);
+      fleet.header.slice(1).forEach((actorLabel, column) => {
+        expect(fleetAccess(role(actorLabel))[field], `${actorLabel}: ${name}`).toBe(
+          cells[column] === "ok",
+        );
+      });
+    }
+  });
+
+  it("lets in through the admin layout's gate exactly who may read them", () => {
+    for (const actorLabel of fleet.header.slice(1)) {
+      const actor = role(actorLabel);
+
+      expect(fleetAccess(actor).viewAudit, actorLabel).toBe(privilegeOf(actor) === "admin");
+      expect(fleetAccess(actor).viewAgents, actorLabel).toBe(privilegeOf(actor) === "admin");
+    }
+  });
+
+  it("gives a role this app doesn't know nothing", () => {
+    expect(fleetAccess("superuser" as UserRole)).toEqual({
+      viewAudit: false,
+      viewAgents: false,
+      disableAgent: false,
+      releaseAgent: false,
+    });
   });
 });
 

@@ -73,6 +73,7 @@ describe("the router", () => {
       "Users",
       "Invites",
       "Minecraft servers",
+      "Audit log",
     ]);
     await app.user.click(screen.getByRole("link", { name: "Users" }));
     expect(await screen.findByRole("heading", { name: "Users", level: 1 })).toBeDefined();
@@ -82,6 +83,8 @@ describe("the router", () => {
     expect(
       await screen.findByRole("heading", { name: "Minecraft servers", level: 1 }),
     ).toBeDefined();
+    await app.user.click(screen.getByRole("link", { name: "Audit log" }));
+    expect(await screen.findByRole("heading", { name: "Audit log", level: 1 })).toBeDefined();
   });
 
   it.each([
@@ -89,6 +92,7 @@ describe("the router", () => {
     ["/admin/invites", "invites"],
     ["/admin/servers", "serverSettings"],
     ["/admin/servers/new", "serverSettings"],
+    ["/admin/audit", "audit"],
   ] as const)("answers a Member on %s with not found, never calling %s", async (to, method) => {
     const app = await signedInAs("member");
 
@@ -96,7 +100,9 @@ describe("the router", () => {
 
     expect(await screen.findByText(NOT_FOUND)).toBeDefined();
     expect(
-      screen.queryByRole("heading", { name: /^(Users|Invites|Minecraft servers|Add a server)$/ }),
+      screen.queryByRole("heading", {
+        name: /^(Users|Invites|Minecraft servers|Add a server|Audit log)$/,
+      }),
     ).toBeNull();
     expect(app.fake.calls.map((call) => call.method)).not.toContain(method);
   });

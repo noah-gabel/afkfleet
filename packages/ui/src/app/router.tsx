@@ -17,6 +17,7 @@
 //     /admin         Admins and the Owner only; anyone else gets "not found"
 //       /admin/users /admin/invites
 //       /admin/servers /admin/servers/new /admin/servers/$id   the Minecraft servers' settings
+//       /admin/audit   the audit log, its search a target's kind and ID
 import { createMemoryHistory, createRouter } from "@tanstack/react-router";
 
 import {
@@ -26,6 +27,7 @@ import {
   linkRoute,
 } from "../features/accounts/routes";
 import { adminRoute, invitesRoute, usersRoute } from "../features/admin/routes";
+import { auditRoute } from "../features/audit/routes";
 import { loginRoute, registerRoute } from "../features/auth/routes";
 import { botRoute } from "../features/bots/routes";
 import { homeRoute } from "../features/home/routes";
@@ -64,6 +66,7 @@ const routeTree = rootRoute.addChildren([
       serversRoute,
       newServerRoute,
       serverSettingsRoute,
+      auditRoute,
     ]),
   ]),
 ]);
