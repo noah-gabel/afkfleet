@@ -4,10 +4,10 @@
 //!
 //! - **Creating a token** ([`EnrollmentTokenService::create`]): the token is
 //!   minted from the `SecureRandom` port before the transaction (`afk_et_…`,
-//!   stored only as its SHA-256 hash) and lives 15 minutes. The Owner's
-//!   session is re-checked and authorized again inside the transaction; the
-//!   server's host operator needs neither. At most 20 tokens may be pending.
-//!   The answer is the [`EnrollmentBundle`] (the token and the CA's
+//!   stored only as its SHA-256 hash) and lives 15 minutes. Only the server's
+//!   host operator creates one, with `afkfleet-server agent
+//!   create-enrollment-token` (ADR-0020, U76). At most 20 tokens may be
+//!   pending. The answer is the [`EnrollmentBundle`] (the token and the CA's
 //!   fingerprint), shown once.
 //! - **Enrolling** ([`EnrollmentService::enroll`]), in S21's order: the
 //!   token on the read pool (one answer for every problem; a real token that
@@ -33,7 +33,6 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use fleet_core::audit::{AuditAction, AuditMetadata, AuditOutcome, AuditTarget};
-use fleet_core::authz::{Actor, Permission, ResourceContext, authorize};
 use fleet_core::enrollment::{
     EnrollmentBundle, MAX_AUDITED_REFUSALS, MAX_PENDING_TOKENS, TOKEN_TTL,
 };
@@ -47,23 +46,11 @@ use tokio::time::timeout;
 use tracing::{debug, info};
 
 use super::audit::AuditService;
-use super::users::{ActingUser, recheck};
 use crate::ports::agents::{InsertAgentError, NewAgent, NewAgentCert};
 use crate::ports::enrollment_tokens::{EnrollmentToken, NewEnrollmentToken};
 use crate::ports::pki::{AgentCertificates, CsrRefusal, IssueError};
 use crate::ports::store::{Store, StoreError};
 use crate::ports::tokens::{TokenHash, TokenKind, Tokens};
-use crate::ports::users::User;
-
-/// Who creates a token.
-#[derive(Debug, Clone, Copy)]
-pub enum Creator<'a> {
-    /// The Owner, through the API, after stepping up.
-    Owner(&'a ActingUser),
-    /// The server's host operator, with `afkfleet-server agent
-    /// create-enrollment-token`.
-    Host,
-}
 
 /// A new token: its bundle, which exists only here, and when it expires.
 pub struct CreatedEnrollmentToken {
@@ -88,12 +75,6 @@ impl fmt::Debug for CreatedEnrollmentToken {
 /// Why no token was created.
 #[derive(Debug, thiserror::Error)]
 pub enum CreateTokenError {
-    /// The Owner's session ended, or they were disabled, meanwhile.
-    #[error("the acting session is gone")]
-    SessionGone,
-    /// `authorize()` refused it on the fresh facts.
-    #[error("creating an enrollment token isn't allowed")]
-    Denied,
     /// 20 tokens are pending already.
     #[error("the most enrollment tokens are pending already")]
     CapReached,
@@ -138,15 +119,11 @@ impl EnrollmentTokenService {
         }
     }
 
-    /// Creates a token for `by`; see the [module docs](self).
+    /// Creates a token; see the [module docs](self).
     ///
     /// # Errors
-    /// [`CreateTokenError::SessionGone`], [`CreateTokenError::Denied`],
     /// [`CreateTokenError::CapReached`], and the server's failures.
-    pub async fn create(
-        &self,
-        by: Creator<'_>,
-    ) -> Result<CreatedEnrollmentToken, CreateTokenError> {
+    pub async fn create(&self) -> Result<CreatedEnrollmentToken, CreateTokenError> {
         let minted = self.tokens.mint(TokenKind::Enrollment).map_err(internal)?;
         let now = self.clock.now();
         let id: EnrollmentTokenId = mint(now, self.random.as_ref()).map_err(internal)?;
@@ -155,26 +132,6 @@ impl EnrollmentTokenService {
             .ok_or_else(|| internal(OutOfRange))?;
         let bundle = EnrollmentBundle::new(minted.token, self.ca_fingerprint).map_err(internal)?;
         let mut tx = self.store.write().await?;
-        let created_by = match by {
-            Creator::Owner(acting) => {
-                let Some(rechecked) = recheck(tx.as_mut(), acting).await? else {
-                    debug!(user_id = %acting.actor.id, "an enrollment token was refused: the session is gone");
-                    return Err(CreateTokenError::SessionGone);
-                };
-                if authorize(
-                    &rechecked.actor,
-                    Permission::EnrollAgent,
-                    &ResourceContext::Global,
-                )
-                .is_err()
-                {
-                    debug!(user_id = %acting.actor.id, "an enrollment token was refused");
-                    return Err(CreateTokenError::Denied);
-                }
-                Some(rechecked.actor.id)
-            }
-            Creator::Host => None,
-        };
         if tx.enrollment_tokens().count_pending(now).await? >= MAX_PENDING_TOKENS {
             debug!("an enrollment token was refused: too many pending");
             return Err(CreateTokenError::CapReached);
@@ -183,29 +140,21 @@ impl EnrollmentTokenService {
             .insert(&NewEnrollmentToken {
                 id,
                 token_hash: minted.hash,
-                created_by,
                 created_at: now,
                 expires_at,
             })
             .await?;
-        let via = match by {
-            Creator::Owner(_) => "http",
-            Creator::Host => "cli",
-        };
         let metadata = AuditMetadata::new()
             .time("expires_at", expires_at)
-            .and_then(|metadata| metadata.text("via", via))
+            .and_then(|metadata| metadata.text("via", "cli"))
             .map_err(internal)?;
-        let mut entry = self
+        let entry = self
             .audit
             .entry(AuditAction::ENROLLMENT_TOKEN_CREATE, AuditOutcome::Success)
             .target(AuditTarget::EnrollmentToken(id))
             .metadata(metadata);
-        if let Creator::Owner(acting) = by {
-            entry = entry.actor(acting.actor.id).ip(acting.ip);
-        }
         tx.commit(entry).await?;
-        info!(enrollment_token_id = %id, via, "an enrollment token was created");
+        info!(enrollment_token_id = %id, "an enrollment token was created");
         Ok(CreatedEnrollmentToken {
             id,
             bundle,
@@ -239,8 +188,6 @@ pub enum TokenProblem {
         /// The agent it enrolled.
         agent: AgentId,
     },
-    /// Its creator was disabled or isn't allowed to enroll agents any more.
-    CreatorUnauthorized,
     /// Another enrollment used it, or it expired, after it was checked.
     Raced,
 }
@@ -254,7 +201,6 @@ impl TokenProblem {
             Self::Unknown => "unknown",
             Self::Expired => "expired",
             Self::Used { .. } => "used",
-            Self::CreatorUnauthorized => "creator_unauthorized",
             Self::Raced => "raced",
         }
     }
@@ -457,11 +403,7 @@ impl EnrollmentService {
         else {
             return Ok(Err(TokenRefusal::unrecorded(TokenProblem::Unknown)));
         };
-        let creator = match found.created_by {
-            Some(id) => self.store.users().get(id).await.map_err(store_error)?,
-            None => None,
-        };
-        if let Some(problem) = decide(&found, creator.as_ref(), now) {
+        if let Some(problem) = decide(&found, now) {
             return Ok(Err(TokenRefusal {
                 answer: problem,
                 recorded: Some((found.id, problem)),
@@ -494,13 +436,9 @@ impl EnrollmentService {
             .await
             .map_err(store_error)?
             .filter(|again| again.token_hash.ct_eq(hash));
-        let creator = match again.as_ref().and_then(|again| again.created_by) {
-            Some(id) => tx.users().get(id).await.map_err(store_error)?,
-            None => None,
-        };
         let raced = match again.as_ref() {
             None => Some(TokenProblem::Raced),
-            Some(again) => decide(again, creator.as_ref(), now),
+            Some(again) => decide(again, now),
         };
         if let Some(problem) = raced {
             drop(tx);
@@ -653,30 +591,13 @@ impl TokenRefusal {
     }
 }
 
-/// What's wrong with `token` at `now`, whose creator is `creator`, if
-/// anything.
-fn decide(
-    token: &EnrollmentToken,
-    creator: Option<&User>,
-    now: DateTime<Utc>,
-) -> Option<TokenProblem> {
+/// What's wrong with `token` at `now`, if anything.
+fn decide(token: &EnrollmentToken, now: DateTime<Utc>) -> Option<TokenProblem> {
     if let Some(agent) = token.agent {
         return Some(TokenProblem::Used { agent });
     }
     if now >= token.expires_at {
         return Some(TokenProblem::Expired);
-    }
-    if token.created_by.is_some() {
-        let allowed = creator.filter(|user| !user.disabled).is_some_and(|user| {
-            let actor = Actor {
-                id: user.id,
-                role: user.role,
-            };
-            authorize(&actor, Permission::EnrollAgent, &ResourceContext::Global).is_ok()
-        });
-        if !allowed {
-            return Some(TokenProblem::CreatorUnauthorized);
-        }
     }
     None
 }

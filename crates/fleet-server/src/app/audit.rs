@@ -7,7 +7,9 @@ use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::system::Clock;
 use tracing::warn;
 
-use crate::ports::audit::{AuditEntryId, AuditLimit, AuditPage, AuditRecord, NewAuditEntry, TABLE};
+use crate::ports::audit::{
+    AuditEntryId, AuditLimit, AuditPage, AuditRecord, AuditTargetFilter, NewAuditEntry, TABLE,
+};
 use crate::ports::page::Paged;
 use crate::ports::store::{Store, StoreError};
 
@@ -86,32 +88,76 @@ impl AuditService {
         &self,
         page: AuditPage,
     ) -> Result<Paged<ListedAuditEntry, AuditEntryId>, StoreError> {
-        let items = match self.list(page).await {
+        self.listed(None, page).await
+    }
+
+    /// One page of the entries about `filter`'s target, as [`Self::page`]
+    /// lists the whole log: the probe and the reading one at a time stay
+    /// under the filter, so another target's row is never named and never
+    /// counts as an older entry (ADR-0020, S89).
+    ///
+    /// # Errors
+    /// As [`Self::page`].
+    pub async fn page_for_target(
+        &self,
+        filter: &AuditTargetFilter,
+        page: AuditPage,
+    ) -> Result<Paged<ListedAuditEntry, AuditEntryId>, StoreError> {
+        self.listed(Some(filter), page).await
+    }
+
+    /// One page of the log, or of `filter`'s target, with its `next`.
+    async fn listed(
+        &self,
+        filter: Option<&AuditTargetFilter>,
+        page: AuditPage,
+    ) -> Result<Paged<ListedAuditEntry, AuditEntryId>, StoreError> {
+        let items = match self.read(filter, page).await {
             Ok(records) => records
                 .into_iter()
                 .map(ListedAuditEntry::Readable)
                 .collect(),
             Err(error) if unreadable_below(&error, page.before).is_some() => {
-                self.one_by_one(page).await?
+                self.one_by_one(filter, page).await?
             }
             Err(error) => return Err(error),
         };
         let full = items.len() >= usize::from(page.limit.get());
         let next = match items.last() {
-            Some(last) if full => self.older_than(last.id()).await?.then_some(last.id()),
+            Some(last) if full => self
+                .older_than(filter, last.id())
+                .await?
+                .then_some(last.id()),
             _ => None,
         };
         Ok(Paged { items, next })
     }
 
-    /// Whether an entry older than `id` follows: one read of a single entry,
-    /// where a row that doesn't read back counts too (R64, S52).
-    async fn older_than(&self, id: AuditEntryId) -> Result<bool, StoreError> {
+    /// One read of the log, or of `filter`'s target.
+    async fn read(
+        &self,
+        filter: Option<&AuditTargetFilter>,
+        page: AuditPage,
+    ) -> Result<Vec<AuditRecord>, StoreError> {
+        match filter {
+            Some(filter) => self.store.audit().list_for_target(filter, page).await,
+            None => self.list(page).await,
+        }
+    }
+
+    /// Whether an entry older than `id` follows, under `filter`: one read of
+    /// a single entry, where a row that doesn't read back counts too (R64,
+    /// S52).
+    async fn older_than(
+        &self,
+        filter: Option<&AuditTargetFilter>,
+        id: AuditEntryId,
+    ) -> Result<bool, StoreError> {
         let older = AuditPage {
             before: Some(id),
             limit: AuditLimit::ONE,
         };
-        match self.list(older).await {
+        match self.read(filter, older).await {
             Ok(older) => Ok(!older.is_empty()),
             Err(error) if unreadable_below(&error, Some(id)).is_some() => Ok(true),
             Err(error) => Err(error),
@@ -121,7 +167,11 @@ impl AuditService {
     /// `page` read again one entry at a time, each row that doesn't read
     /// back listed by its ID, with one warning, and stepped past: every read
     /// is below the last entry listed, so it always ends.
-    async fn one_by_one(&self, page: AuditPage) -> Result<Vec<ListedAuditEntry>, StoreError> {
+    async fn one_by_one(
+        &self,
+        filter: Option<&AuditTargetFilter>,
+        page: AuditPage,
+    ) -> Result<Vec<ListedAuditEntry>, StoreError> {
         let limit = usize::from(page.limit.get());
         let mut items = Vec::with_capacity(limit);
         let mut before = page.before;
@@ -130,7 +180,7 @@ impl AuditService {
                 before,
                 limit: AuditLimit::ONE,
             };
-            let entry = match self.list(one).await {
+            let entry = match self.read(filter, one).await {
                 Ok(mut one) => match one.pop() {
                     Some(record) => ListedAuditEntry::Readable(record),
                     None => break,

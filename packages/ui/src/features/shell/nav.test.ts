@@ -35,6 +35,8 @@ describe("navItems", () => {
       "/admin/users",
       "/admin/invites",
       "/admin/servers",
+      "/admin/agents",
+      "/admin/audit",
     ]);
   });
 });

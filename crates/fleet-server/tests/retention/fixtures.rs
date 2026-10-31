@@ -303,7 +303,6 @@ pub(crate) async fn add_token(db: &Database, n: u8, expires: DateTime<Utc>) -> E
         .insert(&NewEnrollmentToken {
             id,
             token_hash: TokenHash::from_bytes([n; 32]),
-            created_by: None,
             created_at: created,
             expires_at: expires,
         })

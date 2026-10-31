@@ -34,7 +34,7 @@ use fleet_proto::enrollment::{MAX_REQUEST_BYTES, SERVER_DEADLINE};
 use fleet_proto::generated::EnrollRequest;
 use fleet_proto::generated::agent_enrollment_client::AgentEnrollmentClient;
 use fleet_server::app::agents::AgentConnectionService;
-use fleet_server::app::enrollment::{Creator, EnrollmentService, EnrollmentTokenService};
+use fleet_server::app::enrollment::{EnrollmentService, EnrollmentTokenService};
 use fleet_server::config::Heartbeats;
 use fleet_server::config::{Rate, RateLimitConfig};
 use fleet_server::grpc::control::{ControlPorts, ControlTimings, Sessions, control_service};
@@ -270,13 +270,7 @@ impl Port {
 
     /// A token the host made.
     async fn token(&self) -> SecretString {
-        self.tokens
-            .create(Creator::Host)
-            .await
-            .unwrap()
-            .bundle
-            .token()
-            .clone()
+        self.tokens.create().await.unwrap().bundle.token().clone()
     }
 
     /// `Enroll` with `token`, `name` and a CSR of the key from `seed`.

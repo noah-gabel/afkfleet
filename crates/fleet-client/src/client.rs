@@ -318,6 +318,19 @@ impl<S: SessionStore> Client<S> {
         self.core.agents(query).await
     }
 
+    /// `POST /agents/{id}/disable`: disables an agent for good, its
+    /// certificates revoked and its stream ended (Admins and the Owner, after
+    /// a step-up). It answers the agent as `GET /agents` lists it; an agent
+    /// disabled already answers as it is.
+    ///
+    /// # Errors
+    /// [`ClientError::Api`] with 403 (`step_up_required` first, then
+    /// `forbidden` for a Member), 404 or 429 as the server answers, and the
+    /// transport's and the session's errors.
+    pub async fn disable_agent(&self, id: AgentId) -> Result<AgentResponse, ClientError> {
+        self.core.disable_agent(id).await
+    }
+
     /// `POST /agents/{id}/release`: releases a disabled agent's bots, on the
     /// caller's word that its host and its bots are stopped, so they can be
     /// placed elsewhere (Admins and the Owner, after a step-up). The agent

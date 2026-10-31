@@ -70,6 +70,13 @@ const COMMANDS: &[&str] = &[
     "update_server_settings",
     "delete_server_settings",
     "preview_chat_formats",
+    "audit",
+    "agents",
+    "disable_agent",
+    "release_agent",
+    "user_grants",
+    "shared_accounts",
+    "leave_account",
 ];
 
 fn main() -> Result<(), Box<dyn Error>> {

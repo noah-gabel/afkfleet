@@ -2,6 +2,7 @@
 // commands src-tauri/tests/ipc-contract.json lists, the ones the Rust side registers.
 import { readFileSync } from "node:fs";
 
+import type { AuditPage } from "@afkfleet/ui/generated/AuditPage";
 import type { BotPage } from "@afkfleet/ui/generated/BotPage";
 import type { ChatPage } from "@afkfleet/ui/generated/ChatPage";
 import type { ModePage } from "@afkfleet/ui/generated/ModePage";
@@ -693,4 +694,71 @@ test("holds a watch until a newer one starts or the session ends", async () => {
   backend.handle("logout", {});
   expect(await second).toMatchObject({ ok: false, error: { code: "no_session" } });
   expect(signedOut).toMatchObject({ ok: false, error: { code: "no_session" } });
+});
+
+test("pages the audit log newest first, its unreadable rows by ID, and narrows to a target", () => {
+  const backend = new FakeBackend();
+  backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(OWNER) });
+  const target = { kind: "bot" as const, id: "01900000-0000-7000-8000-0000000000b1" };
+  const oldest = backend.addAuditEntry({ target });
+  const other = backend.addAuditEntry({});
+  const unreadable = backend.addUnreadableEntry();
+
+  const first = backend.handle("audit", { limit: 2 }) as { ok: true; value: AuditPage };
+  const second = backend.handle("audit", { before: first.value.next, limit: 2 }) as {
+    ok: true;
+    value: AuditPage;
+  };
+  const narrowed = backend.handle("audit", { targetKind: "bot", targetId: target.id }) as {
+    ok: true;
+    value: AuditPage;
+  };
+
+  expect(first.value.items.map((entry) => entry.id)).toEqual([other]);
+  expect(first.value.unreadable).toEqual([unreadable]);
+  expect(first.value.next).toBe(other);
+  expect(second.value.items.map((entry) => entry.id)).toEqual([oldest]);
+  expect(second.value.next).toBeUndefined();
+  expect(narrowed.value.items.map((entry) => entry.id)).toEqual([oldest]);
+  expect(narrowed.value.unreadable).toEqual([]);
+});
+
+test("disables and releases an agent as the server does", () => {
+  const backend = new FakeBackend();
+  backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(OWNER) });
+  const agent = backend.addAgent("agent-1", { bots: 2 });
+
+  const unstepped = backend.handle("disable_agent", { id: agent });
+  backend.handle("step_up", { request: { password: PASSWORD } });
+  const early = backend.handle("release_agent", { id: agent });
+  const disabled = backend.handle("disable_agent", { id: agent });
+  const released = backend.handle("release_agent", { id: agent });
+  const missing = backend.handle("release_agent", { id: "01900000-0000-7000-8000-0000000000b2" });
+
+  expect(unstepped).toMatchObject({ ok: false, error: { api: { code: "step_up_required" } } });
+  expect(early).toMatchObject({ ok: false, error: { api: { code: "agent_not_disabled" } } });
+  expect(disabled).toMatchObject({
+    ok: true,
+    value: { enabled: false, status: "disabled", bots: 2 },
+  });
+  expect(released).toMatchObject({ ok: true, value: { bots: 0 } });
+  expect(missing).toMatchObject({ ok: false, error: { api: { status: 404 } } });
+});
+
+test("reviews only for the Owner, and lets a grantee leave, not an owner", () => {
+  const backend = new FakeBackend();
+  const account = backend.addAccount(OWNER);
+  backend.share(account, MEMBER, "view");
+  backend.handle("login", { request: { username: MEMBER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(MEMBER) });
+  const refused = backend.handle("user_grants", { id: "any" });
+  backend.handle("step_up", { request: { password: PASSWORD } });
+  const left = backend.handle("leave_account", { id: account });
+  const again = backend.handle("leave_account", { id: account });
+
+  expect(refused).toMatchObject({ ok: false, error: { api: { status: 404 } } });
+  expect(left).toMatchObject({ ok: true });
+  expect(again).toMatchObject({ ok: false, error: { api: { status: 404 } } });
 });

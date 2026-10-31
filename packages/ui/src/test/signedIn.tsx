@@ -55,7 +55,9 @@ export async function atScreen(
     | "/admin/users"
     | "/admin/invites"
     | "/admin/servers"
-    | "/admin/servers/new",
+    | "/admin/servers/new"
+    | "/admin/agents"
+    | "/admin/audit",
   handlers: Partial<ApiClient> = {},
   options: SignedInOptions = {},
 ) {

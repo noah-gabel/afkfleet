@@ -8,7 +8,7 @@
 //!   /api/v1/accounts/awaiting-approval`, `GET` and `DELETE
 //!   /api/v1/accounts/{id}`, `POST /api/v1/accounts/{id}/approve`,
 //!   `/refuse` and `/relink` (P9.6).
-//! - [`agents`]: `POST /api/v1/agents/enrollment-tokens` (P10.3).
+//! - [`agents`]: the agents' list, disabling and releasing (P10.10, P11.9).
 //! - [`audit`]: `GET /api/v1/audit` (P11.9).
 //! - [`bots`]: `GET /api/v1/bots`, `GET` and `PATCH /api/v1/bots/{id}`,
 //!   `PUT /api/v1/bots/{id}/mode`, and `POST /api/v1/bots/{id}/start`,

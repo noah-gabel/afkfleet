@@ -35,7 +35,7 @@ use fleet_core::id::{AgentId, BotId};
 use fleet_core::pki::CertFingerprint;
 use fleet_core::system::{Clock, SecureRandom};
 use fleet_core::value::Username;
-use fleet_server::app::enrollment::{Creator, EnrollmentTokenService};
+use fleet_server::app::enrollment::EnrollmentTokenService;
 use fleet_server::app::users::UserService;
 use fleet_server::cli::pki;
 use fleet_server::cli::serve::{
@@ -468,7 +468,7 @@ impl Server {
             Arc::new(Sha256Tokens::new(random)),
             self.ca_fingerprint,
         )
-        .create(Creator::Host)
+        .create()
         .await
         .map(|created| created.bundle)
         .map_err(|_| "the enrollment token couldn't be made")

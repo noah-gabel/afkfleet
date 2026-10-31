@@ -14,6 +14,8 @@ use crate::keychain::KeychainFactory;
 use crate::state::AppState;
 
 pub(crate) mod accounts;
+pub(crate) mod agents;
+pub(crate) mod audit;
 pub(crate) mod auth;
 pub(crate) mod bots;
 pub(crate) mod grants;

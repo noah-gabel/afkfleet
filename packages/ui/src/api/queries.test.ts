@@ -12,6 +12,8 @@ import { ApiError } from "./ApiError";
 import { FakeApiClient } from "./FakeApiClient";
 import {
   AWAITING_KEY,
+  auditKey,
+  auditQuery,
   awaitingQuery,
   chatOutcomesKey,
   chatOutcomesQuery,
@@ -20,6 +22,9 @@ import {
   modesQuery,
   PAGES_DONT_MOVE_ON,
   recordAnswer,
+  USER_NAMES_KEY,
+  USERS_KEY,
+  userNamesQuery,
 } from "./queries";
 
 /** An empty page, with `next` when more come. */
@@ -168,6 +173,69 @@ describe("the chat's pages (R120)", () => {
     });
 
     expect(read.pageParams).toEqual([undefined, 5]);
+  });
+});
+
+describe("the audit log's pages (R173)", () => {
+  const entries = { items: [], unreadable: [] };
+
+  it("fail an older page whose next doesn't move past the cursor it was asked with", async () => {
+    const api = new FakeApiClient({
+      audit: async (before) => ({ ...entries, next: before ?? 5 }),
+    });
+    const client = createQueryClient();
+    const options = auditQuery(api);
+
+    await client.fetchInfiniteQuery(options);
+    await expect(
+      client.fetchInfiniteQuery({ ...options, pages: 2, getNextPageParam: () => 5 }),
+    ).rejects.toThrow();
+  });
+
+  it("read a target's pages under a key of their own, with its kind and ID", async () => {
+    const calls: unknown[][] = [];
+    const api = new FakeApiClient({
+      audit: async (...args) => {
+        calls.push(args);
+        return entries;
+      },
+    });
+    const client = createQueryClient();
+    const filter = { kind: "bot", id: botId(1) };
+
+    await client.fetchInfiniteQuery(auditQuery(api, filter));
+
+    expect(calls).toEqual([[undefined, undefined, "bot", botId(1)]]);
+    expect(client.getQueryData(auditKey(filter))).toBeDefined();
+    expect(client.getQueryData(auditKey())).toBeUndefined();
+  });
+});
+
+describe("the users' names (S85, R176)", () => {
+  it("read every page, keep only the ID and the username, and sit under the users' key", async () => {
+    const user = (id: string, username: string) => ({
+      id,
+      username,
+      role: "member" as const,
+      disabled: false,
+      mfa_enrolled: true,
+      created_at: "2026-10-13T08:00:00.000Z",
+    });
+    const api = new FakeApiClient({
+      users: async (before) =>
+        before === undefined
+          ? { items: [user("b", "bob")], next: "b" }
+          : { items: [user("a", "alice")] },
+    });
+    const client = createQueryClient();
+
+    const names = await client.fetchQuery(userNamesQuery(api));
+
+    expect(names).toEqual([
+      { id: "b", username: "bob" },
+      { id: "a", username: "alice" },
+    ]);
+    expect(USER_NAMES_KEY.slice(0, USERS_KEY.length)).toEqual([...USERS_KEY]);
   });
 });
 

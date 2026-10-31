@@ -90,6 +90,13 @@ function client() {
     updateServerSettings: ok,
     deleteServerSettings: ok,
     previewChatFormats: ok,
+    audit: ok,
+    agents: ok,
+    disableAgent: ok,
+    releaseAgent: ok,
+    userGrants: ok,
+    sharedAccounts: ok,
+    leaveAccount: ok,
   });
   return { fake, api: validated(fake) as ApiClient };
 }
@@ -119,6 +126,49 @@ async function refusedFields(call: Promise<unknown>): Promise<string[]> {
   }
   throw new Error("the call wasn't refused");
 }
+
+describe("validated, the admin screens' calls (ADR-0020, S89)", () => {
+  const TARGET = "018bcfe5-6800-7101-8101-010101010101";
+
+  it("passes an audit page with a target whole, of a kind this app doesn't know too", async () => {
+    const { api, fake } = client();
+
+    await api.audit(42, 10, "planet", TARGET);
+    await api.audit();
+
+    expect(fake.calls).toEqual([
+      { method: "audit", args: [42, 10, "planet", TARGET] },
+      { method: "audit", args: [undefined, undefined, undefined, undefined] },
+    ]);
+  });
+
+  it("refuses an audit page's bad cursor, limit and half or malformed target", async () => {
+    const { api } = client();
+
+    expect(await refusedFields(api.audit(0, 0))).toEqual(["before", "limit"]);
+    expect(await refusedFields(api.audit(undefined, undefined, "bot"))).toEqual(["target_id"]);
+    expect(await refusedFields(api.audit(undefined, undefined, undefined, TARGET))).toEqual([
+      "target_kind",
+    ]);
+    expect(await refusedFields(api.audit(undefined, undefined, "Not-A-Kind", TARGET))).toEqual([
+      "target_kind",
+    ]);
+    expect(
+      await refusedFields(api.audit(undefined, undefined, "bot", TARGET.toUpperCase())),
+    ).toEqual(["target_id"]);
+  });
+
+  it("refuses a malformed ID on the agents' and the review's calls", async () => {
+    const { api } = client();
+
+    expect(await refusedFields(api.disableAgent("x"))).toEqual(["id"]);
+    expect(await refusedFields(api.releaseAgent("x"))).toEqual(["id"]);
+    expect(await refusedFields(api.leaveAccount("x"))).toEqual(["id"]);
+    expect(await refusedFields(api.userGrants("x", "y", 0))).toEqual(["id", "before", "limit"]);
+    expect(await refusedFields(api.sharedAccounts("x", "y", 0))).toEqual(["id", "before", "limit"]);
+    expect(await refusedFields(api.agents("y", 0))).toEqual(["before", "limit"]);
+  });
+});
 
 describe("validated", () => {
   it("passes valid inputs through unchanged", async () => {

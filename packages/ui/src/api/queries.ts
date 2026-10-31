@@ -19,15 +19,19 @@ import {
 
 import type { AccountPage } from "../generated/AccountPage";
 import type { AccountResponse } from "../generated/AccountResponse";
+import type { AgentPage } from "../generated/AgentPage";
+import type { AuditPage } from "../generated/AuditPage";
 import type { BotPage } from "../generated/BotPage";
 import type { BotResponse } from "../generated/BotResponse";
 import type { ChatPage } from "../generated/ChatPage";
 import type { ChatSendResponse } from "../generated/ChatSendResponse";
 import type { GrantPage } from "../generated/GrantPage";
+import type { HeldGrantPage } from "../generated/HeldGrantPage";
 import type { InvitePage } from "../generated/InvitePage";
 import type { ModePage } from "../generated/ModePage";
 import type { ServerSettingsResponse } from "../generated/ServerSettingsResponse";
 import type { SessionPage } from "../generated/SessionPage";
+import type { UserLabel } from "../generated/UserLabel";
 import type { UserPage } from "../generated/UserPage";
 import type { ApiClient } from "./ApiClient";
 import { ApiError } from "./ApiError";
@@ -38,7 +42,10 @@ import { PAGE_MAX, SERVER_SETTINGS_PAGE_MAX } from "./limits";
 /** Why a read of every page failed when the server's pages didn't move on (R99). */
 export const PAGES_DONT_MOVE_ON = "The server sent a list this app doesn't understand.";
 
-/** How long `me` stays fresh: a role changed by an Admin shows within about a minute. */
+/**
+ * How long `me` stays fresh. A role never changes under a live session: the change revokes every
+ * session of the user, which ends this one at its next call (ADR-0020, S87, R181).
+ */
 export const ME_STALE_MS = 60_000;
 
 /** The signed-in user. */
@@ -99,6 +106,68 @@ export function usersQuery(api: ApiClient) {
 /** The users, through the app's client. */
 export function useUsers() {
   return useInfiniteQuery(usersQuery(useApiClient()));
+}
+
+/**
+ * Every user's ID and username, read through every page once: the audit's names (ADR-0020,
+ * S85). Under `USERS_KEY`, so the users screen's own invalidation reaches it (R176).
+ */
+export const USER_NAMES_KEY = [...USERS_KEY, "names"] as const;
+
+/** Every user's label; one failed page fails it all, and the audit shows IDs instead. */
+export function userNamesQuery(api: ApiClient) {
+  return queryOptions({
+    queryKey: USER_NAMES_KEY,
+    queryFn: async ({ signal }): Promise<UserLabel[]> => {
+      const read = await everyPage((before) => api.users(before, PAGE_MAX), signal);
+      return read.pages.flatMap((page) => page.items.map(({ id, username }) => ({ id, username })));
+    },
+  });
+}
+
+/** Every user's label, through the app's client. */
+export function useUserNames() {
+  return useQuery(userNamesQuery(useApiClient()));
+}
+
+/** The key of the grants user `id` holds (the Owner's review; ADR-0020, R176). */
+export function heldGrantsKey(id: string) {
+  return [...USERS_KEY, "held", id] as const;
+}
+
+/** The grants user `id` holds, dormant ones included, a page at a time. */
+export function heldGrantsQuery(api: ApiClient, id: string) {
+  return infiniteQueryOptions({
+    queryKey: heldGrantsKey(id),
+    queryFn: ({ pageParam }) => api.userGrants(id, pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page: HeldGrantPage) => page.next,
+  });
+}
+
+/** The grants user `id` holds, through the app's client. */
+export function useHeldGrants(id: string) {
+  return useInfiniteQuery(heldGrantsQuery(useApiClient(), id));
+}
+
+/** The key of user `id`'s accounts that a grant shares (the Owner's review; R176). */
+export function sharedAccountsKey(id: string) {
+  return [...USERS_KEY, "shared", id] as const;
+}
+
+/** User `id`'s accounts that a grant shares, a page at a time. */
+export function sharedAccountsQuery(api: ApiClient, id: string) {
+  return infiniteQueryOptions({
+    queryKey: sharedAccountsKey(id),
+    queryFn: ({ pageParam }) => api.sharedAccounts(id, pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page: AccountPage) => page.next,
+  });
+}
+
+/** User `id`'s accounts that a grant shares, through the app's client. */
+export function useSharedAccounts(id: string) {
+  return useInfiniteQuery(sharedAccountsQuery(useApiClient(), id));
 }
 
 /** The invites, in every state, without their codes: every page loaded so far. */
@@ -297,6 +366,60 @@ export function useBot(id: string) {
   return useQuery(botQuery(useApiClient(), id));
 }
 
+/** One target of the audit log: its kind and its ID (ADR-0020, S89). */
+export interface AuditFilter {
+  readonly kind: string;
+  readonly id: string;
+}
+
+/** Where every audit page's key starts. */
+export const AUDIT_KEY = ["audit"] as const;
+
+/** The key of the audit log's pages loaded so far, the whole log's or one target's. */
+export function auditKey(filter?: AuditFilter) {
+  return filter === undefined
+    ? ([...AUDIT_KEY, "all"] as const)
+    : ([...AUDIT_KEY, "target", filter.kind, filter.id] as const);
+}
+
+/** The audit log, or one target's entries, a page at a time, newest first. */
+export function auditQuery(api: ApiClient, filter?: AuditFilter) {
+  return infiniteQueryOptions({
+    queryKey: auditKey(filter),
+    queryFn: async ({ pageParam }) =>
+      movedOn(await api.audit(pageParam, undefined, filter?.kind, filter?.id), pageParam),
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (page: AuditPage) => page.next,
+  });
+}
+
+/** The audit log, through the app's client. */
+export function useAudit(filter?: AuditFilter) {
+  return useInfiniteQuery(auditQuery(useApiClient(), filter));
+}
+
+/** The agents: every page loaded so far. */
+export const AGENTS_KEY = ["agents"] as const;
+
+/**
+ * The agents, a page at a time, newest first. Nothing on the socket carries them, so they're read
+ * again when the screen mounts, after its own writes and when the window regains focus (R177).
+ */
+export function agentsQuery(api: ApiClient) {
+  return infiniteQueryOptions({
+    queryKey: AGENTS_KEY,
+    queryFn: ({ pageParam }) => api.agents(pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page: AgentPage) => page.next,
+    refetchOnWindowFocus: true,
+  });
+}
+
+/** The agents, through the app's client. */
+export function useAgents() {
+  return useInfiniteQuery(agentsQuery(useApiClient()));
+}
+
 /** One bot's chat, a page at a time, newest first. */
 export function chatQuery(api: ApiClient, id: string) {
   return infiniteQueryOptions({
@@ -309,9 +432,9 @@ export function chatQuery(api: ApiClient, id: string) {
 
 /**
  * `page`, read with the cursor `before`, if its `next` moves past it (R120, R99's rule for
- * the chat): otherwise the read fails, so a server bug never loops.
+ * the chat and the audit log): otherwise the read fails, so a server bug never loops.
  */
-function movedOn(page: ChatPage, before: number | undefined): ChatPage {
+function movedOn<P extends { readonly next?: number }>(page: P, before: number | undefined): P {
   if (page.next !== undefined && before !== undefined && page.next >= before) {
     throw new ApiError({ code: "unexpected_response", message: PAGES_DONT_MOVE_ON });
   }

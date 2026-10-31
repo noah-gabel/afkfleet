@@ -33,7 +33,7 @@
 //! - **The database** is opened with [`sqlite::open_migrated`]: never
 //!   created or migrated, so it's safe while `serve` runs; the command's one
 //!   write waits for the server's on SQLite's lock.
-//! - **The token** is the Owner's kind: single-use, 15 minutes, stored only
+//! - **The token** is single-use, 15 minutes, stored only
 //!   as its hash, at most 20 pending in all. Its audit entry,
 //!   `enrollment_token.create`, has no actor and no IP, and `via` = `cli`.
 //!   No 2FA guards it: whoever runs the binary against the database holds
@@ -59,9 +59,7 @@ use crate::app::agents::{
     AgentService, AgentView, DisableAgentError, DisabledAgent, Disabler, ReleaseAgentError,
     ReleasedAgent, Releaser,
 };
-use crate::app::enrollment::{
-    CreateTokenError, CreatedEnrollmentToken, Creator, EnrollmentTokenService,
-};
+use crate::app::enrollment::{CreateTokenError, CreatedEnrollmentToken, EnrollmentTokenService};
 use crate::config::ServerConfig;
 use crate::grpc::registry::AgentRegistry;
 use crate::http::error::chain;
@@ -369,7 +367,7 @@ pub async fn create_enrollment_token(
         Arc::new(Sha256Tokens::new(random)),
         fingerprint,
     );
-    let exit = match tokens.create(Creator::Host).await {
+    let exit = match tokens.create().await {
         Ok(created) => print(&created, out, err),
         Err(CreateTokenError::CapReached) => refuse(
             err,
@@ -594,7 +592,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(token.created_by, None);
+        assert_eq!(token.agent, None);
         let entries = audit(&database).await;
         let created: Vec<_> = entries
             .iter()

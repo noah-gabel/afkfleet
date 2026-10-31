@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-user-grants"
+description = "Enables the user_grants command without any pre-configured scope."
+commands.allow = ["user_grants"]
+
+[[permission]]
+identifier = "deny-user-grants"
+description = "Denies the user_grants command without any pre-configured scope."
+commands.deny = ["user_grants"]

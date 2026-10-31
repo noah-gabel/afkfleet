@@ -35,8 +35,8 @@ use crate::ports::agents::{
     NewAgentCert,
 };
 use crate::ports::audit::{
-    AuditEntryId, AuditPage, AuditReads, AuditRecord, AuditWrites, FailedCodeAttempts,
-    NewAuditEntry,
+    AuditEntryId, AuditPage, AuditReads, AuditRecord, AuditTargetFilter, AuditWrites,
+    FailedCodeAttempts, NewAuditEntry,
 };
 use crate::ports::bots::{Access, Bot, BotReads, BotRecord, BotWrites, Fleet, ListedBot, NewBot};
 use crate::ports::chat::{ChatMessageId, ChatReads, ChatWrites, ListedChat, NewChatMessage};
@@ -366,6 +366,14 @@ impl LoginAttemptReads for Reads {
 impl AuditReads for Reads {
     async fn list(&self, page: AuditPage) -> Result<Vec<AuditRecord>, StoreError> {
         audit::list(&self.pool, page).await
+    }
+
+    async fn list_for_target(
+        &self,
+        filter: &AuditTargetFilter,
+        page: AuditPage,
+    ) -> Result<Vec<AuditRecord>, StoreError> {
+        audit::list_for_target(&self.pool, filter, page).await
     }
 
     async fn failed_code_attempts(&self, user: UserId) -> Result<FailedCodeAttempts, StoreError> {

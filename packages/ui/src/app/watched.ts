@@ -146,6 +146,15 @@ export function watched(client: ApiClient, stores: AppStores, events: WatchEvent
     updateServerSettings: watch((id, request) => client.updateServerSettings(id, request)),
     deleteServerSettings: watch((id) => client.deleteServerSettings(id)),
     previewChatFormats: watch((request) => client.previewChatFormats(request)),
+    audit: watch((before, limit, targetKind, targetId) =>
+      client.audit(before, limit, targetKind, targetId),
+    ),
+    agents: watch((before, limit) => client.agents(before, limit)),
+    disableAgent: watch((id) => client.disableAgent(id)),
+    releaseAgent: watch((id) => client.releaseAgent(id)),
+    userGrants: watch((id, before, limit) => client.userGrants(id, before, limit)),
+    sharedAccounts: watch((id, before, limit) => client.sharedAccounts(id, before, limit)),
+    leaveAccount: watch((id) => client.leaveAccount(id)),
   };
 }
 

@@ -87,12 +87,11 @@ async fn add_agent(db: &Database, n: u8) -> AgentId {
     agent.id
 }
 
-/// Token `n` by `creator`, created `millis` after `T0`, living [`TTL`].
-fn new_token(n: u8, creator: Option<UserId>, millis: i64) -> NewEnrollmentToken {
+/// Token `n`, created `millis` after `T0`, living [`TTL`].
+fn new_token(n: u8, millis: i64) -> NewEnrollmentToken {
     NewEnrollmentToken {
         id: EnrollmentTokenId::new_v7(at(T0 + millis), [n; 10]).unwrap(),
         token_hash: hash(n),
-        created_by: creator,
         created_at: at(T0 + millis),
         expires_at: at(T0 + millis + TTL),
     }
@@ -127,7 +126,6 @@ async fn use_token(
 type Summary = (
     EnrollmentTokenId,
     [u8; 32],
-    Option<UserId>,
     DateTime<Utc>,
     DateTime<Utc>,
     Option<DateTime<Utc>>,
@@ -138,7 +136,6 @@ fn summary(token: &EnrollmentToken) -> Summary {
     (
         token.id,
         *token.token_hash.as_bytes(),
-        token.created_by,
         token.created_at,
         token.expires_at,
         token.used_at,
@@ -150,7 +147,6 @@ fn pending(token: &NewEnrollmentToken) -> Summary {
     (
         token.id,
         *token.token_hash.as_bytes(),
-        token.created_by,
         token.created_at,
         token.expires_at,
         None,
@@ -173,8 +169,7 @@ async fn a_token_is_found_by_its_hash_on_the_read_pool_and_in_a_transaction(
     options: SqliteConnectOptions,
 ) {
     let db = database(options).await;
-    let owner = add_owner(&db).await;
-    let token = new_token(7, Some(owner), 0);
+    let token = new_token(7, 0);
 
     insert(&db, &token).await.unwrap();
 
@@ -187,8 +182,7 @@ async fn a_token_is_found_by_its_hash_on_the_read_pool_and_in_a_transaction(
 #[sqlx::test(migrations = false)]
 async fn an_unknown_hash_finds_nothing(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
     let db = database(options).await;
-    let owner = add_owner(&db).await;
-    insert(&db, &new_token(7, Some(owner), 0)).await.unwrap();
+    insert(&db, &new_token(7, 0)).await.unwrap();
 
     assert_eq!(found(&db, 8).await, None);
 }
@@ -199,9 +193,41 @@ async fn a_host_operators_token_has_no_creator(
     options: SqliteConnectOptions,
 ) {
     let db = database(options).await;
-    let token = new_token(7, None, 0);
+    let token = new_token(7, 0);
 
     insert(&db, &token).await.unwrap();
+
+    let id = token.id.as_uuid().hyphenated().to_string();
+    let row = sqlx::query!(
+        r#"SELECT created_by AS "created_by?: String" FROM enrollment_tokens WHERE id = ?"#,
+        id
+    )
+    .fetch_one(db.write_pool())
+    .await
+    .unwrap();
+    assert_eq!(row.created_by, None);
+}
+
+/// A token the removed route stored names its creator, which nothing reads
+/// any more (ADR-0020, S88).
+#[sqlx::test(migrations = false)]
+async fn a_token_stored_with_a_creator_still_reads_back(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_owner(&db).await.as_uuid().hyphenated().to_string();
+    let token = new_token(7, 0);
+    insert(&db, &token).await.unwrap();
+    let id = token.id.as_uuid().hyphenated().to_string();
+    sqlx::query!(
+        "UPDATE enrollment_tokens SET created_by = ? WHERE id = ?",
+        owner,
+        id
+    )
+    .execute(db.write_pool())
+    .await
+    .unwrap();
 
     assert_eq!(found(&db, 7).await, Some(pending(&token)));
 }
@@ -212,7 +238,7 @@ async fn a_token_enrolls_once_and_names_its_agent(
     options: SqliteConnectOptions,
 ) {
     let db = database(options).await;
-    let token = new_token(7, None, 0);
+    let token = new_token(7, 0);
     insert(&db, &token).await.unwrap();
     let first = add_agent(&db, 1).await;
     let second = add_agent(&db, 2).await;
@@ -223,8 +249,8 @@ async fn a_token_enrolls_once_and_names_its_agent(
     assert!(once);
     assert!(!twice);
     let stored = found(&db, 7).await.unwrap();
-    assert_eq!(stored.5, Some(at(T0 + 1000)));
-    assert_eq!(stored.6, Some(first));
+    assert_eq!(stored.4, Some(at(T0 + 1000)));
+    assert_eq!(stored.5, Some(first));
 }
 
 #[sqlx::test(migrations = false)]
@@ -233,8 +259,8 @@ async fn a_token_cant_be_used_from_its_expiry_on(
     options: SqliteConnectOptions,
 ) {
     let db = database(options).await;
-    let token = new_token(7, None, 0);
-    let other = new_token(8, None, 0);
+    let token = new_token(7, 0);
+    let other = new_token(8, 0);
     insert(&db, &token).await.unwrap();
     insert(&db, &other).await.unwrap();
     let agent = add_agent(&db, 1).await;
@@ -247,7 +273,7 @@ async fn a_token_cant_be_used_from_its_expiry_on(
 
     assert!(!at_expiry);
     assert!(just_before);
-    assert_eq!(found(&db, 7).await.unwrap().6, None);
+    assert_eq!(found(&db, 7).await.unwrap().5, None);
 }
 
 #[sqlx::test(migrations = false)]
@@ -256,8 +282,8 @@ async fn one_agent_is_enrolled_by_one_token(
     options: SqliteConnectOptions,
 ) {
     let db = database(options).await;
-    let token = new_token(7, None, 0);
-    let other = new_token(8, None, 0);
+    let token = new_token(7, 0);
+    let other = new_token(8, 0);
     insert(&db, &token).await.unwrap();
     insert(&db, &other).await.unwrap();
     let agent = add_agent(&db, 1).await;
@@ -275,11 +301,11 @@ async fn only_unused_unexpired_tokens_are_pending(
 ) {
     let db = database(options).await;
     for n in 1..=4 {
-        insert(&db, &new_token(n, None, 0)).await.unwrap();
+        insert(&db, &new_token(n, 0)).await.unwrap();
     }
-    insert(&db, &new_token(5, None, TTL)).await.unwrap();
+    insert(&db, &new_token(5, TTL)).await.unwrap();
     let agent = add_agent(&db, 1).await;
-    let used = new_token(1, None, 0).id;
+    let used = new_token(1, 0).id;
     use_token(&db, used, agent, 1000).await.unwrap();
 
     let mut tx = db.write().await.unwrap();
@@ -301,10 +327,10 @@ async fn only_unused_unexpired_tokens_are_pending(
 #[sqlx::test(migrations = false)]
 async fn a_hash_stored_twice_is_refused(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
     let db = database(options).await;
-    insert(&db, &new_token(7, None, 0)).await.unwrap();
+    insert(&db, &new_token(7, 0)).await.unwrap();
     let same_hash = NewEnrollmentToken {
         id: EnrollmentTokenId::new_v7(at(T0), [8; 10]).unwrap(),
-        ..new_token(7, None, 0)
+        ..new_token(7, 0)
     };
 
     let refused = insert(&db, &same_hash).await;
@@ -323,7 +349,7 @@ async fn a_token_expires_after_it_is_created(
     let db = database(options).await;
     let backwards = NewEnrollmentToken {
         expires_at: at(T0),
-        ..new_token(7, None, 0)
+        ..new_token(7, 0)
     };
 
     let refused = insert(&db, &backwards).await;
@@ -341,8 +367,8 @@ async fn a_tokens_refusals_are_counted_from_the_audit_log(
     options: SqliteConnectOptions,
 ) {
     let db = database(options).await;
-    let token = AuditTarget::EnrollmentToken(new_token(7, None, 0).id);
-    let other = AuditTarget::EnrollmentToken(new_token(8, None, 0).id);
+    let token = AuditTarget::EnrollmentToken(new_token(7, 0).id);
+    let other = AuditTarget::EnrollmentToken(new_token(8, 0).id);
     let entry = |target, outcome| {
         NewAuditEntry::new(at(T0), AuditAction::AGENT_ENROLL, outcome).target(target)
     };

@@ -168,6 +168,29 @@ export function validated(client: ApiClient): ApiClient {
     deleteServerSettings: async (id) => client.deleteServerSettings(check(schemas.id, id, "id")),
     previewChatFormats: async (request) =>
       client.previewChatFormats(check(schemas.previewChatFormatsRequest, request)),
+    audit: async (before, limit, targetKind, targetId) => {
+      checkAll([
+        ...(before === undefined ? [] : problems(schemas.chatCursor, before, "before")),
+        ...(limit === undefined ? [] : problems(schemas.limit, limit, "limit")),
+        ...targetProblems(targetKind, targetId),
+      ]);
+      return client.audit(before, limit, targetKind, targetId);
+    },
+    agents: async (before, limit) => {
+      checkPage(before, limit);
+      return client.agents(before, limit);
+    },
+    disableAgent: async (id) => client.disableAgent(check(schemas.id, id, "id")),
+    releaseAgent: async (id) => client.releaseAgent(check(schemas.id, id, "id")),
+    userGrants: async (id, before, limit) => {
+      checkAll([...problems(schemas.id, id, "id"), ...pageProblems(before, limit)]);
+      return client.userGrants(id, before, limit);
+    },
+    sharedAccounts: async (id, before, limit) => {
+      checkAll([...problems(schemas.id, id, "id"), ...pageProblems(before, limit)]);
+      return client.sharedAccounts(id, before, limit);
+    },
+    leaveAccount: async (id) => client.leaveAccount(check(schemas.id, id, "id")),
   };
 }
 
@@ -214,6 +237,17 @@ function pageProblems(before: string | undefined, limit: number | undefined) {
   return [
     ...(before === undefined ? [] : problems(schemas.id, before, "before")),
     ...(limit === undefined ? [] : problems(schemas.limit, limit, "limit")),
+  ];
+}
+
+/** What an audit page's target breaks: a kind and an ID, both or neither (ADR-0020, S89). */
+function targetProblems(kind: string | undefined, id: string | undefined) {
+  if (kind === undefined && id === undefined) {
+    return [];
+  }
+  return [
+    ...problems(schemas.auditTargetKind, kind, "target_kind"),
+    ...problems(schemas.auditTargetId, id, "target_id"),
   ];
 }
 

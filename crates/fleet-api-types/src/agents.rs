@@ -1,20 +1,11 @@
-//! The agents' DTOs (Plan.md P10.3, P10.10, Appendix B, ADR-0019): creating
-//! an enrollment token, and the agents' list.
-//!
-//! A token enrolls one new agent within 15 minutes. It reaches the agent in
-//! the bundle, `<token>.<CA fingerprint>`, which is in
-//! [`CreatedEnrollmentTokenResponse`] only: the server keeps just the
-//! token's hash, so it's never shown again. Creating one is the Owner's,
-//! after a step-up.
+//! The agents' DTOs (Plan.md P10.10, Appendix B, ADR-0019): the agents' list.
 //!
 //! The agents' list ([`AgentPage`]) shows every agent, enabled or not, with
 //! its status, what its last hello said, and when its latest certificate
 //! expires; disabling one answers it as the list shows it.
 
 use fleet_core::agent::AgentStatus as CoreAgentStatus;
-use fleet_core::enrollment::EnrollmentBundle;
-use fleet_core::id::{AgentId, EnrollmentTokenId};
-use fleet_core::pki::CertFingerprint;
+use fleet_core::id::AgentId;
 use fleet_core::value::{AgentCapacity, AgentName, AgentVersion};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -23,16 +14,8 @@ use utoipa::{PartialSchema as _, ToSchema};
 use crate::ids::id_schema;
 use crate::int::integer_schema;
 use crate::open::{Open, OpenEnum};
-use crate::secret::SecretText;
 use crate::text::BoundedText;
 use crate::time::Timestamp;
-
-/// The characters of an enrollment bundle.
-pub const BUNDLE_CHARS: usize = EnrollmentBundle::TEXT_LEN;
-
-/// The characters of a CA fingerprint: SHA-256 in openssl's uppercase
-/// colon form.
-pub const FINGERPRINT_CHARS: usize = CertFingerprint::TEXT_LEN;
 
 /// The characters of an agent's name.
 pub const AGENT_NAME_MAX_CHARS: usize = AgentName::MAX_LEN;
@@ -150,61 +133,11 @@ pub struct AgentPage {
     pub next: Option<AgentId>,
 }
 
-/// `POST /agents/enrollment-tokens`: the new token, in its bundle, shown
-/// this once.
-#[derive(Debug, Serialize, Deserialize, TS, ToSchema)]
-pub struct CreatedEnrollmentTokenResponse {
-    /// The token's ID, which its audit entries name.
-    #[ts(type = "string")]
-    #[schema(schema_with = id_schema)]
-    pub id: EnrollmentTokenId,
-    /// The bundle (`afk_et_….<CA fingerprint>`) that `afkfleet-agent
-    /// enroll` reads from stdin.
-    #[ts(type = "string")]
-    #[schema(schema_with = SecretText::<BUNDLE_CHARS>::schema)]
-    pub bundle: SecretText<BUNDLE_CHARS>,
-    /// The CA's fingerprint, also in the bundle: the one `pki init`
-    /// printed.
-    #[ts(type = "string")]
-    #[schema(schema_with = BoundedText::<FINGERPRINT_CHARS>::schema)]
-    pub ca_fingerprint: BoundedText<FINGERPRINT_CHARS>,
-    /// When the token expires, 15 minutes after it was created.
-    #[ts(type = "string")]
-    #[schema(schema_with = Timestamp::schema)]
-    pub expires_at: Timestamp,
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::*;
-
-    const FINGERPRINT: &str = "AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB:AB";
-
-    fn created_json() -> serde_json::Value {
-        json!({
-            "id": "018bcfe5-6800-7101-8101-010101010101",
-            "bundle": format!("afk_et_BUNDLEBUNDLE.{FINGERPRINT}"),
-            "ca_fingerprint": FINGERPRINT,
-            "expires_at": "2027-01-15T08:15:00.000Z"
-        })
-    }
-
-    #[test]
-    fn the_limits_are_the_core_types_lengths() {
-        assert_eq!(BUNDLE_CHARS, 146);
-        assert_eq!(FINGERPRINT_CHARS, FINGERPRINT.len());
-    }
-
-    #[test]
-    fn a_created_token_round_trips() {
-        let created = created_json();
-
-        let back: CreatedEnrollmentTokenResponse = serde_json::from_value(created.clone()).unwrap();
-
-        assert_eq!(serde_json::to_value(back).unwrap(), created);
-    }
 
     fn agent_json() -> serde_json::Value {
         json!({
@@ -263,15 +196,5 @@ mod tests {
         assert_eq!(AGENT_NAME_MAX_CHARS, AgentName::MAX_LEN);
         assert_eq!(AGENT_VERSION_MAX_CHARS, AgentVersion::MAX_LEN);
         assert_eq!(AGENT_CAPACITY_MAX, u32::from(AgentCapacity::MAX));
-    }
-
-    #[test]
-    fn no_dto_shows_a_secret_in_debug() {
-        let created: CreatedEnrollmentTokenResponse =
-            serde_json::from_value(created_json()).unwrap();
-
-        let shown = format!("{created:?}");
-
-        assert!(!shown.contains("BUNDLEBUNDLE"), "{shown}");
     }
 }

@@ -25,7 +25,6 @@ use fleet_api_types::accounts::{
 };
 use fleet_api_types::agents::{
     AGENT_NAME_MAX_CHARS, AGENT_VERSION_MAX_CHARS, AgentPage, AgentResponse, AgentStatus,
-    BUNDLE_CHARS, CreatedEnrollmentTokenResponse, FINGERPRINT_CHARS,
 };
 use fleet_api_types::audit::{
     AUDIT_KEY_MAX_CHARS, AUDIT_TEXT_MAX_CHARS, AuditActionName, AuditDetail, AuditEntryResponse,
@@ -128,10 +127,6 @@ fn declarations() -> BTreeMap<String, String> {
         ("ChatLineSender", ChatLineSender::decl(&config)),
         ("ChatPage", ChatPage::decl(&config)),
         ("SafeInt", SafeInt::decl(&config)),
-        (
-            "CreatedEnrollmentTokenResponse",
-            CreatedEnrollmentTokenResponse::decl(&config),
-        ),
         ("CreateGrantRequest", CreateGrantRequest::decl(&config)),
         ("GrantLevel", GrantLevel::decl(&config)),
         ("GrantPage", GrantPage::decl(&config)),
@@ -547,10 +542,6 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::grant_username("CreateGrantRequest", "username", USERNAME_MAX_CHARS)]
 #[case::granted_at("GrantResponse", "granted_at", TIMESTAMP_CHARS)]
 #[case::grant_page_next("GrantPage", "next", ID_CHARS)]
-#[case::enrollment_id("CreatedEnrollmentTokenResponse", "id", ID_CHARS)]
-#[case::enrollment_bundle("CreatedEnrollmentTokenResponse", "bundle", BUNDLE_CHARS)]
-#[case::enrollment_ca("CreatedEnrollmentTokenResponse", "ca_fingerprint", FINGERPRINT_CHARS)]
-#[case::enrollment_expires_at("CreatedEnrollmentTokenResponse", "expires_at", TIMESTAMP_CHARS)]
 #[case::agent_id("AgentResponse", "id", ID_CHARS)]
 #[case::agent_name("AgentResponse", "name", AGENT_NAME_MAX_CHARS)]
 #[case::agent_version("AgentResponse", "version", AGENT_VERSION_MAX_CHARS)]
@@ -626,7 +617,7 @@ fn a_text_field_is_capped_at_its_constant(
 }
 
 /// Every text field whose cap the cases above check.
-const CHECKED_TEXTS: [(&str, &str); 132] = [
+const CHECKED_TEXTS: [(&str, &str); 128] = [
     ("ErrorBody", "message"),
     ("ErrorBody", "request_id"),
     ("FieldError", "path"),
@@ -694,10 +685,6 @@ const CHECKED_TEXTS: [(&str, &str); 132] = [
     ("CreateGrantRequest", "username"),
     ("GrantResponse", "granted_at"),
     ("GrantPage", "next"),
-    ("CreatedEnrollmentTokenResponse", "id"),
-    ("CreatedEnrollmentTokenResponse", "bundle"),
-    ("CreatedEnrollmentTokenResponse", "ca_fingerprint"),
-    ("CreatedEnrollmentTokenResponse", "expires_at"),
     ("AgentResponse", "id"),
     ("AgentResponse", "name"),
     ("AgentResponse", "version"),

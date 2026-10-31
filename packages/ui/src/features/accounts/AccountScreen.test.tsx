@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiClient } from "../../api/ApiClient";
 import { fakeApiError, fakeWatch } from "../../api/FakeApiClient";
+import { BOTS_LIST_KEY } from "../../api/queries";
 import type { AccountResponse } from "../../generated/AccountResponse";
 import type { GrantResponse } from "../../generated/GrantResponse";
 import { formatTime } from "../../lib/time";
@@ -406,6 +407,141 @@ describe("an account's screen", () => {
 
       expect(await screen.findByLabelText("Access of carol")).toBeDefined();
     });
+  });
+
+  describe("leaving (ADR-0020, U23, S51, S86)", () => {
+    const leaver = { handlers: { accounts: async () => ({ items: [] }) } };
+
+    it.each(["view", "control"] as const)("offers Leave to a %s holder", async (level) => {
+      await accountScreen({ account: seenBelowManage(1, level), ...leaver });
+
+      expect(screen.getByRole("button", { name: "Leave" })).toBeDefined();
+    });
+
+    it("offers no Leave at Manage, whatever gave it", async () => {
+      await accountScreen({
+        account: account(1, { owner: { id: BOB_ID, username: "bob" } }),
+        ...leaver,
+      });
+
+      expect(screen.queryByRole("button", { name: "Leave" })).toBeNull();
+    });
+
+    it("asks first, saying what's lost, and Cancel sends nothing", async () => {
+      const leaveAccount = vi.fn(async () => {});
+      const app = await accountScreen({
+        account: seenBelowManage(1, "view"),
+        handlers: { leaveAccount },
+      });
+
+      await app.user.click(screen.getByRole("button", { name: "Leave" }));
+
+      expect(
+        screen.getByText(
+          "Leave AfkBot1? You lose access to it and its bot. Only someone who manages it can give it back.",
+        ),
+      ).toBeDefined();
+      await app.user.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(leaveAccount).not.toHaveBeenCalled();
+    });
+
+    it("leaves after Confirm it's you, then goes back and reads the accounts and bots again", async () => {
+      let stamped = false;
+      const leaveAccount = vi.fn(async () => {
+        if (!stamped) {
+          throw refusal(403, "step_up_required");
+        }
+      });
+      const app = await accountScreen({
+        account: seenBelowManage(1, "control"),
+        handlers: {
+          leaveAccount,
+          stepUp: async () => {
+            stamped = true;
+          },
+          accounts: async () => ({ items: [] }),
+        },
+      });
+      const accountReads = () => called(app, "account").length;
+
+      await app.user.click(screen.getByRole("button", { name: "Leave" }));
+      await app.user.click(screen.getByRole("button", { name: "Leave account" }));
+      await app.user.type(await screen.findByLabelText("Current password"), "placeholder password");
+      const before = accountReads();
+      await app.user.click(screen.getByRole("button", { name: "Continue" }));
+
+      expect(await screen.findByText("You left AfkBot1.")).toBeDefined();
+      await vi.waitFor(() => expect(app.path()).toBe("/accounts"));
+      expect(leaveAccount).toHaveBeenCalledTimes(2);
+      expect(leaveAccount).toHaveBeenLastCalledWith(ID);
+      // It went back before anything read the account again, so its 404 never flashed.
+      expect(accountReads()).toBe(before);
+      // Home isn't showing, so its list is marked to be read when it next shows.
+      expect(app.runtime.queryClient.getQueryState(BOTS_LIST_KEY)?.isInvalidated).toBe(true);
+    });
+
+    it("says access is already gone at a 404, and goes back too", async () => {
+      const app = await accountScreen({
+        account: seenBelowManage(1, "view"),
+        handlers: {
+          leaveAccount: async () => {
+            throw refusal(404, "not_found");
+          },
+          accounts: async () => ({ items: [] }),
+        },
+      });
+
+      await app.user.click(screen.getByRole("button", { name: "Leave" }));
+      await app.user.click(screen.getByRole("button", { name: "Leave account" }));
+
+      expect(await screen.findByText("You no longer have access to AfkBot1.")).toBeDefined();
+      await vi.waitFor(() => expect(app.path()).toBe("/accounts"));
+    });
+
+    it("shows another refusal where it was asked, and stays", async () => {
+      const app = await accountScreen({
+        account: seenBelowManage(1, "view"),
+        handlers: {
+          leaveAccount: async () => {
+            throw refusal(403, "forbidden", { message: "Not yours to leave." });
+          },
+        },
+      });
+
+      await app.user.click(screen.getByRole("button", { name: "Leave" }));
+      await app.user.click(screen.getByRole("button", { name: "Leave account" }));
+
+      expect((await screen.findByRole("alert")).textContent).toContain("Not yours to leave.");
+      expect(app.path()).toBe(`/accounts/${ID}`);
+    });
+  });
+
+  it("lets a Manage grantee revoke their own row, which ends on not found (S86)", async () => {
+    const self = { id: me().id, username: me().username };
+    let revoked = false;
+    const app = await accountScreen({
+      account: account(1, { owner: { id: BOB_ID, username: "bob" } }),
+      grants: [grant("manage", self)],
+      handlers: {
+        account: async () => {
+          if (revoked) {
+            throw refusal(404, "not_found");
+          }
+          return account(1, { owner: { id: BOB_ID, username: "bob" } });
+        },
+        revokeGrant: async () => {
+          revoked = true;
+        },
+      },
+    });
+
+    await app.user.click(
+      await screen.findByRole("button", { name: `Revoke ${self.username}'s access` }),
+    );
+    await app.user.click(screen.getAllByRole("button", { name: "Revoke" }).at(-1) as HTMLElement);
+
+    expect(await screen.findByText(NOT_FOUND)).toBeDefined();
+    expect(called(app, "revokeGrant")[0]?.args).toEqual([ID, self.id]);
   });
 
   it("deletes after asking and Confirm it's you, then goes back to the list", async () => {

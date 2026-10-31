@@ -4,6 +4,9 @@
 // method rejects with an `ApiError` (ApiError.ts).
 import type { AccountPage } from "../generated/AccountPage";
 import type { AccountResponse } from "../generated/AccountResponse";
+import type { AgentPage } from "../generated/AgentPage";
+import type { AgentResponse } from "../generated/AgentResponse";
+import type { AuditPage } from "../generated/AuditPage";
 import type { BotCommandResponse } from "../generated/BotCommandResponse";
 import type { BotModeRequest } from "../generated/BotModeRequest";
 import type { BotPage } from "../generated/BotPage";
@@ -23,6 +26,7 @@ import type { CreateOfflineAccountRequest } from "../generated/CreateOfflineAcco
 import type { CreateServerSettingsRequest } from "../generated/CreateServerSettingsRequest";
 import type { GrantPage } from "../generated/GrantPage";
 import type { GrantResponse } from "../generated/GrantResponse";
+import type { HeldGrantPage } from "../generated/HeldGrantPage";
 import type { InvitePage } from "../generated/InvitePage";
 import type { LinkFlowResponse } from "../generated/LinkFlowResponse";
 import type { LinkStartedResponse } from "../generated/LinkStartedResponse";
@@ -199,6 +203,28 @@ export interface ApiClient {
    * from 0; nothing is stored, and no step-up is needed (Admins and the Owner, U58, R134).
    */
   previewChatFormats(request: PreviewChatFormatsRequest): Promise<PreviewChatFormatsResponse>;
+  /**
+   * A page of the audit log, newest first (Admins and the Owner), optionally narrowed to one
+   * target's entries: its kind and ID, both or neither (ADR-0020, S89).
+   */
+  audit(
+    before?: number,
+    limit?: number,
+    targetKind?: string,
+    targetId?: string,
+  ): Promise<AuditPage>;
+  /** A page of the agents, newest first (Admins and the Owner). */
+  agents(before?: string, limit?: number): Promise<AgentPage>;
+  /** Disables an agent for good, after a step-up (Admins and the Owner). */
+  disableAgent(id: string): Promise<AgentResponse>;
+  /** Releases a disabled agent's bots, after a step-up (Admins and the Owner; ADR-0020, S49). */
+  releaseAgent(id: string): Promise<AgentResponse>;
+  /** A page of the grants a user holds, dormant ones included (the Owner; ADR-0020, S50). */
+  userGrants(id: string, before?: string, limit?: number): Promise<HeldGrantPage>;
+  /** A page of a user's accounts that a grant shares (the Owner; ADR-0020, S50). */
+  sharedAccounts(id: string, before?: string, limit?: number): Promise<AccountPage>;
+  /** Gives up the caller's own grant on a shared account, after a step-up (ADR-0020, S51). */
+  leaveAccount(id: string): Promise<void>;
 }
 
 /** A method of the API. */
@@ -265,4 +291,11 @@ export const API_METHODS = [
   "updateServerSettings",
   "deleteServerSettings",
   "previewChatFormats",
+  "audit",
+  "agents",
+  "disableAgent",
+  "releaseAgent",
+  "userGrants",
+  "sharedAccounts",
+  "leaveAccount",
 ] as const satisfies readonly ApiMethod[];

@@ -8,6 +8,9 @@ import type { ApiClient } from "@afkfleet/ui";
 import { toApiError } from "@afkfleet/ui";
 import type { AccountPage } from "@afkfleet/ui/generated/AccountPage";
 import type { AccountResponse } from "@afkfleet/ui/generated/AccountResponse";
+import type { AgentPage } from "@afkfleet/ui/generated/AgentPage";
+import type { AgentResponse } from "@afkfleet/ui/generated/AgentResponse";
+import type { AuditPage } from "@afkfleet/ui/generated/AuditPage";
 import type { BotCommandResponse } from "@afkfleet/ui/generated/BotCommandResponse";
 import type { BotModeRequest } from "@afkfleet/ui/generated/BotModeRequest";
 import type { BotPage } from "@afkfleet/ui/generated/BotPage";
@@ -27,6 +30,7 @@ import type { CreateOfflineAccountRequest } from "@afkfleet/ui/generated/CreateO
 import type { CreateServerSettingsRequest } from "@afkfleet/ui/generated/CreateServerSettingsRequest";
 import type { GrantPage } from "@afkfleet/ui/generated/GrantPage";
 import type { GrantResponse } from "@afkfleet/ui/generated/GrantResponse";
+import type { HeldGrantPage } from "@afkfleet/ui/generated/HeldGrantPage";
 import type { InvitePage } from "@afkfleet/ui/generated/InvitePage";
 import type { LinkFlowResponse } from "@afkfleet/ui/generated/LinkFlowResponse";
 import type { LinkStartedResponse } from "@afkfleet/ui/generated/LinkStartedResponse";
@@ -287,6 +291,39 @@ export class TauriApiClient implements ApiClient {
 
   previewChatFormats(request: PreviewChatFormatsRequest): Promise<PreviewChatFormatsResponse> {
     return this.#call("preview_chat_formats", { request });
+  }
+
+  audit(
+    before?: number,
+    limit?: number,
+    targetKind?: string,
+    targetId?: string,
+  ): Promise<AuditPage> {
+    return this.#call("audit", { before, limit, targetKind, targetId });
+  }
+
+  agents(before?: string, limit?: number): Promise<AgentPage> {
+    return this.#call("agents", { before, limit });
+  }
+
+  disableAgent(id: string): Promise<AgentResponse> {
+    return this.#call("disable_agent", { id });
+  }
+
+  releaseAgent(id: string): Promise<AgentResponse> {
+    return this.#call("release_agent", { id });
+  }
+
+  userGrants(id: string, before?: string, limit?: number): Promise<HeldGrantPage> {
+    return this.#call("user_grants", { id, before, limit });
+  }
+
+  sharedAccounts(id: string, before?: string, limit?: number): Promise<AccountPage> {
+    return this.#call("shared_accounts", { id, before, limit });
+  }
+
+  leaveAccount(id: string): Promise<void> {
+    return this.#call("leave_account", { id });
   }
 
   account(id: string): Promise<AccountResponse> {

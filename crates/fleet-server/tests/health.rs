@@ -212,7 +212,6 @@ async fn app(db: &Database) -> Router {
         link_flows: idle_link_flows(db),
         accounts: idle_accounts(db),
         grants: idle_grants(db),
-        enrollment_tokens: None,
         agents: idle_agents(db),
         bots: idle_bots(db),
         modes: idle_modes(db),

@@ -5,6 +5,10 @@
 // owner's role, which a viewer may not see: the screens offer Approve and Refuse only for the
 // links `accountsAwaitingApproval` lists. The test reads fleet-core's authorization matrix
 // itself, so a rule change on the server fails it until this file follows.
+//
+// Leaving is offered only at View and Control, where the level alone proves a grant is held
+// (ADR-0020, S86): Manage may be a grant or what a role or ownership gives. Whoever holds a real
+// Manage grant revokes their own row in "Who has access".
 import type { AccountResponse } from "../../generated/AccountResponse";
 import type { GrantLevel } from "../../generated/GrantLevel";
 
@@ -16,6 +20,8 @@ export interface AccountActions {
   readonly linkAgain: boolean;
   /** Delete it. */
   readonly delete: boolean;
+  /** Give up their own grant on it. */
+  readonly leave: boolean;
 }
 
 /** Whether `level` is Manage; an unknown level is not. */
@@ -35,5 +41,6 @@ export function accountActions(
     share: manage,
     linkAgain: manage && account.kind === "microsoft" && LINKABLE_AGAIN.has(account.status),
     delete: manage,
+    leave: account.level === "view" || account.level === "control",
   };
 }

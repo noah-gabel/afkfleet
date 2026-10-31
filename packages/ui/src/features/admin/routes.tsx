@@ -4,6 +4,8 @@ import { createRoute } from "@tanstack/react-router";
 
 import { requireAdmin } from "../shell/guards";
 import { appRoute } from "../shell/routes";
+import { AgentsScreen } from "./components/AgentsScreen";
+import { GrantsReviewScreen } from "./components/GrantsReviewScreen";
 import { InvitesScreen } from "./components/InvitesScreen";
 import { UsersScreen } from "./components/UsersScreen";
 
@@ -26,4 +28,21 @@ export const invitesRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: "invites",
   component: InvitesScreen,
+});
+
+/** `/admin/agents`. */
+export const agentsRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: "agents",
+  component: AgentsScreen,
+});
+
+/** `/admin/users/$id/grants`: the Owner's review of a user's grants (ADR-0020, U79). */
+export const grantsReviewRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: "users/$id/grants",
+  component: function GrantsReviewRoute() {
+    const { id } = grantsReviewRoute.useParams();
+    return <GrantsReviewScreen key={id} id={id} />;
+  },
 });

@@ -11,7 +11,7 @@ use core::fmt;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use fleet_core::id::{AgentId, EnrollmentTokenId, UserId};
+use fleet_core::id::{AgentId, EnrollmentTokenId};
 
 use super::store::StoreError;
 use super::tokens::TokenHash;
@@ -23,8 +23,6 @@ pub struct EnrollmentToken {
     pub id: EnrollmentTokenId,
     /// SHA-256 of the token's text.
     pub token_hash: TokenHash,
-    /// The Owner who created it; `None` when the server's host operator did.
-    pub created_by: Option<UserId>,
     /// When it was created.
     pub created_at: DateTime<Utc>,
     /// When it expires.
@@ -42,8 +40,6 @@ pub struct NewEnrollmentToken {
     pub id: EnrollmentTokenId,
     /// SHA-256 of the token's text.
     pub token_hash: TokenHash,
-    /// The Owner who creates it; `None` for the server's host operator.
-    pub created_by: Option<UserId>,
     /// When it's created.
     pub created_at: DateTime<Utc>,
     /// When it expires: after `created_at`.
@@ -69,8 +65,8 @@ pub trait EnrollmentTokenWrites: Send {
     /// Inserts `token`.
     ///
     /// # Errors
-    /// [`StoreError`]: a creator that doesn't exist, a hash stored already,
-    /// or an expiry that isn't after the creation.
+    /// [`StoreError`]: a hash stored already, or an expiry that isn't after
+    /// the creation.
     async fn insert(&mut self, token: &NewEnrollmentToken) -> Result<(), StoreError>;
 
     /// The token whose text hashes to `hash`, read in this transaction.

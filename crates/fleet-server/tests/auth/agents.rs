@@ -311,14 +311,7 @@ async fn disabling_an_agent_that_never_connected_and_then_again_records_once(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
-    let setup = setup_with(
-        options,
-        Options {
-            control_plane: true,
-            ..Options::default()
-        },
-    )
-    .await;
+    let setup = setup(options).await;
     let owner = stepped_up(&setup, 3, "owner", Role::Owner).await;
     let agent = setup.agent(1).await;
 
@@ -670,4 +663,39 @@ async fn without_credentials_a_release_is_401(
     let seen = setup.post(&release_path(agent), None, None).await;
 
     assert_eq!(seen.status, 401, "{}", seen.text);
+}
+
+/// Tokens come only from the server's host (ADR-0020, U76, S88): a
+/// stepped-up Owner and an anonymous caller get what any path nobody
+/// registered gets.
+#[sqlx::test(migrations = false)]
+async fn the_enrollment_route_answers_as_an_unknown_path(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let owner = setup.person(2, "owner", Role::Owner).await;
+    setup.stamp(owner.session).await;
+    let path = format!("{AGENTS}/enrollment-tokens");
+    let unknown = format!("{AGENTS}/no-such-route");
+
+    let by_owner = setup.post(&path, Some(&owner.token), None).await;
+    let by_nobody = setup.post(&path, None, None).await;
+    let elsewhere_by_owner = setup.post(&unknown, Some(&owner.token), None).await;
+    let elsewhere_by_nobody = setup.post(&unknown, None, None).await;
+
+    for (seen, elsewhere) in [
+        (&by_owner, &elsewhere_by_owner),
+        (&by_nobody, &elsewhere_by_nobody),
+    ] {
+        assert_eq!(seen.status, elsewhere.status, "{}", seen.text);
+        assert_eq!(seen.code(), elsewhere.code());
+    }
+    assert!(
+        !setup
+            .audit()
+            .await
+            .iter()
+            .any(|entry| entry.action == AuditAction::ENROLLMENT_TOKEN_CREATE)
+    );
 }

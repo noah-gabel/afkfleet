@@ -23,7 +23,6 @@ struct TokenRow {
     rowid: i64,
     id: String,
     token_hash: Vec<u8>,
-    created_by: Option<String>,
     created_at: String,
     expires_at: String,
     used_at: Option<String>,
@@ -50,7 +49,7 @@ where
     sqlx::query_as!(
         TokenRow,
         r#"SELECT rowid AS "rowid!: i64", id AS "id!", token_hash AS "token_hash!: Vec<u8>",
-                  created_by AS "created_by?", created_at AS "created_at!",
+                  created_at AS "created_at!",
                   expires_at AS "expires_at!", used_at AS "used_at?", agent_id AS "agent_id?"
            FROM enrollment_tokens WHERE token_hash = ?"#,
         hash
@@ -69,15 +68,13 @@ pub(super) async fn insert(
 ) -> Result<(), StoreError> {
     let id = id_text(token.id);
     let hash = token.token_hash.as_bytes().as_slice();
-    let created_by = token.created_by.map(id_text);
     let created_at = stored_time(token.created_at, "created_at")?;
     let expires_at = stored_time(token.expires_at, "expires_at")?;
     sqlx::query!(
-        "INSERT INTO enrollment_tokens (id, token_hash, created_by, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO enrollment_tokens (id, token_hash, created_at, expires_at)
+         VALUES (?, ?, ?, ?)",
         id,
         hash,
-        created_by,
         created_at,
         expires_at
     )
@@ -141,10 +138,6 @@ fn token_from_row(row: TokenRow) -> Result<EnrollmentToken, StoreError> {
     };
     let token_hash =
         TokenHash::try_from(row.token_hash.as_slice()).map_err(|_| corrupt("token_hash"))?;
-    let created_by = row
-        .created_by
-        .map(|id| parse_id(&id).ok_or_else(|| corrupt("created_by")))
-        .transpose()?;
     let used_at = row
         .used_at
         .map(|at| parse_time(&at).ok_or_else(|| corrupt("used_at")))
@@ -156,7 +149,6 @@ fn token_from_row(row: TokenRow) -> Result<EnrollmentToken, StoreError> {
     Ok(EnrollmentToken {
         id: parse_id(&row.id).ok_or_else(|| corrupt("id"))?,
         token_hash,
-        created_by,
         created_at: parse_time(&row.created_at).ok_or_else(|| corrupt("created_at"))?,
         expires_at: parse_time(&row.expires_at).ok_or_else(|| corrupt("expires_at"))?,
         used_at,

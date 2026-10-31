@@ -663,6 +663,8 @@ async fn audit<S: SessionStore>(
         .audit(&AuditPageQuery {
             before,
             limit: None,
+            target_kind: None,
+            target_id: None,
         })
         .await?;
     for line in audit_lines_of(&page) {

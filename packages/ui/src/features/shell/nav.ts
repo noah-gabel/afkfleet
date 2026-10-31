@@ -16,7 +16,9 @@ export interface NavItem {
     | "/profile"
     | "/admin/users"
     | "/admin/invites"
-    | "/admin/servers";
+    | "/admin/servers"
+    | "/admin/agents"
+    | "/admin/audit";
   readonly label: string;
   readonly privilege: Privilege;
 }
@@ -31,6 +33,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { to: "/admin/users", label: "Users", privilege: "admin" },
   { to: "/admin/invites", label: "Invites", privilege: "admin" },
   { to: "/admin/servers", label: "Minecraft servers", privilege: "admin" },
+  { to: "/admin/agents", label: "Agents", privilege: "admin" },
+  { to: "/admin/audit", label: "Audit log", privilege: "admin" },
 ];
 
 /** The privilege of `role`; an unknown role is a Member's. */

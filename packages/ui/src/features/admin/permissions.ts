@@ -12,8 +12,12 @@
 // - The Minecraft servers' settings are Admins' and the Owner's to read and, after a step-up,
 //   to write (ADR-0020, S75): the gate of their screens, under the admin layout's
 //   `requireAdmin`.
+// - The audit log and the agents are Admins' and the Owner's: reading both, disabling an agent
+//   and releasing a disabled one's bots (ADR-0020, R172), under the admin layout's gate. Enrolling
+//   an agent is nobody's here: only the server's host creates a token (U76).
 // A role this app doesn't know (the server's `UserRole` is open) gets nothing, and nothing
 // is offered on one.
+import type { AgentResponse } from "../../generated/AgentResponse";
 import type { InviteResponse } from "../../generated/InviteResponse";
 import type { UserRole } from "../../generated/UserRole";
 
@@ -94,6 +98,47 @@ export interface ServerSettingsAccess {
 export function serverSettingsAccess(role: UserRole): ServerSettingsAccess {
   const admin = role === "admin" || role === "owner";
   return { view: admin, configure: admin };
+}
+
+/** What a role may do fleet-wide with the agents and the audit log. */
+export interface FleetAccess {
+  /** Reading the audit log (`ViewAuditLog`). */
+  readonly viewAudit: boolean;
+  /** Reading the agents (`ViewAgents`). */
+  readonly viewAgents: boolean;
+  /** Disabling an agent (`DisableAgent`). */
+  readonly disableAgent: boolean;
+  /** Releasing a disabled agent's bots (`ReleaseAgent`). */
+  readonly releaseAgent: boolean;
+}
+
+/** What `role` may do with the agents and the audit log: Admins and the Owner everything. */
+export function fleetAccess(role: UserRole): FleetAccess {
+  const admin = role === "admin" || role === "owner";
+  return { viewAudit: admin, viewAgents: admin, disableAgent: admin, releaseAgent: admin };
+}
+
+/** What a role may do to one agent. */
+export interface AgentActions {
+  /** Disabling it, for good. */
+  readonly disable: boolean;
+  /** Releasing the bots it holds. */
+  readonly release: boolean;
+}
+
+/**
+ * What `role` may do to `agent`, from `enabled` and `bots`, never the open `status`: an enabled
+ * agent can be disabled, and a disabled one holding bots can have them released (R172).
+ */
+export function agentActions(
+  agent: Pick<AgentResponse, "enabled" | "bots">,
+  role: UserRole,
+): AgentActions {
+  const access = fleetAccess(role);
+  return {
+    disable: access.disableAgent && agent.enabled,
+    release: access.releaseAgent && !agent.enabled && agent.bots > 0,
+  };
 }
 
 /** Whether `role` may revoke `invite` now: only a pending one changes. */

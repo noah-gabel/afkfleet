@@ -442,3 +442,284 @@ async fn reading_the_audit_log_writes_nothing_and_tells_the_sockets_nothing(
     assert_eq!(*setup.db.commits().borrow(), commits);
     assert!(bus.try_recv().is_err());
 }
+
+// The filter by target (ADR-0020, U78, S89).
+
+impl Setup {
+    /// An entry about `target`, recorded `millis` after `T0`.
+    async fn about(&self, target: AuditTarget, millis: i64) -> i64 {
+        self.record(
+            NewAuditEntry::new(
+                at(T0 + millis),
+                AuditAction::BOT_START,
+                AuditOutcome::Success,
+            )
+            .target(target),
+        )
+        .await
+    }
+}
+
+/// Bot `n` as a target.
+fn bot(n: u8) -> AuditTarget {
+    AuditTarget::Bot(BotId::new_v7(at(T0), [n; 10]).unwrap())
+}
+
+/// The query that narrows the log to `target`.
+fn only(target: AuditTarget) -> String {
+    format!("target_kind={}&target_id={}", target.kind(), target.id())
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_filter_lists_only_that_targets_entries_and_chains_its_pages(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+    let oldest = setup.about(bot(5), 100).await;
+    setup.about(bot(6), 200).await;
+    let middle = setup.about(bot(5), 300).await;
+    setup.about(bot(6), 400).await;
+    let newest = setup.about(bot(5), 500).await;
+    let query = only(bot(5));
+
+    let first = setup
+        .get(&format!("{AUDIT}?{query}&limit=2"), Some(&admin.token))
+        .await;
+    assert_eq!(first.status, 200, "{}", first.text);
+    let before = first.body["next"].as_i64().unwrap();
+    let second = setup
+        .get(
+            &format!("{AUDIT}?{query}&limit=2&before={before}"),
+            Some(&admin.token),
+        )
+        .await;
+
+    assert_eq!(ids(&first.body), [newest, middle]);
+    assert_eq!(before, middle);
+    assert_eq!(second.status, 200, "{}", second.text);
+    assert_eq!(ids(&second.body), [oldest]);
+    assert_eq!(second.body.get("next"), None);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_full_last_filtered_page_names_no_next_though_other_targets_are_older(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+    setup.about(bot(6), 100).await;
+    let only_one = setup.about(bot(5), 200).await;
+
+    let seen = setup
+        .get(
+            &format!("{AUDIT}?{}&limit=1", only(bot(5))),
+            Some(&admin.token),
+        )
+        .await;
+
+    assert_eq!(seen.status, 200, "{}", seen.text);
+    assert_eq!(ids(&seen.body), [only_one]);
+    assert_eq!(seen.body.get("next"), None, "{}", seen.text);
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_unreadable_entry_under_the_target_lists_by_id_and_another_targets_never_appears(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    const BROKEN_AT: &str = "2027-13-45T08:00:00.000Z";
+    let setup = setup(options).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+    let oldest = setup.about(bot(5), 100).await;
+    let broken = setup.about(bot(5), 200).await;
+    let other_broken = setup.about(bot(6), 300).await;
+    let newest = setup.about(bot(5), 400).await;
+    for id in [broken, other_broken] {
+        sqlx::query!("UPDATE audit_log SET at = ? WHERE id = ?", BROKEN_AT, id)
+            .execute(setup.db.write_pool())
+            .await
+            .unwrap();
+    }
+
+    let seen = setup
+        .get(
+            &format!("{AUDIT}?{}&limit=3", only(bot(5))),
+            Some(&admin.token),
+        )
+        .await;
+
+    assert_eq!(seen.status, 200, "{}", seen.text);
+    assert_eq!(ids(&seen.body), [newest, oldest]);
+    assert_eq!(seen.body["unreadable"], json!([broken]));
+    assert_eq!(seen.body.get("next"), None, "{}", seen.text);
+}
+
+/// The filter reads the target's columns as stored: a row whose target was
+/// changed leaves the filtered view, and the full log still shows it (S89).
+#[sqlx::test(migrations = false)]
+async fn a_row_whose_target_was_changed_leaves_the_filter_and_stays_in_the_full_log(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+    let changed = setup.about(bot(5), 100).await;
+    let other = bot(6).id().to_string();
+    sqlx::query!(
+        "UPDATE audit_log SET target_id = ? WHERE id = ?",
+        other,
+        changed
+    )
+    .execute(setup.db.write_pool())
+    .await
+    .unwrap();
+
+    let filtered = setup
+        .get(&format!("{AUDIT}?{}", only(bot(5))), Some(&admin.token))
+        .await;
+    let full = setup.get(AUDIT, Some(&admin.token)).await;
+
+    assert_eq!(filtered.status, 200, "{}", filtered.text);
+    assert_eq!(ids(&filtered.body), Vec::<i64>::new());
+    assert!(ids(&full.body).contains(&changed));
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_kind_this_version_doesnt_know_filters_by_its_text(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    const PLANET: &str = "018bcfe5-6800-7cdc-8dcd-cdcdcdcd0009";
+    let setup = setup(options).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+    sqlx::query!(
+        "INSERT INTO audit_log (at, action, target_type, target_id, outcome)
+         VALUES ('2027-01-15T08:00:05.000Z', 'agent.teleport', 'planet', ?, 'success')",
+        PLANET
+    )
+    .execute(setup.db.write_pool())
+    .await
+    .unwrap();
+
+    let seen = setup
+        .get(
+            &format!("{AUDIT}?target_kind=planet&target_id={PLANET}"),
+            Some(&admin.token),
+        )
+        .await;
+
+    assert_eq!(seen.status, 200, "{}", seen.text);
+    assert_eq!(seen.body["items"].as_array().unwrap().len(), 1);
+    assert_eq!(seen.body["items"][0]["target"]["kind"], json!("planet"));
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_target_query_half_given_or_malformed_is_422(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    const ID: &str = "018bcfe5-6800-7cdc-8dcd-cdcdcdcd0009";
+    let setup = setup(options).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+    let upper = ID.to_uppercase();
+    let simple = ID.replace('-', "");
+
+    let mut seen = Vec::new();
+    for query in [
+        "target_kind=bot".to_owned(),
+        format!("target_id={ID}"),
+        format!("target_kind=&target_id={ID}"),
+        format!("target_kind=Not-A-Kind&target_id={ID}"),
+        format!("target_kind={}&target_id={ID}", "k".repeat(65)),
+        "target_kind=bot&target_id=".to_owned(),
+        "target_kind=bot&target_id=nonsense".to_owned(),
+        format!("target_kind=bot&target_id={upper}"),
+        format!("target_kind=bot&target_id={simple}"),
+    ] {
+        seen.push(
+            setup
+                .get(&format!("{AUDIT}?{query}"), Some(&admin.token))
+                .await,
+        );
+    }
+    let twice = setup
+        .get(
+            &format!("{AUDIT}?target_kind=bot&target_kind=bot&target_id={ID}"),
+            Some(&admin.token),
+        )
+        .await;
+
+    for one in &seen {
+        assert_eq!(one.status, 422, "{}", one.text);
+    }
+    assert_eq!(twice.status, 400, "{}", twice.text);
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_unknown_target_is_an_empty_200(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+
+    let seen = setup
+        .get(&format!("{AUDIT}?{}", only(bot(9))), Some(&admin.token))
+        .await;
+
+    assert_eq!(seen.status, 200, "{}", seen.text);
+    assert_eq!(
+        seen.body,
+        json!({ "items": [], "unreadable": [] }),
+        "{}",
+        seen.text
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_member_may_not_filter_the_audit_log_and_without_credentials_it_is_401(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let member = setup.person(2, "member", Role::Member).await;
+    let path = format!("{AUDIT}?{}", only(bot(5)));
+
+    let refused = setup.get(&path, Some(&member.token)).await;
+    let nobody = setup.get(&path, None).await;
+
+    assert_eq!(refused.status, 403, "{}", refused.text);
+    assert_eq!(nobody.status, 401, "{}", nobody.text);
+}
+
+/// 0007's index would read and sort all of a target's rows for each page.
+#[sqlx::test(migrations = false)]
+async fn a_targets_page_walks_its_index_without_sorting(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+
+    let plan = sqlx::query!(
+        "EXPLAIN QUERY PLAN
+         SELECT id, at, actor_user_id, actor_ip, action, target_type, target_id, outcome,
+                metadata_json
+         FROM audit_log WHERE target_type = ? AND target_id = ? AND id < ?
+         ORDER BY id DESC LIMIT ?",
+        "bot",
+        "id",
+        1_i64,
+        1_i64
+    )
+    .fetch_all(setup.db.write_pool())
+    .await
+    .unwrap();
+
+    let details: Vec<String> = plan.into_iter().filter_map(|row| row.detail).collect();
+    assert_eq!(details.len(), 1, "{details:?}");
+    assert!(details[0].contains("audit_log_target_id"), "{details:?}");
+    assert!(!details[0].contains("TEMP B-TREE"), "{details:?}");
+}
