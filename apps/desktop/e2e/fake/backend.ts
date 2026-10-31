@@ -33,7 +33,9 @@ import type { AccountPage } from "@afkfleet/ui/generated/AccountPage";
 import type { AccountResponse } from "@afkfleet/ui/generated/AccountResponse";
 import type { AccountStatus } from "@afkfleet/ui/generated/AccountStatus";
 import type { AgentPage } from "@afkfleet/ui/generated/AgentPage";
+import type { AgentResponse } from "@afkfleet/ui/generated/AgentResponse";
 import type { ApiErrorDetails } from "@afkfleet/ui/generated/ApiErrorDetails";
+import type { AuditEntryResponse } from "@afkfleet/ui/generated/AuditEntryResponse";
 import type { AuditPage } from "@afkfleet/ui/generated/AuditPage";
 import type { BotCommandResponse } from "@afkfleet/ui/generated/BotCommandResponse";
 import type { BotPage } from "@afkfleet/ui/generated/BotPage";
@@ -52,6 +54,7 @@ import type { GrantLevel } from "@afkfleet/ui/generated/GrantLevel";
 import type { GrantPage } from "@afkfleet/ui/generated/GrantPage";
 import type { GrantResponse } from "@afkfleet/ui/generated/GrantResponse";
 import type { HeldGrantPage } from "@afkfleet/ui/generated/HeldGrantPage";
+import type { HeldGrantResponse } from "@afkfleet/ui/generated/HeldGrantResponse";
 import type { InvitePage } from "@afkfleet/ui/generated/InvitePage";
 import type { InviteResponse } from "@afkfleet/ui/generated/InviteResponse";
 import type { LinkFlowResponse } from "@afkfleet/ui/generated/LinkFlowResponse";
@@ -184,6 +187,7 @@ const MESSAGES: Partial<Record<CommandErrorCode, string>> = {
 
 /** The server's messages (fleet-api-types' `ErrorCode::message`). */
 const API_MESSAGES: Partial<Record<ErrorCode, string>> = {
+  agent_not_disabled: "Only a disabled agent's bots can be released. Disable the agent first.",
   invalid_credentials: "The username, password or code is wrong.",
   forbidden: "You don't have permission to do this.",
   step_up_required: "Enter your password again to do this.",
@@ -695,6 +699,12 @@ export class FakeBackend {
   readonly #usedByOthers = new Set<string>();
   /** The servers' settings, newest first. */
   #settings: Settings[] = [];
+  /** The agents, newest first. */
+  readonly #agents: AgentResponse[] = [];
+  /** The audit log, oldest first, and the IDs of its rows that don't read back. */
+  readonly #audit: AuditEntryResponse[] = [];
+  readonly #unreadable: number[] = [];
+  #auditEntries = 0;
   #flow: Flow | null = null;
   #opened = 0;
   #accountNames = 0;
@@ -888,21 +898,209 @@ export class FakeBackend {
           return formatsRefused(formats) ?? value(preview(formats, String(request.line ?? "")));
         });
       case "audit":
-        return this.#admin(() => value({ items: [], unreadable: [] } satisfies AuditPage));
+        return this.#admin(() => this.#auditPage(args));
       case "agents":
-        return this.#admin(() => value({ items: [] } satisfies AgentPage));
+        return this.#admin(() => value({ items: [...this.#agents] } satisfies AgentPage));
       case "disable_agent":
+        return this.#steppedUp((session) =>
+          this.#admin(() => this.#disableAgent(session, String(args.id))),
+        );
       case "release_agent":
-        return this.#steppedUp(() => this.#admin(() => api(404, "not_found")));
+        return this.#steppedUp((session) =>
+          this.#admin(() => this.#releaseAgent(session, String(args.id))),
+        );
       case "user_grants":
-        return this.#admin(() => value({ items: [] } satisfies HeldGrantPage));
+        return this.#reviewOf(args.id, (user) =>
+          value({
+            items: this.#accounts
+              .filter((account) => account.grants.has(user.id))
+              .map((account) => this.#heldGrant(user, account)),
+          } satisfies HeldGrantPage),
+        );
       case "shared_accounts":
-        return this.#admin(() => value({ items: [] } satisfies AccountPage));
+        return this.#reviewOf(args.id, (user, session) =>
+          value({
+            items: this.#accounts
+              .filter((account) => account.ownerId === user.id && account.grants.size > 0)
+              .map((account) => this.#accountResponse(session.user, account)),
+          } satisfies AccountPage),
+        );
       case "leave_account":
-        return this.#steppedUp(() => api(404, "not_found"));
+        return this.#steppedUp((session) => this.#leave(session, String(args.id)));
       default:
         return this.#accountCommand(command as Command, args);
     }
+  }
+
+  /** An agent named `name`, enabled and online unless `changes` say otherwise; newest first. */
+  addAgent(name: string, changes: Partial<AgentResponse> = {}): string {
+    const agentId = id(this.#next());
+    this.#agents.unshift({
+      id: agentId,
+      name,
+      enabled: true,
+      status: "online",
+      bots: 0,
+      capacity: 10,
+      version: "0.1.0",
+      last_seen_at: "2026-10-13T12:00:00.000Z",
+      not_after: "2026-12-13T12:00:00.000Z",
+      created_at: "2026-10-13T11:00:00.000Z",
+      ...changes,
+    });
+    return agentId;
+  }
+
+  /** An audit entry as the server would list it, its ID the next one. */
+  addAuditEntry(entry: Partial<Omit<AuditEntryResponse, "id">>): number {
+    this.#auditEntries += 1;
+    this.#audit.push({
+      id: this.#auditEntries,
+      at: "2026-10-13T12:00:00.000Z",
+      action: "auth.login",
+      outcome: "success",
+      metadata: [],
+      ...entry,
+    });
+    return this.#auditEntries;
+  }
+
+  /** The next audit ID as a row that doesn't read back (ADR-0020, S52). */
+  addUnreadableEntry(): number {
+    this.#auditEntries += 1;
+    this.#unreadable.push(this.#auditEntries);
+    return this.#auditEntries;
+  }
+
+  /** Gives `username` a grant at `level` on `accountId`, from its owner. */
+  share(accountId: string, username: string, level: GrantLevel): void {
+    const account = this.#accounts.find((one) => one.id === accountId);
+    if (account === undefined) {
+      throw new Error(`the fake has no account ${accountId}`);
+    }
+    account.grants.set(this.#user(username).id, { level, by: account.ownerId });
+  }
+
+  /** One page of the audit log, newest first, narrowed to its target (ADR-0020, S89). */
+  #auditPage(args: Record<string, unknown>): Outcome {
+    const kind = args.targetKind;
+    const target = args.targetId;
+    const before = typeof args.before === "number" ? args.before : Number.MAX_SAFE_INTEGER;
+    const limit = typeof args.limit === "number" ? args.limit : 50;
+    const entries = this.#audit
+      .filter(
+        (entry) =>
+          kind === undefined || (entry.target?.kind === kind && entry.target.id === target),
+      )
+      .map((entry) => entry.id);
+    const ids = [...entries, ...(kind === undefined ? this.#unreadable : [])]
+      .filter((one) => one < before)
+      .sort((a, b) => b - a);
+    const page = ids.slice(0, limit);
+    const last = page.at(-1);
+    return value({
+      items: page.flatMap((one) => this.#audit.filter((entry) => entry.id === one)),
+      unreadable: page.filter((one) => this.#unreadable.includes(one)),
+      ...(ids.length > limit && last !== undefined ? { next: last } : {}),
+    } satisfies AuditPage);
+  }
+
+  #disableAgent(session: Session, agentId: string): Outcome {
+    const agent = this.#agents.find((one) => one.id === agentId);
+    if (agent === undefined) {
+      return api(404, "not_found");
+    }
+    if (agent.enabled) {
+      agent.enabled = false;
+      agent.status = "disabled";
+      this.addAuditEntry({
+        actor: session.user.id,
+        ip: "192.0.2.10",
+        action: "agent.disable",
+        target: { kind: "agent", id: agent.id },
+        metadata: [
+          { key: "name", text: agent.name },
+          { key: "via", text: "http" },
+        ],
+      });
+    }
+    return value({ ...agent });
+  }
+
+  #releaseAgent(session: Session, agentId: string): Outcome {
+    const agent = this.#agents.find((one) => one.id === agentId);
+    if (agent === undefined) {
+      return api(404, "not_found");
+    }
+    if (agent.enabled) {
+      return api(409, "agent_not_disabled");
+    }
+    if (agent.bots > 0) {
+      this.addAuditEntry({
+        actor: session.user.id,
+        ip: "192.0.2.10",
+        action: "agent.release",
+        target: { kind: "agent", id: agent.id },
+        metadata: [
+          { key: "count", int: agent.bots },
+          { key: "via", text: "http" },
+        ],
+      });
+      agent.bots = 0;
+    }
+    return value({ ...agent });
+  }
+
+  /** The Owner's review of the user `target` (ADR-0020, S50). */
+  #reviewOf(target: unknown, then: (user: User, session: Session) => Outcome): Outcome {
+    return this.#signedIn((session) => {
+      if (session.user.role !== "owner") {
+        return api(session.user.role === "admin" ? 403 : 404, "forbidden");
+      }
+      const user = this.#users.find((one) => one.id === target);
+      return user === undefined ? api(404, "not_found") : then(user, session);
+    });
+  }
+
+  #heldGrant(user: User, account: Account): HeldGrantResponse {
+    const grant = account.grants.get(user.id);
+    const label = (userId: string | undefined) => ({
+      id: userId ?? "",
+      username: this.#users.find((one) => one.id === userId)?.username ?? "",
+    });
+    return {
+      account: { id: account.id, name: account.name },
+      owner: label(account.ownerId),
+      level: grant?.level ?? "view",
+      granted_by: label(grant?.by),
+      granted_at: "2026-10-13T12:30:00.000Z",
+      dormant: this.#implicitManage(user, account),
+    };
+  }
+
+  /** Gives up the caller's grant on `accountId` (ADR-0020, S51). */
+  #leave(session: Session, accountId: string): Outcome {
+    const account = this.#accounts.find((one) => one.id === accountId);
+    if (account === undefined || this.#level(session.user, account) === null) {
+      return api(404, "not_found");
+    }
+    if (this.#implicitManage(session.user, account)) {
+      return api(403, "forbidden");
+    }
+    const grant = account.grants.get(session.user.id);
+    account.grants.delete(session.user.id);
+    this.addAuditEntry({
+      actor: session.user.id,
+      ip: "192.0.2.10",
+      action: "grant.revoke",
+      target: { kind: "account", id: account.id },
+      metadata: [
+        { key: "grantee", text: session.user.id },
+        { key: "level", text: grant?.level ?? "view" },
+        { key: "via", text: "leave" },
+      ],
+    });
+    return value();
   }
 
   /** A new watch: held until a newer one starts or the session ends, which stops the older. */
@@ -1222,17 +1420,21 @@ export class FakeBackend {
     return account;
   }
 
-  /** What `user` holds on `account`: their grant or their implicit Manage, or nothing. */
-  #level(user: User, account: Account): GrantLevel | null {
+  /** Whether `user` manages `account` by owning it or through their role. */
+  #implicitManage(user: User, account: Account): boolean {
     const owner = this.#users.find((one) => one.id === account.ownerId);
-    if (
+    return (
       account.ownerId === user.id ||
       user.role === "owner" ||
       (user.role === "admin" && owner?.role === "member")
-    ) {
-      return "manage";
-    }
-    return account.grants.get(user.id)?.level ?? null;
+    );
+  }
+
+  /** What `user` holds on `account`: their grant or their implicit Manage, or nothing. */
+  #level(user: User, account: Account): GrantLevel | null {
+    return this.#implicitManage(user, account)
+      ? "manage"
+      : (account.grants.get(user.id)?.level ?? null);
   }
 
   /** Whether `user` manages a private mode of `owner`: their own, the Owner, or an Admin's Member. */
