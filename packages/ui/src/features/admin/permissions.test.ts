@@ -10,6 +10,7 @@ import { role, table } from "../../test/authzMatrix";
 import { privilegeOf } from "../shell/nav";
 import {
   type Actor,
+  agentActions,
   canRevoke,
   canRevokeRole,
   fleetAccess,
@@ -177,6 +178,29 @@ describe("fleetAccess", () => {
       viewAgents: false,
       disableAgent: false,
       releaseAgent: false,
+    });
+  });
+});
+
+describe("agentActions", () => {
+  it.each([
+    ["an enabled agent", true, 0, { disable: true, release: false }],
+    ["an enabled agent with bots", true, 3, { disable: true, release: false }],
+    ["a disabled agent with bots", false, 1, { disable: false, release: true }],
+    ["a disabled agent without bots", false, 0, { disable: false, release: false }],
+  ])("offers on %s what the server would allow", (_name, enabled, bots, offered) => {
+    expect(agentActions({ enabled, bots }, "admin")).toEqual(offered);
+    expect(agentActions({ enabled, bots }, "owner")).toEqual(offered);
+  });
+
+  it.each<UserRole>(["member", "superuser" as UserRole])("offers %s nothing", (actor) => {
+    expect(agentActions({ enabled: true, bots: 1 }, actor)).toEqual({
+      disable: false,
+      release: false,
+    });
+    expect(agentActions({ enabled: false, bots: 1 }, actor)).toEqual({
+      disable: false,
+      release: false,
     });
   });
 });

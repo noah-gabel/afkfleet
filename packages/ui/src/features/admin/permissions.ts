@@ -17,6 +17,7 @@
 //   an agent is nobody's here: only the server's host creates a token (U76).
 // A role this app doesn't know (the server's `UserRole` is open) gets nothing, and nothing
 // is offered on one.
+import type { AgentResponse } from "../../generated/AgentResponse";
 import type { InviteResponse } from "../../generated/InviteResponse";
 import type { UserRole } from "../../generated/UserRole";
 
@@ -115,6 +116,29 @@ export interface FleetAccess {
 export function fleetAccess(role: UserRole): FleetAccess {
   const admin = role === "admin" || role === "owner";
   return { viewAudit: admin, viewAgents: admin, disableAgent: admin, releaseAgent: admin };
+}
+
+/** What a role may do to one agent. */
+export interface AgentActions {
+  /** Disabling it, for good. */
+  readonly disable: boolean;
+  /** Releasing the bots it holds. */
+  readonly release: boolean;
+}
+
+/**
+ * What `role` may do to `agent`, from `enabled` and `bots`, never the open `status`: an enabled
+ * agent can be disabled, and a disabled one holding bots can have them released (R172).
+ */
+export function agentActions(
+  agent: Pick<AgentResponse, "enabled" | "bots">,
+  role: UserRole,
+): AgentActions {
+  const access = fleetAccess(role);
+  return {
+    disable: access.disableAgent && agent.enabled,
+    release: access.releaseAgent && !agent.enabled && agent.bots > 0,
+  };
 }
 
 /** Whether `role` may revoke `invite` now: only a pending one changes. */

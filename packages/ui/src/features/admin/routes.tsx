@@ -4,6 +4,7 @@ import { createRoute } from "@tanstack/react-router";
 
 import { requireAdmin } from "../shell/guards";
 import { appRoute } from "../shell/routes";
+import { AgentsScreen } from "./components/AgentsScreen";
 import { InvitesScreen } from "./components/InvitesScreen";
 import { UsersScreen } from "./components/UsersScreen";
 
@@ -26,4 +27,11 @@ export const invitesRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: "invites",
   component: InvitesScreen,
+});
+
+/** `/admin/agents`. */
+export const agentsRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: "agents",
+  component: AgentsScreen,
 });
