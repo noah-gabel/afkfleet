@@ -41,7 +41,6 @@
 //! | `PUT /api/v1/accounts/{id}/grants/{user}` | user + step-up (Manage) | changes a grant |
 //! | `DELETE /api/v1/accounts/{id}/grants/{user}` | user + step-up (Manage) | revokes a grant |
 //! | `DELETE /api/v1/accounts/{id}/grants/me` | user + step-up (a grantee without implicit Manage) | gives up the caller's own grant: they leave the account |
-//! | `POST /api/v1/agents/enrollment-tokens` | user + step-up (the Owner; while `[grpc]` is configured) | a new enrollment token, in its bundle, shown this once |
 //! | `GET /api/v1/agents` | user (Admin+) | one page of agents, with their status |
 //! | `POST /api/v1/agents/{id}/disable` | user + step-up (Admin+) | disables an agent for good: every certificate revoked, its stream ended |
 //! | `POST /api/v1/agents/{id}/release` | user + step-up (Admin+) | releases a disabled agent's bots, on the caller's word that its host is stopped |
@@ -99,7 +98,6 @@ use crate::app::agents::AgentService;
 use crate::app::audit::AuditService;
 use crate::app::auth::TokenService;
 use crate::app::bots::BotService;
-use crate::app::enrollment::EnrollmentTokenService;
 use crate::app::grants::GrantService;
 use crate::app::health::HealthService;
 use crate::app::invites::InviteService;
@@ -138,9 +136,6 @@ pub struct AppState {
     pub(crate) accounts: AccountService,
     /// The grants that share accounts.
     pub(crate) grants: GrantService,
-    /// The enrollment tokens, while the control plane is on (`[grpc]`);
-    /// without it, their route answers 404.
-    pub(crate) enrollment_tokens: Option<EnrollmentTokenService>,
     /// The agents: their list, and disabling one, with `[grpc]` or without.
     pub(crate) agents: AgentService,
     /// The bots: what each viewer sees of them, and what users change.
@@ -180,8 +175,6 @@ pub struct Services {
     pub accounts: AccountService,
     /// The grants that share accounts.
     pub grants: GrantService,
-    /// The enrollment tokens, while the control plane is on (`[grpc]`).
-    pub enrollment_tokens: Option<EnrollmentTokenService>,
     /// The agents: their list, and disabling one.
     pub agents: AgentService,
     /// The bots: what each viewer sees of them, and what users change.
@@ -211,7 +204,6 @@ impl AppState {
             link_flows,
             accounts,
             grants,
-            enrollment_tokens,
             agents,
             bots,
             modes,
@@ -230,7 +222,6 @@ impl AppState {
             link_flows,
             accounts,
             grants,
-            enrollment_tokens,
             agents,
             bots,
             modes,
@@ -282,10 +273,6 @@ pub fn api_routes(routes: Routes) -> Routes {
         .step_up_route(RateClass::Standard, routes!(grants::change))
         .step_up_route(RateClass::Standard, routes!(grants::revoke))
         .step_up_route(RateClass::Standard, routes!(grants::leave))
-        .step_up_route(
-            RateClass::Standard,
-            routes!(agents::create_enrollment_token),
-        )
         .authed_route(RateClass::Standard, routes!(agents::list_agents))
         .step_up_route(RateClass::Standard, routes!(agents::disable_agent))
         .step_up_route(RateClass::Standard, routes!(agents::release_agent))

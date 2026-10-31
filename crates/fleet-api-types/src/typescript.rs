@@ -30,7 +30,7 @@ use crate::accounts::{
     CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
     HeldGrantPage, LinkFlowResponse, LinkStartedResponse,
 };
-use crate::agents::{AgentPage, AgentResponse, AgentStatus, CreatedEnrollmentTokenResponse};
+use crate::agents::{AgentPage, AgentResponse, AgentStatus};
 use crate::app::{
     BotCommandResponse, LiveUpdateMessage, LoginStepResponse, LogoutResponse, ServerProfileRequest,
     ServerProfileResponse, ServerProfileState, SetupStepResponse,
@@ -205,7 +205,6 @@ fn write_api(config: &Config) -> Result<(), TypeScriptError> {
     ChangeGrantRequest::export_all(config).map_err(TypeScriptError::Export)?;
     GrantResponse::export_all(config).map_err(TypeScriptError::Export)?;
     GrantPage::export_all(config).map_err(TypeScriptError::Export)?;
-    CreatedEnrollmentTokenResponse::export_all(config).map_err(TypeScriptError::Export)?;
     AgentStatus::export_all(config).map_err(TypeScriptError::Export)?;
     AgentResponse::export_all(config).map_err(TypeScriptError::Export)?;
     AgentPage::export_all(config).map_err(TypeScriptError::Export)?;

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT created_by AS \"created_by?: String\" FROM enrollment_tokens WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "created_by?: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "enrollment_tokens",
+            "name": "created_by"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "4d5b9db0053554ed8e69927b1735da604db2ac2f8634a710bce8e8c75335c561"
+}

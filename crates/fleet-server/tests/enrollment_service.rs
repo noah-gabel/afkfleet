@@ -1,5 +1,5 @@
-//! Tests for enrolling agents (Plan.md P10.3; ADR-0019, S15–S17, S21): the
-//! tokens' creation by the Owner and by the server's host, and the
+//! Tests for enrolling agents (Plan.md P10.3; ADR-0019, S15–S17, S21;
+//! ADR-0020, S88): the tokens' creation on the server's host, and the
 //! enrollment that trades one token for one agent's certificate, in S21's
 //! order, single-use even when two enrollments race, with every refusal's
 //! answer and audit entry.
@@ -22,39 +22,31 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use fleet_core::audit::{AuditAction, AuditOutcome, AuditTarget, RecordedTarget, RecordedValue};
-use fleet_core::authz::{Actor, Role};
 use fleet_core::enrollment::{EnrollmentBundle, MAX_PENDING_TOKENS};
-use fleet_core::id::{AgentId, SessionId, UserId};
+use fleet_core::id::AgentId;
 use fleet_core::pki::{CertFingerprint, ed25519_pkcs8};
 use fleet_core::system::Clock as _;
-use fleet_core::value::{AgentName, Username};
+use fleet_core::value::AgentName;
 use fleet_proto::enrollment::{EnrollRequest, SERVER_DEADLINE};
 use fleet_server::app::enrollment::{
-    CreateTokenError, Creator, EnrollError, EnrollmentService, EnrollmentTokenService, TokenProblem,
+    CreateTokenError, EnrollError, EnrollmentService, EnrollmentTokenService, TokenProblem,
 };
-use fleet_server::app::users::ActingUser;
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
 use fleet_server::infra::pki::{AgentIssuer, CertificateAuthority, fingerprint};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::agents::NewAgent;
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
 use fleet_server::ports::pki::{AgentCertificates, CsrRefusal, IssueError, IssuedCertificate};
-use fleet_server::ports::sessions::NewSession;
 use fleet_server::ports::store::Store as _;
 use fleet_server::ports::tokens::{TokenKind, Tokens as _};
-use fleet_server::ports::users::{NewUser, PasswordHash};
 use fleet_testkit::system::{ManualClock, SeededRandom};
 use rcgen::{CertificateParams, KeyPair, PKCS_ED25519};
 use rustls::pki_types::PrivatePkcs8KeyDer;
 use secrecy::{ExposeSecret as _, SecretString};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
-/// A valid Argon2id PHC string (not a real hash).
-const PHC: &str = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2g";
 /// When everything starts.
 const T0: &str = "2027-01-15T08:00:00Z";
-/// The Owner's address.
-const OWNER_IP: [u8; 4] = [192, 0, 2, 10];
 /// The agent's address.
 const AGENT_IP: [u8; 4] = [192, 0, 2, 20];
 /// How long a test waits to see that an enrollment is still running.
@@ -111,7 +103,6 @@ struct Setup {
     enrollment: EnrollmentService,
     signer: Arc<Signer>,
     ca: CertFingerprint,
-    owner: ActingUser,
 }
 
 async fn setup(options: SqliteConnectOptions) -> Setup {
@@ -143,7 +134,6 @@ async fn setup(options: SqliteConnectOptions) -> Setup {
         token_port,
         Arc::clone(&signer) as _,
     );
-    let owner = add_user(&db, 1, Role::Owner).await;
     Setup {
         db,
         clock,
@@ -151,7 +141,6 @@ async fn setup(options: SqliteConnectOptions) -> Setup {
         enrollment,
         signer,
         ca: ca_fingerprint,
-        owner,
     }
 }
 
@@ -161,39 +150,6 @@ fn setup_entry() -> NewAuditEntry {
         AuditAction::try_from("test.enrollment_setup").unwrap(),
         AuditOutcome::Success,
     )
-}
-
-/// Adds user `n` with `role` and a live session, and returns them acting.
-async fn add_user(db: &Database, n: u8, role: Role) -> ActingUser {
-    let id = UserId::new_v7(at(T0), [n; 10]).unwrap();
-    let session = SessionId::new_v7(at(T0), [n; 10]).unwrap();
-    let mut tx = db.write().await.unwrap();
-    tx.users()
-        .insert(&NewUser {
-            id,
-            username: Username::try_from(format!("user{n}").as_str()).unwrap(),
-            password_hash: PasswordHash::new(SecretString::from(PHC)).unwrap(),
-            role,
-            created_at: at(T0),
-        })
-        .await
-        .unwrap();
-    tx.sessions()
-        .insert(&NewSession {
-            id: session,
-            user_id: id,
-            access_hash: fleet_server::ports::tokens::TokenHash::from_bytes([n; 32]),
-            refresh_hash: fleet_server::ports::tokens::TokenHash::from_bytes([n + 100; 32]),
-            created_at: at(T0),
-        })
-        .await
-        .unwrap();
-    tx.commit(setup_entry()).await.unwrap();
-    ActingUser {
-        actor: Actor { id, role },
-        session_id: session,
-        ip: IpAddr::from(OWNER_IP),
-    }
 }
 
 /// An agent's key from `seed`, as the agent makes one.
@@ -223,7 +179,7 @@ fn request(token: &SecretString, name: &str, seed: u8) -> EnrollRequest {
 }
 
 async fn host_token(setup: &Setup) -> SecretString {
-    let created = setup.tokens.create(Creator::Host).await.unwrap();
+    let created = setup.tokens.create().await.unwrap();
     created.bundle.token().clone()
 }
 
@@ -286,17 +242,13 @@ fn token_problem(
 // --- Creating a token ----------------------------------------------------------------
 
 #[sqlx::test(migrations = false)]
-async fn the_owner_creates_a_token_whose_bundle_pins_the_ca(
+async fn a_tokens_bundle_pins_the_ca_and_is_stored_only_as_its_hash(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
 
-    let created = setup
-        .tokens
-        .create(Creator::Owner(&setup.owner))
-        .await
-        .unwrap();
+    let created = setup.tokens.create().await.unwrap();
 
     assert_eq!(created.bundle.ca_fingerprint(), setup.ca);
     assert_eq!(created.expires_at, at(T0) + TimeDelta::minutes(15));
@@ -315,84 +267,25 @@ async fn the_owner_creates_a_token_whose_bundle_pins_the_ca(
         .unwrap()
         .unwrap();
     assert_eq!(stored.id, created.id);
-    assert_eq!(stored.created_by, Some(setup.owner.actor.id));
     let all = entries(&setup.db).await;
     let created_entries = of(&all, &AuditAction::ENROLLMENT_TOKEN_CREATE);
     assert_eq!(created_entries.len(), 1);
     let entry = created_entries[0];
     assert_eq!(entry.outcome, AuditOutcome::Success);
-    assert_eq!(entry.actor, Some(setup.owner.actor.id));
-    assert_eq!(entry.ip, Some(IpAddr::from(OWNER_IP)));
+    assert_eq!(entry.actor, None);
+    assert_eq!(entry.ip, None);
     assert_eq!(
         entry.target,
         Some(RecordedTarget::Known(AuditTarget::EnrollmentToken(
             created.id
         )))
     );
-    assert_eq!(text(entry, "via").as_deref(), Some("http"));
+    assert_eq!(text(entry, "via").as_deref(), Some("cli"));
     assert!(text(entry, "expires_at").is_some());
     let shown = format!("{all:?}");
     assert!(
         !shown.contains(&token[7..]),
         "the token reached the audit log"
-    );
-}
-
-#[sqlx::test(migrations = false)]
-async fn the_hosts_token_has_no_creator_and_no_actor(
-    _pool: SqlitePoolOptions,
-    options: SqliteConnectOptions,
-) {
-    let setup = setup(options).await;
-
-    let created = setup.tokens.create(Creator::Host).await.unwrap();
-
-    let all = entries(&setup.db).await;
-    let entry = of(&all, &AuditAction::ENROLLMENT_TOKEN_CREATE)[0];
-    assert_eq!(entry.actor, None);
-    assert_eq!(entry.ip, None);
-    assert_eq!(text(entry, "via").as_deref(), Some("cli"));
-    assert_eq!(
-        entry.target,
-        Some(RecordedTarget::Known(AuditTarget::EnrollmentToken(
-            created.id
-        )))
-    );
-}
-
-#[sqlx::test(migrations = false)]
-async fn only_the_owner_creates_a_token(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
-    let setup = setup(options).await;
-    let admin = add_user(&setup.db, 2, Role::Admin).await;
-
-    let refused = setup.tokens.create(Creator::Owner(&admin)).await;
-
-    assert!(
-        matches!(refused, Err(CreateTokenError::Denied)),
-        "{refused:?}"
-    );
-    let created = entries(&setup.db).await;
-    assert_eq!(of(&created, &AuditAction::ENROLLMENT_TOKEN_CREATE).len(), 0);
-}
-
-#[sqlx::test(migrations = false)]
-async fn a_session_ended_meanwhile_creates_nothing(
-    _pool: SqlitePoolOptions,
-    options: SqliteConnectOptions,
-) {
-    let setup = setup(options).await;
-    let mut tx = setup.db.write().await.unwrap();
-    tx.sessions()
-        .revoke(setup.owner.session_id, at(T0))
-        .await
-        .unwrap();
-    tx.commit(setup_entry()).await.unwrap();
-
-    let refused = setup.tokens.create(Creator::Owner(&setup.owner)).await;
-
-    assert!(
-        matches!(refused, Err(CreateTokenError::SessionGone)),
-        "{refused:?}"
     );
 }
 
@@ -403,12 +296,12 @@ async fn the_twenty_first_pending_token_is_refused(
 ) {
     let setup = setup(options).await;
     for _ in 0..MAX_PENDING_TOKENS {
-        setup.tokens.create(Creator::Host).await.unwrap();
+        setup.tokens.create().await.unwrap();
     }
 
-    let refused = setup.tokens.create(Creator::Owner(&setup.owner)).await;
+    let refused = setup.tokens.create().await;
     setup.clock.advance(core::time::Duration::from_mins(15));
-    let after_expiry = setup.tokens.create(Creator::Host).await;
+    let after_expiry = setup.tokens.create().await;
 
     assert!(
         matches!(refused, Err(CreateTokenError::CapReached)),
@@ -425,11 +318,7 @@ async fn a_token_enrolls_one_agent_recorded_twice(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let created = setup
-        .tokens
-        .create(Creator::Owner(&setup.owner))
-        .await
-        .unwrap();
+    let created = setup.tokens.create().await.unwrap();
     setup.clock.advance(core::time::Duration::from_secs(60));
 
     let enrolled = enroll(&setup, created.bundle.token(), "agent-1")
@@ -608,34 +497,6 @@ async fn an_expired_token_is_recorded_with_its_reason(
     assert_eq!(failures[0].outcome, AuditOutcome::Failure);
     assert_eq!(text(failures[0], "reason").as_deref(), Some("expired"));
     assert_eq!(text(failures[0], "agent"), None);
-}
-
-#[sqlx::test(migrations = false)]
-async fn a_token_whose_creator_was_disabled_is_refused_and_recorded(
-    _pool: SqlitePoolOptions,
-    options: SqliteConnectOptions,
-) {
-    let setup = setup(options).await;
-    let created = setup
-        .tokens
-        .create(Creator::Owner(&setup.owner))
-        .await
-        .unwrap();
-    let owner = setup.owner.actor.id.as_uuid().hyphenated().to_string();
-    sqlx::query!("UPDATE users SET disabled = 1 WHERE id = ?", owner)
-        .execute(setup.db.write_pool())
-        .await
-        .unwrap();
-
-    let refused = enroll(&setup, created.bundle.token(), "agent-1").await;
-
-    assert_eq!(token_problem(refused), TokenProblem::CreatorUnauthorized);
-    assert_eq!(setup.signer.calls.load(Ordering::SeqCst), 0);
-    let all = entries(&setup.db).await;
-    assert_eq!(
-        text(of(&all, &AuditAction::AGENT_ENROLL)[0], "reason").as_deref(),
-        Some("creator_unauthorized")
-    );
 }
 
 #[sqlx::test(migrations = false)]

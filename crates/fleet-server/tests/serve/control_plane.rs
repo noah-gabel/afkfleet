@@ -34,7 +34,7 @@ use fleet_proto::generated::EnrollRequest;
 use fleet_proto::generated::agent_control_client::AgentControlClient;
 use fleet_proto::generated::agent_enrollment_client::AgentEnrollmentClient;
 use fleet_server::app::auth::TokenService;
-use fleet_server::app::enrollment::{Creator, EnrollmentTokenService};
+use fleet_server::app::enrollment::EnrollmentTokenService;
 use fleet_server::cli::healthcheck;
 use fleet_server::cli::serve::{self, ControlPlane, Exit, GrpcPort, ServerPorts, ShutdownTimeouts};
 use fleet_server::config::{GrpcConfig, PkiPaths, ServerConfig};
@@ -173,7 +173,7 @@ async fn an_agent_enrolls_over_the_grpc_port_beside_the_api_and_both_stop_at_one
         Arc::new(Sha256Tokens::new(random)),
         fingerprint,
     )
-    .create(Creator::Host)
+    .create()
     .await
     .unwrap()
     .bundle
@@ -349,7 +349,7 @@ async fn an_enrolled_agent_connects_and_one_signal_ends_its_stream_and_the_serve
         Arc::new(Sha256Tokens::new(random)),
         fingerprint,
     )
-    .create(Creator::Host)
+    .create()
     .await
     .unwrap()
     .bundle
@@ -831,7 +831,7 @@ async fn host_token(
         Arc::new(Sha256Tokens::new(random)),
         fingerprint,
     )
-    .create(Creator::Host)
+    .create()
     .await
     .unwrap()
     .bundle

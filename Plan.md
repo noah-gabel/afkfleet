@@ -3542,7 +3542,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **x509-parser** is a direct dependency of fleet-server (the user's choice, U5): rcgen 0.14 no longer reads certificates, and the startup check reads the CA flag and the server certificate's names and validity.
   > - **Tests,** red first against compiling stubs: fleet-core's fingerprint and PKCS#8 (RFC 8410's example key), the config, the repository, `infra::pki` (RFC 8032's test key, every profile field read back with x509-parser, the validity edges with rustls's verifiers, CSR refusals, the startup check's refusals, the no-clobber writer with a file appearing midway) and the `pki` commands, in-process and through the binary. Tests that passed against a stub were shown red by a temporary mutation, each reverted and checked by checksum.
 - [x] **P10.3** 🔴 Enrollment:
-  1. An Admin calls `POST /agents/enrollment-tokens` and gets a single-use token, valid 15 min, stored hashed.
+  1. An Admin calls `POST /agents/enrollment-tokens` and gets a single-use token, valid 15 min, stored hashed. *Since Phase 11's group J only the server's host creates tokens, and the route is gone ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U76).*
   2. `afkfleet-agent enroll` creates a key and a CSR (rcgen).
   3. It calls `AgentEnrollment.Enroll`. This RPC uses TLS without a client certificate and is rate-limited; the agent pins the CA fingerprint from the enrollment bundle.
   4. The agent stores its cert and key, readable only by itself.
@@ -4222,7 +4222,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Every `Open<…>`** (`desired_state`, `status.kind`, `state`, `reason`, `why`, the last disconnect's kinds) has a default branch. `server_address` is there only for Control holders and above, `agent` only for Admins and the Owner.
   > - **Step-up:** `PATCH /bots/{id}` goes through `useStepUpAction`; the mode switch, the lifecycle calls and the reads don't need one. A per-bot 429 shows its `Retry-After`.
 
-  > Note (P11.9, from Phase 10, group B, the user's choice, U3) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **enrollment tokens in the agents view.** `POST /agents/enrollment-tokens` exists (the Owner's, step-up, no body); the view shows the bundle once, for the Owner to pipe into `afkfleet-agent enroll`. The bundle is a secret for 15 minutes, so the call is a direct one through `useApiClient()`, never a TanStack query or mutation (CLAUDE.md). `afkfleet-server agent create-enrollment-token` stays for the server's host.
+  > Note (P11.9, from Phase 10, group B, the user's choice, U3) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **enrollment tokens in the agents view.** *Superseded at group J's planning (the user's choice, [ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U76): no token in the app, and the route is removed.* `POST /agents/enrollment-tokens` exists (the Owner's, step-up, no body); the view shows the bundle once, for the Owner to pipe into `afkfleet-agent enroll`. The bundle is a secret for 15 minutes, so the call is a direct one through `useApiClient()`, never a TanStack query or mutation (CLAUDE.md). `afkfleet-server agent create-enrollment-token` stays for the server's host.
 
   > Note (P11.9, from the group A review): **Chat console.** Render each message as its own block, with the sender outside the text, so a `\n[Server] …` inside a message can't pass as a separate line. The sanitizer keeps combining marks, so clip stacked ones (Zalgo text) with CSS overflow.
 
@@ -4389,7 +4389,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P12.6, from Phase 10, group B, the user's note at the plan review) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the server certificate's yearly renewal.** It expires after 365 days, and then every agent fails to connect. The runbook's steps: stop the server, move `server.crt` and `server.key` away, run `afkfleet-server pki server-cert --config … --dns … --ip …` with the names agents dial, start the server. The CA stays, so no agent enrolls again.
 
-  > Note (P12.6, from Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **enrolling an agent:** `pki init` once (it prints the CA's fingerprint); a token from the Owner (`POST /agents/enrollment-tokens`, later the app's agents view) or from the server's host (`afkfleet-server agent create-enrollment-token`); then pipe its bundle into `afkfleet-agent enroll` within 15 minutes. A token is single-use; exit 3 means the server enrolled an agent the host didn't store, which is disabled before enrolling again with a new token.
+  > Note (P12.6, from Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **enrolling an agent:** `pki init` once (it prints the CA's fingerprint); a token from the server's host (`afkfleet-server agent create-enrollment-token`; the API's route is gone, [ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U76); then pipe its bundle into `afkfleet-agent enroll` within 15 minutes. A token is single-use; exit 3 means the server enrolled an agent the host didn't store, which is disabled before enrolling again with a new token.
 
   > Note (P12.6, from Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **an agent next to a local Minecraft server** lists that network in `[control_plane] private_targets`, with a comment saying why; a bot whose last disconnect is `connect_failed` with `blocked` points at an address its agent refuses (S46). Listing a network opens it to every Manage holder of a bot on that agent (the threat model's accepted risk).
 
@@ -4741,14 +4741,14 @@ All routes are prefixed with `/api/v1`. The required level is checked through `a
 | `GET/POST /modes` · `PUT/DELETE /modes/{id}` | Member+ (own) / Admin+ (shared) (`POST`, `PUT` with a command off the allowlist: their `/with-commands` step-up twins; `DELETE`: step-up) | Modes |
 | `GET/POST /server-settings` · `PUT/DELETE /server-settings/{id}` | Admin+ (writes: step-up) | Each Minecraft server's settings: its conflict texts and chat formats (P11.9) |
 | `POST /server-settings/chat-format-preview` | Admin+ | Which sender unsaved chat formats read from a line; nothing stored (P11.9) |
-| `GET /agents` · `POST /agents/enrollment-tokens` · `POST /agents/{id}/disable` · `POST /agents/{id}/release` | Admin+ (`disable`, `release`: step-up); `enrollment-tokens`: the Owner's, step-up | Agents; a disabled agent's bots released (P11.9) |
+| `GET /agents` · `POST /agents/{id}/disable` · `POST /agents/{id}/release` | Admin+ (`disable`, `release`: step-up) | Agents; a disabled agent's bots released (P11.9). *Enrollment tokens have no route since Phase 11's group J ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U76).* |
 | `GET /audit` | Admin+ | Audit log (cursor-paginated) |
 | `POST /events/ticket` · `GET /events?ticket=` | user | WebSocket live events |
 | `GET /health/live` · `GET /health/ready` | public (no prefix) | Health |
 | `GET /api/openapi.json` | public, **only in dev mode** (no `/api/v1` prefix) | The OpenAPI document (P6.10); outside dev mode the path answers like any unknown route |
 
 > Note (P2.9): `authorize()` refines these levels (ADR-0010):
-> - `POST /agents/enrollment-tokens` is Owner-only.
+> - `POST /agents/enrollment-tokens` is Owner-only. *Removed at Phase 11's group J ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U76).*
 > - `PATCH /users/{id}`: only the Owner changes roles; Admins disable and enable Members.
 > - `DELETE /invites/{id}`: an Admin invite is the Owner's.
 > - `PATCH /bots/{id}`: the server needs Manage; the mode (`PUT /bots/{id}/mode` since Phase 10, group E) Control, and a mode with a command off the allowlist Manage.
@@ -4758,7 +4758,7 @@ All routes are prefixed with `/api/v1`. The required level is checked through `a
 
 > Note (Appendix B, Phase 9, group D, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **`POST /accounts/link`** (every role) answers 201 `{flow_id, user_code, verification_uri, expires_at}`, the only time the code is shown. **`GET /accounts/link/{flow_id}`** is the flow's creator's alone (404 for everyone else) and answers `{status}` with each state's fields. P9.4's notes list both routes' answers. **`POST /accounts/offline {name}`** (every role, while `[accounts] allow_offline` is on; 404 otherwise) answers 201 `{id, name, kind, status}` (P9.7).
 
-> Note (Appendix B, Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`POST /agents/enrollment-tokens`** (the Owner, step-up, no body) answers 201 `{id, bundle, ca_fingerprint, expires_at}`, the only time the bundle is shown; 404 while `[grpc]` is off, 409 at 20 pending tokens (P10.3's note).
+> Note (Appendix B, Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): *removed at Phase 11's group J ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U76).* **`POST /agents/enrollment-tokens`** (the Owner, step-up, no body) answers 201 `{id, bundle, ca_fingerprint, expires_at}`, the only time the bundle is shown; 404 while `[grpc]` is off, 409 at 20 pending tokens (P10.3's note).
 
 > Note (Appendix B, Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`GET /agents`** (Admin+) pages every agent with its status (`online`, `offline`, `expired`, `disabled`), and **`POST /agents/{id}/disable`** (Admin+, step-up, no body) answers 200 with the agent, disabled for good: every certificate revoked and its stream ended (P10.10's note).
 

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE enrollment_tokens SET created_by = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "09b14c0a181f85d670eaa6fed5b8e3f96e69092f555e36a8808bf4f0035ab13f"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO enrollment_tokens (id, token_hash, created_at, expires_at)\n         VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "8f1ec6d13dc03201aae3569b8abb48c2ad23c1466ac9d5421ba93e2e9b4fd9ac"
+}

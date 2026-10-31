@@ -31,7 +31,6 @@ use fleet_server::app::audit::AuditService;
 use fleet_server::app::auth::TokenService;
 use fleet_server::app::bots::{BotService, ChatWait};
 use fleet_server::app::challenges::{ChallengeUser, Challenges, SetupPurpose};
-use fleet_server::app::enrollment::EnrollmentTokenService;
 use fleet_server::app::event_tickets::EventTickets;
 use fleet_server::app::events::{EventBus, LiveRights};
 use fleet_server::app::health::HealthService;
@@ -108,7 +107,6 @@ pub(crate) const STEP_UP: &str = "/api/v1/auth/step-up";
 pub(crate) const RESET: &str = "/api/v1/me/mfa/reset";
 pub(crate) const ENROLL: &str = "/api/v1/me/mfa/enroll";
 pub(crate) const CONFIRM: &str = "/api/v1/me/mfa/confirm";
-pub(crate) const ENROLLMENT_TOKENS: &str = "/api/v1/agents/enrollment-tokens";
 pub(crate) const USERS: &str = "/api/v1/users";
 pub(crate) const INVITES: &str = "/api/v1/invites";
 pub(crate) const REGISTER: &str = "/api/v1/auth/register";
@@ -121,9 +119,6 @@ pub(crate) const ME_SESSIONS: &str = "/api/v1/me/sessions";
 const PHC: &str = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2g";
 /// An invite's default lifetime, in milliseconds.
 pub(crate) const INVITE_TTL: i64 = 72 * 3_600_000;
-/// The CA fingerprint the tests' enrollment tokens pin.
-pub(crate) const CA_FINGERPRINT: CertFingerprint = CertFingerprint::from_digest([0xAB; 32]);
-
 pub(crate) fn at(millis: i64) -> DateTime<Utc> {
     DateTime::from_timestamp_millis(millis).unwrap()
 }
@@ -188,9 +183,6 @@ pub(crate) struct Options {
     /// Alice's stored hash, when it isn't one of today's parameters.
     pub(crate) hash: Option<PasswordHash>,
     pub(crate) invite_ttl: InviteTtl,
-    /// Whether the control plane is on: the enrollment tokens' route
-    /// answers 404 without it.
-    pub(crate) control_plane: bool,
     /// `[chat] command_allowlist`, which the bots' mode switch and chat
     /// read.
     pub(crate) allowlist: CommandAllowlist,
@@ -209,7 +201,6 @@ impl Default for Options {
             rehash: Rehash::Works,
             hash: None,
             invite_ttl: InviteTtl::default(),
-            control_plane: false,
             allowlist: CommandAllowlist::default(),
             chat_wait: ChatWait::default(),
             sockets: SocketTimings::default(),
@@ -1336,9 +1327,6 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         &heard,
     );
     let limits = RateLimits::new(&settings.limits, Arc::new(clock.clone()));
-    let enrollment_tokens = settings
-        .control_plane
-        .then(|| enrollment_tokens(&clock, &random, &hooked));
     let hints = Arc::new(Hinted::default());
     let (registry, agents) = agents(&clock, &hooked, (&heard, &hints));
     let bots = bot_service(
@@ -1366,7 +1354,6 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         link_flows: idle_link_flows(&db),
         accounts: idle_accounts(&db),
         grants: idle_grants(&db),
-        enrollment_tokens,
         agents,
         bots,
         modes: mode_service(
@@ -1565,21 +1552,6 @@ fn agents(
     .with_live_hints(Arc::clone(heard) as Arc<dyn LiveHints>)
     .with_reconcile(Arc::clone(hints) as Arc<dyn Reconcile>);
     (registry, agents)
-}
-
-/// The enrollment tokens' service over `hooked`, pinning [`CA_FINGERPRINT`].
-fn enrollment_tokens(
-    clock: &ManualClock,
-    random: &SeededRandom,
-    hooked: &HookedStore,
-) -> EnrollmentTokenService {
-    EnrollmentTokenService::new(
-        Arc::new(clock.clone()),
-        Arc::new(random.clone()),
-        Arc::new(hooked.clone()),
-        Arc::new(Sha256Tokens::new(Arc::new(random.clone()))),
-        CA_FINGERPRINT,
-    )
 }
 
 /// The users' and invites' services over `hooked`, so a queued change

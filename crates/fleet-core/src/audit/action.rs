@@ -292,12 +292,12 @@ audit_actions! {
     /// grantee left.
     GRANT_REVOKE = "grant.revoke";
 
-    /// An enrollment token was created for one new agent (P10.3, ADR-0019):
-    /// by the Owner through `POST /agents/enrollment-tokens` after stepping
-    /// up (actor: the Owner; the client's IP), or on the server's host with
-    /// `afkfleet-server agent create-enrollment-token` (no actor, no IP).
-    /// Outcome: Success. Target: the token. Metadata: `expires_at` and `via`
-    /// (`http` or `cli`); never the token or its hash.
+    /// An enrollment token was created for one new agent (P10.3, ADR-0019) on
+    /// the server's host, with `afkfleet-server agent
+    /// create-enrollment-token`: no actor, no IP. Outcome: Success. Target:
+    /// the token. Metadata: `expires_at` and `via` (`cli`); never the token
+    /// or its hash. Older entries may hold an actor, an IP and `via` =
+    /// `http`, from the API's route, removed in P11.9 (ADR-0020, U76, S88).
     ENROLLMENT_TOKEN_CREATE = "enrollment_token.create";
 
     /// An enrollment token enrolled an agent (P10.3), in the commit that
@@ -313,7 +313,8 @@ audit_actions! {
     /// `enrollment` (the token's ID). Failure, nothing stored: a real token
     /// that expired or was used already, at most 10 entries per token;
     /// target the token; metadata `reason` (`expired` or `used`) and, for a
-    /// used one, `agent` (the agent it enrolled). An unknown token is never
+    /// used one, `agent` (the agent it enrolled); older entries may hold
+    /// `creator_unauthorized` (ADR-0020, S88). An unknown token is never
     /// recorded.
     AGENT_ENROLL = "agent.enroll";
 

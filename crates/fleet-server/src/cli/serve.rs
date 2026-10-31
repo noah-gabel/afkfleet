@@ -97,7 +97,7 @@ use crate::app::audit::AuditService;
 use crate::app::auth::TokenService;
 use crate::app::bots::{BotService, ChatWait};
 use crate::app::challenges::Challenges;
-use crate::app::enrollment::{EnrollmentService, EnrollmentTokenService};
+use crate::app::enrollment::EnrollmentService;
 use crate::app::event_tickets::EventTickets;
 use crate::app::events::{EventBus, LiveRights};
 use crate::app::grants::GrantService;
@@ -483,7 +483,7 @@ pub fn app_with(
     let retention = retention(config, &ports.clock, &store);
     let shutdown = CancellationToken::new();
     let (sockets, live) = live_events(&auth.tickets, &events, &store, &shutdown);
-    let (enrollment_tokens, grpc) = control_plane_services(
+    let grpc = control_plane_services(
         config,
         ca,
         inbox,
@@ -513,7 +513,6 @@ pub fn app_with(
         link_flows: link_flows.clone(),
         accounts,
         grants: fleet.grants,
-        enrollment_tokens,
         agents: fleet.agents,
         bots: fleet.bots,
         modes: fleet.modes,
@@ -965,9 +964,8 @@ fn session_grants(
 }
 
 /// The control plane's services over `ports`, while `config` has `[grpc]`
-/// and there is a `ca`: the enrollment tokens' for the API, pinning the
-/// CA; for the gRPC port, the enrollment, signing with the CA for
-/// `[grpc] agent_cert_lifetime_days` within [`SERVER_DEADLINE`],
+/// and there is a `ca`: for the gRPC port, the enrollment, signing with the
+/// CA for `[grpc] agent_cert_lifetime_days` within [`SERVER_DEADLINE`],
 /// `Connect` with `[grpc]`'s heartbeats, and the reconciler, hinted
 /// through `inbox`, placing offline accounts' bots only while `[accounts]
 /// allow_offline` is on.
@@ -976,10 +974,8 @@ fn control_plane_services(
     ca: Option<CertificateAuthority>,
     inbox: Option<HintInbox>,
     ports: EnrollmentPorts,
-) -> (Option<EnrollmentTokenService>, Option<GrpcRoutes>) {
-    let Some(((grpc, ca), inbox)) = config.grpc.as_ref().zip(ca).zip(inbox) else {
-        return (None, None);
-    };
+) -> Option<GrpcRoutes> {
+    let ((grpc, ca), inbox) = config.grpc.as_ref().zip(ca).zip(inbox)?;
     let reconciler = Reconciler::new(
         ports.registry.clone(),
         Arc::new(AssignmentService::new(
@@ -993,13 +989,6 @@ fn control_plane_services(
         config.rate_limits.chat_per_bot,
     )
     .with_live_hints(Arc::new(ports.bus.clone()));
-    let tokens = EnrollmentTokenService::new(
-        Arc::clone(&ports.clock),
-        Arc::clone(&ports.random),
-        Arc::clone(&ports.store),
-        Arc::clone(&ports.tokens),
-        ca.fingerprint(),
-    );
     let issuer = AgentIssuer::new(ca, Arc::clone(&ports.random), grpc.agent_cert_lifetime);
     let connections: Arc<dyn AgentConnections> = Arc::new(
         AgentConnectionService::new(
@@ -1038,21 +1027,18 @@ fn control_plane_services(
         ports.tokens,
         Arc::new(issuer),
     );
-    (
-        Some(tokens),
-        Some(GrpcRoutes {
-            enrollment: enrollment_service(enrollment, ports.limits, ports.ids, SERVER_DEADLINE),
-            control,
-            sessions,
-            sweep: Sweep {
-                registry: ports.registry,
-                connections,
-            },
-            reconciler,
-            session_tokens,
-            ingest: ingest_writer,
-        }),
-    )
+    Some(GrpcRoutes {
+        enrollment: enrollment_service(enrollment, ports.limits, ports.ids, SERVER_DEADLINE),
+        control,
+        sessions,
+        sweep: Sweep {
+            registry: ports.registry,
+            connections,
+        },
+        reconciler,
+        session_tokens,
+        ingest: ingest_writer,
+    })
 }
 
 /// The Microsoft link flows and the other account use cases over `ports`,
