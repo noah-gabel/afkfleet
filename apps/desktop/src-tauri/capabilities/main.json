@@ -62,6 +62,13 @@
     "allow-create-server-settings",
     "allow-update-server-settings",
     "allow-delete-server-settings",
-    "allow-preview-chat-formats"
+    "allow-preview-chat-formats",
+    "allow-audit",
+    "allow-agents",
+    "allow-disable-agent",
+    "allow-release-agent",
+    "allow-user-grants",
+    "allow-shared-accounts",
+    "allow-leave-account"
   ]
 }

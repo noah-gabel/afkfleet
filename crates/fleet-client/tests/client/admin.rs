@@ -169,6 +169,42 @@ async fn the_owner_pages_through_the_audit_log_and_a_member_is_refused() {
     server.stop().await;
 }
 
+/// An Admin's disabling asks for the step-up, then ends the agent for good;
+/// a Member is refused, and disabling again answers it as it is.
+#[tokio::test]
+async fn the_owner_disables_an_agent_after_a_step_up_and_a_member_is_refused() {
+    let server = Server::start().await;
+    let (owner, _, _) = server.owner().await;
+    owner
+        .create_offline_account(&CreateOfflineAccountRequest {
+            name: SecretText::new("AfkBot1".to_owned()),
+        })
+        .await
+        .unwrap();
+    let bot = owner.bots(&all()).await.unwrap().items[0].id;
+    let agent = server.agent_holding(bot, 1, false).await;
+
+    let unstepped = owner.disable_agent(agent).await.unwrap_err();
+    step_up(&owner).await;
+    let (bob, _) = server.member(&owner, "bob").await;
+    let disabled = owner.disable_agent(agent).await.unwrap();
+    let again = owner.disable_agent(agent).await.unwrap();
+    step_up(&bob).await;
+    let refused = bob.disable_agent(agent).await.unwrap_err();
+
+    assert!(
+        is_api(&unstepped, 403, ErrorCode::StepUpRequired),
+        "{unstepped:?}"
+    );
+    assert_eq!(disabled.id, agent);
+    assert!(!disabled.enabled);
+    assert_eq!(disabled.status.known(), Some(AgentStatus::Disabled));
+    assert_eq!(disabled.bots, 1, "its bot stays until it's released");
+    assert_eq!(again, disabled);
+    assert!(is_api(&refused, 403, ErrorCode::Forbidden), "{refused:?}");
+    server.stop().await;
+}
+
 /// The target's kind and ID reach the server: the Owner's page narrowed to
 /// the Member they invited holds only that Member's entries (ADR-0020, S89).
 #[tokio::test]

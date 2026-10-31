@@ -32,7 +32,9 @@ import type { AccountKind } from "@afkfleet/ui/generated/AccountKind";
 import type { AccountPage } from "@afkfleet/ui/generated/AccountPage";
 import type { AccountResponse } from "@afkfleet/ui/generated/AccountResponse";
 import type { AccountStatus } from "@afkfleet/ui/generated/AccountStatus";
+import type { AgentPage } from "@afkfleet/ui/generated/AgentPage";
 import type { ApiErrorDetails } from "@afkfleet/ui/generated/ApiErrorDetails";
+import type { AuditPage } from "@afkfleet/ui/generated/AuditPage";
 import type { BotCommandResponse } from "@afkfleet/ui/generated/BotCommandResponse";
 import type { BotPage } from "@afkfleet/ui/generated/BotPage";
 import type { BotResponse } from "@afkfleet/ui/generated/BotResponse";
@@ -49,6 +51,7 @@ import type { ErrorCode } from "@afkfleet/ui/generated/ErrorCode";
 import type { GrantLevel } from "@afkfleet/ui/generated/GrantLevel";
 import type { GrantPage } from "@afkfleet/ui/generated/GrantPage";
 import type { GrantResponse } from "@afkfleet/ui/generated/GrantResponse";
+import type { HeldGrantPage } from "@afkfleet/ui/generated/HeldGrantPage";
 import type { InvitePage } from "@afkfleet/ui/generated/InvitePage";
 import type { InviteResponse } from "@afkfleet/ui/generated/InviteResponse";
 import type { LinkFlowResponse } from "@afkfleet/ui/generated/LinkFlowResponse";
@@ -153,6 +156,13 @@ export const COMMANDS = [
   "update_server_settings",
   "delete_server_settings",
   "preview_chat_formats",
+  "audit",
+  "agents",
+  "disable_agent",
+  "release_agent",
+  "user_grants",
+  "shared_accounts",
+  "leave_account",
 ] as const;
 
 /** One command. */
@@ -877,6 +887,19 @@ export class FakeBackend {
           const formats = formatsOf(request.chat_formats);
           return formatsRefused(formats) ?? value(preview(formats, String(request.line ?? "")));
         });
+      case "audit":
+        return this.#admin(() => value({ items: [], unreadable: [] } satisfies AuditPage));
+      case "agents":
+        return this.#admin(() => value({ items: [] } satisfies AgentPage));
+      case "disable_agent":
+      case "release_agent":
+        return this.#steppedUp(() => this.#admin(() => api(404, "not_found")));
+      case "user_grants":
+        return this.#admin(() => value({ items: [] } satisfies HeldGrantPage));
+      case "shared_accounts":
+        return this.#admin(() => value({ items: [] } satisfies AccountPage));
+      case "leave_account":
+        return this.#steppedUp(() => api(404, "not_found"));
       default:
         return this.#accountCommand(command as Command, args);
     }

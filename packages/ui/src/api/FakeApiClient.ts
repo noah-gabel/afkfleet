@@ -4,7 +4,10 @@
 
 import type { AccountPage } from "../generated/AccountPage";
 import type { AccountResponse } from "../generated/AccountResponse";
+import type { AgentPage } from "../generated/AgentPage";
+import type { AgentResponse } from "../generated/AgentResponse";
 import type { ApiErrorDetails } from "../generated/ApiErrorDetails";
+import type { AuditPage } from "../generated/AuditPage";
 import type { BotCommandResponse } from "../generated/BotCommandResponse";
 import type { BotModeRequest } from "../generated/BotModeRequest";
 import type { BotPage } from "../generated/BotPage";
@@ -26,6 +29,7 @@ import type { CreateServerSettingsRequest } from "../generated/CreateServerSetti
 import type { FieldError } from "../generated/FieldError";
 import type { GrantPage } from "../generated/GrantPage";
 import type { GrantResponse } from "../generated/GrantResponse";
+import type { HeldGrantPage } from "../generated/HeldGrantPage";
 import type { InvitePage } from "../generated/InvitePage";
 import type { LinkFlowResponse } from "../generated/LinkFlowResponse";
 import type { LinkStartedResponse } from "../generated/LinkStartedResponse";
@@ -285,6 +289,44 @@ export class FakeApiClient implements ApiClient {
     request: PreviewChatFormatsRequest,
   ): Promise<PreviewChatFormatsResponse> {
     return this.#handler("previewChatFormats", [request])(request);
+  }
+
+  async audit(
+    before?: number,
+    limit?: number,
+    targetKind?: string,
+    targetId?: string,
+  ): Promise<AuditPage> {
+    return this.#handler("audit", [before, limit, targetKind, targetId])(
+      before,
+      limit,
+      targetKind,
+      targetId,
+    );
+  }
+
+  async agents(before?: string, limit?: number): Promise<AgentPage> {
+    return this.#handler("agents", [before, limit])(before, limit);
+  }
+
+  async disableAgent(id: string): Promise<AgentResponse> {
+    return this.#handler("disableAgent", [id])(id);
+  }
+
+  async releaseAgent(id: string): Promise<AgentResponse> {
+    return this.#handler("releaseAgent", [id])(id);
+  }
+
+  async userGrants(id: string, before?: string, limit?: number): Promise<HeldGrantPage> {
+    return this.#handler("userGrants", [id, before, limit])(id, before, limit);
+  }
+
+  async sharedAccounts(id: string, before?: string, limit?: number): Promise<AccountPage> {
+    return this.#handler("sharedAccounts", [id, before, limit])(id, before, limit);
+  }
+
+  async leaveAccount(id: string): Promise<void> {
+    return this.#handler("leaveAccount", [id])(id);
   }
 
   async account(id: string): Promise<AccountResponse> {

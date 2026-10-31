@@ -884,6 +884,15 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         expect_json(answer, 200)
     }
 
+    pub(crate) async fn disable_agent(
+        self: &Arc<Self>,
+        id: AgentId,
+    ) -> Result<AgentResponse, ClientError> {
+        let url = self.server.api(&["agents", &id.to_string(), "disable"]);
+        let answer = self.authed(Method::POST, url, None).await?;
+        expect_json(answer, 200)
+    }
+
     pub(crate) async fn release_agent(
         self: &Arc<Self>,
         id: AgentId,

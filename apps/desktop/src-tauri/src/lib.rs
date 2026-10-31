@@ -109,6 +109,13 @@ pub fn configure<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         commands::server_settings::update_server_settings,
         commands::server_settings::delete_server_settings,
         commands::server_settings::preview_chat_formats,
+        commands::audit::audit,
+        commands::agents::agents,
+        commands::agents::disable_agent,
+        commands::agents::release_agent,
+        commands::users::user_grants,
+        commands::users::shared_accounts,
+        commands::grants::leave_account,
     ])
 }
 

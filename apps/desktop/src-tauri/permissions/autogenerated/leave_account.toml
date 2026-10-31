@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-leave-account"
+description = "Enables the leave_account command without any pre-configured scope."
+commands.allow = ["leave_account"]
+
+[[permission]]
+identifier = "deny-leave-account"
+description = "Denies the leave_account command without any pre-configured scope."
+commands.deny = ["leave_account"]

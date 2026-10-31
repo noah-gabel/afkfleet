@@ -9,6 +9,7 @@
 
 mod account;
 mod accounts;
+mod admin;
 mod auth;
 mod bots;
 mod chat;

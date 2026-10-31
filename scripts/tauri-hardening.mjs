@@ -96,6 +96,13 @@ export const COMMANDS = [
   "update_server_settings",
   "delete_server_settings",
   "preview_chat_formats",
+  "audit",
+  "agents",
+  "disable_agent",
+  "release_agent",
+  "user_grants",
+  "shared_accounts",
+  "leave_account",
 ];
 
 /** The whole of `app.security`. */

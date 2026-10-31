@@ -17,17 +17,20 @@ use core::time::Duration;
 use fleet_api_types::accounts::{
     AccountPage, AccountResponse, ChangeGrantRequest, CreateGrantRequest,
     CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
-    LinkFlowResponse, LinkStartedResponse,
+    HeldGrantPage, LinkFlowResponse, LinkStartedResponse,
 };
+use fleet_api_types::agents::{AgentPage, AgentResponse};
 use fleet_api_types::app::{
     BotCommandEffect, BotCommandResponse, CommandError, CommandErrorCode, LoginStepKind,
     LoginStepResponse, LogoutResponse, SetupStepResponse,
 };
+use fleet_api_types::audit::{AuditPage, AuditPageQuery};
 use fleet_api_types::auth::{LoginRequest, RegisterRequest, RegisterResponse, StepUpRequest};
 use fleet_api_types::bots::{BotModeRequest, BotPage, BotPatchRequest, BotResponse};
 use fleet_api_types::chat::{
     ChatCommandRequest, ChatPage, ChatPageQuery, ChatSendRequest, ChatSendResponse,
 };
+use fleet_api_types::ids::AgentId;
 use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaConfirmResponse, MfaEnrollResponse};
@@ -511,6 +514,127 @@ impl<F: StoreFactory> AppState<F> {
         let conn = self.conn.read().await;
         conn.client()?
             .revoke_grant(id, user)
+            .await
+            .map_err(error::client)
+    }
+
+    /// The `leave_account` command: gives up the caller's own grant on a
+    /// shared account, after `step_up` within 5 minutes (ADR-0020, S51).
+    ///
+    /// # Errors
+    /// `no_server`, `no_session`, or `api` 403 or 404.
+    pub async fn leave_account(&self, id: AccountId) -> Result<(), CommandError> {
+        let conn = self.conn.read().await;
+        conn.client()?
+            .leave_account(id)
+            .await
+            .map_err(error::client)
+    }
+
+    /// The `audit` command: a page of the audit log, newest first, optionally
+    /// narrowed to one target's entries (ADR-0020, S47, S89).
+    ///
+    /// # Errors
+    /// `invalid_input` for a cursor below 1, a limit outside 1 to 100, or a
+    /// target half given or malformed; `no_server`, `no_session`, or `api`
+    /// 403 or 429.
+    pub async fn audit(
+        &self,
+        before: Option<SafeInt>,
+        limit: Option<u32>,
+        target_kind: Option<String>,
+        target_id: Option<String>,
+    ) -> Result<AuditPage, CommandError> {
+        let query = AuditPageQuery {
+            before,
+            limit,
+            target_kind,
+            target_id,
+        };
+        validate(&query)?;
+        let conn = self.conn.read().await;
+        conn.client()?.audit(&query).await.map_err(error::client)
+    }
+
+    /// The `agents` command: a page of the agents, newest first, with their
+    /// status and bots count.
+    ///
+    /// # Errors
+    /// `invalid_input` for a limit out of range, `no_server`, `no_session`,
+    /// or `api` 403 or 429.
+    pub async fn agents(
+        &self,
+        before: Option<AgentId>,
+        limit: Option<u32>,
+    ) -> Result<AgentPage, CommandError> {
+        let query = page(before, limit)?;
+        let conn = self.conn.read().await;
+        conn.client()?.agents(&query).await.map_err(error::client)
+    }
+
+    /// The `disable_agent` command: disables an agent for good, after
+    /// `step_up` within 5 minutes.
+    ///
+    /// # Errors
+    /// `no_server`, `no_session`, or `api` 403, 404 or 429.
+    pub async fn disable_agent(&self, id: AgentId) -> Result<AgentResponse, CommandError> {
+        let conn = self.conn.read().await;
+        conn.client()?
+            .disable_agent(id)
+            .await
+            .map_err(error::client)
+    }
+
+    /// The `release_agent` command: releases a disabled agent's bots, after
+    /// `step_up` within 5 minutes (ADR-0020, S49).
+    ///
+    /// # Errors
+    /// `no_server`, `no_session`, or `api` 403, 404, 409
+    /// (`agent_not_disabled`) or 429.
+    pub async fn release_agent(&self, id: AgentId) -> Result<AgentResponse, CommandError> {
+        let conn = self.conn.read().await;
+        conn.client()?
+            .release_agent(id)
+            .await
+            .map_err(error::client)
+    }
+
+    /// The `user_grants` command: a page of the grants a user holds, the
+    /// Owner's review (ADR-0020, S50).
+    ///
+    /// # Errors
+    /// `invalid_input` for a limit out of range, `no_server`, `no_session`,
+    /// or `api` 403, 404 or 429.
+    pub async fn user_grants(
+        &self,
+        id: UserId,
+        before: Option<AccountId>,
+        limit: Option<u32>,
+    ) -> Result<HeldGrantPage, CommandError> {
+        let query = page(before, limit)?;
+        let conn = self.conn.read().await;
+        conn.client()?
+            .user_grants(id, &query)
+            .await
+            .map_err(error::client)
+    }
+
+    /// The `shared_accounts` command: a page of a user's accounts that a
+    /// grant shares, the Owner's review (ADR-0020, S50).
+    ///
+    /// # Errors
+    /// `invalid_input` for a limit out of range, `no_server`, `no_session`,
+    /// or `api` 403, 404 or 429.
+    pub async fn shared_accounts(
+        &self,
+        id: UserId,
+        before: Option<AccountId>,
+        limit: Option<u32>,
+    ) -> Result<AccountPage, CommandError> {
+        let query = page(before, limit)?;
+        let conn = self.conn.read().await;
+        conn.client()?
+            .shared_accounts(id, &query)
             .await
             .map_err(error::client)
     }

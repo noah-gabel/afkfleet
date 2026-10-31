@@ -566,6 +566,76 @@
         "request": { "chat_formats": ["[{any}] {sender} : "], "line": "[Clan] Notch : hello" }
       },
       "expect": { "error": "no_server" }
+    },
+    {
+      "command": "audit",
+      "method": "audit",
+      "inputs": [42, 10, "user", "01900000-0000-7000-8000-000000000002"],
+      "args": {
+        "before": 42,
+        "limit": 10,
+        "targetKind": "user",
+        "targetId": "01900000-0000-7000-8000-000000000002"
+      },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "agents",
+      "method": "agents",
+      "inputs": ["01900000-0000-7000-8000-00000000000c", 10],
+      "args": { "before": "01900000-0000-7000-8000-00000000000c", "limit": 10 },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "disable_agent",
+      "method": "disableAgent",
+      "inputs": ["01900000-0000-7000-8000-00000000000c"],
+      "args": { "id": "01900000-0000-7000-8000-00000000000c" },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "release_agent",
+      "method": "releaseAgent",
+      "inputs": ["01900000-0000-7000-8000-00000000000c"],
+      "args": { "id": "01900000-0000-7000-8000-00000000000c" },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "user_grants",
+      "method": "userGrants",
+      "inputs": [
+        "01900000-0000-7000-8000-000000000002",
+        "01900000-0000-7000-8000-00000000000a",
+        10
+      ],
+      "args": {
+        "id": "01900000-0000-7000-8000-000000000002",
+        "before": "01900000-0000-7000-8000-00000000000a",
+        "limit": 10
+      },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "shared_accounts",
+      "method": "sharedAccounts",
+      "inputs": [
+        "01900000-0000-7000-8000-000000000002",
+        "01900000-0000-7000-8000-00000000000a",
+        10
+      ],
+      "args": {
+        "id": "01900000-0000-7000-8000-000000000002",
+        "before": "01900000-0000-7000-8000-00000000000a",
+        "limit": 10
+      },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "leave_account",
+      "method": "leaveAccount",
+      "inputs": ["01900000-0000-7000-8000-00000000000a"],
+      "args": { "id": "01900000-0000-7000-8000-00000000000a" },
+      "expect": { "error": "no_server" }
     }
   ]
 }

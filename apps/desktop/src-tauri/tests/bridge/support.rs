@@ -289,6 +289,30 @@ impl Server {
         id
     }
 
+    /// Agent `n`, enabled, holding `bot`: rows only an enrolled agent makes,
+    /// written straight to the database.
+    pub(crate) async fn agent_holding(&self, bot: BotId, n: u8) -> AgentId {
+        let now = self.clock.now();
+        let agent = AgentId::new_v7(now, [n; 10]).unwrap();
+        let mut tx = self.db.write().await.unwrap();
+        tx.agents()
+            .insert(&NewAgent {
+                id: agent,
+                name: AgentName::try_from(format!("agent-{n}").as_str()).unwrap(),
+                created_at: now,
+            })
+            .await
+            .unwrap();
+        assert!(tx.bots().assign(bot, agent).await.unwrap());
+        let entry = NewAuditEntry::new(
+            now,
+            AuditAction::try_from("test.agent_setup").unwrap(),
+            AuditOutcome::Success,
+        );
+        tx.commit(entry).await.unwrap();
+        agent
+    }
+
     /// `texts` in `bot`'s chat, oldest first, as system messages its agent
     /// reported: rows no route can make without an agent, so the bot is
     /// assigned to an agent made for it first (fleet-client's tests do the
