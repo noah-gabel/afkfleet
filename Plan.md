@@ -3847,7 +3847,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >   | H7 | `p11/p11.9-chat-format` | P11.9's per-server chat format as a server setting, its preview (split from H4 at its plan review) |
 >   | H8 | `p11/p11.9-parsed-senders` | P11.9's parsed senders end to end and the editor's formats (split from H7 at its plan review) |
 >   | I | `p11/p11.9-mode-editor` | P11.9's mode editor and first its `networkMode` fix (one group, about 6,200 lines, the user's at its plan review, U75) |
->   | J | `p11/p11.9-admin-screens` | P11.9's admin screens (ticked here) |
+>   | J | `p11/p11.9-admin-screens` | P11.9's admin screens, the audit's filter by target and the enrollment route's removal (ticked here; one group, about 5,100 to 5,900 lines, the user's at its plan review, U82) |
 >   | K | `p11/p11.10-dark-mode` | P11.10 |
 >   | L | `p11/p11.11-design-pass` | P11.11 |
 >   | M | `p11/p11-wrap-up` | The threat model, the README, the DoD's 24-hour run |
@@ -4156,6 +4156,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P11.8, as built in G2) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group G2)"): **built as planned,** with PR #72's follow-ups first. `watch_events` holds the read guard for its life and forwards fleet-client's updates over a `Channel` as `LiveUpdateMessage`s; the live layer (`packages/ui/src/app/live.ts`) patches the account caches and the bot, chat and mode keys H fills, holds changes per query while it fetches, and sets the Header's hint. *Deviations:* the test of a `recv` dropped during its own close drives it with an event before `ready` rather than silence, since a re-derived silence would pass against the old code too; the account screen's 404 is tested through a `bot_removed` that reads the account again.
 - [ ] **P11.9** 🔴 UI:
+
+  > Note (P11.9, Phase 11, group J's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U76–U82, S85–S89, R172–R181): **the admin screens, in one PR.** An audit viewer with a filter by target, an agents screen, the Owner's grants review on its own screen, and Leave.
+  > - **The user's:** enrollment tokens are CLI only, and the HTTP route is removed (U76); seven commands, 66 grants (U77); the filter on the server (U78), reached from an entry and from "Audit" on Agents' and Users' rows (U81); the review at `/admin/users/$id/grants`, offered by a line after a role change (U79); a name with the whole ID on hover (U80); one group (U82). The texts are ADR-0020's table.
+  > - **Decided by the review agents** (approved at the plan review): names from the users list, in the app (S85); Leave at `view` and `control`, a Manage grantee using Revoke (S86); the default cache time, with the session's end clearing it (S87); what the removal takes with it (S88); the filter's route, port and new index, correcting S48 (S89). Reconciliations: R172–R181.
 
   > Note (P11.9, from Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): the agents view shows each agent's bots count (`AgentResponse.bots`: its bots and open release records); releasing a disabled agent's bots becomes an API action (Admin or Owner, step-up, `agent.release` with `via` = `api`), with a text saying the operator vouches the agent's host is stopped. The texts for it and for the shown states are the user's. *Corrected at group F's planning (the user's choice, [ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U24): `via` = `http`, as every entry the HTTP API writes; the route is S49's.*
 
