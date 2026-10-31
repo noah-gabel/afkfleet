@@ -1,0 +1,42 @@
+{
+  "db_name": "SQLite",
+  "query": "EXPLAIN QUERY PLAN\n         SELECT id, at, actor_user_id, actor_ip, action, target_type, target_id, outcome,\n                metadata_json\n         FROM audit_log WHERE target_type = ? AND target_id = ? AND id < ?\n         ORDER BY id DESC LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "parent",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "notused",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "detail",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "76de8847baeca3f7eb41e00f572bf239ba64e29f8e6aa75a936a27f44a06c584"
+}

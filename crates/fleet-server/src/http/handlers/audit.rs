@@ -1,12 +1,13 @@
 //! The audit log's route (Plan.md P11.9, Appendix B; ADR-0020, S47, S48,
-//! R64–R66): `GET /api/v1/audit`.
+//! S89, R64–R66): `GET /api/v1/audit`.
 //!
 //! - **Who:** Admins and the Owner (`ViewAuditLog`); a Member gets 403, as
 //!   for the other admin lists. A plain authed route of class Standard: a
 //!   read neither loses data nor widens access, so it takes no step-up
 //!   (S47).
 //! - **What:** every entry, newest first by ID, in keyset pages with a
-//!   `SafeInt` cursor, without filters (S48); each built by
+//!   `SafeInt` cursor, optionally narrowed to one target's entries (U78,
+//!   S89); each built by
 //!   [`audit_entry`] the same for every viewer (ADR-0010's P7.13): what the
 //!   log stores, its names as `Open` values, the server's own entries
 //!   without actor, IP or target. A row that doesn't read back is listed by
@@ -20,7 +21,7 @@ use fleet_api_types::audit::{
     AuditDetail, AuditEntryResponse, AuditPage, AuditPageQuery, AuditTargetResponse,
 };
 use fleet_api_types::{BoundedText, ErrorResponse, Open, SafeInt};
-use fleet_core::audit::{RecordedTarget, RecordedValue};
+use fleet_core::audit::{RecordedTarget, RecordedValue, TargetKind};
 use fleet_core::authz::{Permission, ResourceContext};
 
 use super::timestamp;
@@ -28,7 +29,9 @@ use crate::app::audit::ListedAuditEntry;
 use crate::http::error::ApiError;
 use crate::http::extractors::{AuthUser, ValidQuery};
 use crate::http::router::AppState;
-use crate::ports::audit::{AuditEntryId, AuditLimit, AuditPage as Page, AuditRecord};
+use crate::ports::audit::{
+    AuditEntryId, AuditLimit, AuditPage as Page, AuditRecord, AuditTargetFilter,
+};
 
 /// `GET /api/v1/audit`: one page of the audit log, newest first.
 #[utoipa::path(
@@ -42,7 +45,7 @@ use crate::ports::audit::{AuditEntryId, AuditLimit, AuditPage as Page, AuditReco
         (status = 400, description = "A query that doesn't parse.", body = ErrorResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
         (status = 403, description = "Only Admins and the Owner read the audit log.", body = ErrorResponse),
-        (status = 422, description = "A `limit` outside 1 to 100, or a `before` below 1.", body = ErrorResponse),
+        (status = 422, description = "A `limit` outside 1 to 100, a `before` below 1, or a target that's half given or malformed.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
             headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
         (status = "default", description = "Any other answer the server gives, in the error envelope.", body = ErrorResponse),
@@ -59,7 +62,10 @@ pub(crate) async fn list(
         // garde has checked the limit, so one out of range is a bug.
         limit: AuditLimit::new(query.limit_or_default()).map_err(ApiError::internal)?,
     };
-    let listed = state.audit.page(page).await?;
+    let listed = match target_filter(&query)? {
+        Some(filter) => state.audit.page_for_target(&filter, page).await?,
+        None => state.audit.page(page).await?,
+    };
     let mut items = Vec::new();
     let mut unreadable = Vec::new();
     for entry in &listed.items {
@@ -79,6 +85,20 @@ pub(crate) async fn list(
             .transpose()
             .map_err(ApiError::internal)?,
     }))
+}
+
+/// The target `query` narrows the log to. garde has checked both values, so
+/// one that doesn't read is a bug.
+fn target_filter(query: &AuditPageQuery) -> Result<Option<AuditTargetFilter>, ApiError> {
+    query
+        .target()
+        .map(|(kind, id)| {
+            Ok(AuditTargetFilter {
+                kind: TargetKind::try_from(kind).map_err(ApiError::internal)?,
+                id: id.parse().map_err(ApiError::internal)?,
+            })
+        })
+        .transpose()
 }
 
 /// `record` as every viewer reads it: what the log stores, nothing joined,

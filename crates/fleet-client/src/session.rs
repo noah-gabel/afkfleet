@@ -924,7 +924,12 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         self: &Arc<Self>,
         query: &AuditPageQuery,
     ) -> Result<AuditPage, ClientError> {
-        let url = with_cursor(self.server.api(&["audit"]), query.before, query.limit);
+        let mut url = with_cursor(self.server.api(&["audit"]), query.before, query.limit);
+        if let Some((kind, id)) = query.target() {
+            url.query_pairs_mut()
+                .append_pair("target_kind", kind)
+                .append_pair("target_id", id);
+        }
         let answer = self.authed(Method::GET, url, None).await?;
         expect_json(answer, 200)
     }
@@ -3367,6 +3372,8 @@ mod tests {
             .audit(&AuditPageQuery {
                 before: Some(fleet_api_types::SafeInt::try_new(42).unwrap()),
                 limit: Some(10),
+                target_kind: None,
+                target_id: None,
             })
             .await
             .unwrap();
@@ -3393,6 +3400,8 @@ mod tests {
             .audit(&AuditPageQuery {
                 before: None,
                 limit: None,
+                target_kind: None,
+                target_id: None,
             })
             .await
             .unwrap_err();

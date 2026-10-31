@@ -12,8 +12,10 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use fleet_core::audit::{
     AuditAction, AuditMetadata, AuditOutcome, AuditTarget, RecordedMetadata, RecordedTarget,
+    TargetKind,
 };
 use fleet_core::id::UserId;
+use uuid::Uuid;
 
 use super::store::StoreError;
 
@@ -194,6 +196,16 @@ pub struct FailedCodeAttempts {
     pub last_at: Option<DateTime<Utc>>,
 }
 
+/// The one target a page of the log is narrowed to, as its columns store it
+/// (ADR-0020, S89): a kind this version may not know, and any UUID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditTargetFilter {
+    /// The stored `target_type`.
+    pub kind: TargetKind,
+    /// The stored `target_id`.
+    pub id: Uuid,
+}
+
 /// Reading the audit log.
 #[async_trait]
 pub trait AuditReads: Send + Sync + fmt::Debug {
@@ -205,6 +217,18 @@ pub trait AuditReads: Send + Sync + fmt::Debug {
     /// can list it and step past it (ADR-0020, S52); and the other
     /// [`StoreError`]s.
     async fn list(&self, page: AuditPage) -> Result<Vec<AuditRecord>, StoreError>;
+
+    /// One page of the entries about `filter`'s target, newest first by ID.
+    /// A row whose target columns were changed is no longer this target's
+    /// (S89).
+    ///
+    /// # Errors
+    /// As [`Self::list`].
+    async fn list_for_target(
+        &self,
+        filter: &AuditTargetFilter,
+        page: AuditPage,
+    ) -> Result<Vec<AuditRecord>, StoreError>;
 
     /// The wrong 2FA codes typed for `user` since their previous login,
     /// without the newest login's own typos ([`FailedCodeAttempts`]).

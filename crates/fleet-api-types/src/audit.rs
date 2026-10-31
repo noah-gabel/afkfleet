@@ -1,5 +1,5 @@
 //! The audit log's DTOs (Plan.md P11.9, Appendix B; ADR-0020, S47, S48,
-//! R64–R66): `GET /audit`'s query and pages, Admin+.
+//! S89, R64–R66): `GET /audit`'s query and pages, Admin+.
 //!
 //! Each entry shows what the audit log stores, built the same for every
 //! viewer: when, who (the acting user's ID and the client's IP address,
@@ -21,7 +21,7 @@
 //! older app reads a name only a newer server records as unknown text, and
 //! shows it. The entries' cursor is their row ID, a [`SafeInt`].
 
-use fleet_core::audit::AuditMetadata;
+use fleet_core::audit::{AuditMetadata, TargetKind};
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -395,11 +395,13 @@ pub struct AuditPage {
     pub next: Option<SafeInt>,
 }
 
-/// `GET /audit?before=<id>&limit=<n>`: which page of the audit log to
-/// answer, newest first. Like [`crate::PageQuery`], with the log's own
-/// cursor, a row ID, which crosses as a [`SafeInt`] (ADR-0015). A parameter
-/// that isn't one of these two, or one given twice, is refused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Validate)]
+/// `GET /audit?before=<id>&limit=<n>&target_kind=<kind>&target_id=<id>`:
+/// which page of the audit log to answer, newest first. Like
+/// [`crate::PageQuery`], with the log's own cursor, a row ID, which crosses
+/// as a [`SafeInt`] (ADR-0015), and optionally narrowed to one target's
+/// entries, the kind and the ID both or neither (ADR-0020, S89). A parameter
+/// that isn't one of these, or one given twice, is refused.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct AuditPageQuery {
     /// Only entries older than this one: the `next` of the page before. At
@@ -411,6 +413,17 @@ pub struct AuditPageQuery {
     #[garde(range(min = 1, max = PAGE_MAX))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+    /// Only entries about a target of this kind, with `target_id`. A kind
+    /// this version doesn't know is valid: an entry's own kind must work
+    /// after a downgrade.
+    #[garde(custom(valid_target_kind(self.target_id.as_ref())))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_kind: Option<String>,
+    /// Only entries about the target with this ID, with `target_kind`: a
+    /// UUID in its canonical lowercase form, as stored.
+    #[garde(custom(valid_target_id(self.target_kind.as_ref())))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<String>,
 }
 
 impl AuditPageQuery {
@@ -419,6 +432,52 @@ impl AuditPageQuery {
     pub fn limit_or_default(&self) -> u32 {
         self.limit.unwrap_or(PAGE_DEFAULT)
     }
+
+    /// The kind and the ID of the target it's narrowed to, when both are
+    /// given; the query's rules refuse one alone.
+    #[must_use]
+    pub fn target(&self) -> Option<(&str, &str)> {
+        self.target_kind.as_deref().zip(self.target_id.as_deref())
+    }
+}
+
+/// What a half-given target's other field says.
+const TARGET_PAIR: &str = "target_kind and target_id go together";
+
+/// The garde rule of `target_kind`: a valid name, and only with `target_id`.
+fn valid_target_kind(
+    id: Option<&String>,
+) -> impl FnOnce(&Option<String>, &()) -> garde::Result + '_ {
+    move |kind, _context| match (kind, id) {
+        (None, None) => Ok(()),
+        (None, Some(_)) => Err(garde::Error::new(TARGET_PAIR)),
+        (Some(kind), _) => TargetKind::try_from(kind.as_str())
+            .map(drop)
+            .map_err(|_| garde::Error::new("isn't a target's kind")),
+    }
+}
+
+/// The garde rule of `target_id`: a canonical UUID, and only with
+/// `target_kind`.
+fn valid_target_id(
+    kind: Option<&String>,
+) -> impl FnOnce(&Option<String>, &()) -> garde::Result + '_ {
+    move |id, _context| match (id, kind) {
+        (None, None) => Ok(()),
+        (None, Some(_)) => Err(garde::Error::new(TARGET_PAIR)),
+        (Some(id), _) if is_canonical_uuid(id) => Ok(()),
+        (Some(_), _) => Err(garde::Error::new("isn't a lowercase hyphenated ID")),
+    }
+}
+
+/// Whether `text` is a UUID's canonical form, of any version: 36 characters,
+/// lowercase hexadecimal with hyphens at 8, 13, 18 and 23.
+fn is_canonical_uuid(text: &str) -> bool {
+    text.len() == ID_CHARS
+        && text.bytes().enumerate().all(|(at, byte)| match at {
+            8 | 13 | 18 | 23 => byte == b'-',
+            _ => byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte),
+        })
 }
 
 impl IntoParams for AuditPageQuery {
@@ -440,6 +499,24 @@ impl IntoParams for AuditPageQuery {
                 .description(Some("How many entries at most; 50 by default."))
                 .schema(Some(integer_schema::<1, PAGE_MAX>()))
                 .build(),
+            ParameterBuilder::new()
+                .name("target_kind")
+                .parameter_in(ParameterIn::Query)
+                .required(Required::False)
+                .description(Some(
+                    "Only entries about a target of this kind, with `target_id`.",
+                ))
+                .schema(Some(BoundedText::<{ TargetKind::MAX_LEN }>::schema()))
+                .build(),
+            ParameterBuilder::new()
+                .name("target_id")
+                .parameter_in(ParameterIn::Query)
+                .required(Required::False)
+                .description(Some(
+                    "Only entries about the target with this ID, with `target_kind`.",
+                ))
+                .schema(Some(id_schema()))
+                .build(),
         ]
     }
 }
@@ -451,6 +528,9 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// A target's ID in its canonical form.
+    const CANONICAL: &str = "018bcfe5-6800-7101-8101-010101010101";
 
     #[test]
     fn every_action_fleet_core_records_has_its_name_in_the_same_order() {
@@ -597,6 +677,64 @@ mod tests {
         let error = serde_json::from_value::<AuditPageQuery>(json!({ "action": "auth.login" }));
 
         assert!(error.is_err());
+    }
+
+    #[rstest]
+    #[case::neither(json!({}), true)]
+    #[case::both(json!({ "target_kind": "bot", "target_id": CANONICAL }), true)]
+    #[case::a_kind_only_a_newer_server_knows(
+        json!({ "target_kind": "planet", "target_id": CANONICAL }),
+        true
+    )]
+    #[case::any_version(
+        json!({ "target_kind": "bot", "target_id": "00000000-0000-0000-0000-000000000000" }),
+        true
+    )]
+    #[case::kind_alone(json!({ "target_kind": "bot" }), false)]
+    #[case::id_alone(json!({ "target_id": CANONICAL }), false)]
+    #[case::empty_kind(json!({ "target_kind": "", "target_id": CANONICAL }), false)]
+    #[case::kind_with_a_dot(json!({ "target_kind": "a.b", "target_id": CANONICAL }), false)]
+    #[case::kind_in_capitals(json!({ "target_kind": "Bot", "target_id": CANONICAL }), false)]
+    #[case::empty_id(json!({ "target_kind": "bot", "target_id": "" }), false)]
+    #[case::uppercase_id(
+        json!({ "target_kind": "bot", "target_id": "018BCFE5-6800-7101-8101-010101010101" }),
+        false
+    )]
+    #[case::no_hyphens(
+        json!({ "target_kind": "bot", "target_id": "018bcfe5680071018101010101010101" }),
+        false
+    )]
+    #[case::a_hyphen_moved(
+        json!({ "target_kind": "bot", "target_id": "018bcfe56-800-7101-8101-010101010101" }),
+        false
+    )]
+    #[case::one_too_long(
+        json!({ "target_kind": "bot", "target_id": "018bcfe5-6800-7101-8101-0101010101010" }),
+        false
+    )]
+    #[case::multibyte(
+        json!({ "target_kind": "bot", "target_id": "018bcfe5-6800-7101-8101-0101010101é" }),
+        false
+    )]
+    fn a_query_takes_a_target_whole_or_not_at_all(
+        #[case] json: serde_json::Value,
+        #[case] valid: bool,
+    ) {
+        let query: AuditPageQuery = serde_json::from_value(json).unwrap();
+
+        assert_eq!(query.validate().is_ok(), valid, "{query:?}");
+    }
+
+    #[test]
+    fn a_query_names_its_target_only_when_both_parts_are_given() {
+        let both: AuditPageQuery =
+            serde_json::from_value(json!({ "target_kind": "bot", "target_id": CANONICAL }))
+                .unwrap();
+        let kind_alone: AuditPageQuery =
+            serde_json::from_value(json!({ "target_kind": "bot" })).unwrap();
+
+        assert_eq!(both.target(), Some(("bot", CANONICAL)));
+        assert_eq!(kind_alone.target(), None);
     }
 
     #[test]

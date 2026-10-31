@@ -14,7 +14,8 @@ use uuid::Uuid;
 use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::store_error;
 use crate::ports::audit::{
-    AuditEntryId, AuditPage, AuditRecord, FailedCodeAttempts, NewAuditEntry, TABLE,
+    AuditEntryId, AuditPage, AuditRecord, AuditTargetFilter, FailedCodeAttempts, NewAuditEntry,
+    TABLE,
 };
 use crate::ports::store::StoreError;
 
@@ -79,6 +80,37 @@ pub(super) async fn list(
         r#"SELECT id AS "id!: i64", at, actor_user_id, actor_ip, action, target_type, target_id,
                   outcome, metadata_json
            FROM audit_log WHERE id < ? ORDER BY id DESC LIMIT ?"#,
+        before,
+        limit
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(store_error)?
+    .iter()
+    .map(record_from_row)
+    .collect()
+}
+
+/// One page of the entries about `filter`'s target, newest first by ID, over
+/// `audit_log_target_id`: 0007's index would read and sort all of the
+/// target's rows for each page (ADR-0020, S89).
+pub(super) async fn list_for_target(
+    pool: &SqlitePool,
+    filter: &AuditTargetFilter,
+    page: AuditPage,
+) -> Result<Vec<AuditRecord>, StoreError> {
+    let kind = filter.kind.as_str();
+    let id = id_text(filter.id);
+    let before = page.before.map_or(i64::MAX, AuditEntryId::get);
+    let limit = i64::from(page.limit.get());
+    sqlx::query_as!(
+        AuditRow,
+        r#"SELECT id AS "id!: i64", at, actor_user_id, actor_ip, action, target_type, target_id,
+                  outcome, metadata_json
+           FROM audit_log WHERE target_type = ? AND target_id = ? AND id < ?
+           ORDER BY id DESC LIMIT ?"#,
+        kind,
+        id,
         before,
         limit
     )

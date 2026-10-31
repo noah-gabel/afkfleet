@@ -4571,6 +4571,26 @@ expression: answer.json()
               "minimum": 1,
               "type": "integer"
             }
+          },
+          {
+            "description": "Only entries about a target of this kind, with `target_id`.",
+            "in": "query",
+            "name": "target_kind",
+            "required": false,
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only entries about the target with this ID, with `target_kind`.",
+            "in": "query",
+            "name": "target_id",
+            "required": false,
+            "schema": {
+              "maxLength": 36,
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4622,7 +4642,7 @@ expression: answer.json()
                 }
               }
             },
-            "description": "A `limit` outside 1 to 100, or a `before` below 1."
+            "description": "A `limit` outside 1 to 100, a `before` below 1, or a target that's half given or malformed."
           },
           "429": {
             "content": {

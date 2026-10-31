@@ -134,6 +134,8 @@ async fn the_owner_pages_through_the_audit_log_and_a_member_is_refused() {
             .audit(&AuditPageQuery {
                 before,
                 limit: Some(2),
+                target_kind: None,
+                target_id: None,
             })
             .await
             .unwrap();
@@ -148,6 +150,8 @@ async fn the_owner_pages_through_the_audit_log_and_a_member_is_refused() {
         .audit(&AuditPageQuery {
             before: None,
             limit: None,
+            target_kind: None,
+            target_id: None,
         })
         .await
         .unwrap_err();
@@ -162,6 +166,35 @@ async fn the_owner_pages_through_the_audit_log_and_a_member_is_refused() {
     );
     assert!(actions.len() > 2, "more than one page: {actions:?}");
     assert!(is_api(&refused, 403, ErrorCode::Forbidden), "{refused:?}");
+    server.stop().await;
+}
+
+/// The target's kind and ID reach the server: the Owner's page narrowed to
+/// the Member they invited holds only that Member's entries (ADR-0020, S89).
+#[tokio::test]
+async fn a_filtered_audit_page_reaches_the_server() {
+    let server = Server::start().await;
+    let (owner, _, _) = server.owner().await;
+    step_up(&owner).await;
+    let (bob, _) = server.member(&owner, "bob").await;
+    let bob_id = bob.me().await.unwrap().id.to_string();
+
+    let page = owner
+        .audit(&AuditPageQuery {
+            before: None,
+            limit: None,
+            target_kind: Some("user".to_owned()),
+            target_id: Some(bob_id.clone()),
+        })
+        .await
+        .unwrap();
+
+    assert_ne!(page.items.len(), 0);
+    for entry in &page.items {
+        let target = entry.target.as_ref().unwrap();
+        assert_eq!(target.kind.as_str(), "user");
+        assert_eq!(target.id.as_str(), bob_id);
+    }
     server.stop().await;
 }
 
