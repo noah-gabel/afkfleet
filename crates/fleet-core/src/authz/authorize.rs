@@ -125,7 +125,6 @@ fn account(
         | Permission::ListInvites
         | Permission::CreateInvite { .. }
         | Permission::ViewAgents
-        | Permission::EnrollAgent
         | Permission::DisableAgent
         | Permission::ReleaseAgent
         | Permission::ViewAuditLog
@@ -178,7 +177,6 @@ fn global(actor: &Actor, permission: Permission) -> Result<(), AuthzError> {
         | Permission::ConfigureServerSettings => actor.role >= Role::Admin,
         // An agent receives session tokens for the bots assigned to it, so
         // only the Owner decides which agents exist (ADR-0010).
-        Permission::EnrollAgent => actor.role == Role::Owner,
         Permission::CreateInvite { role } => handles_invites_for(actor, role),
         Permission::ViewBot
         | Permission::ControlBot
@@ -233,7 +231,6 @@ fn invite(actor: &Actor, permission: Permission, role: Role) -> Result<(), Authz
         | Permission::ListInvites
         | Permission::CreateInvite { .. }
         | Permission::ViewAgents
-        | Permission::EnrollAgent
         | Permission::DisableAgent
         | Permission::ReleaseAgent
         | Permission::ViewAuditLog
@@ -282,7 +279,6 @@ fn mode(
         | Permission::ListInvites
         | Permission::CreateInvite { .. }
         | Permission::ViewAgents
-        | Permission::EnrollAgent
         | Permission::DisableAgent
         | Permission::ReleaseAgent
         | Permission::ViewAuditLog
@@ -352,7 +348,6 @@ fn user(actor: &Actor, permission: Permission, target: UserRef) -> Result<(), Au
         | Permission::ListInvites
         | Permission::CreateInvite { .. }
         | Permission::ViewAgents
-        | Permission::EnrollAgent
         | Permission::DisableAgent
         | Permission::ReleaseAgent
         | Permission::ViewAuditLog
@@ -404,7 +399,6 @@ fn personal(actor: &Actor, permission: Permission, owner: UserId) -> Result<(), 
         | Permission::ListInvites
         | Permission::CreateInvite { .. }
         | Permission::ViewAgents
-        | Permission::EnrollAgent
         | Permission::DisableAgent
         | Permission::ReleaseAgent
         | Permission::ViewAuditLog
@@ -539,7 +533,7 @@ mod tests {
     }
 
     /// How many variants [`Permission`] has.
-    const PERMISSION_VARIANTS: usize = 31;
+    const PERMISSION_VARIANTS: usize = 30;
 
     /// The variant's index, and the kind of context it applies to.
     ///
@@ -563,22 +557,21 @@ mod tests {
             Permission::ListInvites => (12, Kind::Global),
             Permission::CreateInvite { .. } => (13, Kind::Global),
             Permission::ViewAgents => (14, Kind::Global),
-            Permission::EnrollAgent => (15, Kind::Global),
-            Permission::DisableAgent => (16, Kind::Global),
-            Permission::ViewAuditLog => (17, Kind::Global),
-            Permission::RevokeInvite => (18, Kind::Invite),
-            Permission::ViewMode => (19, Kind::Mode),
-            Permission::UpdateMode { .. } => (20, Kind::Mode),
-            Permission::DeleteMode => (21, Kind::Mode),
-            Permission::SetRole { .. } => (22, Kind::User),
-            Permission::SetDisabled => (23, Kind::User),
-            Permission::UsePersonal => (24, Kind::Personal),
-            Permission::ReviewLink => (25, Kind::Account),
-            Permission::ReleaseAgent => (26, Kind::Global),
-            Permission::ReviewUserGrants => (27, Kind::User),
-            Permission::LeaveAccount => (28, Kind::Account),
-            Permission::ViewServerSettings => (29, Kind::Global),
-            Permission::ConfigureServerSettings => (30, Kind::Global),
+            Permission::DisableAgent => (15, Kind::Global),
+            Permission::ViewAuditLog => (16, Kind::Global),
+            Permission::RevokeInvite => (17, Kind::Invite),
+            Permission::ViewMode => (18, Kind::Mode),
+            Permission::UpdateMode { .. } => (19, Kind::Mode),
+            Permission::DeleteMode => (20, Kind::Mode),
+            Permission::SetRole { .. } => (21, Kind::User),
+            Permission::SetDisabled => (22, Kind::User),
+            Permission::UsePersonal => (23, Kind::Personal),
+            Permission::ReviewLink => (24, Kind::Account),
+            Permission::ReleaseAgent => (25, Kind::Global),
+            Permission::ReviewUserGrants => (26, Kind::User),
+            Permission::LeaveAccount => (27, Kind::Account),
+            Permission::ViewServerSettings => (28, Kind::Global),
+            Permission::ConfigureServerSettings => (29, Kind::Global),
         }
     }
 
@@ -642,7 +635,6 @@ mod tests {
                 Permission::CreateInvite { role: Role::Owner },
             ),
             ("ViewAgents", Permission::ViewAgents),
-            ("EnrollAgent", Permission::EnrollAgent),
             ("DisableAgent", Permission::DisableAgent),
             ("ReleaseAgent", Permission::ReleaseAgent),
             ("ViewAuditLog", Permission::ViewAuditLog),
@@ -1386,21 +1378,6 @@ mod tests {
     }
 
     // Fleet-wide and invites.
-
-    #[rstest]
-    #[case::owner(Role::Owner, Ok(()))]
-    #[case::admin(Role::Admin, Err(Forbidden))]
-    #[case::member(Role::Member, Err(Forbidden))]
-    fn only_the_owner_enrolls_agents(#[case] role: Role, #[case] expected: Result<(), AuthzError>) {
-        assert_eq!(
-            authorize(
-                &actor(role),
-                Permission::EnrollAgent,
-                &ResourceContext::Global
-            ),
-            expected
-        );
-    }
 
     #[rstest]
     #[case::owner(Role::Owner, Ok(()))]

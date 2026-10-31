@@ -72,10 +72,6 @@ pub enum Permission {
     },
     /// List the agents (Admin+).
     ViewAgents,
-    /// Create an agent enrollment token (Owner). Every agent can receive
-    /// session tokens for the bots assigned to it, so only the Owner decides
-    /// which agents exist (ADR-0010).
-    EnrollAgent,
     /// Disable an agent (Admin+).
     DisableAgent,
     /// Release a disabled agent's bots, on the operator's word that its
