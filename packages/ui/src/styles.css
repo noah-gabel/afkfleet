@@ -66,6 +66,7 @@
 }
 
 :root {
+  color-scheme: light;
   --radius: 0.625rem;
   --background: #ffffff;
   --foreground: oklch(0.145 0 0);
@@ -103,6 +104,7 @@
 }
 
 .dark {
+  color-scheme: dark;
   --background: #0a0a0a;
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0);
@@ -135,6 +137,14 @@
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
   --qr-background: #fff;
+}
+
+/* Until the bundled script sets `.light` or `.dark`: nothing but the page's canvas shows yet. */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    color-scheme: dark;
+    --background: #0a0a0a;
+  }
 }
 
 @layer base {

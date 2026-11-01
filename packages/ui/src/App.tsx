@@ -1,3 +1,6 @@
+// First, so every entry sets the theme's class before it renders (ADR-0020, S92).
+import "./app/themeStart";
+
 import { QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
@@ -7,6 +10,7 @@ import { ApiClientProvider } from "./api/context";
 import { StoresProvider } from "./app/context";
 import { useWindowFocus } from "./app/focus";
 import { type AppRuntime, createAppRuntime } from "./app/runtime";
+import { attachTheme } from "./app/theme";
 import { Toaster } from "./components/Toaster";
 import { AppErrorBoundary } from "./features/shell/components/AppErrorBoundary";
 
@@ -24,12 +28,14 @@ export function App({ apiClient }: { apiClient: ApiClient }) {
 /**
  * The app over an existing runtime: the error boundary around everything, the providers,
  * the router and the toasts. Tests render it to reach the runtime; `onRestart` replaces
- * the error screen's reload. While it's mounted, the window's focus counts (app/focus.ts)
- * and the live events layer follows the session (app/live.ts).
+ * the error screen's reload. While it's mounted, the window's focus counts (app/focus.ts),
+ * the live events layer follows the session (app/live.ts), and the theme follows the choice and
+ * Windows (app/theme.ts).
  */
 export function AppRoot({ runtime, onRestart }: { runtime: AppRuntime; onRestart?: () => void }) {
   useWindowFocus();
   useEffect(() => runtime.live.attach(), [runtime]);
+  useEffect(() => attachTheme(runtime.stores.theme), [runtime]);
   return (
     <AppErrorBoundary {...(onRestart === undefined ? {} : { onRestart })}>
       <ApiClientProvider client={runtime.apiClient}>
