@@ -29,7 +29,11 @@ export function renderApp(
   handlers: Partial<ApiClient> = {},
   options: { advanceTimers?: (ms: number) => unknown; strict?: boolean } = {},
 ): RenderedApp {
-  const fake = new FakeApiClient({ watchEvents: fakeWatch().handler, ...handlers });
+  const fake = new FakeApiClient({
+    watchEvents: fakeWatch().handler,
+    setWindowTheme: async () => {},
+    ...handlers,
+  });
   const runtime = createAppRuntime(fake);
   const restart = vi.fn();
   const user = userEvent.setup(

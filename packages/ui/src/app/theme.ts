@@ -5,7 +5,15 @@
 // The choice is the one thing the UI keeps in `localStorage`: it isn't a secret, and anything but
 // the three values, or a read that fails, counts as Windows. A write that fails still applies the
 // choice for this run.
+//
+// The native window follows the choice too, for its title bar (U85, S94), one call at a time, the
+// latest choice after each answer; a refusal is dropped, as the page already shows the choice.
+// A choice other than `windows` forces the window's theme and so `prefers-color-scheme` with it,
+// which then says nothing about Windows. So the media query counts only under `windows`, and is
+// read again once that call settled: Windows may have changed while it couldn't be seen.
 import type { StoreApi } from "zustand/vanilla";
+
+import type { ApiClient } from "../api/ApiClient";
 
 /** What a user may choose. */
 export type ThemeChoice = "light" | "dark" | "windows";
@@ -27,6 +35,10 @@ export interface ThemeState {
   choose(choice: ThemeChoice): void;
   /** Windows' setting changed. */
   windowsChanged(windows: Theme): void;
+  /** The choice the native window last took, once it answered; none yet this start. */
+  readonly sent: ThemeChoice | null;
+  /** Whether the native window hasn't answered the last call yet. */
+  readonly sending: boolean;
 }
 
 /** The query Windows' setting answers. */
@@ -73,15 +85,46 @@ export function applyTheme(theme: Theme): void {
   classes.toggle("light", theme === "light");
 }
 
+/** Tells the native window the store's choice, unless it's on its way or already there. */
+function sendChoice(store: StoreApi<ThemeState>, api: Pick<ApiClient, "setWindowTheme">): void {
+  const { choice, sending, sent } = store.getState();
+  if (sending || sent === choice) {
+    return;
+  }
+  store.setState({ sending: true });
+  void api
+    .setWindowTheme(choice)
+    .catch(() => {})
+    .then(() => {
+      store.setState({ sending: false, sent: choice });
+      readWindows(store);
+      sendChoice(store, api);
+    });
+}
+
+/** Reads Windows' setting into the store, if the media query means it now. */
+function readWindows(store: StoreApi<ThemeState>): void {
+  if (store.getState().choice === "windows") {
+    store.getState().windowsChanged(windowsTheme());
+  }
+}
+
 /**
- * Keeps the document and `store` in step until the returned function is called: the class follows
- * the store, and the store follows Windows' change event.
+ * Keeps the document, the native window and `store` in step until the returned function is called:
+ * the class and the window follow the store, and the store follows Windows' change event.
  */
-export function attachTheme(store: StoreApi<ThemeState>): () => void {
-  const onWindowsChange = () => store.getState().windowsChanged(windowsTheme());
+export function attachTheme(
+  store: StoreApi<ThemeState>,
+  api: Pick<ApiClient, "setWindowTheme">,
+): () => void {
+  const onWindowsChange = () => readWindows(store);
   onWindowsChange();
   applyTheme(store.getState().theme);
-  const unsubscribe = store.subscribe((state) => applyTheme(state.theme));
+  sendChoice(store, api);
+  const unsubscribe = store.subscribe((state) => {
+    applyTheme(state.theme);
+    sendChoice(store, api);
+  });
   const query = darkQuery();
   query?.addEventListener("change", onWindowsChange);
   return () => {

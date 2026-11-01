@@ -168,6 +168,7 @@ export const COMMANDS = [
   "user_grants",
   "shared_accounts",
   "leave_account",
+  "set_window_theme",
 ] as const;
 
 /** One command. */
@@ -2090,6 +2091,8 @@ export class FakeBackend {
         return this.#startLink(args.id);
       case "link_status":
         return this.#linkStatus(args.id);
+      case "set_window_theme":
+        return value();
       case "open_verification_link":
         if (this.#flow === null) {
           return refused("no_verification_link");

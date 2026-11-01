@@ -162,6 +162,16 @@ describe("watched", () => {
     expect(events.recovered).toHaveBeenCalledTimes(1);
   });
 
+  it("takes no banner down when the window's theme is set: it reaches no server (S94)", async () => {
+    const { client, stores, events } = setup({ setWindowTheme: async () => {} });
+    stores.connection.getState().fail("down");
+
+    await client.setWindowTheme("dark");
+
+    expect(stores.connection.getState().status).toBe("down");
+    expect(events.recovered).not.toHaveBeenCalled();
+  });
+
   it("keeps the banner for a success that started before it went up", async () => {
     const answer = deferred<MeResponse>();
     const { client, stores, events } = setup({ me: () => answer.promise });

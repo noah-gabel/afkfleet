@@ -28,6 +28,7 @@ pub(crate) mod modes;
 pub(crate) mod server;
 pub(crate) mod server_settings;
 pub(crate) mod users;
+pub(crate) mod window;
 
 /// The managed state, as a command takes it.
 pub(crate) type Managed<'a> = tauri::State<'a, AppState<KeychainFactory>>;

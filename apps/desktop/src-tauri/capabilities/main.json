@@ -69,6 +69,7 @@
     "allow-release-agent",
     "allow-user-grants",
     "allow-shared-accounts",
-    "allow-leave-account"
+    "allow-leave-account",
+    "allow-set-window-theme"
   ]
 }

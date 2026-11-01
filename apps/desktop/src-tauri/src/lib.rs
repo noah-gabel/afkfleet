@@ -19,6 +19,9 @@
 //! tauri-plugin-opener's free `open_url`, on the one link the state holds
 //! after fleet-client's `VerifiedLink` passed it. The plugin isn't
 //! registered, so the webview gets none of its commands.
+//!
+//! The window starts hidden and shows once it has its colour, and its colours follow the
+//! user's theme (`window_theme`; P11.10, ADR-0020).
 
 mod commands;
 mod endpoints;
@@ -30,6 +33,7 @@ mod navigation;
 pub mod profile;
 pub mod startup;
 pub mod state;
+mod window_theme;
 
 use std::sync::Arc;
 
@@ -116,6 +120,7 @@ pub fn configure<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         commands::users::user_grants,
         commands::users::shared_accounts,
         commands::grants::leave_account,
+        commands::window::set_window_theme,
     ])
 }
 
@@ -136,7 +141,21 @@ pub fn run() -> Result<(), StartError> {
                     focus::focus_main_window(&window);
                 }
             }))
-            .plugin(navigation::guard()?),
+            .plugin(navigation::guard()?)
+            .setup(|app| {
+                if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+                    window_theme::reveal_main_window(&window);
+                }
+                Ok(())
+            })
+            // Windows' own change, under the `windows` choice: the page follows it itself.
+            .on_window_event(|window, event| {
+                if let tauri::WindowEvent::ThemeChanged(theme) = event
+                    && let Some(webview) = window.get_webview_window(window.label())
+                {
+                    window_theme::paint(&webview, *theme);
+                }
+            }),
     )
     .build(tauri::generate_context!())?;
     let store = windows_native_keyring_store::Store::new().map_err(|_| StartError::Keychain)?;

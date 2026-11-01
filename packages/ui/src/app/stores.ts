@@ -183,6 +183,8 @@ export function createAppStores(): AppStores {
       choice,
       windows,
       theme: resolveTheme(choice, windows),
+      sent: null,
+      sending: false,
       choose(next) {
         saveThemeChoice(next);
         set({ choice: next, theme: resolveTheme(next, get().windows) });

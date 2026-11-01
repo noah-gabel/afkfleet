@@ -15,6 +15,11 @@ import {
   windowsTheme,
 } from "./theme";
 
+/** A native window that takes every choice at once, for the tests about the class. */
+function quiet() {
+  return { setWindowTheme: async () => {} };
+}
+
 /** What `<html>` holds of the two theme classes. */
 function classes(): string[] {
   const list = document.documentElement.classList;
@@ -137,7 +142,7 @@ describe("attachTheme", () => {
   it("shows Windows' setting at once and follows its change, live", () => {
     const windows = fakeMatchMedia(true);
     const store = createAppStores().theme;
-    const release = attachTheme(store);
+    const release = attachTheme(store, quiet());
     expect(classes()).toEqual(["dark"]);
 
     windows.change(false);
@@ -156,7 +161,7 @@ describe("attachTheme", () => {
     const windows = fakeMatchMedia(dark);
     const store = createAppStores().theme;
     store.getState().choose(choice as ThemeChoice);
-    const release = attachTheme(store);
+    const release = attachTheme(store, quiet());
     expect(classes()).toEqual(shown);
 
     windows.change(!dark);
@@ -168,7 +173,7 @@ describe("attachTheme", () => {
   it("follows the store when the user chooses", () => {
     fakeMatchMedia(false);
     const store = createAppStores().theme;
-    const release = attachTheme(store);
+    const release = attachTheme(store, quiet());
 
     store.getState().choose("dark");
 
@@ -181,7 +186,7 @@ describe("attachTheme", () => {
     const store = createAppStores().theme;
     windows.change(true);
 
-    const release = attachTheme(store);
+    const release = attachTheme(store, quiet());
 
     expect(store.getState().windows).toBe("dark");
     expect(classes()).toEqual(["dark"]);
@@ -191,7 +196,7 @@ describe("attachTheme", () => {
   it("lets go of both when released, and leaves the class", () => {
     const windows = fakeMatchMedia(true);
     const store = createAppStores().theme;
-    const release = attachTheme(store);
+    const release = attachTheme(store, quiet());
     expect(windows.listeners()).toBe(1);
 
     release();
@@ -205,8 +210,8 @@ describe("attachTheme", () => {
     const windows = fakeMatchMedia(true);
     const store = createAppStores().theme;
 
-    attachTheme(store)();
-    const release = attachTheme(store);
+    attachTheme(store, quiet())();
+    const release = attachTheme(store, quiet());
 
     expect(windows.listeners()).toBe(1);
     release();
@@ -215,10 +220,146 @@ describe("attachTheme", () => {
   it("works without matchMedia", () => {
     const store = createAppStores().theme;
 
-    const release = attachTheme(store);
+    const release = attachTheme(store, quiet());
 
     expect(classes()).toEqual(["light"]);
     expect(release).not.toThrow();
+  });
+});
+
+describe("the native window (ADR-0020, S94)", () => {
+  /** A native window whose calls wait until a test answers them. */
+  function heldWindow() {
+    const pending: { choice: string; answer: () => void; refuse: () => void }[] = [];
+    return {
+      pending,
+      setWindowTheme: (choice: string) =>
+        new Promise<void>((resolve, reject) => {
+          pending.push({ choice, answer: resolve, refuse: () => reject(new Error("no window")) });
+        }),
+    };
+  }
+
+  /** Lets what a settled call does next run. */
+  const settled = () => new Promise((resolve) => setTimeout(resolve));
+
+  it("takes the choice when the App attaches, Windows too, which ends a force a reload left", () => {
+    fakeMatchMedia(false);
+    const native = heldWindow();
+
+    const release = attachTheme(createAppStores().theme, native);
+
+    expect(native.pending.map((call) => call.choice)).toEqual(["windows"]);
+    release();
+  });
+
+  it("sends once when attached twice, as StrictMode does", () => {
+    fakeMatchMedia(false);
+    const native = heldWindow();
+    const store = createAppStores().theme;
+
+    attachTheme(store, native)();
+    const release = attachTheme(store, native);
+
+    expect(native.pending).toHaveLength(1);
+    release();
+  });
+
+  it("sends a choice once the last call answered, and only the latest of many", async () => {
+    fakeMatchMedia(false);
+    const native = heldWindow();
+    const store = createAppStores().theme;
+    const release = attachTheme(store, native);
+
+    store.getState().choose("light");
+    store.getState().choose("windows");
+    store.getState().choose("dark");
+    expect(native.pending.map((call) => call.choice)).toEqual(["windows"]);
+    native.pending[0]?.answer();
+    await settled();
+
+    expect(native.pending.map((call) => call.choice)).toEqual(["windows", "dark"]);
+    native.pending[1]?.answer();
+    await settled();
+    expect(native.pending).toHaveLength(2);
+    expect(store.getState().sent).toBe("dark");
+    release();
+  });
+
+  it("shows the choice before the native window answers", () => {
+    fakeMatchMedia(false);
+    const native = heldWindow();
+    const store = createAppStores().theme;
+    const release = attachTheme(store, native);
+
+    store.getState().choose("dark");
+
+    expect(classes()).toEqual(["dark"]);
+    release();
+  });
+
+  it("keeps the theme and raises nothing when the native window refuses, then goes on", async () => {
+    fakeMatchMedia(false);
+    const native = heldWindow();
+    const store = createAppStores().theme;
+    const release = attachTheme(store, native);
+    store.getState().choose("dark");
+
+    native.pending[0]?.refuse();
+    await settled();
+
+    expect(classes()).toEqual(["dark"]);
+    expect(native.pending.map((call) => call.choice)).toEqual(["windows", "dark"]);
+    release();
+  });
+
+  it("ignores what the media query says under a manual choice: the window forces it", () => {
+    const windows = fakeMatchMedia(true);
+    const store = createAppStores().theme;
+    store.getState().choose("light");
+    const release = attachTheme(store, quiet());
+
+    windows.change(false);
+    windows.change(true);
+    windows.change(false);
+
+    expect(store.getState().windows).toBe("dark");
+    expect(classes()).toEqual(["light"]);
+    release();
+  });
+
+  it("reads Windows again once the window stopped forcing, for a change it couldn't see", async () => {
+    const windows = fakeMatchMedia(false);
+    const native = heldWindow();
+    const store = createAppStores().theme;
+    store.getState().choose("dark");
+    const release = attachTheme(store, native);
+    native.pending[0]?.answer();
+    await settled();
+    // Windows went dark under the forced theme, so nothing fired.
+    windows.change(true);
+    expect(store.getState().windows).toBe("light");
+
+    store.getState().choose("windows");
+    expect(native.pending.map((call) => call.choice)).toEqual(["dark", "windows"]);
+    native.pending[1]?.answer();
+    await settled();
+
+    expect(store.getState().windows).toBe("dark");
+    expect(classes()).toEqual(["dark"]);
+    release();
+  });
+
+  it("follows Windows' change while the Windows call is still on its way", () => {
+    const windows = fakeMatchMedia(false);
+    const native = heldWindow();
+    const store = createAppStores().theme;
+    const release = attachTheme(store, native);
+
+    windows.change(true);
+
+    expect(classes()).toEqual(["dark"]);
+    release();
   });
 });
 

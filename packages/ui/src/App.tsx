@@ -35,7 +35,7 @@ export function App({ apiClient }: { apiClient: ApiClient }) {
 export function AppRoot({ runtime, onRestart }: { runtime: AppRuntime; onRestart?: () => void }) {
   useWindowFocus();
   useEffect(() => runtime.live.attach(), [runtime]);
-  useEffect(() => attachTheme(runtime.stores.theme), [runtime]);
+  useEffect(() => attachTheme(runtime.stores.theme, runtime.apiClient), [runtime]);
   return (
     <AppErrorBoundary {...(onRestart === undefined ? {} : { onRestart })}>
       <ApiClientProvider client={runtime.apiClient}>

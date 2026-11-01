@@ -234,6 +234,20 @@ pub struct ApiErrorDetails {
     pub retry_after_secs: Option<u32>,
 }
 
+/// What the `set_window_theme` command takes: the user's theme choice, for
+/// the native title bar (ADR-0020, U85, S94). Closed: anything else is
+/// refused before the command runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowTheme {
+    /// The light theme, whatever Windows says.
+    Light,
+    /// The dark theme, whatever Windows says.
+    Dark,
+    /// Whatever Windows says.
+    Windows,
+}
+
 /// Which step follows the password.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -468,6 +482,23 @@ mod tests {
 
     use super::*;
     use crate::events::EventMessageKind;
+
+    #[test]
+    fn a_window_theme_is_one_of_three_words_and_nothing_else() {
+        for (word, theme) in [
+            ("light", WindowTheme::Light),
+            ("dark", WindowTheme::Dark),
+            ("windows", WindowTheme::Windows),
+        ] {
+            assert_eq!(
+                serde_json::from_value::<WindowTheme>(json!(word)).unwrap(),
+                theme
+            );
+        }
+        for word in ["Dark", "system", ""] {
+            assert!(serde_json::from_value::<WindowTheme>(json!(word)).is_err());
+        }
+    }
 
     #[test]
     fn a_bot_commands_answer_says_what_it_did_in_snake_case() {
