@@ -63,12 +63,23 @@ test("the check itself reports what it should, at the numbers it should", async 
     document.body.style.background = "#000";
   });
   await plant("#555", "rgb(255 255 255 / 10%)");
-  expect((await planted(3))?.ratio).toBeLessThan(3);
+  expect((await planted(3))?.ratio).toBeCloseTo(2.33, 1);
 
   // Text that's disabled or only for screen readers isn't what the floor is about.
   await page.evaluate(() => {
     const holder = document.querySelector("[data-planted]") as HTMLElement;
     holder.setAttribute("aria-disabled", "true");
+  });
+  expect(await planted(22)).toBeUndefined();
+  await plant("#000", "#fff");
+  expect((await planted(22))?.ratio).toBe(21);
+  await page.evaluate(() => {
+    const holder = document.querySelector("[data-planted]") as HTMLElement;
+    holder.style.position = "absolute";
+    holder.style.width = "1px";
+    holder.style.height = "1px";
+    holder.style.overflow = "hidden";
+    holder.style.clipPath = "inset(50%)";
   });
   expect(await planted(22)).toBeUndefined();
   await page.evaluate(() => {
@@ -350,6 +361,7 @@ test("servers, accounts with their grants, and the Owner's admin screens", async
   await bothThemes(page, "the grants review");
 
   await nav(page, "Invites");
+  await expect(main.getByRole("heading", { name: "Invites", level: 1 })).toBeVisible();
   await bothThemes(page, "invites");
   await nav(page, "Agents");
   await expect(main.getByRole("row", { name: /agent-main/ })).toBeVisible();
@@ -377,12 +389,7 @@ test("the banner, the start screen, loading and the error panel", async ({ page,
   await bothThemes(page, "the banner, unreachable");
   backend.refuseAll("certificate");
   await nav(page, "Modes");
-  await expect(
-    status
-      .getByRole("button")
-      .or(status.getByText(/certificate/i))
-      .first(),
-  ).toBeVisible();
+  await expect(status.getByRole("button", { name: "Server settings" })).toBeVisible();
   await bothThemes(page, "the banner, certificate");
 
   backend.refuseAll("unreachable");

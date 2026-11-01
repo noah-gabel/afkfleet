@@ -350,6 +350,103 @@ describe("the native window (ADR-0020, S94)", () => {
     release();
   });
 
+  describe("a force on its way out or in", () => {
+    /** Attached with a held window whose first call, `windows`, has answered. */
+    async function attachedOnWindows(dark: boolean) {
+      const windows = fakeMatchMedia(dark);
+      const native = heldWindow();
+      const store = createAppStores().theme;
+      const release = attachTheme(store, native);
+      native.pending[0]?.answer();
+      await settled();
+      const shown: string[] = [];
+      store.subscribe((state) => shown.push(state.theme));
+      return { windows, native, store, release, shown };
+    }
+
+    it("never shows the forced dark when Dark then Windows come quickly", async () => {
+      const { windows, native, store, release, shown } = await attachedOnWindows(false);
+
+      store.getState().choose("dark");
+      store.getState().choose("windows");
+      expect(native.pending.map((call) => call.choice)).toEqual(["windows", "dark"]);
+      shown.length = 0;
+      windows.force("dark");
+      native.pending[1]?.answer();
+      await settled();
+      expect(native.pending[2]?.choice).toBe("windows");
+      windows.force(null);
+      native.pending[2]?.answer();
+      await settled();
+
+      expect(shown).not.toContain("dark");
+      expect(store.getState().windows).toBe("light");
+      expect(classes()).toEqual(["light"]);
+      release();
+    });
+
+    it("ignores what it hears while a Dark call is on its way, under Windows", async () => {
+      const { windows, store, release } = await attachedOnWindows(false);
+      store.getState().choose("dark");
+      store.getState().choose("windows");
+
+      windows.force("dark");
+
+      expect(store.getState().windows).toBe("light");
+      expect(classes()).toEqual(["light"]);
+      release();
+    });
+
+    it("ignores what it hears after Dark settled, until the Windows call settles", async () => {
+      const { windows, native, store, release } = await attachedOnWindows(false);
+      store.getState().choose("dark");
+      store.getState().choose("windows");
+      native.pending[1]?.answer();
+      await settled();
+
+      windows.force("dark");
+
+      expect(store.getState().windows).toBe("light");
+      expect(classes()).toEqual(["light"]);
+      release();
+    });
+
+    it("reads Windows when the Windows call settles, not when the Dark call does", async () => {
+      const { windows, native, store, release } = await attachedOnWindows(false);
+      store.getState().choose("dark");
+      native.pending[1]?.answer();
+      await settled();
+      windows.force("dark");
+      // Windows goes dark under the force, unseen, and stays so when the force ends.
+      windows.change(true);
+      store.getState().choose("windows");
+      windows.force(null);
+      expect(store.getState().windows).toBe("light");
+
+      native.pending[2]?.answer();
+      await settled();
+
+      expect(store.getState().windows).toBe("dark");
+      expect(classes()).toEqual(["dark"]);
+      release();
+    });
+
+    it("follows Windows again once the Windows call settled", async () => {
+      const { windows, native, store, release } = await attachedOnWindows(false);
+      store.getState().choose("dark");
+      native.pending[1]?.answer();
+      await settled();
+      store.getState().choose("windows");
+      native.pending[2]?.answer();
+      await settled();
+
+      windows.change(true);
+
+      expect(classes()).toEqual(["dark"]);
+      release();
+    });
+  });
+
   it("follows Windows' change while the Windows call is still on its way", () => {
     const windows = fakeMatchMedia(false);
     const native = heldWindow();
@@ -369,6 +466,16 @@ describe("themeStart", () => {
     vi.resetModules();
     await import("./themeStart");
   }
+
+  it("runs when the App is imported, so the class is set before it renders", async () => {
+    fakeMatchMedia(false);
+    localStorage.setItem(THEME_KEY, "dark");
+    vi.resetModules();
+
+    await import("../App");
+
+    expect(classes()).toEqual(["dark"]);
+  });
 
   it("sets the class before anything renders, from what's remembered", async () => {
     fakeMatchMedia(false);

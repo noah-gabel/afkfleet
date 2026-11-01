@@ -330,6 +330,12 @@ dev-app:
 app-build *args:
     pnpm --filter @afkfleet/desktop tauri build {{ args }}
 
+# The debug exe the AI launches, under its own identifier from its very first launch, so it can
+# never reach the user's running app, its single-instance lock, its profile or its Credential
+# Manager entries (ADR-0020, U87). The path is absolute, as the CLI may change folders.
+app-build-check:
+    pnpm --filter @afkfleet/desktop tauri build --debug --config "{{ justfile_directory() }}/apps/desktop/src-tauri/tauri.check.conf.json"
+
 # Render the desktop app's icon.ico from apps/desktop/src-tauri/icons/icon.svg (needs pnpm install).
 icons:
     node scripts/icons.mjs

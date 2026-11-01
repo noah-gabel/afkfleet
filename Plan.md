@@ -1069,7 +1069,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Allowlist entries** keep the slash: `/` plus a command name without arguments, at most 64 entries. A missing key means an empty list, so every command needs Manage.
   > - **Invites.** Admins list all invites. Revoking follows creating: Member invites need Admin+, Admin invites the Owner, and Owner invites are never allowed.
   > - **Self-service routes** check `ResourceContext::Personal{owner}` with `Permission::UsePersonal`: allowed for the owner, 404 for everyone else, the Owner included.
-  > - **Agents.** Only the Owner enrolls agents; viewing and disabling them stays Admin+. An agent receives session tokens for the bots assigned to it, so an Admin's own agent could otherwise get the Owner's. This deviates from §7.3.
+  > - **Agents.** Only the Owner enrolls agents; viewing and disabling them stays Admin+. An agent receives session tokens for the bots assigned to it, so an Admin's own agent could otherwise get the Owner's. This deviates from §7.3. *(Since Phase 11's group J, enrollment tokens come only from the server's host; ADR-0020, U76.)*
   >
   > Also settled while building it (ADR-0010):
   > - **API.**
@@ -4256,7 +4256,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
 - [x] **P11.10** Dark mode: the app follows Windows' light or dark setting (`prefers-color-scheme` and its change event; the `.dark` class on `<html>`, set by the bundled script so the CSP allows it), and every screen is checked in both themes.
 
-  > Note (P11.10, group K) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U84, U85, S92–S97): beyond the task, the user added a Light / Dark / Windows setting on the Profile screen, and one new command, `set_window_theme`, so the title bar follows it (67 grants). `scripts/theme-guard.mjs` refuses a hard-coded colour, and a Playwright sweep holds about 35 screens and states at 3:1 in both themes. WCAG AA stays with P11.11, which gets today's figures.
+  > Note (P11.10, group K) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U84, U85, S92–S97): beyond the task, the user added a Light / Dark / Windows setting on the Profile screen, and one new command, `set_window_theme`, so the title bar follows it (67 grants). `scripts/theme-guard.mjs` refuses a hard-coded colour, and a Playwright sweep holds 36 rows of screens and states at 3:1 in both themes. WCAG AA stays with P11.11, which gets today's figures.
 
   > Note (P11.10, from Phase 8, group D, the user's decision) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): Phase 8 ships the light theme only (sonner's `theme="light"`). `packages/ui/src/styles.css` already holds shadcn's dark tokens under `.dark`.
 - [ ] **P11.11** UI design pass, before Phase 12 and once every screen exists:

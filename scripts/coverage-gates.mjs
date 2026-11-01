@@ -137,8 +137,10 @@ export const GATES = [
   },
   {
     // The desktop app's Rust side, measured on Windows only, since Linux never builds it:
-    // the switch rules, the keychain, the profile file and the error mapping. lib.rs's
-    // `run` and main.rs start the real event loop, which no test reaches (ADR-0017).
+    // the switch rules, the keychain, the profile file, the error mapping and the window's
+    // reveal and colours. lib.rs's `run` and main.rs start the real event loop, which no test
+    // reaches: `run`'s lines count against the gate's total, and main.rs stays out of it
+    // (ADR-0017; ADR-0020, U89).
     name: "desktop",
     report: "desktop",
     min: 90,
@@ -149,10 +151,12 @@ export const GATES = [
       "apps/desktop/src-tauri/src/error.rs",
       "apps/desktop/src-tauri/src/focus.rs",
       "apps/desktop/src-tauri/src/keychain.rs",
+      "apps/desktop/src-tauri/src/lib.rs",
       "apps/desktop/src-tauri/src/navigation.rs",
       "apps/desktop/src-tauri/src/profile.rs",
       "apps/desktop/src-tauri/src/startup.rs",
       "apps/desktop/src-tauri/src/state.rs",
+      "apps/desktop/src-tauri/src/window_theme.rs",
     ],
   },
 ];

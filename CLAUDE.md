@@ -76,7 +76,7 @@ The full table, with every recipe and how to write one, is in `.claude/rules/com
 - `just fmt`; `just gen` after changing a DTO; `just db-prepare` after changing a query or adding a migration.
 - `just cov` (the coverage gates) and, on Windows, `just cov-desktop` (the desktop crate's gate).
 
-**The user only; the AI never runs them:** `just test-real-account`, `just test-ms-account`, `just test-managed-account`, every `just dod-*` recipe, and the `manual` nextest profile. `just dev-bots` needs a terminal, so the AI doesn't run it either.
+**The user only; the AI never runs them:** `just test-real-account`, `just test-ms-account`, `just test-managed-account`, every `just dod-*` recipe, and the `manual` nextest profile. `just dev-bots` needs a terminal, so the AI doesn't run it either. Nor does the AI run `just dev-app` or launch an exe from `just app-build`: the only build of the app it launches comes from `just app-build-check`, under its own identifier, so it can never reach the user's running app (ADR-0020, U87).
 
 ## Architecture rules
 **Crates and dependencies** (full table in Plan.md §4):

@@ -9,8 +9,9 @@
 // The native window follows the choice too, for its title bar (U85, S94), one call at a time, the
 // latest choice after each answer; a refusal is dropped, as the page already shows the choice.
 // A choice other than `windows` forces the window's theme and so `prefers-color-scheme` with it,
-// which then says nothing about Windows. So the media query counts only under `windows`, and is
-// read again once that call settled: Windows may have changed while it couldn't be seen.
+// which then says nothing about Windows. So the media query counts only under `windows`, and not
+// while a forcing call is on its way or was the last to settle, and is read again once a `windows`
+// call settled: Windows may have changed while it couldn't be seen.
 import type { StoreApi } from "zustand/vanilla";
 
 import type { ApiClient } from "../api/ApiClient";
@@ -37,8 +38,8 @@ export interface ThemeState {
   windowsChanged(windows: Theme): void;
   /** The choice the native window last took, once it answered; none yet this start. */
   readonly sent: ThemeChoice | null;
-  /** Whether the native window hasn't answered the last call yet. */
-  readonly sending: boolean;
+  /** The choice the native window hasn't answered yet, if any. */
+  readonly inFlight: ThemeChoice | null;
 }
 
 /** The query Windows' setting answers. */
@@ -87,25 +88,31 @@ export function applyTheme(theme: Theme): void {
 
 /** Tells the native window the store's choice, unless it's on its way or already there. */
 function sendChoice(store: StoreApi<ThemeState>, api: Pick<ApiClient, "setWindowTheme">): void {
-  const { choice, sending, sent } = store.getState();
-  if (sending || sent === choice) {
+  const { choice, inFlight, sent } = store.getState();
+  if (inFlight !== null || sent === choice) {
     return;
   }
-  store.setState({ sending: true });
+  store.setState({ inFlight: choice });
   void api
     .setWindowTheme(choice)
     .catch(() => {})
     .then(() => {
-      store.setState({ sending: false, sent: choice });
+      store.setState({ inFlight: null, sent: choice });
       readWindows(store);
       sendChoice(store, api);
     });
 }
 
+/** Whether `call` to the native window forces its theme, and so the media query. */
+function forces(call: ThemeChoice | null): boolean {
+  return call === "light" || call === "dark";
+}
+
 /** Reads Windows' setting into the store, if the media query means it now. */
 function readWindows(store: StoreApi<ThemeState>): void {
-  if (store.getState().choice === "windows") {
-    store.getState().windowsChanged(windowsTheme());
+  const { choice, inFlight, sent, windowsChanged } = store.getState();
+  if (choice === "windows" && !forces(inFlight) && !forces(sent)) {
+    windowsChanged(windowsTheme());
   }
 }
 

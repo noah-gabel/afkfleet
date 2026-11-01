@@ -2,10 +2,33 @@
 // live, without a restart; a choice on the Profile screen overrides it and survives a reload, the
 // sign-in screens following it; and going back to Windows follows it again. Toasts follow too.
 
+import type { Page } from "@playwright/test";
+
 import { OWNER } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
 import { enterCode, expectHome, logIn, push } from "./steps";
 import { inScheme } from "./theme";
+
+/** Windows' setting moves to `scheme`; returns two frames after the page heard the change. */
+async function windowsSays(page: Page, scheme: "light" | "dark"): Promise<void> {
+  const heard = await page.evaluateHandle(() => ({
+    done: new Promise<void>((resolve) => {
+      matchMedia("(prefers-color-scheme: dark)").addEventListener(
+        "change",
+        () => {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              resolve();
+            });
+          });
+        },
+        { once: true },
+      );
+    }),
+  }));
+  await page.emulateMedia({ colorScheme: scheme });
+  await heard.evaluate((waiting) => waiting.done);
+}
 
 test("the app follows Windows' setting live, its toasts too, without a restart", async ({
   page,
@@ -66,9 +89,9 @@ test("a choice overrides Windows, survives a reload, and Windows takes over agai
   await theme.getByRole("radio", { name: "Dark" }).check();
   await expect(html).toHaveClass(/\bdark\b/);
 
-  // Windows' setting moves under the choice, which holds.
-  await page.emulateMedia({ colorScheme: "dark" });
-  await page.emulateMedia({ colorScheme: "light" });
+  // Windows' setting moves under the choice, which holds, once the page has heard each move.
+  await windowsSays(page, "dark");
+  await windowsSays(page, "light");
   await expect(html).toHaveClass(/\bdark\b/);
 
   // It survives a reload, and it's this PC's: the sign-in screens hold it too.
