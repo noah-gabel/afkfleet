@@ -7,6 +7,7 @@
 use core::time::Duration;
 
 use fleet_api_types::accounts::CreateOfflineAccountRequest;
+use fleet_api_types::agents::AgentResponse;
 use fleet_api_types::auth::{LoginRequest, StepUpRequest};
 use fleet_api_types::bots::{BotModeRequest, BotPatchRequest, BotResponse};
 use fleet_api_types::chat::{ChatPage, ChatPageQuery, ChatSendRequest, ChatSendResponse};
@@ -20,7 +21,7 @@ use fleet_api_types::server_settings::{
 };
 use fleet_api_types::{PageQuery, SecretText};
 use fleet_client::{Client, ClientConfig, ClientError, LoginStep, MemoryStore, ServerUrl, Trust};
-use fleet_core::id::{BotId, ModeId};
+use fleet_core::id::{AgentId, BotId, ModeId};
 use fleet_core::system::Clock as _;
 use totp_rs::Totp;
 
@@ -259,6 +260,16 @@ impl Owner {
     /// Stops `bot`.
     pub(crate) async fn stop(&self, bot: BotId) {
         self.client.stop_bot(bot).await.unwrap();
+    }
+
+    /// Disables `agent` for good, as the agents' screen does.
+    pub(crate) async fn disable_agent(&self, agent: AgentId) -> AgentResponse {
+        self.client.disable_agent(agent).await.unwrap()
+    }
+
+    /// Releases disabled `agent`'s bots, as the agents' screen does.
+    pub(crate) async fn release_agent(&self, agent: AgentId) -> AgentResponse {
+        self.client.release_agent(agent).await.unwrap()
     }
 
     /// Has `bot` send `text` through `POST /bots/{id}/chat`.

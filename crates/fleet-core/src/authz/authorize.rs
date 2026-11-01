@@ -175,8 +175,6 @@ fn global(actor: &Actor, permission: Permission) -> Result<(), AuthzError> {
         // U54, S75).
         | Permission::ViewServerSettings
         | Permission::ConfigureServerSettings => actor.role >= Role::Admin,
-        // An agent receives session tokens for the bots assigned to it, so
-        // only the Owner decides which agents exist (ADR-0010).
         Permission::CreateInvite { role } => handles_invites_for(actor, role),
         Permission::ViewBot
         | Permission::ControlBot

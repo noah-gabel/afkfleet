@@ -1,7 +1,7 @@
-// The Owner's grants review of one user (Plan.md P11.9; ADR-0018, ADR-0020, U79, S50, R178):
+// The Owner's grants review of one user (Plan.md P11.9; ADR-0018, ADR-0020, U79, S50, S90, R178):
 // the grants they hold first, dormant ones marked, computed by the server; then their accounts a
 // grant shares, each account's grants read only when it's opened, since grants per account have
-// no cap. Every revoke goes through the accounts' own route, asks first, and takes a step-up when
+// no cap, and dormant ones marked there too. Every revoke goes through the accounts' own route, asks first, and takes a step-up when
 // the server wants one (useStepUpAction). The users' screen links here only for whom the Owner may
 // review; anyone else who got here reads the server's refusal in place of each list.
 // Nothing here carries a secret but the step-up's password, which StepUpForm holds. Every answer
@@ -28,7 +28,7 @@ import type { AccountResponse } from "../../../generated/AccountResponse";
 import type { GrantResponse } from "../../../generated/GrantResponse";
 import type { HeldGrantResponse } from "../../../generated/HeldGrantResponse";
 import { formatTime } from "../../../lib/time";
-import { accessLabel, revoked, revokeQuestion } from "../../accounts/texts";
+import { accessLabel, NOBODY_ELSE, revoked, revokeQuestion } from "../../accounts/texts";
 import { useStepUpAction } from "../hooks/useStepUpAction";
 import { StepUpPrompt } from "./StepUpPrompt";
 
@@ -36,11 +36,16 @@ const BACK_TO_USERS = "Back to users";
 const HELD_HEADING = "Grants they hold";
 const HELD_NONE = "They hold no grants.";
 const DORMANT =
-  "Dormant: their role already gives them Manage here. It counts again if they become a Member.";
+  "Dormant: their role already gives them Manage here. It counts again if they become a Member or the account's owner becomes an Admin.";
 const SHARED_HEADING = "Their accounts others can use";
 const SHARED_NONE = "No grant shares their accounts.";
 const SHOW_ACCESS = "Show who has access";
 const HIDE_ACCESS = "Hide";
+
+/** The mark on a grant on the reviewed user's account: "their" would read as the reviewed user. */
+function dormantOn(who: string): string {
+  return `Dormant: ${who}'s role already gives them Manage here. It counts again if ${who} becomes a Member or the account's owner becomes an Admin.`;
+}
 
 /** The screen's writes, as its rows take them. */
 interface Revoking {
@@ -262,7 +267,12 @@ function SharedGrantRow({
   return (
     <Fragment>
       <tr className="border-t align-top">
-        <td className="py-2 pr-3">{who}</td>
+        <td className="py-2 pr-3">
+          {who}
+          {grant.dormant === true ? (
+            <span className="block text-xs text-muted-foreground">{dormantOn(who)}</span>
+          ) : null}
+        </td>
         <td className="py-2 pr-3">{accessLabel(grant.level)}</td>
         <td className="py-2 pr-3">{grant.granted_by.username}</td>
         <td className="py-2 pr-3">{formatTime(grant.granted_at)}</td>
@@ -301,6 +311,9 @@ function SharedGrants({ account, revoking }: { account: AccountResponse; revokin
         <p role="alert" className="text-sm text-destructive">
           {describeError(toApiError(grants.error).error)}
         </p>
+      ) : null}
+      {grants.isSuccess && rows.length === 0 ? (
+        <p className="text-sm text-muted-foreground">{NOBODY_ELSE}</p>
       ) : null}
       {rows.length === 0 ? null : (
         <table aria-label={`Who has access to ${account.name}`} className="text-left text-sm">

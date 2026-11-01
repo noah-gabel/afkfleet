@@ -441,7 +441,7 @@ The full analysis lives in `docs/threat-model.md`.
 | Agents, audit log, server settings | Admin+ |
 
 > Note (P2.9): The built `authorize()` refines this table (ADR-0010):
-> - **Agents.** Only the Owner enrolls agents; viewing and disabling them is Admin+.
+> - **Agents.** Only the Owner enrolls agents; viewing and disabling them is Admin+. *(Since Phase 11's group J, enrollment tokens come only from the server's host; ADR-0020, U76.)*
 > - **Roles.** Only the Owner changes roles, so Admins manage Members by disabling and enabling them. Ownership transfer gets a permission together with a route.
 > - **Modes.** Private modes follow the account rule. Shared modes are edited by their creator, while an Admin, and by the Owner. Built-in modes are read-only.
 > - **The Owner's "everything"** leaves out: built-in modes, their own role and account status, another Owner, Owner invites, grants to themselves, and other users' personal resources.

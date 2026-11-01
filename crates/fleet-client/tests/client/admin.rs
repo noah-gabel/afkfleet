@@ -9,6 +9,7 @@ use fleet_api_types::invites::{CreateInviteRequest, InviteState};
 use fleet_api_types::users::{UserPatchRequest, UserRole};
 use fleet_api_types::{ErrorCode, PageQuery, SecretText, UserId};
 use fleet_client::ClientError;
+use rstest::rstest;
 
 use crate::support::{PASSWORD, Server, is_api, register, step_up};
 
@@ -231,6 +232,36 @@ async fn a_filtered_audit_page_reaches_the_server() {
         assert_eq!(target.kind.as_str(), "user");
         assert_eq!(target.id.as_str(), bob_id);
     }
+    server.stop().await;
+}
+
+/// One of the target's two fields alone reaches the server, whose 422 says
+/// so, rather than a whole log the caller didn't ask for (ADR-0020, R182).
+#[rstest]
+#[case::the_kind_alone(Some("user"), None)]
+#[case::the_id_alone(None, Some("01900000-0000-7000-8000-000000000001"))]
+#[tokio::test]
+async fn half_a_target_is_refused_as_the_server_refuses_it(
+    #[case] kind: Option<&str>,
+    #[case] id: Option<&str>,
+) {
+    let server = Server::start().await;
+    let (owner, _, _) = server.owner().await;
+
+    let error = owner
+        .audit(&AuditPageQuery {
+            before: None,
+            limit: None,
+            target_kind: kind.map(str::to_owned),
+            target_id: id.map(str::to_owned),
+        })
+        .await
+        .unwrap_err();
+
+    assert!(
+        is_api(&error, 422, ErrorCode::ValidationFailed),
+        "{error:?}"
+    );
     server.stop().await;
 }
 

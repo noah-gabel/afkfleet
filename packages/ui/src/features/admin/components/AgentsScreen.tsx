@@ -6,7 +6,8 @@
 //   which the row asks for when the server wants it (useStepUpAction).
 // - A token to add an agent comes only from the server's host (U76), so nothing here creates one.
 // Nothing here carries a secret but the step-up's password, which StepUpForm holds: the list is a
-// query and each change a mutation, and every answer only reads the list again (S87).
+// query and each change a mutation, and a success or a refusal only reads the list again, once
+// (S87, R177). A step-up isn't a refusal, so it reads nothing before the prompt.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Fragment, useState } from "react";
@@ -64,11 +65,11 @@ export function AgentsScreen() {
   const writes = useStepUpAction({ onRefused: refetch });
   const disable = useMutation({
     mutationFn: (id: string) => api.disableAgent(id),
-    onSettled: refetch,
+    onSuccess: refetch,
   });
   const release = useMutation({
     mutationFn: (id: string) => api.releaseAgent(id),
-    onSettled: refetch,
+    onSuccess: refetch,
   });
   const [asking, setAsking] = useState<{ id: string; change: Change } | null>(null);
   const rows = agents.data?.pages.flatMap((page) => page.items) ?? [];

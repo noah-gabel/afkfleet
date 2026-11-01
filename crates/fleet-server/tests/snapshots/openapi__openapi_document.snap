@@ -1249,6 +1249,10 @@ expression: answer.json()
       "GrantResponse": {
         "description": "A grant as `GET /accounts/{id}/grants` lists it, and as creating or\nchanging one answers.",
         "properties": {
+          "dormant": {
+            "description": "Whether the grantee's role gives them Manage on the account now, so\nthe grant adds nothing for the time being: in a listing, for who may\nreview the account's owner only (ADR-0020, S90). It would tell anyone\nelse the grantee's role.",
+            "type": "boolean"
+          },
           "granted_at": {
             "maxLength": 24,
             "type": "string"

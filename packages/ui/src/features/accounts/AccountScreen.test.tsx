@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiClient } from "../../api/ApiClient";
 import { fakeApiError, fakeWatch } from "../../api/FakeApiClient";
-import { BOTS_LIST_KEY } from "../../api/queries";
+import { accountKey, BOTS_LIST_KEY } from "../../api/queries";
 import type { AccountResponse } from "../../generated/AccountResponse";
 import type { GrantResponse } from "../../generated/GrantResponse";
 import { formatTime } from "../../lib/time";
@@ -478,6 +478,8 @@ describe("an account's screen", () => {
       expect(accountReads()).toBe(before);
       // Home isn't showing, so its list is marked to be read when it next shows.
       expect(app.runtime.queryClient.getQueryState(BOTS_LIST_KEY)?.isInvalidated).toBe(true);
+      // So is this account's own read, by ACCOUNTS_KEY, which nothing shows any more.
+      expect(app.runtime.queryClient.getQueryState(accountKey(ID))?.isInvalidated).toBe(true);
     });
 
     it("says access is already gone at a 404, and goes back too", async () => {

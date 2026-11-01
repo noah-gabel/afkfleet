@@ -227,6 +227,26 @@ describe("the audit log's screen", () => {
     await waitFor(() => expect(rows()).toHaveLength(2));
   });
 
+  it("reads the names again with Load again, so a failed read can recover", async () => {
+    let times = 0;
+    const app = await auditScreen(
+      async () => ({ items: [entry(5, { actor: USER })], unreadable: [] }),
+      async () => {
+        times += 1;
+        if (times === 1) {
+          throw refusal(500, "internal");
+        }
+        return { items: [listedUser(USER, "afkbot1")] };
+      },
+    );
+    expect(await screen.findByText("Names couldn't be loaded, so users show by ID.")).toBeDefined();
+
+    await app.user.click(screen.getByRole("button", { name: "Load again" }));
+
+    expect(await screen.findByText("afkbot1")).toBeDefined();
+    expect(screen.queryByText("Names couldn't be loaded, so users show by ID.")).toBeNull();
+  });
+
   it("says when the log is empty, and when it couldn't be read", async () => {
     await auditScreen(async () => ({ items: [], unreadable: [] }));
     expect(await screen.findByText("Nothing recorded yet.")).toBeDefined();
@@ -285,7 +305,10 @@ describe("the audit log's screen", () => {
 
       await app.user.click(await screen.findByRole("link", { name: "Only user afkbot1" }));
 
-      expect(await screen.findByText("Showing only user afkbot1.")).toBeDefined();
+      const line = await screen.findByText(/^Showing only user/);
+      expect(line.textContent).toBe(`Showing only user afkbot1 (${USER}).`);
+      expect(within(line).getByText("afkbot1").getAttribute("title")).toBe(USER);
+      expect(within(line).getByText(`(${USER})`).className).toContain("sr-only");
       expect(
         screen.getByText("This shows what happened to this user, not everything they did."),
       ).toBeDefined();
@@ -342,7 +365,7 @@ describe("the audit log's screen", () => {
 
       await app.user.click(await screen.findByRole("link", { name: "Audit of afkbot1" }));
 
-      expect(await screen.findByText("Showing only user afkbot1.")).toBeDefined();
+      expect((await screen.findByText(/^Showing only user/)).textContent).toContain("afkbot1");
       expect(audit).toHaveBeenCalledWith(undefined, undefined, "user", USER);
     });
   });

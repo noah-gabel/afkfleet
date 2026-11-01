@@ -4,7 +4,8 @@
 //! /api/v1/accounts/{id}/grants/me`.
 //!
 //! - **Listing** needs Manage on the account (`ManageGrants`); an account
-//!   the caller may not see is 404.
+//!   the caller may not see is 404. Each row says `dormant` only to who may
+//!   review the account's owner, so the Owner (ADR-0020, S90).
 //! - **Creating** names the grantee by their username, since Members can't
 //!   list users. Every name that can't be granted gets one 422 on
 //!   `username` ([`UNGRANTABLE`]), and the route spends its own per-user
@@ -26,7 +27,7 @@ use fleet_api_types::accounts::{
     UNGRANTABLE,
 };
 use fleet_api_types::{ErrorResponse, FieldError, PageQuery};
-use fleet_core::authz::{Actor, GrantLevel, Permission};
+use fleet_core::authz::{Actor, GrantLevel, Permission, ResourceContext, authorize};
 use fleet_core::id::{AccountId, UserId};
 use fleet_core::value::Username;
 
@@ -66,12 +67,20 @@ pub(crate) async fn list(
 ) -> Result<Json<GrantPage>, ApiError> {
     let account = facts(&state, &user.actor(), id).await?;
     user.require(Permission::ManageGrants, &account.context())?;
-    let listed = state.grants.list(id, page(&query)?).await?;
+    let listed = state.grants.list(id, account.owner, page(&query)?).await?;
+    // Dormant tells the grantee's role, so only who may review the account's
+    // owner reads it (ADR-0020, S90).
+    let reviews = authorize(
+        &user.actor(),
+        Permission::ReviewUserGrants,
+        &ResourceContext::User(account.owner),
+    )
+    .is_ok();
     Ok(Json(GrantPage {
         items: listed
             .items
             .iter()
-            .map(grant_response)
+            .map(|view| grant_response(&view.listed, reviews.then_some(view.dormant)))
             .collect::<Result<_, _>>()?,
         next: listed.next,
     }))
@@ -131,7 +140,7 @@ pub(crate) async fn create(
             CreateGrantError::Store(error) => ApiError::from(error),
             other @ CreateGrantError::Audit(_) => ApiError::internal(other),
         })?;
-    Ok((StatusCode::CREATED, Json(grant_response(&grant)?)))
+    Ok((StatusCode::CREATED, Json(grant_response(&grant, None)?)))
 }
 
 /// `PUT /api/v1/accounts/{id}/grants/{user}`: changes the user's grant.
@@ -182,7 +191,7 @@ pub(crate) async fn change(
             ChangeGrantError::Store(error) => ApiError::from(error),
             other @ ChangeGrantError::Audit(_) => ApiError::internal(other),
         })?;
-    Ok(Json(grant_response(&grant)?))
+    Ok(Json(grant_response(&grant, None)?))
 }
 
 /// `DELETE /api/v1/accounts/{id}/grants/{user}`: revokes the user's grant.
@@ -279,13 +288,14 @@ async fn facts(state: &AppState, actor: &Actor, id: AccountId) -> Result<ListedA
         .ok_or(ApiError::NotFound)
 }
 
-/// A grant as the API shows it.
-fn grant_response(listed: &ListedGrant) -> Result<GrantResponse, ApiError> {
+/// A grant as the API shows it; `dormant` only for who may see it.
+fn grant_response(listed: &ListedGrant, dormant: Option<bool>) -> Result<GrantResponse, ApiError> {
     let grant = &listed.grant;
     Ok(GrantResponse {
         user: label(grant.user, &listed.user_name),
         level: ApiGrantLevel::from(grant.level).into(),
         granted_by: label(grant.granted_by, &listed.granted_by_name),
         granted_at: timestamp(grant.granted_at)?,
+        dormant,
     })
 }

@@ -467,6 +467,14 @@ pub struct GrantResponse {
     #[ts(type = "string")]
     #[schema(schema_with = Timestamp::schema)]
     pub granted_at: Timestamp,
+    /// Whether the grantee's role gives them Manage on the account now, so
+    /// the grant adds nothing for the time being: in a listing, for who may
+    /// review the account's owner only (ADR-0020, S90). It would tell anyone
+    /// else the grantee's role.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[schema(nullable = false)]
+    pub dormant: Option<bool>,
 }
 
 /// `GET /accounts/{id}/grants`: one page of grants, newest grantee first.

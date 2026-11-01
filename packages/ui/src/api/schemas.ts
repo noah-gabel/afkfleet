@@ -252,10 +252,6 @@ export const previewChatFormatsRequest = z.strictObject({
 export const botModeRequest = z.strictObject({ mode_id: id });
 
 /**
- * A chat page's cursor: a line's ID, an integer of at least 1 that a JavaScript number holds
- * exactly, in the server's words.
- */
-/**
  * An audit page's target (ADR-0020, S89): the kind as an entry names it, known to this app or
  * not, and the ID in its canonical form, of any version. The server stays authoritative.
  */
@@ -267,6 +263,10 @@ export const auditTargetId = z
     "isn't a lowercase hyphenated ID",
   );
 
+/**
+ * A chat page's cursor: a line's ID, an integer of at least 1 that a JavaScript number holds
+ * exactly, in the server's words.
+ */
 export const chatCursor = z
   .number()
   .int()

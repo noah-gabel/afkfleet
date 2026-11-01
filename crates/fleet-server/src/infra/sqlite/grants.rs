@@ -41,6 +41,7 @@ struct ListedRow {
     granted_by: String,
     granted_at: String,
     user_name: String,
+    user_role: String,
     user_rowid: i64,
     granted_by_name: String,
     granter_rowid: i64,
@@ -127,7 +128,8 @@ pub(super) async fn list(
                   account_grants.user_id AS "user_id!", account_grants.level AS "level!",
                   account_grants.granted_by AS "granted_by!",
                   account_grants.granted_at AS "granted_at!",
-                  grantee.username AS "user_name!", grantee.rowid AS "user_rowid!: i64",
+                  grantee.username AS "user_name!", grantee.role AS "user_role!",
+                  grantee.rowid AS "user_rowid!: i64",
                   granter.username AS "granted_by_name!",
                   granter.rowid AS "granter_rowid!: i64"
            FROM account_grants
@@ -318,8 +320,8 @@ fn grant_from_row(row: &GrantRow) -> Result<AccountGrant, StoreError> {
     })
 }
 
-/// A list row: the grant, then both names, each checked against its own
-/// `users` row.
+/// A list row: the grant, then both names and the grantee's role, each
+/// checked against its own `users` row.
 fn listed_from_row(row: ListedRow) -> Result<ListedGrant, StoreError> {
     let name = |text: &str, rowid| {
         Username::try_from(text).map_err(|_| StoreError::Corrupt {
@@ -329,6 +331,14 @@ fn listed_from_row(row: ListedRow) -> Result<ListedGrant, StoreError> {
         })
     };
     let user_name = name(&row.user_name, row.user_rowid)?;
+    let user_role = row
+        .user_role
+        .parse::<Role>()
+        .map_err(|_| StoreError::Corrupt {
+            table: "users",
+            column: "role",
+            rowid: row.user_rowid,
+        })?;
     let granted_by_name = name(&row.granted_by_name, row.granter_rowid)?;
     let grant = grant_from_row(&GrantRow {
         rowid: row.rowid,
@@ -341,6 +351,7 @@ fn listed_from_row(row: ListedRow) -> Result<ListedGrant, StoreError> {
     Ok(ListedGrant {
         grant,
         user_name,
+        user_role,
         granted_by_name,
     })
 }

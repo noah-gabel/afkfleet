@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT account_grants.rowid AS \"rowid!: i64\",\n                  account_grants.account_id AS \"account_id!\",\n                  account_grants.user_id AS \"user_id!\", account_grants.level AS \"level!\",\n                  account_grants.granted_by AS \"granted_by!\",\n                  account_grants.granted_at AS \"granted_at!\",\n                  grantee.username AS \"user_name!\", grantee.rowid AS \"user_rowid!: i64\",\n                  granter.username AS \"granted_by_name!\",\n                  granter.rowid AS \"granter_rowid!: i64\"\n           FROM account_grants\n           JOIN users AS grantee ON grantee.id = account_grants.user_id\n           JOIN users AS granter ON granter.id = account_grants.granted_by\n           WHERE account_grants.account_id = ?\n             AND (? IS NULL OR account_grants.user_id < ?)\n           ORDER BY account_grants.user_id DESC\n           LIMIT ?",
+  "query": "SELECT account_grants.rowid AS \"rowid!: i64\",\n                  account_grants.account_id AS \"account_id!\",\n                  account_grants.user_id AS \"user_id!\", account_grants.level AS \"level!\",\n                  account_grants.granted_by AS \"granted_by!\",\n                  account_grants.granted_at AS \"granted_at!\",\n                  grantee.username AS \"user_name!\", grantee.role AS \"user_role!\",\n                  grantee.rowid AS \"user_rowid!: i64\",\n                  granter.username AS \"granted_by_name!\",\n                  granter.rowid AS \"granter_rowid!: i64\"\n           FROM account_grants\n           JOIN users AS grantee ON grantee.id = account_grants.user_id\n           JOIN users AS granter ON granter.id = account_grants.granted_by\n           WHERE account_grants.account_id = ?\n             AND (? IS NULL OR account_grants.user_id < ?)\n           ORDER BY account_grants.user_id DESC\n           LIMIT ?",
   "describe": {
     "columns": [
       {
@@ -81,8 +81,19 @@
         }
       },
       {
-        "name": "user_rowid!: i64",
+        "name": "user_role!",
         "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "role"
+          }
+        }
+      },
+      {
+        "name": "user_rowid!: i64",
+        "ordinal": 8,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -93,7 +104,7 @@
       },
       {
         "name": "granted_by_name!",
-        "ordinal": 8,
+        "ordinal": 9,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -104,7 +115,7 @@
       },
       {
         "name": "granter_rowid!: i64",
-        "ordinal": 9,
+        "ordinal": 10,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -127,8 +138,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "b03bb339c08d548fb5042198ebbff58b545fb26925e25d1b67d68e32b8b19329"
+  "hash": "8ee8eef097b095e136b8951657d4f24e85f608775a52d3e30499c0da8a5c0b8c"
 }

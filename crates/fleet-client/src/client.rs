@@ -298,11 +298,13 @@ impl<S: SessionStore> Client<S> {
 
     /// `GET /audit`: one page of the audit log, newest first (Admins and
     /// the Owner): each entry as the log stores it. `query`'s `before` is
-    /// the `next` of the page before.
+    /// the `next` of the page before; its `target_kind` and `target_id`
+    /// narrow the page to one target's entries, both or neither.
     ///
     /// # Errors
     /// The server's 403 for a Member, 422 (a `limit` outside 1 to 100, a
-    /// `before` below 1) or 429 as [`ClientError::Api`]; any other error as
+    /// `before` below 1, one of the target's two fields without the other, or
+    /// a malformed one) or 429 as [`ClientError::Api`]; any other error as
     /// for every authenticated call.
     pub async fn audit(&self, query: &AuditPageQuery) -> Result<AuditPage, ClientError> {
         self.core.audit(query).await

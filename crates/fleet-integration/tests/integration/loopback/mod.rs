@@ -6,6 +6,7 @@
 use fleet_core::audit::RecordedValue;
 use fleet_server::ports::audit::AuditRecord;
 
+mod agent_disable;
 mod agent_restart;
 mod chat;
 mod conflict_texts;

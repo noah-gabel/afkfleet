@@ -88,6 +88,8 @@ export const PASSWORD = "placeholder password";
 export const NEW_USER = "afkbot1";
 /** A Member with 2FA. */
 export const MEMBER = "afkmember";
+/** An Admin a spec adds with `addAdmin`. */
+export const ADMIN = "afkadmin";
 /** Every link flow's user code. */
 export const LINK_CODE = "B7X4-KDLQ";
 /** The server's 422 for a name that can't be given a grant (U4 in ADR-0018). */
@@ -972,6 +974,16 @@ export class FakeBackend {
     return this.#auditEntries;
   }
 
+  /** A new Admin `username` with 2FA, and their ID. */
+  addAdmin(username: string): string {
+    return this.#addUser(username, "admin", true).id;
+  }
+
+  /** The ID of the user named `username`. */
+  userId(username: string): string {
+    return this.#user(username).id;
+  }
+
   /** Gives `username` a grant at `level` on `accountId`, from its owner. */
   share(accountId: string, username: string, level: GrantLevel): void {
     const account = this.#accounts.find((one) => one.id === accountId);
@@ -1051,14 +1063,23 @@ export class FakeBackend {
     return value({ ...agent });
   }
 
-  /** The Owner's review of the user `target` (ADR-0020, S50). */
+  /**
+   * The Owner's review of the user `target` (ADR-0020, S50), in the server's order: an unknown
+   * user first, then `ReviewUserGrants`' cells of the matrix. Nobody reviews themselves.
+   */
   #reviewOf(target: unknown, then: (user: User, session: Session) => Outcome): Outcome {
     return this.#signedIn((session) => {
-      if (session.user.role !== "owner") {
-        return api(session.user.role === "admin" ? 403 : 404, "forbidden");
-      }
       const user = this.#users.find((one) => one.id === target);
-      return user === undefined ? api(404, "not_found") : then(user, session);
+      if (user === undefined) {
+        return api(404, "not_found");
+      }
+      if (session.user.role === "owner" && user.id !== session.user.id) {
+        return then(user, session);
+      }
+      if (session.user.role === "member" && user.id !== session.user.id) {
+        return api(404, "not_found");
+      }
+      return api(403, "forbidden");
     });
   }
 
@@ -1981,6 +2002,15 @@ export class FakeBackend {
     return this.#addAccount(user, "microsoft", user.role === "owner" ? "active" : "pending");
   }
 
+  /** `grant` as `session`'s user lists it: `dormant` for who may review the owner (S90). */
+  #asSeen(session: Session, account: Account, grant: GrantResponse): GrantResponse {
+    const holder = this.#users.find((one) => one.id === grant.user.id);
+    if (session.user.role !== "owner" || account.ownerId === session.user.id || !holder) {
+      return grant;
+    }
+    return { ...grant, dormant: this.#implicitManage(holder, account) };
+  }
+
   #grantsOf(account: Account): GrantResponse[] {
     return [...account.grants.entries()].map(([userId, grant]) => {
       const user = this.#users.find((one) => one.id === userId);
@@ -2207,7 +2237,9 @@ export class FakeBackend {
       case "account_grants":
         return this.#signedIn((session) =>
           this.#managed(session, args.id, (account) =>
-            value({ items: this.#grantsOf(account) } satisfies GrantPage),
+            value({
+              items: this.#grantsOf(account).map((grant) => this.#asSeen(session, account, grant)),
+            } satisfies GrantPage),
           ),
         );
       case "create_grant":

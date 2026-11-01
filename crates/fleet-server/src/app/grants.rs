@@ -29,7 +29,7 @@ use std::sync::Arc;
 use fleet_core::account::awaits_review;
 use fleet_core::audit::{AuditAction, AuditError, AuditMetadata, AuditOutcome, AuditTarget};
 use fleet_core::authz::{
-    Actor, AuthzError, GrantLevel, Permission, Role, authorize, implicit_manage,
+    Actor, AuthzError, GrantLevel, Permission, Role, UserRef, authorize, implicit_manage,
 };
 use fleet_core::id::{AccountId, UserId};
 use fleet_core::system::Clock;
@@ -88,6 +88,17 @@ pub struct HeldView {
     /// The grant, its account and their people.
     pub held: HeldGrant,
     /// Whether the holder's role gives Manage on the account now.
+    pub dormant: bool,
+}
+
+/// A grant on an account, and whether it's dormant now: the grantee's role
+/// gives Manage on the account already (ADR-0020, S90). Whoever shows
+/// `dormant` decides who may see it, since it tells the grantee's role.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrantView {
+    /// The grant and its people.
+    pub listed: ListedGrant,
+    /// Whether the grantee's role gives Manage on the account now.
     pub dormant: bool,
 }
 
@@ -222,19 +233,31 @@ impl GrantService {
         Self { live_hints, ..self }
     }
 
-    /// The grants on `account` on `page`, newest grantee first, and the
-    /// next page's cursor. The caller asks `authorize()` for
-    /// `ManageGrants` first.
+    /// The grants on `account`, which `owner` owns, on `page`, newest
+    /// grantee first, and the next page's cursor. The caller asks
+    /// `authorize()` for `ManageGrants` first.
     ///
     /// # Errors
     /// [`StoreError`].
     pub async fn list(
         &self,
         account: AccountId,
+        owner: UserRef,
         page: Page<UserId>,
-    ) -> Result<Paged<ListedGrant, UserId>, StoreError> {
+    ) -> Result<Paged<GrantView, UserId>, StoreError> {
         let rows = self.store.grants().list(account, page).await?;
-        Ok(Paged::split(rows, page.limit, |grant| grant.grant.user))
+        let grants = Paged::split(rows, page.limit, |grant| grant.grant.user);
+        Ok(Paged {
+            items: grants
+                .items
+                .into_iter()
+                .map(|listed| GrantView {
+                    dormant: implicit_manage(&actor_of(listed.grant.user, listed.user_role), owner),
+                    listed,
+                })
+                .collect(),
+            next: grants.next,
+        })
     }
 
     /// Ends `by`'s own grant on `account`: they leave a shared account
@@ -404,6 +427,7 @@ impl GrantService {
         Ok(ListedGrant {
             grant,
             user_name: grantee.username,
+            user_role: grantee.role,
             granted_by_name: actor_name,
         })
     }
@@ -457,6 +481,7 @@ impl GrantService {
             return Ok(ListedGrant {
                 grant: current,
                 user_name: grantee.username,
+                user_role: grantee.role,
                 granted_by_name,
             });
         }
@@ -501,6 +526,7 @@ impl GrantService {
                 ..current
             },
             user_name: grantee.username,
+            user_role: grantee.role,
             granted_by_name: actor_name,
         })
     }

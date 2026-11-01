@@ -168,10 +168,8 @@ function FilterLine({ filter, names }: { filter: AuditFilter; names: Names }) {
   return (
     <div className="flex flex-col gap-1 text-sm">
       <p className="break-all">
-        {showingOnly(
-          filter.kind as AuditTargetKind,
-          targetWho(filter.kind as AuditTargetKind, filter.id, names),
-        )}
+        {showingOnly(filter.kind as AuditTargetKind)}{" "}
+        {filter.kind === "user" ? <UserName id={filter.id} names={names} /> : filter.id}.
       </p>
       {filter.kind === "user" ? <p className="text-muted-foreground">{FILTER_ON_USER}</p> : null}
       <Button asChild variant="link" className="h-auto self-start p-0">
@@ -246,7 +244,10 @@ export function AuditScreen({ filter }: { filter?: AuditFilter }) {
           type="button"
           variant="outline"
           disabled={audit.isFetching}
-          onClick={() => void audit.refetch()}
+          onClick={() => {
+            void audit.refetch();
+            void users.refetch();
+          }}
         >
           {LOAD_AGAIN}
         </Button>

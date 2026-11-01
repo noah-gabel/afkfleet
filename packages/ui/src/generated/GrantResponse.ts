@@ -22,4 +22,11 @@ granted_by: UserLabel,
 /**
  * When it was set last.
  */
-granted_at: string, };
+granted_at: string, 
+/**
+ * Whether the grantee's role gives them Manage on the account now, so
+ * the grant adds nothing for the time being: in a listing, for who may
+ * review the account's owner only (ADR-0020, S90). It would tell anyone
+ * else the grantee's role.
+ */
+dormant?: boolean, };

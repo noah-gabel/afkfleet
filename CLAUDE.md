@@ -58,6 +58,8 @@ Where things are:
 
     If at least one sensible option respects every rule and every recorded decision, the subagent decides, and the decision goes into "Decided without you". When unsure whether a question is (1)–(3), ask.
 
+    Every subagent brief repeats "Stay in this repository". Library and crate sources are read on docs.rs or the crate's own repository on the web, never from the cargo registry, the toolchain folders or any other folder on this PC outside this repository.
+
 ## Git & GitHub rules
 - **Never:** merge a PR, push to `main`, force-push, or rewrite history that's already pushed. The ruleset on `main` blocks most of this anyway; don't try to work around a rejection.
 - **Allowed `gh` commands:** `gh pr create`, `gh pr view`, `gh pr diff`, `gh pr checks`, `gh run list`, `gh run view` (including `--log-failed`). Nothing else: no `gh pr merge`, `gh api`, `gh repo …`, `gh secret`, `gh auth`, `gh workflow`, `gh release`, `gh gist`.

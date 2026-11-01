@@ -10,7 +10,7 @@ use core::fmt;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use fleet_core::authz::{GrantLevel, UserRef};
+use fleet_core::authz::{GrantLevel, Role, UserRef};
 use fleet_core::id::{AccountId, UserId};
 use fleet_core::value::{McUsername, Username};
 
@@ -32,13 +32,16 @@ pub struct AccountGrant {
     pub granted_at: DateTime<Utc>,
 }
 
-/// A grant as the list shows it, with its people's names.
+/// A grant as the list shows it, with its people's names and the grantee's
+/// current role.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListedGrant {
     /// The grant.
     pub grant: AccountGrant,
     /// The grantee's username.
     pub user_name: Username,
+    /// The grantee's current role.
+    pub user_role: Role,
     /// The username of whoever set it last.
     pub granted_by_name: Username,
 }
