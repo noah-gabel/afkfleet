@@ -719,6 +719,10 @@ export class FakeBackend {
   /** The last line sent, with its request, for a spec to push its `chat` and `chat_sent`. */
   lastSend: { readonly request: string; readonly line: ChatLine } | null = null;
 
+  #refusing: CommandErrorCode | null = null;
+  readonly #held = new Set<string>();
+  readonly #waiting: (() => void)[] = [];
+
   constructor() {
     this.#addUser(OWNER, "owner", true);
     this.#addUser(NEW_USER, "member", false);
@@ -800,6 +804,37 @@ export class FakeBackend {
    * live events watch, which answers when it ends.
    */
   handle(command: string, args: Record<string, unknown>): Outcome | Promise<Outcome> {
+    // Not the theme's, which reaches no server, nor the profile, which only the app holds.
+    if (this.#refusing !== null && command !== "set_window_theme" && command !== "server_profile") {
+      return refused(this.#refusing);
+    }
+    if (this.#held.has(command)) {
+      return new Promise<void>((resolve) => this.#waiting.push(resolve)).then(() =>
+        this.#answer(command, args),
+      );
+    }
+    return this.#answer(command, args);
+  }
+
+  /** Every command but the profile's and the theme's fails as `code`, until `null` (S96). */
+  refuseAll(code: CommandErrorCode | null): void {
+    this.#refusing = code;
+  }
+
+  /** `command` waits unanswered, for a screen's loading state, until `release` (S96). */
+  hold(command: string): void {
+    this.#held.add(command);
+  }
+
+  /** Answers every call `hold` kept waiting, and holds nothing more. */
+  release(): void {
+    this.#held.clear();
+    for (const resolve of this.#waiting.splice(0)) {
+      resolve();
+    }
+  }
+
+  #answer(command: string, args: Record<string, unknown>): Outcome | Promise<Outcome> {
     const request = (args.request ?? {}) as Record<string, unknown>;
     switch (command as Command) {
       case "server_profile":
