@@ -6,10 +6,12 @@ import { fileURLToPath } from "node:url";
 
 import {
   checkRepository,
+  checkSelects,
   checkStylesheet,
   isColourLiteral,
   isScanned,
   lex,
+  NATIVE_SELECT,
   scanSource,
   sourceFiles,
 } from "./theme-guard.mjs";
@@ -299,6 +301,80 @@ describe("the stylesheet", () => {
   it("ignores comments", () => {
     assert.deepEqual(checkStylesheet(stylesheet((css) => `/* color: red; #fff */\n${css}`)), []);
   });
+});
+
+describe("native selects", () => {
+  const LOOK =
+    'const LOOK = "bg-background text-foreground [&_option]:bg-background [&_option]:text-foreground";';
+  const shared = (
+    source = `${LOOK}\nexport const S = (p) => <select {...p} className={LOOK} />;`,
+  ) => ({
+    path: NATIVE_SELECT,
+    source,
+  });
+  const other = (source) => ({ path: "packages/ui/src/features/a/A.tsx", source });
+  const matches = (files) => checkSelects(files).map((problem) => problem.match);
+
+  it("takes the shared component alone", () => {
+    assert.deepEqual(checkSelects([shared(), other("<NativeSelect id={id} />")]), []);
+  });
+
+  it("refuses a select anywhere else, saying where", () => {
+    assert.deepEqual(checkSelects([shared(), other('\n<select className="a" />')]), [
+      {
+        file: "packages/ui/src/features/a/A.tsx",
+        line: 2,
+        rule: "native select",
+        match: "<select: use NativeSelect",
+      },
+    ]);
+  });
+
+  it("refuses one written with createElement", () => {
+    assert.equal(checkSelects([shared(), other('createElement("select", {});')]).length, 1);
+  });
+
+  for (const [name, source] of [
+    ["a line comment", "// a <select here\nconst a = 1;"],
+    ["a block comment", "/* <select> */ const a = 1;"],
+    ["a string", 'const a = "<select>";'],
+    ["a template", "const a = `<select>`;"],
+    ["another tag that starts the same", "<selection /> ; <select-all />"],
+  ]) {
+    it(`doesn't take ${name} for a select`, () => {
+      assert.deepEqual(checkSelects([shared(), other(source)]), []);
+    });
+  }
+
+  it("refuses a shared file that's gone", () => {
+    assert.deepEqual(matches([other("const a = 1;")]), ["the file is missing"]);
+  });
+
+  it("refuses a shared file with no select, or two", () => {
+    assert.deepEqual(matches([shared(LOOK)]), ["it must render exactly one <select"]);
+    assert.deepEqual(matches([shared(`${LOOK}\n<select /> ; <select />`)]), [
+      "it must render exactly one <select",
+    ]);
+  });
+
+  for (const token of [
+    "bg-background",
+    "text-foreground",
+    "[&_option]:bg-background",
+    "[&_option]:text-foreground",
+  ]) {
+    it(`refuses a shared look without ${token}`, () => {
+      const source = shared().source.replace(`"${token} `, '"').replace(` ${token}`, "");
+      assert.ok(matches([shared(source)]).includes(`it must hold ${token}`), source);
+    });
+  }
+
+  for (const see of ["bg-transparent", "bg-background/50", "bg-input/30"]) {
+    it(`refuses ${see} on the shared look`, () => {
+      const source = shared().source.replace('"bg-background ', `"bg-background ${see} `);
+      assert.equal(checkSelects([shared(source)])[0]?.match.split(":")[0], see);
+    });
+  }
 });
 
 describe("the real tree", () => {

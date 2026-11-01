@@ -14,6 +14,11 @@
 // `currentColor`, `transparent`, `inherit`, `none`, `var(--x)` and `color-mix` over `var()` are
 // fine, and prose never counts: each rule needs a colour context. There is no file allowlist.
 //
+// A native `<select>` lives only in components/NativeSelect.tsx, whose one look holds the tokens
+// for the select and its options: WebView2 paints the open list from them, and a transparent
+// select in dark mode opened a light list with light text, which no sweep can see, since the list
+// isn't in the DOM (found at the user's hands-on of PR #87).
+//
 // styles.css may hold colour literals only as `--*` values directly in `:root`, `.dark` or the
 // `prefers-color-scheme` block. Every token is in both `:root` and `.dark`, each `--color-*` maps
 // to a token that exists, the media block equals `.dark`, and Tailwind's own palette stays reset,
@@ -144,7 +149,7 @@ export function lex(source) {
       if (source[at] === "\\") {
         at += 2;
       } else if (source[at] === quote) {
-        strings.push({ text: source.slice(open + 1, at), index: open });
+        strings.push({ text: source.slice(open + 1, at), index: open, start: open + 1 });
         return at + 1;
       } else {
         at += 1;
@@ -159,10 +164,10 @@ export function lex(source) {
       if (source[at] === "\\") {
         at += 2;
       } else if (source[at] === "`") {
-        strings.push({ text: source.slice(chunk, at), index: chunk });
+        strings.push({ text: source.slice(chunk, at), index: chunk, start: chunk });
         return at + 1;
       } else if (source[at] === "$" && source[at + 1] === "{") {
-        strings.push({ text: source.slice(chunk, at), index: chunk });
+        strings.push({ text: source.slice(chunk, at), index: chunk, start: chunk });
         at = readCode(at + 2, true);
         chunk = at;
       } else {
@@ -360,6 +365,85 @@ export function checkStylesheet(source) {
   return found.sort((a, b) => a.line - b.line);
 }
 
+/** The one file a native select may be written in. */
+export const NATIVE_SELECT = "packages/ui/src/components/NativeSelect.tsx";
+
+/** What the shared look must hold: the tokens, for the select and for its options. */
+const SELECT_LOOK = [
+  "bg-background",
+  "text-foreground",
+  "[&_option]:bg-background",
+  "[&_option]:text-foreground",
+];
+
+/** Where `source` writes a native select in code, as lines: never in a comment or a string. */
+function selectsIn(source) {
+  const { code, strings } = lex(source);
+  const bare = code.split("");
+  for (const { text, start } of strings) {
+    for (let at = start; at < start + text.length; at += 1) {
+      if (bare[at] !== "\n") {
+        bare[at] = " ";
+      }
+    }
+  }
+  const lines = [];
+  for (const match of bare.join("").matchAll(/<select(?![\w-])/g)) {
+    lines.push(lineOf(source, match.index));
+  }
+  // A string names the tag here, so this one reads the code with its strings.
+  for (const match of code.matchAll(/createElement\(\s*["'`]select["'`]/g)) {
+    lines.push(lineOf(source, match.index));
+  }
+  return lines;
+}
+
+/**
+ * Every problem with the native selects of `files`, each `{ path, source }`, as
+ * `{ file, line, rule, match }`: a select outside NativeSelect.tsx, not exactly one inside it, or
+ * a shared look that doesn't hold the tokens or makes the select see-through.
+ */
+export function checkSelects(files) {
+  const rule = "native select";
+  const problems = [];
+  const shared = files.find((file) => file.path === NATIVE_SELECT);
+  for (const { path, source } of files) {
+    if (path !== NATIVE_SELECT) {
+      for (const line of selectsIn(source)) {
+        problems.push({ file: path, line, rule, match: "<select: use NativeSelect" });
+      }
+    }
+  }
+  if (shared === undefined) {
+    problems.push({ file: NATIVE_SELECT, line: 1, rule, match: "the file is missing" });
+    return problems;
+  }
+  const { code } = lex(shared.source);
+  if (selectsIn(shared.source).length !== 1) {
+    problems.push({
+      file: NATIVE_SELECT,
+      line: 1,
+      rule,
+      match: "it must render exactly one <select",
+    });
+  }
+  const words = new Set(code.split(/[\s"'`]+/));
+  for (const token of SELECT_LOOK) {
+    if (!words.has(token)) {
+      problems.push({ file: NATIVE_SELECT, line: 1, rule, match: `it must hold ${token}` });
+    }
+  }
+  for (const match of code.matchAll(/(?<![\w-])bg-(?:transparent\b|[a-z-]+\/\d+)/g)) {
+    problems.push({
+      file: NATIVE_SELECT,
+      line: lineOf(shared.source, match.index),
+      rule,
+      match: `${match[0]}: see-through, so the open list is painted light`,
+    });
+  }
+  return problems;
+}
+
 /** Whether `path`, relative and with `/`, is a shipped source this guard reads. */
 export function isScanned(path) {
   return (
@@ -389,11 +473,16 @@ export function sourceFiles(root) {
 /** Every problem in the repository at `root`, as `{ file, line, rule, match }`. */
 export function checkRepository(root) {
   const problems = [];
-  for (const file of sourceFiles(root)) {
-    for (const finding of scanSource(readFileSync(join(root, file), "utf8"))) {
-      problems.push({ file, ...finding });
+  const files = sourceFiles(root).map((path) => ({
+    path,
+    source: readFileSync(join(root, path), "utf8"),
+  }));
+  for (const { path, source } of files) {
+    for (const finding of scanSource(source)) {
+      problems.push({ file: path, ...finding });
     }
   }
+  problems.push(...checkSelects(files));
   const styles = "packages/ui/src/styles.css";
   for (const finding of checkStylesheet(readFileSync(join(root, styles), "utf8"))) {
     problems.push({ file: styles, ...finding });

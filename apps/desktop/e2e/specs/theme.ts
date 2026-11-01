@@ -38,6 +38,36 @@ export async function measured(page: Page, row: string, scheme: Scheme): Promise
   expect(colorScheme, `${row} in ${scheme}`).toBe(scheme);
 }
 
+/**
+ * Every native select on the page, and its options, hold the theme's tokens for `scheme`: what
+ * WebView2 paints the open list from. The list itself isn't in the DOM, so that stays a hands-on
+ * check. Answers how many selects it read.
+ */
+export async function selectsInTokens(page: Page, row: string, scheme: Scheme): Promise<number> {
+  await inScheme(page, scheme);
+  const { tokens, found } = await page.evaluate(() => {
+    const probe = document.createElement("div");
+    probe.style.background = "var(--background)";
+    probe.style.color = "var(--foreground)";
+    document.body.append(probe);
+    const held = getComputedStyle(probe);
+    const tokens = { background: held.backgroundColor, color: held.color };
+    probe.remove();
+    const read = (element: Element) => {
+      const style = getComputedStyle(element);
+      return { background: style.backgroundColor, color: style.color };
+    };
+    return {
+      tokens,
+      found: [...document.querySelectorAll("select, select option")].map(read),
+    };
+  });
+  for (const colours of found) {
+    expect(colours, `${row} in ${scheme}`).toEqual(tokens);
+  }
+  return found.length;
+}
+
 /** What's on the page, in both themes, flipped in place. */
 export async function bothThemes(page: Page, row: string): Promise<void> {
   for (const scheme of ["dark", "light"] as const) {

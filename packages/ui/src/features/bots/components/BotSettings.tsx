@@ -13,18 +13,19 @@
 //   whose 429 counts down on Save. While a save runs or the password is asked, the field and
 //   Save are locked, and while a save runs, Cancel is.
 // Every answer reads the bot again rather than writing over the cache (R102).
+
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useId, useState } from "react";
 import { useForm } from "react-hook-form";
-
 import { toApiError } from "../../../api/ApiError";
 import { useApiClient } from "../../../api/context";
 import { describeError } from "../../../api/describeError";
 import { botKey, MODES_LIST_KEY, useModes } from "../../../api/queries";
 import { botPatchRequest } from "../../../api/schemas";
 import { FormField } from "../../../components/FormField";
+import { NativeSelect } from "../../../components/NativeSelect";
 import { RetryWaitMessage } from "../../../components/RetryWaitMessage";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
@@ -135,9 +136,8 @@ function ModeSetting({ bot, actions }: { bot: BotResponse; actions: BotActions }
         {SETTINGS.mode}
       </label>
       <div className="flex flex-wrap items-center gap-3">
-        <select
+        <NativeSelect
           id={id}
-          className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
           value={picked ?? (listed ? bot.mode_id : UNSEEN)}
           disabled={picked !== null || wait.waiting !== null}
           onChange={(event) => {
@@ -154,7 +154,7 @@ function ModeSetting({ bot, actions }: { bot: BotResponse; actions: BotActions }
               {modeName(mode)}
             </option>
           ))}
-        </select>
+        </NativeSelect>
         <Button asChild variant="link" size="sm" className="px-0">
           <Link to="/modes">{MODES_HEADING}</Link>
         </Button>

@@ -3,12 +3,12 @@
 // "Share with" by exact username. Every write may ask for the password first (ADR-0018
 // group E); a level changes as soon as it's picked, a revoke asks first. The caller's own row
 // offers neither: nobody grants to themselves, and Leave is their way out (ADR-0020, U83).
+
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQueryClient } from "@tanstack/react-query";
 import { Fragment, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
-
 import { toApiError } from "../../../api/ApiError";
 import { useApiClient } from "../../../api/context";
 import { describeError } from "../../../api/describeError";
@@ -16,6 +16,7 @@ import { ACCOUNTS_KEY, useGrants, useMe } from "../../../api/queries";
 import { grantLevel, username } from "../../../api/schemas";
 import { z } from "../../../api/zod";
 import { FormField } from "../../../components/FormField";
+import { NativeSelect } from "../../../components/NativeSelect";
 import { RetryWaitMessage } from "../../../components/RetryWaitMessage";
 import { Alert, AlertDescription } from "../../../components/ui/alert";
 import { Button } from "../../../components/ui/button";
@@ -161,9 +162,8 @@ function GrantRow({
           {mine ? (
             accessLabel(row.level)
           ) : (
-            <select
+            <NativeSelect
               aria-label={`Access of ${who}`}
-              className="rounded-md border bg-background px-2 py-1"
               value={row.level}
               disabled={writes.busy || user === undefined}
               onChange={(event) => change(event.target.value as GrantLevel)}
@@ -173,7 +173,7 @@ function GrantRow({
                   {accessLabel(level)}
                 </option>
               ))}
-            </select>
+            </NativeSelect>
           )}
         </td>
         <td className="py-2">{row.granted_by.username}</td>

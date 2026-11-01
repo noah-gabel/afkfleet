@@ -3,6 +3,7 @@
 // shows as text in a read-only field, since a native select has no such state, and there's
 // nothing to press. While a write runs or the password is asked, everything's locked for the
 // moment, so what's sent is what's on the screen.
+
 import { useId } from "react";
 import {
   get,
@@ -11,8 +12,8 @@ import {
   type UseFormReturn,
   useWatch,
 } from "react-hook-form";
-
 import { FormField } from "../../../components/FormField";
+import { NativeSelect } from "../../../components/NativeSelect";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import {
@@ -60,9 +61,6 @@ export interface StepView {
   /** This is a copy: a cut command is the user's to complete (U63). */
   readonly copying: boolean;
 }
-
-/** A native select, as the bot's mode drop-down is. */
-const SELECT = "h-9 rounded-md border border-input bg-transparent px-3 text-sm";
 
 /**
  * Move up or down at its edge: it looks disabled, but only `aria-disabled`, so a step just moved
@@ -140,18 +138,13 @@ export function StepCard({
             value={options.find((option) => option.value === step[field])?.text ?? ""}
           />
         ) : (
-          <select
-            {...control}
-            className={SELECT}
-            disabled={view.locked}
-            {...form.register(pathOf(field))}
-          >
+          <NativeSelect {...control} disabled={view.locked} {...form.register(pathOf(field))}>
             {options.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.text}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         )
       }
     </FormField>
@@ -304,12 +297,12 @@ function UnitField({
     return <Input aria-label={label} readOnly className="w-28" value={UNIT_TEXT[value]} />;
   }
   return (
-    <select aria-label={label} className={SELECT} disabled={view.locked} {...register}>
+    <NativeSelect aria-label={label} disabled={view.locked} {...register}>
       {TIME_UNITS.map((unit) => (
         <option key={unit} value={unit}>
           {UNIT_TEXT[unit]}
         </option>
       ))}
-    </select>
+    </NativeSelect>
   );
 }

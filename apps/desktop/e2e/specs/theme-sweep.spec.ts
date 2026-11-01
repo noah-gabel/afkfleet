@@ -10,7 +10,7 @@ import { walk } from "../contrast";
 import { type FakeBackend, MEMBER, NEW_USER, OWNER, PASSWORD } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
 import { enterCode, expectHome, logIn, push } from "./steps";
-import { bothThemes, inScheme, measured } from "./theme";
+import { bothThemes, inScheme, measured, selectsInTokens } from "./theme";
 
 /** Signed in as `username`, on Home. */
 async function signIn(page: Page, backend: FakeBackend, username: string): Promise<void> {
@@ -75,6 +75,49 @@ test("the check itself reports what it should, at the numbers it should", async 
     document.querySelector("[data-planted]")?.remove();
     document.body.style.background = "";
   });
+});
+
+test("every native select holds the theme's tokens, its options too", async ({ page, context }) => {
+  const backend = await fakeBackend(context);
+  const account = backend.addAccount(OWNER);
+  backend.share(account, MEMBER, "view");
+  await signIn(page, backend, OWNER);
+  const main = page.getByRole("main");
+  const check = async (row: string) => {
+    for (const scheme of ["dark", "light"] as const) {
+      expect(await selectsInTokens(page, row, scheme), row).toBeGreaterThan(0);
+    }
+  };
+
+  await page.getByRole("link", { name: "Open AfkBot1" }).click();
+  await expect(main.getByLabel("Mode", { exact: true })).toBeVisible();
+  await check("a bot's mode");
+
+  await nav(page, "Accounts");
+  await main.getByRole("link", { name: "Open AfkBot1" }).click();
+  await expect(main.getByLabel(`Access of ${MEMBER}`)).toBeVisible();
+  await check("who has access");
+
+  await nav(page, "Modes");
+  await main.getByRole("link", { name: "New mode" }).click();
+  await main.getByLabel("Name").fill("Fishing");
+  const joining = main.getByRole("group", { name: "When it joins", exact: true });
+  await joining.getByRole("button", { name: "Add step" }).click();
+  await joining
+    .getByRole("group", { name: "Step 1", exact: true })
+    .getByLabel("What it does")
+    .selectOption({ label: "Select a hotbar slot" });
+  const online = main.getByRole("group", { name: "While it's online", exact: true });
+  await online.getByRole("button", { name: "Add step" }).click();
+  await online.getByLabel("Every", { exact: true }).fill("5");
+  await online.getByLabel("Plus up to, at random", { exact: true }).fill("0");
+  // A saved mode is the one that offers who can see it.
+  await main.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(main.getByRole("heading", { name: "Fishing", level: 1 })).toBeVisible();
+  await expect(main.getByLabel("Who can see it")).toBeVisible();
+  await expect(joining.getByLabel("Slot")).toBeVisible();
+  await expect(online.getByLabel("Every: unit")).toBeVisible();
+  await check("the mode editor: visibility, what it does, a step's choice, a time's unit");
 });
 
 test("before signing in", async ({ page, context }) => {
