@@ -6,6 +6,7 @@ expression: seen
   "1 the owner": {
     "id": "[account]",
     "kind": "microsoft",
+    "leavable": false,
     "level": "manage",
     "linked_at": "2027-01-15T08:00:00.000Z",
     "name": "AfkBot1",
@@ -19,6 +20,7 @@ expression: seen
   "2 a grantee with view": {
     "id": "[account]",
     "kind": "microsoft",
+    "leavable": true,
     "level": "view",
     "name": "AfkBot1",
     "reason": "not_owned",
@@ -27,6 +29,7 @@ expression: seen
   "3 a grantee with control": {
     "id": "[account]",
     "kind": "microsoft",
+    "leavable": true,
     "level": "control",
     "name": "AfkBot1",
     "reason": "not_owned",
@@ -35,6 +38,7 @@ expression: seen
   "4 a grantee with manage": {
     "id": "[account]",
     "kind": "microsoft",
+    "leavable": true,
     "level": "manage",
     "linked_at": "2027-01-15T08:00:00.000Z",
     "name": "AfkBot1",
@@ -48,6 +52,7 @@ expression: seen
   "5 an admin": {
     "id": "[account]",
     "kind": "microsoft",
+    "leavable": false,
     "level": "manage",
     "linked_at": "2027-01-15T08:00:00.000Z",
     "name": "AfkBot1",
@@ -61,6 +66,7 @@ expression: seen
   "6 the Owner": {
     "id": "[account]",
     "kind": "microsoft",
+    "leavable": false,
     "level": "manage",
     "linked_at": "2027-01-15T08:00:00.000Z",
     "name": "AfkBot1",
@@ -74,6 +80,7 @@ expression: seen
   "7 an admin with view on another admin's": {
     "id": "[account]",
     "kind": "offline",
+    "leavable": true,
     "level": "view",
     "linked_at": "2027-01-15T08:00:00.000Z",
     "name": "AfkBot2",

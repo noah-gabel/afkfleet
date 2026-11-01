@@ -1,7 +1,8 @@
 // "Who has access" (Plan.md P9.8, the user's U11 at group F's plan review): for a Manage
 // holder, the account's grants with a level picker and Revoke, a page at a time, then
 // "Share with" by exact username. Every write may ask for the password first (ADR-0018
-// group E); a level changes as soon as it's picked, a revoke asks first.
+// group E); a level changes as soon as it's picked, a revoke asks first. The caller's own row
+// offers neither: nobody grants to themselves, and Leave is their way out (ADR-0020, U83).
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQueryClient } from "@tanstack/react-query";
 import { Fragment, useState } from "react";
@@ -11,7 +12,7 @@ import { toast } from "sonner";
 import { toApiError } from "../../../api/ApiError";
 import { useApiClient } from "../../../api/context";
 import { describeError } from "../../../api/describeError";
-import { ACCOUNTS_KEY, useGrants } from "../../../api/queries";
+import { ACCOUNTS_KEY, useGrants, useMe } from "../../../api/queries";
 import { grantLevel, username } from "../../../api/schemas";
 import { z } from "../../../api/zod";
 import { FormField } from "../../../components/FormField";
@@ -41,6 +42,7 @@ import {
   revokeQuestion,
   shared,
   TOO_MANY_NAMES,
+  YOU,
 } from "../texts";
 
 const LEVELS = ["view", "control", "manage"] as const;
@@ -115,6 +117,8 @@ function GrantRow({
 }) {
   const api = useApiClient();
   const queryClient = useQueryClient();
+  const { data: user } = useMe();
+  const mine = user?.id === row.user.id;
   const [asking, setAsking] = useState(false);
   const who = row.user.username;
   const key = `grant:${row.user.id}`;
@@ -154,33 +158,40 @@ function GrantRow({
       <tr className="border-b">
         <td className="py-2">{who}</td>
         <td className="py-2">
-          <select
-            aria-label={`Access of ${who}`}
-            className="rounded-md border bg-background px-2 py-1"
-            value={row.level}
-            disabled={writes.busy}
-            onChange={(event) => change(event.target.value as GrantLevel)}
-          >
-            {LEVELS.map((level) => (
-              <option key={level} value={level}>
-                {accessLabel(level)}
-              </option>
-            ))}
-          </select>
+          {mine ? (
+            accessLabel(row.level)
+          ) : (
+            <select
+              aria-label={`Access of ${who}`}
+              className="rounded-md border bg-background px-2 py-1"
+              value={row.level}
+              disabled={writes.busy || user === undefined}
+              onChange={(event) => change(event.target.value as GrantLevel)}
+            >
+              {LEVELS.map((level) => (
+                <option key={level} value={level}>
+                  {accessLabel(level)}
+                </option>
+              ))}
+            </select>
+          )}
         </td>
         <td className="py-2">{row.granted_by.username}</td>
         <td className="py-2">{formatTime(row.granted_at)}</td>
         <td className="py-2 text-right">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            aria-label={`Revoke ${who}'s access`}
-            disabled={writes.busy}
-            onClick={() => setAsking(true)}
-          >
-            Revoke
-          </Button>
+          {mine ? YOU : null}
+          {!mine && user !== undefined ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              aria-label={`Revoke ${who}'s access`}
+              disabled={writes.busy}
+              onClick={() => setAsking(true)}
+            >
+              Revoke
+            </Button>
+          ) : null}
         </td>
       </tr>
       <tr>

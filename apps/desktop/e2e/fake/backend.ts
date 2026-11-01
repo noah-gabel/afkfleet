@@ -1696,6 +1696,7 @@ export class FakeBackend {
       kind: account.kind,
       status: account.status,
       level,
+      leavable: account.grants.has(user.id) && !this.#implicitManage(user, account),
       ...(level === "manage" && owner !== undefined
         ? { owner: { id: owner.id, username: owner.username }, linked_at: account.linkedAt }
         : {}),
@@ -2046,6 +2047,9 @@ export class FakeBackend {
   #changeGrant(target: unknown, user: unknown, request: Record<string, unknown>): Outcome {
     return this.#steppedUp((session) =>
       this.#managed(session, target, (account) => {
+        if (String(user) === session.user.id) {
+          return api(403, "forbidden");
+        }
         const grant = account.grants.get(String(user));
         if (grant === undefined) {
           return api(404, "not_found");

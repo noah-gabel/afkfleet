@@ -266,6 +266,7 @@ mod tests {
                     "kind": "microsoft",
                     "status": "active",
                     "level": "manage",
+                    "leavable": false,
                     "owner": { "id": ID, "username": "a".repeat(32) },
                     "linked_at": AT,
                 },

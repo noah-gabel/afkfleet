@@ -107,6 +107,35 @@ test("the Owner promotes a Member and reviews their grants, revoking one", async
   await expect(main.getByRole("heading", { name: "Users", level: 1 })).toBeVisible();
 });
 
+test("a Manage grantee's own row says You, and Leave is their way out", async ({
+  page,
+  context,
+}) => {
+  const backend = await fakeBackend(context);
+  backend.share(backend.addAccount(OWNER), MEMBER, "manage");
+  await page.goto("/");
+  await logIn(page, MEMBER);
+  await enterCode(page, backend.code(MEMBER));
+  await expectHome(page, MEMBER);
+  const main = page.getByRole("main");
+
+  await page
+    .getByRole("navigation", { name: "Main" })
+    .getByRole("link", { name: "Accounts" })
+    .click();
+  await main.getByRole("link", { name: "Open AfkBot1" }).click();
+  const mine = main.getByRole("row", { name: new RegExp(MEMBER) });
+  await expect(mine.getByText("You", { exact: true })).toBeVisible();
+  await expect(mine.getByRole("button", { name: /Revoke/ })).toBeHidden();
+  await main.getByRole("button", { name: "Leave", exact: true }).click();
+  await main.getByRole("button", { name: "Leave account" }).click();
+  await page.getByLabel("Current password").fill(PASSWORD);
+  await page.getByRole("button", { name: "Continue" }).click();
+
+  await expect(page.getByText("You left AfkBot1.")).toBeVisible();
+  await expect(main.getByRole("link", { name: "Open AfkBot1" })).toBeHidden();
+});
+
 test("a Member leaves a shared account after the password", async ({ page, context }) => {
   const backend = await fakeBackend(context);
   backend.share(backend.addAccount(OWNER), MEMBER, "view");

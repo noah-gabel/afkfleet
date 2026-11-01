@@ -38,6 +38,11 @@ reason?: RefusalReason,
  */
 level: GrantLevel, 
 /**
+ * Whether the caller may leave it: they hold a grant, and neither
+ * ownership nor their role gives them Manage (ADR-0020, U83).
+ */
+leavable: boolean, 
+/**
  * Who linked it, and so owns it: for Admins, the Owner and Manage only.
  */
 owner?: UserLabel, 

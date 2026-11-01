@@ -821,6 +821,30 @@ test("refuses an account's owner and an Admin whose role gives Manage leaving (S
   expect(byAnAdmin).toMatchObject({ ok: false, error: { api: { status: 403 } } });
 });
 
+test("says leavable where leave_account would answer, and refuses changing one's own grant", () => {
+  const backend = new FakeBackend();
+  const shared = backend.addAccount(OWNER);
+  const own = backend.addAccount(MEMBER);
+  backend.share(shared, MEMBER, "manage");
+  signedInAs(backend, MEMBER);
+  const leavable = (id: string) =>
+    (backend.handle("account", { id }) as { value: { leavable: boolean } }).value.leavable;
+
+  const seen = [leavable(shared), leavable(own)];
+  const changed = backend.handle("change_grant", {
+    id: shared,
+    user: backend.userId(MEMBER),
+    request: { level: "view" },
+  });
+  const refused = backend.handle("leave_account", { id: own });
+  const left = backend.handle("leave_account", { id: shared });
+
+  expect(seen).toEqual([true, false]);
+  expect(changed).toMatchObject({ ok: false, error: { api: { status: 403 } } });
+  expect(refused).toMatchObject({ ok: false, error: { api: { status: 403 } } });
+  expect(left).toMatchObject({ ok: true });
+});
+
 test("says a listed grant is dormant to the Owner alone (S90)", () => {
   const backend = new FakeBackend();
   const account = backend.addAccount(MEMBER);

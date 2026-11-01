@@ -395,6 +395,9 @@ pub struct AccountResponse {
     #[ts(as = "GrantLevel")]
     #[schema(value_type = GrantLevel)]
     pub level: Open<GrantLevel>,
+    /// Whether the caller may leave it: they hold a grant, and neither
+    /// ownership nor their role gives them Manage (ADR-0020, U83).
+    pub leavable: bool,
     /// Who linked it, and so owns it: for Admins, the Owner and Manage only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -727,6 +730,7 @@ mod tests {
             "status": "refused",
             "reason": "not_owned",
             "level": "manage",
+            "leavable": false,
             "owner": { "id": "018bcfe5-6800-7202-8202-020202020202", "username": "alice" },
             "linked_at": "2027-01-15T08:00:00.000Z"
         });
@@ -735,7 +739,8 @@ mod tests {
             "name": "AfkBot1",
             "kind": "offline",
             "status": "active",
-            "level": "view"
+            "level": "view",
+            "leavable": true
         });
         let page = json!({ "items": [shown_to_a_grantee.clone()] });
         let more = json!({
@@ -760,7 +765,8 @@ mod tests {
             "name": "AfkBot1",
             "kind": "bedrock",
             "status": "active",
-            "level": "admin"
+            "level": "admin",
+            "leavable": false
         }))
         .unwrap();
 

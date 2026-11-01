@@ -7,12 +7,12 @@ import { describe, expect, it } from "vitest";
 import type { AccountKind } from "../../generated/AccountKind";
 import type { AccountStatus } from "../../generated/AccountStatus";
 import type { GrantLevel } from "../../generated/GrantLevel";
-import { checkGrantTable, GRANTS, levelSeen, role, table } from "../../test/authzMatrix";
+import { checkGrantTable } from "../../test/authzMatrix";
 import { accountActions, manages } from "./permissions";
 
 /** A Microsoft account in `status`, which the viewer sees at `level`. */
 function microsoft(level: GrantLevel, status: AccountStatus = "active") {
-  return { kind: "microsoft" as AccountKind, status, level };
+  return { kind: "microsoft" as AccountKind, status, level, leavable: false };
 }
 
 describe("account permissions", () => {
@@ -30,7 +30,7 @@ describe("account permissions", () => {
 
   it("offers linking again only for a Microsoft account that isn't waiting for approval", () => {
     const again = (kind: AccountKind, status: AccountStatus) =>
-      accountActions({ kind, status, level: "manage" }).linkAgain;
+      accountActions({ kind, status, level: "manage", leavable: false }).linkAgain;
 
     expect(again("microsoft", "active")).toBe(true);
     expect(again("microsoft", "reauth_required")).toBe(true);
@@ -40,36 +40,13 @@ describe("account permissions", () => {
     expect(again("microsoft", "brand_new" as AccountStatus)).toBe(false);
   });
 
-  it("offers leaving exactly where the level says a grant is held, the matrix's every cell", () => {
-    const leave = table("### LeaveAccount");
-    const manageGrants = table("### ManageGrants");
-    expect(leave.rows).toHaveLength(11);
-    leave.rows.forEach(([actorLabel = "", owner = "", ...cells], row) => {
-      GRANTS.forEach((grant, column) => {
-        const name = `${actorLabel} on ${owner}'s, ${grant}`;
-        const cell = cells[column];
-        const level = levelSeen(role(actorLabel), owner, grant);
-        if (level === null) {
-          expect(cell, name).toBe("404");
-          return;
-        }
-        const offered = accountActions(microsoft(level)).leave;
-        if (level === "manage") {
-          // The level can't tell a Manage grant from implicit Manage, so Leave isn't offered;
-          // whoever may leave at Manage revokes their own row instead (ADR-0020, S86).
-          expect(offered, name).toBe(false);
-          if (cell === "ok") {
-            const revokes = manageGrants.rows[row]?.slice(2)[column];
-            expect(revokes, name).toBe("ok");
-          } else {
-            expect(cell, name).toBe("403");
-          }
-        } else {
-          expect(cell, name).toBe("ok");
-          expect(offered, name).toBe(true);
-        }
-      });
-    });
+  it("offers leaving exactly as the server says, whatever the level (U83)", () => {
+    // The server's own test walks the matrix's `### LeaveAccount` (`leavable_follows_every_cell_
+    // of_the_matrix`, R172); here the app must only pass its answer on.
+    for (const level of ["view", "control", "manage"] as const) {
+      expect(accountActions({ ...microsoft(level), leavable: true }).leave).toBe(true);
+      expect(accountActions({ ...microsoft(level), leavable: false }).leave).toBe(false);
+    }
   });
 
   it("gives an unknown level nothing", () => {

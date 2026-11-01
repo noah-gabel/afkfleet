@@ -2759,6 +2759,7 @@ mod tests {
             reason: None,
             level: GrantLevel::Manage.into(),
             owner: Some(label("01900000-0000-7000-8000-000000000001", "alice")),
+            leavable: false,
             linked_at: Some(at()),
         }
     }

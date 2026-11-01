@@ -8,6 +8,7 @@ expression: "redacted(&members.body, &page_names)"
       "account": {
         "id": "[shared_account]",
         "kind": "offline",
+        "leavable": true,
         "level": "control",
         "name": "AfkBot11",
         "status": "active"
@@ -25,6 +26,7 @@ expression: "redacted(&members.body, &page_names)"
       "account": {
         "id": "[own_account]",
         "kind": "offline",
+        "leavable": false,
         "level": "manage",
         "linked_at": "[T0+10ms]",
         "name": "AfkBot10",

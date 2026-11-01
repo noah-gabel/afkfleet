@@ -62,6 +62,10 @@ expression: answer.json()
             "$ref": "#/components/schemas/AccountKind",
             "description": "How it signs in."
           },
+          "leavable": {
+            "description": "Whether the caller may leave it: they hold a grant, and neither\nownership nor their role gives them Manage (ADR-0020, U83).",
+            "type": "boolean"
+          },
           "level": {
             "$ref": "#/components/schemas/GrantLevel",
             "description": "What the caller may do with it: their own grant, or the Manage their\nrole or ownership gives them, whichever is higher."
@@ -92,7 +96,8 @@ expression: answer.json()
           "name",
           "kind",
           "status",
-          "level"
+          "level",
+          "leavable"
         ],
         "type": "object"
       },

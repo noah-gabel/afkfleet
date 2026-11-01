@@ -479,7 +479,8 @@ mod tests {
                     "name": "AfkBot1",
                     "kind": "offline",
                     "status": "active",
-                    "level": "control"
+                    "level": "control",
+                    "leavable": true
                 },
                 "mode_id": "01a14202-2800-7000-8000-000000000001",
                 "desired_state": "running",

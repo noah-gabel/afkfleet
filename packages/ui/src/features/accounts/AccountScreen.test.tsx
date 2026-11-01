@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiClient } from "../../api/ApiClient";
@@ -409,7 +409,7 @@ describe("an account's screen", () => {
     });
   });
 
-  describe("leaving (ADR-0020, U23, S51, S86)", () => {
+  describe("leaving (ADR-0020, U23, S51, U83)", () => {
     const leaver = { handlers: { accounts: async () => ({ items: [] }) } };
 
     it.each(["view", "control"] as const)("offers Leave to a %s holder", async (level) => {
@@ -418,9 +418,19 @@ describe("an account's screen", () => {
       expect(screen.getByRole("button", { name: "Leave" })).toBeDefined();
     });
 
-    it("offers no Leave at Manage, whatever gave it", async () => {
+    it("offers Leave to a Manage grantee, beside what managing offers", async () => {
       await accountScreen({
-        account: account(1, { owner: { id: BOB_ID, username: "bob" } }),
+        account: account(1, { owner: { id: BOB_ID, username: "bob" }, leavable: true }),
+        ...leaver,
+      });
+
+      expect(screen.getByRole("button", { name: "Leave" })).toBeDefined();
+      expect(screen.getByRole("button", { name: "Delete" })).toBeDefined();
+    });
+
+    it("offers no Leave where the server says so, though the level is Manage", async () => {
+      await accountScreen({
+        account: account(1, { owner: { id: BOB_ID, username: "bob" }, leavable: false }),
         ...leaver,
       });
 
@@ -518,32 +528,53 @@ describe("an account's screen", () => {
     });
   });
 
-  it("lets a Manage grantee revoke their own row, which ends on not found (S86)", async () => {
+  describe("the caller's own row in Who has access (ADR-0020, U83)", () => {
     const self = { id: me().id, username: me().username };
-    let revoked = false;
-    const app = await accountScreen({
-      account: account(1, { owner: { id: BOB_ID, username: "bob" } }),
-      grants: [grant("manage", self)],
-      handlers: {
-        account: async () => {
-          if (revoked) {
-            throw refusal(404, "not_found");
-          }
-          return account(1, { owner: { id: BOB_ID, username: "bob" } });
-        },
-        revokeGrant: async () => {
-          revoked = true;
-        },
-      },
+    const grantee = account(1, { owner: { id: BOB_ID, username: "bob" }, leavable: true });
+
+    it("says You instead of Revoke, shows the level as text, and leaves the others alone", async () => {
+      await accountScreen({
+        account: grantee,
+        grants: [grant("manage", self), grant("view")],
+      });
+
+      const mine = within(
+        await screen.findByRole("row", { name: new RegExp(`^${self.username}`) }),
+      );
+      expect(mine.getByText("You")).toBeDefined();
+      expect(mine.getByText("Manage")).toBeDefined();
+      expect(mine.queryByRole("button", { name: /Revoke/ })).toBeNull();
+      expect(mine.queryByRole("combobox")).toBeNull();
+      const bobs = within(screen.getByRole("row", { name: /bob/ }));
+      expect(bobs.getByRole("button", { name: "Revoke bob's access" })).toBeDefined();
+      expect(bobs.getByLabelText("Access of bob")).toBeDefined();
+      expect(bobs.queryByText("You")).toBeNull();
+      expect(screen.getByRole("button", { name: "Leave" })).toBeDefined();
     });
 
-    await app.user.click(
-      await screen.findByRole("button", { name: `Revoke ${self.username}'s access` }),
-    );
-    await app.user.click(screen.getAllByRole("button", { name: "Revoke" }).at(-1) as HTMLElement);
+    it("offers no Revoke and no change while it doesn't know who's asking", async () => {
+      const held = deferred<ReturnType<typeof me>>();
+      let reads = 0;
+      const app = await accountScreen({
+        account: grantee,
+        grants: [grant("manage", self), grant("view")],
+        handlers: {
+          me: async () => {
+            reads += 1;
+            return reads === 1 ? me() : held.promise;
+          },
+        },
+      });
+      await screen.findByRole("button", { name: "Revoke bob's access" });
 
-    expect(await screen.findByText(NOT_FOUND)).toBeDefined();
-    expect(called(app, "revokeGrant")[0]?.args).toEqual([ID, self.id]);
+      await act(async () => {
+        void app.runtime.queryClient.resetQueries({ queryKey: ["me"] });
+      });
+
+      await waitFor(() => expect(screen.queryByRole("button", { name: /Revoke/ })).toBeNull());
+      expect((screen.getByLabelText("Access of bob") as HTMLSelectElement).disabled).toBe(true);
+      await act(async () => held.resolve(me()));
+    });
   });
 
   it("deletes after asking and Confirm it's you, then goes back to the list", async () => {

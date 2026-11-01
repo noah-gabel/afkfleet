@@ -1,7 +1,7 @@
 // One account's screen (Plan.md P9.8, the user's U11 at group F's plan review): its facts as
 // the viewer may see them, a pending link's note or review, the re-auth prompt, "Who has
-// access" for a Manage holder, then Link again and Delete, or Leave for a View or Control holder
-// (ADR-0020, U23, S51, S86). Deleting and leaving ask first, then "Confirm it's you" when the
+// access" for a Manage holder, then Link again and Delete, and Leave where the server says the
+// viewer may (ADR-0020, U23, S51, U83). Deleting and leaving ask first, then "Confirm it's you" when the
 // server wants it, and go back to the list.
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
