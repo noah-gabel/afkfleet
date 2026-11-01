@@ -1345,7 +1345,8 @@ fn each_event_kind_reads_as_its_console_line() {
                 "name": "AfkBot1",
                 "kind": "offline",
                 "status": "active",
-                "level": "view"
+                "level": "view",
+                "leavable": true
             },
             "mode_id": EVENT_MODE,
             "desired_state": "running",

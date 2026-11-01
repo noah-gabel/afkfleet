@@ -1,9 +1,10 @@
 //! Enrolling an agent (Plan.md P10.3; ADR-0019): the enrollment token's
-//! rules and [`EnrollmentBundle`], the one line the Owner hands an agent.
+//! rules and [`EnrollmentBundle`], the one line the server's host operator
+//! hands an agent.
 //!
-//! - **A token stands for one new agent.** The Owner creates it (or the
-//!   server's host operator, with `afkfleet-server agent
-//!   create-enrollment-token`), it lives [`TOKEN_TTL`] and is used once.
+//! - **A token stands for one new agent.** The server's host operator
+//!   creates it, with `afkfleet-server agent create-enrollment-token`, it
+//!   lives [`TOKEN_TTL`] and is used once.
 //! - **The bundle** is the token, a `.`, and the CA certificate's
 //!   fingerprint as openssl prints it: `afk_et_…` plus 43 base64url
 //!   characters, then 95 for the fingerprint, 146 in all. The agent pins

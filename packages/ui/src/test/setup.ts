@@ -3,15 +3,19 @@
 // `afterEach` hooks in reverse order, so the guard (registered last) checks the document
 // before cleanup unmounts what the test rendered: a <style> a component renders is caught
 // as well as one a library injected. Last of all, every toast is dismissed: sonner keeps
-// them in module state and replays the undismissed ones to the next test's Toaster.
+// them in module state and replays the undismissed ones to the next test's Toaster. The theme
+// lives outside every App, in `localStorage` and on `<html>`, so each test leaves it as it found it.
 import { cleanup } from "@testing-library/react";
 import { toast } from "sonner";
-import { afterEach } from "vitest";
+import { afterEach, vi } from "vitest";
 
 import { assertNoInjectedStyles } from "./styleGuard";
 
 afterEach(() => {
   toast.dismiss();
+  vi.unstubAllGlobals();
+  localStorage.clear();
+  document.documentElement.classList.remove("light", "dark");
 });
 
 afterEach(() => {

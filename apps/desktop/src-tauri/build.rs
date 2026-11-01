@@ -77,6 +77,7 @@ const COMMANDS: &[&str] = &[
     "user_grants",
     "shared_accounts",
     "leave_account",
+    "set_window_theme",
 ];
 
 fn main() -> Result<(), Box<dyn Error>> {

@@ -636,6 +636,13 @@
       "inputs": ["01900000-0000-7000-8000-00000000000a"],
       "args": { "id": "01900000-0000-7000-8000-00000000000a" },
       "expect": { "error": "no_server" }
+    },
+    {
+      "command": "set_window_theme",
+      "method": "setWindowTheme",
+      "inputs": ["dark"],
+      "args": { "theme": "dark" },
+      "expect": { "ok": null }
     }
   ]
 }

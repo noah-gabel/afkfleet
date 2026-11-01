@@ -103,6 +103,7 @@ export const COMMANDS = [
   "user_grants",
   "shared_accounts",
   "leave_account",
+  "set_window_theme",
 ];
 
 /** The whole of `app.security`. */

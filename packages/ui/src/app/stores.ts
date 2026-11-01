@@ -19,8 +19,8 @@
 //   current watch is live.
 // - `record`: the live record (api/liveRecord.ts, S71) that the timeline and the notices
 //   show, which the live layer feeds and clears; and the bot whose screen is open (R109).
+// - `theme`: light or dark, from what this PC remembers and what Windows says (theme.ts, S92).
 import { createStore, type StoreApi } from "zustand/vanilla";
-
 import {
   acknowledge,
   dismiss,
@@ -34,6 +34,13 @@ import {
 import type { BotResponse } from "../generated/BotResponse";
 import type { CommandError } from "../generated/CommandError";
 import type { LiveUpdateMessage } from "../generated/LiveUpdateMessage";
+import {
+  readThemeChoice,
+  resolveTheme,
+  saveThemeChoice,
+  type ThemeState,
+  windowsTheme,
+} from "./theme";
 
 /** Where the user's session stands, as far as the UI knows. */
 export type SessionPhase = "starting" | "signed_out" | "signed_in" | "logging_out";
@@ -164,11 +171,28 @@ export interface AppStores {
   readonly notices: StoreApi<NoticesState>;
   readonly live: StoreApi<LiveState>;
   readonly record: StoreApi<RecordState>;
+  readonly theme: StoreApi<ThemeState>;
 }
 
 /** Fresh stores for one App. */
 export function createAppStores(): AppStores {
+  const choice = readThemeChoice();
+  const windows = windowsTheme();
   return {
+    theme: createStore<ThemeState>()((set, get) => ({
+      choice,
+      windows,
+      theme: resolveTheme(choice, windows),
+      sent: null,
+      sending: false,
+      choose(next) {
+        saveThemeChoice(next);
+        set({ choice: next, theme: resolveTheme(next, get().windows) });
+      },
+      windowsChanged(said) {
+        set({ windows: said, theme: resolveTheme(get().choice, said) });
+      },
+    })),
     session: createStore<SessionState>()((set, get) => ({
       phase: "starting",
       generation: 0,

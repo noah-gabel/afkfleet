@@ -10,7 +10,7 @@ import type { ModeResponse } from "@afkfleet/ui/generated/ModeResponse";
 import type { ServerSettingsResponse } from "@afkfleet/ui/generated/ServerSettingsResponse";
 import { expect, test } from "@playwright/test";
 
-import { COMMANDS, FakeBackend, MEMBER, OWNER, PASSWORD } from "../fake/backend";
+import { ADMIN, COMMANDS, FakeBackend, MEMBER, OWNER, PASSWORD } from "../fake/backend";
 
 /** The built-in `farm` mode, as the server seeds it. */
 const FARM = "01a14202-2800-7000-8000-000000000002";
@@ -747,18 +747,120 @@ test("disables and releases an agent as the server does", () => {
   expect(missing).toMatchObject({ ok: false, error: { api: { status: 404 } } });
 });
 
-test("reviews only for the Owner, and lets a grantee leave, not an owner", () => {
+/** `backend` signed in as `username`, stepped up. */
+function signedInAs(backend: FakeBackend, username: string) {
+  backend.handle("login", { request: { username, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(username) });
+  backend.handle("step_up", { request: { password: PASSWORD } });
+}
+
+test("answers the review as the server does: an unknown user first, then the matrix (S50)", () => {
+  const backend = new FakeBackend();
+  const owner = backend.userId(OWNER);
+  const member = backend.userId(MEMBER);
+  const admin = backend.addAdmin(ADMIN);
+  const unknown = "01900000-0000-7000-8000-0000000000ff";
+  const statusOf = (id: string) => {
+    const outcomes = ["user_grants", "shared_accounts"].map((command) =>
+      backend.handle(command, { id }),
+    ) as { ok: boolean; error?: { api?: { status: number } } }[];
+    expect(outcomes[0]).toEqual(outcomes[1]);
+    return outcomes[0]?.ok === true ? "ok" : outcomes[0]?.error?.api?.status;
+  };
+
+  backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(OWNER) });
+  expect([statusOf(member), statusOf(admin), statusOf(owner), statusOf(unknown)]).toEqual([
+    "ok",
+    "ok",
+    403,
+    404,
+  ]);
+  backend.handle("logout", {});
+
+  backend.handle("login", { request: { username: ADMIN, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(ADMIN) });
+  expect([statusOf(member), statusOf(admin), statusOf(owner), statusOf(unknown)]).toEqual([
+    403, 403, 403, 404,
+  ]);
+  backend.handle("logout", {});
+
+  backend.handle("login", { request: { username: MEMBER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(MEMBER) });
+  expect([statusOf(member), statusOf(admin), statusOf(owner), statusOf(unknown)]).toEqual([
+    403, 404, 404, 404,
+  ]);
+});
+
+test("lets a grantee leave, once", () => {
   const backend = new FakeBackend();
   const account = backend.addAccount(OWNER);
   backend.share(account, MEMBER, "view");
-  backend.handle("login", { request: { username: MEMBER, password: PASSWORD } });
-  backend.handle("login_mfa", { code: backend.code(MEMBER) });
-  const refused = backend.handle("user_grants", { id: "any" });
-  backend.handle("step_up", { request: { password: PASSWORD } });
+  signedInAs(backend, MEMBER);
+
   const left = backend.handle("leave_account", { id: account });
   const again = backend.handle("leave_account", { id: account });
 
-  expect(refused).toMatchObject({ ok: false, error: { api: { status: 404 } } });
   expect(left).toMatchObject({ ok: true });
   expect(again).toMatchObject({ ok: false, error: { api: { status: 404 } } });
+});
+
+test("refuses an account's owner and an Admin whose role gives Manage leaving (S51)", () => {
+  const backend = new FakeBackend();
+  const owners = backend.addAccount(MEMBER);
+  backend.addAdmin(ADMIN);
+  backend.share(owners, ADMIN, "view");
+
+  signedInAs(backend, MEMBER);
+  const byItsOwner = backend.handle("leave_account", { id: owners });
+  backend.handle("logout", {});
+  signedInAs(backend, ADMIN);
+  const byAnAdmin = backend.handle("leave_account", { id: owners });
+
+  expect(byItsOwner).toMatchObject({ ok: false, error: { api: { status: 403 } } });
+  expect(byAnAdmin).toMatchObject({ ok: false, error: { api: { status: 403 } } });
+});
+
+test("says leavable where leave_account would answer, and refuses changing one's own grant", () => {
+  const backend = new FakeBackend();
+  const shared = backend.addAccount(OWNER);
+  const own = backend.addAccount(MEMBER);
+  backend.share(shared, MEMBER, "manage");
+  signedInAs(backend, MEMBER);
+  const leavable = (id: string) =>
+    (backend.handle("account", { id }) as { value: { leavable: boolean } }).value.leavable;
+
+  const seen = [leavable(shared), leavable(own)];
+  const changed = backend.handle("change_grant", {
+    id: shared,
+    user: backend.userId(MEMBER),
+    request: { level: "view" },
+  });
+  const refused = backend.handle("leave_account", { id: own });
+  const left = backend.handle("leave_account", { id: shared });
+
+  expect(seen).toEqual([true, false]);
+  expect(changed).toMatchObject({ ok: false, error: { api: { status: 403 } } });
+  expect(refused).toMatchObject({ ok: false, error: { api: { status: 403 } } });
+  expect(left).toMatchObject({ ok: true });
+});
+
+test("says a listed grant is dormant to the Owner alone (S90)", () => {
+  const backend = new FakeBackend();
+  const account = backend.addAccount(MEMBER);
+  const admin = backend.addAdmin(ADMIN);
+  backend.share(account, ADMIN, "view");
+  const dormant = (outcome: unknown) =>
+    (
+      outcome as { value: { items: { user: { id: string }; dormant?: boolean }[] } }
+    ).value.items.find((grant) => grant.user.id === admin)?.dormant;
+
+  signedInAs(backend, OWNER);
+  const toTheOwner = dormant(backend.handle("account_grants", { id: account }));
+  backend.handle("logout", {});
+  signedInAs(backend, ADMIN);
+  const toTheHolder = dormant(backend.handle("account_grants", { id: account }));
+
+  expect(toTheOwner).toBe(true);
+  expect(toTheHolder).toBeUndefined();
 });

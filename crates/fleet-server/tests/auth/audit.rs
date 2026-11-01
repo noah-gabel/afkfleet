@@ -695,13 +695,35 @@ async fn a_member_may_not_filter_the_audit_log_and_without_credentials_it_is_401
     assert_eq!(nobody.status, 401, "{}", nobody.text);
 }
 
+/// `text` with every run of whitespace as one space, as SQL reads it.
+fn normalised(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// 0007's index would read and sort all of a target's rows for each page.
+/// `query!` takes only a literal, so the port and this test can't share the
+/// text, and an `EXPLAIN` of the port's text at run time would need raw SQL. So
+/// the test reads the port's source and requires the clause that picks the
+/// plan to be the one it EXPLAINs (ADR-0020, R183).
 #[sqlx::test(migrations = false)]
 async fn a_targets_page_walks_its_index_without_sorting(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
+    const CLAUSE: &str = "FROM audit_log WHERE target_type = ? AND target_id = ? AND id < ? \
+                          ORDER BY id DESC LIMIT ?";
     let setup = setup(options).await;
+    let port = normalised(include_str!("../../src/infra/sqlite/audit.rs"));
+    let (_, from_the_port) = port.split_once("fn list_for_target").unwrap();
+    let (the_ports_query, _) = from_the_port.split_once(".fetch_all").unwrap();
+    assert!(
+        the_ports_query.contains(&format!("metadata_json {CLAUSE}")),
+        "{the_ports_query}"
+    );
+    assert!(
+        normalised(include_str!("audit.rs")).contains(&format!("metadata_json {CLAUSE}")),
+        "this test EXPLAINs another clause than the port's"
+    );
 
     let plan = sqlx::query!(
         "EXPLAIN QUERY PLAN

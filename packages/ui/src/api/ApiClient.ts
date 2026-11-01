@@ -2,6 +2,7 @@
 // the desktop app's Rust side. The UI never knows the platform: `apps/desktop` injects a
 // `TauriApiClient`, tests a `FakeApiClient`. No method takes or returns a token. Every
 // method rejects with an `ApiError` (ApiError.ts).
+
 import type { AccountPage } from "../generated/AccountPage";
 import type { AccountResponse } from "../generated/AccountResponse";
 import type { AgentPage } from "../generated/AgentPage";
@@ -57,6 +58,7 @@ import type { UpdateServerSettingsRequest } from "../generated/UpdateServerSetti
 import type { UserPage } from "../generated/UserPage";
 import type { UserPatchRequest } from "../generated/UserPatchRequest";
 import type { UserResponse } from "../generated/UserResponse";
+import type { WindowTheme } from "../generated/WindowTheme";
 
 /** The app's API; see the module comment. IDs are the server's UUID strings. */
 export interface ApiClient {
@@ -225,6 +227,8 @@ export interface ApiClient {
   sharedAccounts(id: string, before?: string, limit?: number): Promise<AccountPage>;
   /** Gives up the caller's own grant on a shared account, after a step-up (ADR-0020, S51). */
   leaveAccount(id: string): Promise<void>;
+  /** The native window follows the theme `theme` chose (ADR-0020, U85). Reaches no server. */
+  setWindowTheme(theme: WindowTheme): Promise<void>;
 }
 
 /** A method of the API. */
@@ -298,4 +302,5 @@ export const API_METHODS = [
   "userGrants",
   "sharedAccounts",
   "leaveAccount",
+  "setWindowTheme",
 ] as const satisfies readonly ApiMethod[];

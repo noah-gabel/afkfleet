@@ -1,5 +1,6 @@
-// The profile (Plan.md P8.7, ADR-0016): the user's own account, its warnings, the two flows
-// (changing the password, replacing the authenticator) and the session list.
+// The profile (Plan.md P8.7, ADR-0016): the user's own account, its warnings, this PC's theme
+// (P11.10), the two flows (changing the password, replacing the authenticator) and the session
+// list.
 import { Link } from "@tanstack/react-router";
 
 import { useMe } from "../../../api/queries";
@@ -8,6 +9,7 @@ import { formatTime } from "../../../lib/time";
 import { roleLabel } from "../../shell/nav";
 import { SecurityWarnings } from "./SecurityWarnings";
 import { SessionList } from "./SessionList";
+import { ThemeSection } from "./ThemeSection";
 
 /** `/profile`. */
 export function ProfileOverview() {
@@ -39,6 +41,7 @@ export function ProfileOverview() {
               </dd>
             </dl>
           </section>
+          <ThemeSection />
           <section aria-labelledby="password-heading" className="flex flex-col gap-2">
             <h2 id="password-heading" className="text-lg font-semibold">
               Password

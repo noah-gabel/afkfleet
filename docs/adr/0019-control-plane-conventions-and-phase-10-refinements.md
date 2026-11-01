@@ -98,7 +98,7 @@ One branch and one PR per group, one commit per task, in this order, each after 
 
 ### Group B: reconciliations *(for the user's review)*
 - **R1.** `enrollment_tokens.created_by` is NULL for the host's tokens; the creator's re-check applies only when there is one; the cap of 20 counts every pending token. *Changed at Phase 11's group J (ADR-0020, S88): new rows always hold NULL, and the re-check is gone.*
-- **R2.** Without `[grpc]` the token route answers 404, after the step-up check, as `POST /accounts/offline` does while it's off; the host command refuses with "the control plane is off".
+- **R2.** Without `[grpc]` the token route answers 404, after the step-up check, as `POST /accounts/offline` does while it's off; the host command refuses with "the control plane is off". *Corrected at Phase 11's group K: group J removed the token route (ADR-0020, U76, S88), so only the host command's half still holds.*
 - **R3.** `enroll`'s exit codes are 0, 1, 2 and 3 (S18's case).
 - **R4.** The dev agent dials `https://127.0.0.1:7443`, and the dev server certificate names `localhost`, `127.0.0.1` and `::1`.
 - **R5.** `pki server-cert` never overwrites either.

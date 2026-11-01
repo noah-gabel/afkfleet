@@ -17,10 +17,12 @@ import { auditId, listedUser } from "../../test/audit";
 import { deferred, me } from "../../test/fixtures";
 import { atScreen, signedIn } from "../../test/signedIn";
 import { PASSWORD, refusal } from "../../test/signIn";
+import { NOBODY_ELSE } from "../accounts/texts";
 
 const OWNER = { ...me("owner", "afkowner"), id: ME_ID };
 const REVIEWED = BOB_ID;
 const CAROL = { id: auditId(3), username: "carol" };
+const DAVE = { id: auditId(4), username: "dave" };
 
 /** A grant Bob holds on account `n`. */
 function held(n: number, changes: Partial<HeldGrantResponse> = {}): HeldGrantResponse {
@@ -106,9 +108,49 @@ describe("the grants review", () => {
     expect(dormant.getByText("Manage")).toBeDefined();
     expect(
       dormant.getByText(
-        "Dormant: their role already gives them Manage here. It counts again if they become a Member.",
+        "Dormant: their role already gives them Manage here. It counts again if they become a Member or the account's owner becomes an Admin.",
       ),
     ).toBeDefined();
+  });
+
+  it("marks a dormant grant on a shared account, naming whose role gives it (S90)", async () => {
+    const app = await atReview({
+      sharedAccounts: async () => ({ items: [account(1)] }),
+      accountGrants: async () => ({
+        items: [
+          { ...grant("control", CAROL), dormant: true },
+          { ...grant("view", DAVE), dormant: false },
+        ],
+      }),
+    });
+    const shared = await section("Their accounts others can use");
+
+    await app.user.click(
+      await shared.findByRole("button", { name: "Show who has access to AfkBot1" }),
+    );
+
+    const carol = within(await shared.findByRole("row", { name: /carol/ }));
+    expect(
+      carol.getByText(
+        "Dormant: carol's role already gives them Manage here. It counts again if carol becomes a Member or the account's owner becomes an Admin.",
+      ),
+    ).toBeDefined();
+    const dave = within(shared.getByRole("row", { name: /dave/ }));
+    expect(dave.queryByText(/^Dormant/)).toBeNull();
+  });
+
+  it("says nobody else has access when an opened account's grants are gone", async () => {
+    const app = await atReview({
+      sharedAccounts: async () => ({ items: [account(1)] }),
+      accountGrants: async () => ({ items: [] }),
+    });
+    const shared = await section("Their accounts others can use");
+
+    await app.user.click(
+      await shared.findByRole("button", { name: "Show who has access to AfkBot1" }),
+    );
+
+    expect(await shared.findByText(NOBODY_ELSE)).toBeDefined();
   });
 
   it("reads a shared account's grants only when it's opened, and hides them again", async () => {
@@ -242,6 +284,29 @@ describe("the grants review", () => {
 
       expect(revokeGrant).toHaveBeenCalledWith(accountId(1), CAROL.id);
       expect(await shared.findByText("No grant shares their accounts.")).toBeDefined();
+    });
+
+    it("takes a revoked row away when the account keeps a second grantee", async () => {
+      let grants = [grant("view", CAROL), grant("view", DAVE)];
+      const app = await atReview({
+        sharedAccounts: async () => ({ items: [account(1)] }),
+        accountGrants: async () => ({ items: grants }),
+        revokeGrant: async () => {
+          grants = [grant("view", DAVE)];
+        },
+      });
+      const shared = await section("Their accounts others can use");
+
+      await app.user.click(
+        await shared.findByRole("button", { name: "Show who has access to AfkBot1" }),
+      );
+      await app.user.click(
+        await shared.findByRole("button", { name: "Revoke carol's access to AfkBot1" }),
+      );
+      await app.user.click(shared.getByRole("button", { name: "Revoke" }));
+
+      await waitFor(() => expect(shared.queryByRole("row", { name: /carol/ })).toBeNull());
+      expect(shared.getByRole("row", { name: /dave/ })).toBeDefined();
     });
 
     it("shows a refusal in place and reads the lists again", async () => {

@@ -14,7 +14,10 @@ describe("the launch", () => {
     const app = renderApp({ serverProfile: async () => ({ state: "none" }) });
 
     await waitFor(() => expect(app.path()).toBe("/setup"));
-    expect(app.fake.calls.map((call) => call.method)).toEqual(["serverProfile"]);
+    // Besides the window's theme, which reaches no server (ADR-0020, S94).
+    expect(
+      app.fake.calls.map((call) => call.method).filter((method) => method !== "setWindowTheme"),
+    ).toEqual(["serverProfile"]);
   });
 
   it("opens server setup when the saved profile is unreadable", async () => {

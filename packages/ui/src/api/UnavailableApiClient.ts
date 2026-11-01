@@ -68,6 +68,7 @@ export class UnavailableApiClient implements ApiClient {
   userGrants = unavailable;
   sharedAccounts = unavailable;
   leaveAccount = unavailable;
+  setWindowTheme = unavailable;
   accountsAwaitingApproval = unavailable;
   account = unavailable;
   deleteAccount = unavailable;

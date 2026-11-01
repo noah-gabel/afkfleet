@@ -29,6 +29,8 @@ Moved from `CLAUDE.md` word for word; it points here.
 **Safety**
 - Never use `dangerouslySetInnerHTML`, `eval` or `new Function`. Nor may a library at runtime: the release CSP has no 'unsafe-eval'. zod is imported only from `src/api/zod.ts`, which makes it jitless (Biome enforces it; `src/api/zod.test.ts` checks it).
 - **No runtime styles.** The release CSP has `style-src 'self'`, so a `<style>` element or a constructed stylesheet added at runtime is blocked in the real build while `just dev-app` shows nothing wrong. Every Vitest test ends with a check that the document holds none (`src/test/styleGuard.ts`). sonner is patched for this (`patches/sonner@<version>.patch`); a sonner bump redoes the patch and runs `Toaster.test.tsx` (ADR-0017). Check a new UI dependency in `just app-build --debug` too.
+- **No hard-coded colour.** Every colour is a theme token in `src/styles.css`, defined in both `:root` and `.dark`; Tailwind's own palette is reset, and `scripts/theme-guard.mjs` (`just scripts-test`) refuses a palette class, a colour literal or a colour value in a component. A new shadcn copy with `bg-black/50` gets a token, listed among the file's edits (ADR-0020, S95). A native select is `components/NativeSelect`, never `<select>`, which the same guard refuses: WebView2 paints its open list from the select's colours, and that list isn't in the DOM (ADR-0020, K's "As built").
+- `localStorage` holds one key, `afkfleet.theme`, a closed list and no secret; nothing else goes there (ADR-0020, S92).
 - Chat is rendered as plain text.
 - External links open only through the Rust-side opener command.
 

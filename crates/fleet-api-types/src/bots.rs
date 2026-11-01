@@ -1005,6 +1005,7 @@ mod tests {
                 "kind": "microsoft",
                 "status": "active",
                 "level": "manage",
+                "leavable": false,
                 "owner": { "id": "018bcfe5-6800-7202-8202-020202020202", "username": "alice" },
                 "linked_at": "2027-01-15T08:00:00.000Z"
             },
@@ -1037,7 +1038,8 @@ mod tests {
                 "name": "AfkBot1",
                 "kind": "offline",
                 "status": "active",
-                "level": "view"
+                "level": "view",
+                "leavable": true
             },
             "mode_id": MODE,
             "desired_state": "stopped",

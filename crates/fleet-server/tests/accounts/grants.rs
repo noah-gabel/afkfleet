@@ -1004,9 +1004,9 @@ async fn leaving_spends_the_users_limit(_pool: SqlitePoolOptions, options: Sqlit
     assert!(setup.grant_of(id, bob.id).await.is_some());
 }
 
-/// A Manage grantee leaves through Revoke on their own row: the app offers
-/// them no Leave, since their level can't tell a grant from implicit Manage
-/// (ADR-0020, S86). The account is gone from their view at once.
+/// The API still takes a Manage grantee's revoke of their own grant, though
+/// the app offers them Leave instead (ADR-0020, U83, S91). The account is
+/// gone from their view at once.
 #[sqlx::test(migrations = false)]
 async fn a_manage_grantee_revokes_their_own_grant_and_loses_the_account(
     _pool: SqlitePoolOptions,

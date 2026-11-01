@@ -145,6 +145,94 @@ async fn the_owner_sees_the_users_shared_accounts_and_a_revoke_on_the_grants_rou
     assert_eq!(after.body["items"], json!([]));
 }
 
+/// A grant's `dormant` on its account's list as `by` reads it, by its
+/// grantee, or `None` where the answer leaves it out.
+async fn dormant_on(
+    setup: &HttpSetup,
+    by: &Person,
+    account: AccountId,
+    grantee: UserId,
+) -> Option<bool> {
+    let page = setup
+        .api(
+            Method::GET,
+            &format!("/accounts/{account}/grants"),
+            by,
+            None,
+        )
+        .await;
+    assert_eq!(page.status, 200, "{}", page.text);
+    let items = page.body["items"].as_array().unwrap();
+    let row = items
+        .iter()
+        .find(|item| item["user"]["id"] == json!(grantee.to_string()))
+        .unwrap();
+    row.get("dormant").map(|dormant| dormant.as_bool().unwrap())
+}
+
+/// An Admin's grant on another Admin's account counts; once that owner is a
+/// Member, the holder's role gives them Manage there, so the Owner's review
+/// marks the grant. It would tell anyone else the grantee is an Admin.
+#[sqlx::test(migrations = false)]
+async fn a_demotion_makes_an_admins_grant_on_the_users_account_dormant_for_the_owner_alone(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = HttpSetup::new(options).await;
+    let owner = setup.stepped_up(1, Role::Owner).await;
+    let bob = setup.person(2, Role::Admin).await;
+    let admin = setup.person(3, Role::Admin).await;
+    let other_admin = setup.person(4, Role::Admin).await;
+    let manager = setup.person(5, Role::Member).await;
+    let bobs = setup.add_account(bob.id, 6, None).await;
+    setup
+        .add_grant(bobs, admin.id, GrantLevel::Control, bob.id)
+        .await;
+    setup
+        .add_grant(bobs, manager.id, GrantLevel::Manage, bob.id)
+        .await;
+
+    let before = dormant_on(&setup, &owner, bobs, admin.id).await;
+    setup.set_role(bob.id, Role::Member).await;
+    let after = dormant_on(&setup, &owner, bobs, admin.id).await;
+    let a_members = dormant_on(&setup, &owner, bobs, manager.id).await;
+    let to_the_holder = dormant_on(&setup, &admin, bobs, admin.id).await;
+    let to_an_admin = dormant_on(&setup, &other_admin, bobs, admin.id).await;
+    let to_a_manager = dormant_on(&setup, &manager, bobs, admin.id).await;
+    setup.set_role(bob.id, Role::Admin).await;
+    let promoted_again = dormant_on(&setup, &owner, bobs, admin.id).await;
+
+    assert_eq!(before, Some(false));
+    assert_eq!(after, Some(true));
+    assert_eq!(a_members, Some(false));
+    assert_eq!(to_the_holder, None);
+    assert_eq!(to_an_admin, None);
+    assert_eq!(to_a_manager, None);
+    assert_eq!(promoted_again, Some(false));
+}
+
+/// A write's answer never says so, even to the Owner.
+#[sqlx::test(migrations = false)]
+async fn a_grants_write_answers_without_dormant(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let s = sharing(options).await;
+
+    let changed = s
+        .setup
+        .api(
+            Method::PUT,
+            &format!("/accounts/{}/grants/{}", s.alices, s.bob.id),
+            &s.owner,
+            Some(json!({ "level": "view" })),
+        )
+        .await;
+
+    assert_eq!(changed.status, 200, "{}", changed.text);
+    assert!(changed.body.get("dormant").is_none(), "{}", changed.text);
+}
+
 #[sqlx::test(migrations = false)]
 async fn the_held_grants_page_newest_account_first(
     _pool: SqlitePoolOptions,

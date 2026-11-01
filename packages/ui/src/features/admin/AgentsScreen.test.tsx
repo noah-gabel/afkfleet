@@ -2,7 +2,7 @@
 // with its status, bots and certificate; disabling through the step-up with a text saying it's
 // final; releasing a disabled agent's bots on the operator's word; `agent_not_disabled`; and no
 // way to create an enrollment token.
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ApiClient } from "../../api/ApiClient";
@@ -162,6 +162,20 @@ describe("the agents' screen", () => {
     expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
   });
 
+  it("reads the agents again when the window regains focus (R177)", async () => {
+    const agents = vi.fn(async () => ({ items: [agent(1)] }));
+    await atAgents([], { agents });
+    await row("agent-1");
+    const reads = agents.mock.calls.length;
+
+    act(() => {
+      fireEvent.blur(window);
+      fireEvent.focus(window);
+    });
+
+    await waitFor(() => expect(agents.mock.calls.length).toBe(reads + 1));
+  });
+
   it("opens the audit log narrowed to an agent from its row (U81)", async () => {
     const audit = vi.fn(async (): Promise<AuditPage> => ({ items: [], unreadable: [] }));
     const app = await atAgents([agent(1)], { audit, users: async () => ({ items: [] }) });
@@ -234,7 +248,7 @@ describe("the agents' screen", () => {
       await waitFor(async () => expect((await row("agent-1")).getByText("Disabled")).toBeDefined());
     });
 
-    it("shows a refusal at the row and reads the list again", async () => {
+    it("shows a refusal at the row and reads the list once, through onRefused (R177)", async () => {
       const agents = vi.fn(async () => ({ items: [agent(1)] }));
       const app = await atAgents([], {
         agents,
@@ -248,7 +262,27 @@ describe("the agents' screen", () => {
       await app.user.click(screen.getByRole("button", { name: "Disable for good" }));
 
       expect((await screen.findByRole("alert")).textContent).toContain("It's gone.");
-      await waitFor(() => expect(agents.mock.calls.length).toBeGreaterThan(reads));
+      await waitFor(() => expect(agents.mock.calls.length).toBe(reads + 1));
+      await waitFor(() => expect(app.runtime.queryClient.isFetching()).toBe(0));
+      expect(agents.mock.calls.length).toBe(reads + 1);
+    });
+
+    it("reads nothing before the password prompt: a step-up isn't a refusal (R177)", async () => {
+      const agents = vi.fn(async () => ({ items: [agent(1)] }));
+      const app = await atAgents([], {
+        agents,
+        disableAgent: async () => {
+          throw refusal(403, "step_up_required");
+        },
+      });
+
+      await app.user.click((await row("agent-1")).getByRole("button", { name: "Disable" }));
+      const reads = agents.mock.calls.length;
+      await app.user.click(screen.getByRole("button", { name: "Disable for good" }));
+      await screen.findByLabelText("Current password");
+
+      expect(agents.mock.calls.length).toBe(reads);
+      expect(app.runtime.queryClient.getQueryState(AGENTS_KEY)?.isInvalidated).toBe(false);
     });
   });
 

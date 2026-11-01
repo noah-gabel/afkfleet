@@ -231,6 +231,19 @@ impl Agent {
         assert!(outcome.report.is_some(), "the fleet confirmed its shutdown");
     }
 
+    /// Waits until the server's refusal ends the run by itself: every bot
+    /// left its server first.
+    pub(crate) async fn refused(&mut self) {
+        let mut running = self.running.take().expect("the agent runs");
+        let outcome = tokio::time::timeout(PATIENCE, running.task.join_next())
+            .await
+            .expect("the refusal ends the run")
+            .unwrap()
+            .unwrap();
+        assert_eq!(outcome.exit, Exit::Refused);
+        assert!(outcome.report.is_some(), "the fleet confirmed its shutdown");
+    }
+
     /// The host dies: the connection goes silent and stays open, then the
     /// run is aborted, its bots with it.
     pub(crate) async fn crash(&mut self, ledger: &Ledger) {

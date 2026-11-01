@@ -4,6 +4,7 @@
 // tests and the e2e build pass their own; this file imports nothing from Tauri but its
 // types. A rejection that's a `CommandError` becomes an `ApiError` of it; anything else
 // (Tauri's own refusals are plain strings) becomes `ipc`, its text dropped.
+
 import type { ApiClient } from "@afkfleet/ui";
 import { toApiError } from "@afkfleet/ui";
 import type { AccountPage } from "@afkfleet/ui/generated/AccountPage";
@@ -61,6 +62,7 @@ import type { UpdateServerSettingsRequest } from "@afkfleet/ui/generated/UpdateS
 import type { UserPage } from "@afkfleet/ui/generated/UserPage";
 import type { UserPatchRequest } from "@afkfleet/ui/generated/UserPatchRequest";
 import type { UserResponse } from "@afkfleet/ui/generated/UserResponse";
+import type { WindowTheme } from "@afkfleet/ui/generated/WindowTheme";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 
 /** Tauri's `invoke`, as this client uses it. */
@@ -364,6 +366,10 @@ export class TauriApiClient implements ApiClient {
 
   openVerificationLink(): Promise<void> {
     return this.#call("open_verification_link");
+  }
+
+  setWindowTheme(theme: WindowTheme): Promise<void> {
+    return this.#call("set_window_theme", { theme });
   }
 
   async watchEvents(onUpdate: (update: LiveUpdateMessage) => void): Promise<void> {

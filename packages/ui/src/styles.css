@@ -11,11 +11,20 @@
  * sonner's stylesheet comes in here, bundled and so served from 'self', in Tailwind's
  * components layer so utilities still win. sonner itself is patched not to inject it as a
  * <style> element, which the release CSP (`style-src 'self'`) blocks (ADR-0017).
+ *
+ * Every colour is a token here, in both `:root` and `.dark`; Tailwind's own palette is reset, so
+ * a palette class gets none, and scripts/theme-guard.mjs refuses one (ADR-0020, S95).
+ * `--background` stays a hex value: the desktop app's Rust side paints the window with it before
+ * the page loads, and a test keeps the two equal (S93).
  */
 @import "tailwindcss" source(".");
 @import "sonner/dist/styles.css" layer(components);
 
 @custom-variant dark (&:is(.dark *));
+
+@theme {
+  --color-*: initial;
+}
 
 @theme inline {
   --radius-sm: calc(var(--radius) - 4px);
@@ -53,11 +62,13 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-qr-background: var(--qr-background);
 }
 
 :root {
+  color-scheme: light;
   --radius: 0.625rem;
-  --background: oklch(1 0 0);
+  --background: #ffffff;
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);
@@ -88,10 +99,13 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+  /* The same in both themes: the server's QR code draws its own white, and this is its margin. */
+  --qr-background: #fff;
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
+  color-scheme: dark;
+  --background: #0a0a0a;
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0);
   --card-foreground: oklch(0.985 0 0);
@@ -122,6 +136,15 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+  --qr-background: #fff;
+}
+
+/* Until the bundled script sets `.light` or `.dark`: nothing but the page's canvas shows yet. */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    color-scheme: dark;
+    --background: #0a0a0a;
+  }
 }
 
 @layer base {

@@ -155,6 +155,8 @@ export function watched(client: ApiClient, stores: AppStores, events: WatchEvent
     userGrants: watch((id, before, limit) => client.userGrants(id, before, limit)),
     sharedAccounts: watch((id, before, limit) => client.sharedAccounts(id, before, limit)),
     leaveAccount: watch((id) => client.leaveAccount(id)),
+    // Not watched: it reaches no server, so its success says nothing about the banner (S94).
+    setWindowTheme: (theme) => client.setWindowTheme(theme),
   };
 }
 

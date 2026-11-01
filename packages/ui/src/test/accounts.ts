@@ -26,6 +26,7 @@ export function account(n: number, changes: Partial<AccountResponse> = {}): Acco
     kind: "microsoft",
     status: "active",
     level: "manage",
+    leavable: false,
     owner: { id: ME_ID, username: "afkbot1" },
     linked_at: "2026-10-15T10:00:00.000Z",
     ...changes,
@@ -38,7 +39,15 @@ export function seenBelowManage(
   level: GrantLevel,
   changes: Partial<AccountResponse> = {},
 ) {
-  const { owner: _owner, linked_at: _at, ...rest } = account(n, { level, ...changes });
+  const {
+    owner: _owner,
+    linked_at: _at,
+    ...rest
+  } = account(n, {
+    level,
+    leavable: true,
+    ...changes,
+  });
   return rest;
 }
 

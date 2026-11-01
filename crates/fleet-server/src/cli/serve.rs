@@ -431,12 +431,11 @@ pub fn app(
 /// opens the users' TOTP secrets with it (ADR-0016), and logs in through
 /// `passwords`, which [`run`] builds (its dummy hash is async work).
 ///
-/// With `[grpc]` and its `ca`, the control plane is on: the API creates
-/// enrollment tokens that pin the CA, and [`App::grpc`] enrolls agents,
-/// signing their certificates with it, and admits their streams
-/// (ADR-0019), and its reconciler places the bots on them (P10.5). Without
-/// either, the token route answers 404, there is no gRPC port, and nothing
-/// is hinted.
+/// With `[grpc]` and its `ca`, the control plane is on: [`App::grpc`]
+/// enrolls agents with the tokens the host's command creates, signing their
+/// certificates with it, and admits their streams (ADR-0019), and its
+/// reconciler places the bots on them (P10.5). Without either, there is no
+/// gRPC port, and nothing is hinted.
 #[must_use]
 pub fn app_with(
     config: &ServerConfig,

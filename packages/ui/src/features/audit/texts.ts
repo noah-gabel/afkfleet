@@ -25,8 +25,8 @@ export function auditFailed(why: string): string {
 }
 
 /** What the line above a filtered list says; `who` is a user's name or a target's ID. */
-export function showingOnly(kind: AuditTargetKind, who: string): string {
-  return `Showing only ${targetKindLabel(kind).toLowerCase()} ${who}.`;
+export function showingOnly(kind: AuditTargetKind): string {
+  return `Showing only ${targetKindLabel(kind).toLowerCase()}`;
 }
 
 /** An entry's "Only this target", for screen readers. */

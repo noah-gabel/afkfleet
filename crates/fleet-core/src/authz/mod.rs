@@ -27,9 +27,9 @@
 //!   rule.
 //! - **Users and invites.** Admins disable Members and handle Member
 //!   invites. Only the Owner changes roles, reviews a user's grants at a
-//!   role change ([`Permission::ReviewUserGrants`]), handles Admin invites
-//!   and enrolls agents. Nobody acts on themselves or on the Owner, and nobody
-//!   becomes the Owner this way.
+//!   role change ([`Permission::ReviewUserGrants`]) and handles Admin
+//!   invites. Nobody acts on themselves or on the Owner, and nobody becomes
+//!   the Owner this way.
 //! - **Agents and the audit log.** Admins and the Owner list agents,
 //!   disable them, release a disabled one's bots
 //!   ([`Permission::ReleaseAgent`]), and read the audit log.

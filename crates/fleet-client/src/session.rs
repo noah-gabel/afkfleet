@@ -934,10 +934,12 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         query: &AuditPageQuery,
     ) -> Result<AuditPage, ClientError> {
         let mut url = with_cursor(self.server.api(&["audit"]), query.before, query.limit);
-        if let Some((kind, id)) = query.target() {
-            url.query_pairs_mut()
-                .append_pair("target_kind", kind)
-                .append_pair("target_id", id);
+        // Each as given, so the server's 422 refuses one alone (ADR-0020, R182).
+        if let Some(kind) = &query.target_kind {
+            url.query_pairs_mut().append_pair("target_kind", kind);
+        }
+        if let Some(id) = &query.target_id {
+            url.query_pairs_mut().append_pair("target_id", id);
         }
         let answer = self.authed(Method::GET, url, None).await?;
         expect_json(answer, 200)
@@ -2757,6 +2759,7 @@ mod tests {
             reason: None,
             level: GrantLevel::Manage.into(),
             owner: Some(label("01900000-0000-7000-8000-000000000001", "alice")),
+            leavable: false,
             linked_at: Some(at()),
         }
     }
@@ -2767,6 +2770,7 @@ mod tests {
             level: fleet_api_types::accounts::GrantLevel::Control.into(),
             granted_by: label("01900000-0000-7000-8000-000000000001", "alice"),
             granted_at: at(),
+            dormant: None,
         }
     }
 

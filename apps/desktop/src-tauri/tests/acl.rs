@@ -176,11 +176,13 @@ fn every_contract_command_passes_the_acl_and_answers_as_the_contract_says() {
         let command = entry["command"].as_str().unwrap();
         let answer = invoke(&window, command, entry["args"].clone());
 
-        match (&entry["expect"]["ok"], &entry["expect"]["error"], answer) {
-            (expected, Value::Null, Ok(value)) if !expected.is_null() => {
+        match (entry["expect"].get("ok"), &entry["expect"]["error"], answer) {
+            // A command that answers nothing: `set_window_theme`.
+            (Some(Value::Null), Value::Null, Ok(Value::Null)) => {}
+            (Some(expected), Value::Null, Ok(value)) if !expected.is_null() => {
                 assert_ok(command, expected, &value);
             }
-            (Value::Null, Value::String(code), Err(value)) => {
+            (None, Value::String(code), Err(value)) => {
                 let error: CommandError = serde_json::from_value(value.clone())
                     .unwrap_or_else(|_| panic!("{command}: {} ({value})", rejection_kind(&value)));
                 assert_eq!(
@@ -192,7 +194,7 @@ fn every_contract_command_passes_the_acl_and_answers_as_the_contract_says() {
             (_, _, answer) => panic!("{command}: unexpected answer {answer:?}"),
         }
     }
-    assert_eq!(entries.len(), 66);
+    assert_eq!(entries.len(), 67);
 }
 
 /// An Ok answer must parse as `command`'s own response type and equal the expected

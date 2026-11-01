@@ -60,6 +60,7 @@ import type { UpdateServerSettingsRequest } from "../generated/UpdateServerSetti
 import type { UserPage } from "../generated/UserPage";
 import type { UserPatchRequest } from "../generated/UserPatchRequest";
 import type { UserResponse } from "../generated/UserResponse";
+import type { WindowTheme } from "../generated/WindowTheme";
 import type { ApiClient, ApiMethod } from "./ApiClient";
 import { ApiError } from "./ApiError";
 
@@ -323,6 +324,10 @@ export class FakeApiClient implements ApiClient {
 
   async sharedAccounts(id: string, before?: string, limit?: number): Promise<AccountPage> {
     return this.#handler("sharedAccounts", [id, before, limit])(id, before, limit);
+  }
+
+  async setWindowTheme(theme: WindowTheme): Promise<void> {
+    return this.#handler("setWindowTheme", [theme])(theme);
   }
 
   async leaveAccount(id: string): Promise<void> {

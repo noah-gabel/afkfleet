@@ -31,6 +31,7 @@ const USER = "01900000-0000-7000-8000-000000000002";
 function client() {
   const ok = async () => undefined as never;
   const fake = new FakeApiClient({
+    setWindowTheme: ok,
     serverProfile: ok,
     setServerProfile: ok,
     checkServer: ok,
@@ -167,6 +168,23 @@ describe("validated, the admin screens' calls (ADR-0020, S89)", () => {
     expect(await refusedFields(api.userGrants("x", "y", 0))).toEqual(["id", "before", "limit"]);
     expect(await refusedFields(api.sharedAccounts("x", "y", 0))).toEqual(["id", "before", "limit"]);
     expect(await refusedFields(api.agents("y", 0))).toEqual(["before", "limit"]);
+  });
+});
+
+describe("validated, the window's theme (ADR-0020, S94)", () => {
+  it.each(["light", "dark", "windows"] as const)("passes %s through", async (theme) => {
+    const { fake, api } = client();
+
+    await api.setWindowTheme(theme);
+
+    expect(fake.calls).toEqual([{ method: "setWindowTheme", args: [theme] }]);
+  });
+
+  it("refuses anything else before the call", async () => {
+    const { fake, api } = client();
+
+    expect(await refusedFields(api.setWindowTheme("Dark" as "dark"))).toEqual(["theme"]);
+    expect(fake.calls).toEqual([]);
   });
 });
 

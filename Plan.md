@@ -441,7 +441,7 @@ The full analysis lives in `docs/threat-model.md`.
 | Agents, audit log, server settings | Admin+ |
 
 > Note (P2.9): The built `authorize()` refines this table (ADR-0010):
-> - **Agents.** Only the Owner enrolls agents; viewing and disabling them is Admin+.
+> - **Agents.** Only the Owner enrolls agents; viewing and disabling them is Admin+. *(Since Phase 11's group J, enrollment tokens come only from the server's host; ADR-0020, U76.)*
 > - **Roles.** Only the Owner changes roles, so Admins manage Members by disabling and enabling them. Ownership transfer gets a permission together with a route.
 > - **Modes.** Private modes follow the account rule. Shared modes are edited by their creator, while an Admin, and by the Owner. Built-in modes are read-only.
 > - **The Owner's "everything"** leaves out: built-in modes, their own role and account status, another Owner, Owner invites, grants to themselves, and other users' personal resources.
@@ -3848,7 +3848,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >   | H8 | `p11/p11.9-parsed-senders` | P11.9's parsed senders end to end and the editor's formats (split from H7 at its plan review) |
 >   | I | `p11/p11.9-mode-editor` | P11.9's mode editor and first its `networkMode` fix (one group, about 6,200 lines, the user's at its plan review, U75) |
 >   | J | `p11/p11.9-admin-screens` | P11.9's admin screens, the audit's filter by target and the enrollment route's removal (ticked here; one group, about 5,100 to 5,900 lines, the user's at its plan review, U82) |
->   | K | `p11/p11.10-dark-mode` | P11.10 |
+>   | K | `p11/p11.10-dark-mode` | P11.10, with PR #86's follow-ups and U83 first |
 >   | L | `p11/p11.11-design-pass` | P11.11 |
 >   | M | `p11/p11-wrap-up` | The threat model, the README, the DoD's 24-hour run |
 >
@@ -4254,7 +4254,9 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Hotbar slots** *(the user's note at group C's plan review)*: the editor shows them as 1 to 9, the keys players know, and maps them to the API's 0 to 8.
   > - **The user's then:** the wordings of the marks (built-in, shared, private, yours, a cut command), what each 409 offers (reload, keep the draft, "save as copy"), and whether a save warns before it asks for the password.
 
-- [ ] **P11.10** Dark mode: the app follows Windows' light or dark setting (`prefers-color-scheme` and its change event; the `.dark` class on `<html>`, set by the bundled script so the CSP allows it), and every screen is checked in both themes.
+- [x] **P11.10** Dark mode: the app follows Windows' light or dark setting (`prefers-color-scheme` and its change event; the `.dark` class on `<html>`, set by the bundled script so the CSP allows it), and every screen is checked in both themes.
+
+  > Note (P11.10, group K) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U84, U85, S92–S97): beyond the task, the user added a Light / Dark / Windows setting on the Profile screen, and one new command, `set_window_theme`, so the title bar follows it (67 grants). `scripts/theme-guard.mjs` refuses a hard-coded colour, and a Playwright sweep holds about 35 screens and states at 3:1 in both themes. WCAG AA stays with P11.11, which gets today's figures.
 
   > Note (P11.10, from Phase 8, group D, the user's decision) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): Phase 8 ships the light theme only (sonner's `theme="light"`). `packages/ui/src/styles.css` already holds shadcn's dark tokens under `.dark`.
 - [ ] **P11.11** UI design pass, before Phase 12 and once every screen exists:

@@ -14,6 +14,7 @@ import type {
   RecordState,
   SessionState,
 } from "./stores";
+import type { ThemeState } from "./theme";
 
 /** The router's context: what every route's `beforeLoad` and `loader` receive. */
 export interface RouterContext {
@@ -57,6 +58,11 @@ export function useNotices<T>(select: (state: NoticesState) => T): T {
 /** A value of the live events store, re-rendering when it changes. */
 export function useLive<T>(select: (state: LiveState) => T): T {
   return useStore(useAppStores().live, select);
+}
+
+/** A value of the theme store, re-rendering when it changes. */
+export function useTheme<T>(select: (state: ThemeState) => T): T {
+  return useStore(useAppStores().theme, select);
 }
 
 /** A value of the live record's store, re-rendering when it changes. */

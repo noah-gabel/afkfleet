@@ -570,7 +570,8 @@ mod tests {
                 "name": "AfkBot1",
                 "kind": "offline",
                 "status": "active",
-                "level": "view"
+                "level": "view",
+                "leavable": true
             },
             "mode_id": MODE,
             "desired_state": "stopped",

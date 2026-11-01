@@ -160,9 +160,10 @@ fn page<I: Copy>(query: &PageQuery<I>) -> Result<Page<I>, ApiError> {
     })
 }
 
-/// An account as `viewer` sees it (ADR-0018, group E): its own facts and
-/// the viewer's level for everyone, and who owns it and since when only
-/// for Admins, the Owner and whoever holds Manage on it.
+/// An account as `viewer` sees it (ADR-0018, group E): its own facts, the
+/// viewer's level and whether they may leave it (ADR-0020, U83) for
+/// everyone, and who owns it and since when only for Admins, the Owner and
+/// whoever holds Manage on it.
 fn account_response(viewer: &Actor, account: &ListedAccount) -> Result<AccountResponse, ApiError> {
     let level = effective_level(viewer, account.owner, account.grant)
         .ok_or_else(|| ApiError::internal("an account the viewer may not see was answered"))?;
@@ -177,6 +178,7 @@ fn account_response(viewer: &Actor, account: &ListedAccount) -> Result<AccountRe
             .reason()
             .map(|reason| RefusalReason::from(reason).into()),
         level: ApiGrantLevel::from(level).into(),
+        leavable: authorize(viewer, Permission::LeaveAccount, &account.context()).is_ok(),
         owner: shows_owner.then(|| label(account.owner.id, &account.owner_name)),
         linked_at: shows_owner
             .then(|| timestamp(account.created_at))
@@ -409,7 +411,10 @@ mod tests {
 
     use super::*;
     use crate::ports::chat::{ChatMessageId, ChatRecord};
+    use fleet_core::account::{AccountKind as CoreAccountKind, AccountStatus as CoreAccountStatus};
     use fleet_core::authz::UserRef;
+    use fleet_core::id::AccountId;
+    use fleet_core::value::McUsername;
 
     /// `stored`, a received line, as the history lists it.
     fn received(stored: &IncomingChat) -> ListedChat {
@@ -429,6 +434,93 @@ mod tests {
         Actor {
             id: UserId::new_v7(DateTime::UNIX_EPOCH, [2; 10]).unwrap(),
             role: Role::Member,
+        }
+    }
+
+    /// fleet-core's authorization matrix, as its tests write it.
+    const MATRIX: &str = include_str!(
+        "../../../../fleet-core/src/authz/snapshots/fleet_core__authz__authorize__tests__authorization_matrix.snap"
+    );
+
+    /// The role a row of the matrix names.
+    fn role_of(label: &str) -> Role {
+        match label {
+            "Owner" | "the Owner" => Role::Owner,
+            "Admin" | "an Admin" | "another Admin" => Role::Admin,
+            "Member" | "a Member" | "another Member" => Role::Member,
+            other => panic!("the matrix names {other}"),
+        }
+    }
+
+    /// An account of `owner`, with `viewer`'s `grant`.
+    fn account_of(owner: UserRef, grant: Option<GrantLevel>) -> ListedAccount {
+        ListedAccount {
+            id: AccountId::new_v7(DateTime::UNIX_EPOCH, [3; 10]).unwrap(),
+            owner,
+            owner_name: Username::try_from("afkowner").unwrap(),
+            name: McUsername::try_from("AfkBot1").unwrap(),
+            uuid: None,
+            kind: CoreAccountKind::Offline,
+            status: CoreAccountStatus::Active,
+            created_at: DateTime::UNIX_EPOCH,
+            grant,
+        }
+    }
+
+    /// `leavable` says what the matrix says, at each of `### LeaveAccount`'s
+    /// cells: `ok` is true, `403` false, and `404` an account the viewer may
+    /// not see, which is never answered (ADR-0020, U83, R172).
+    #[test]
+    fn leavable_follows_every_cell_of_the_matrix() {
+        const GRANTS: [Option<GrantLevel>; 4] = [
+            None,
+            Some(GrantLevel::View),
+            Some(GrantLevel::Control),
+            Some(GrantLevel::Manage),
+        ];
+        let (_, table) = MATRIX.split_once("### LeaveAccount\n").unwrap();
+        let rows: Vec<&str> = table
+            .lines()
+            .skip(1)
+            .take_while(|line| !line.is_empty())
+            .collect();
+        assert_eq!(rows.len(), 11, "{rows:#?}");
+        for row in rows {
+            let parts: Vec<&str> = row
+                .split("  ")
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .collect();
+            let [actor, owner, cells @ ..] = parts.as_slice() else {
+                panic!("a row reads {row}");
+            };
+            assert_eq!(cells.len(), GRANTS.len(), "{row}");
+            let viewer = Actor {
+                id: UserId::new_v7(DateTime::UNIX_EPOCH, [4; 10]).unwrap(),
+                role: role_of(actor),
+            };
+            let owner = if *owner == "self" {
+                UserRef {
+                    id: viewer.id,
+                    role: viewer.role,
+                }
+            } else {
+                UserRef {
+                    id: UserId::new_v7(DateTime::UNIX_EPOCH, [5; 10]).unwrap(),
+                    role: role_of(owner),
+                }
+            };
+            for (cell, grant) in cells.iter().zip(GRANTS) {
+                let answer = account_response(&viewer, &account_of(owner, grant));
+                match *cell {
+                    "404" => assert!(answer.is_err(), "{row}, {grant:?}"),
+                    expected => assert_eq!(
+                        answer.unwrap().leavable,
+                        expected == "ok",
+                        "{row}, {grant:?}"
+                    ),
+                }
+            }
         }
     }
 

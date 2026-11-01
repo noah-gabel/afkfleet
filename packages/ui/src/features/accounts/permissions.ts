@@ -6,9 +6,9 @@
 // links `accountsAwaitingApproval` lists. The test reads fleet-core's authorization matrix
 // itself, so a rule change on the server fails it until this file follows.
 //
-// Leaving is offered only at View and Control, where the level alone proves a grant is held
-// (ADR-0020, S86): Manage may be a grant or what a role or ownership gives. Whoever holds a real
-// Manage grant revokes their own row in "Who has access".
+// Leaving is the server's to say, per account (`leavable`; ADR-0020, U83): Manage may be a grant or
+// what a role or ownership gives, and the level can't tell them apart, so nothing here copies
+// `implicit_manage`.
 import type { AccountResponse } from "../../generated/AccountResponse";
 import type { GrantLevel } from "../../generated/GrantLevel";
 
@@ -34,13 +34,13 @@ const LINKABLE_AGAIN: ReadonlySet<string> = new Set(["active", "reauth_required"
 
 /** What the viewer whose own level is `account.level` may do with `account`. */
 export function accountActions(
-  account: Pick<AccountResponse, "kind" | "status" | "level">,
+  account: Pick<AccountResponse, "kind" | "status" | "level" | "leavable">,
 ): AccountActions {
   const manage = manages(account.level);
   return {
     share: manage,
     linkAgain: manage && account.kind === "microsoft" && LINKABLE_AGAIN.has(account.status),
     delete: manage,
-    leave: account.level === "view" || account.level === "control",
+    leave: account.leavable,
   };
 }

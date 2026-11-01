@@ -1,5 +1,5 @@
-// The app's toasts (Plan.md P8.6, ADR-0017): sonner, in the light theme, with lucide's
-// icons. sonner 2.0.8 is patched (patches/sonner@2.0.8.patch) so it no longer injects its
+// The app's toasts (Plan.md P8.6, ADR-0017): sonner, in the app's theme (ADR-0020, U84), never
+// through next-themes, whose inline script the CSP would block, with lucide's icons. sonner 2.0.8 is patched (patches/sonner@2.0.8.patch) so it no longer injects its
 // stylesheet as a <style> element at import time, which the release CSP (`style-src
 // 'self'`) blocks; its CSS comes through styles.css instead. Toaster.test.tsx fails if a
 // bump brings the injection back.
@@ -14,6 +14,8 @@ import {
 import type { CSSProperties } from "react";
 import { Toaster as Sonner } from "sonner";
 
+import { useTheme } from "../app/context";
+
 // sonner's colour variables, set to the theme's tokens. React applies a `style` prop
 // through the CSS object model, which `style-src 'self'` allows.
 const THEME = {
@@ -25,9 +27,10 @@ const THEME = {
 
 /** Where the app's toasts appear; rendered once, next to the router. */
 export function Toaster() {
+  const theme = useTheme((state) => state.theme);
   return (
     <Sonner
-      theme="light"
+      theme={theme}
       position="bottom-right"
       closeButton
       style={THEME}

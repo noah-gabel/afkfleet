@@ -191,6 +191,8 @@ export function validated(client: ApiClient): ApiClient {
       return client.sharedAccounts(id, before, limit);
     },
     leaveAccount: async (id) => client.leaveAccount(check(schemas.id, id, "id")),
+    setWindowTheme: async (theme) =>
+      client.setWindowTheme(check(schemas.windowTheme, theme, "theme")),
   };
 }
 

@@ -22,18 +22,19 @@
 //   sent (R158); `validated()` refuses only what the wire can't carry (S82). The form's "resolver"
 //   checks nothing: it makes every submit start clean, so an error the server put on a field never
 //   blocks the next save.
+
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useId, useRef, useState } from "react";
 import { type Path, type Resolver, useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
-
 import { toApiError } from "../../../api/ApiError";
 import { useApiClient } from "../../../api/context";
 import { describeError } from "../../../api/describeError";
 import { MODE_MAX_STEPS } from "../../../api/limits";
 import { MODES_LIST_KEY } from "../../../api/queries";
 import { FormField } from "../../../components/FormField";
+import { NativeSelect } from "../../../components/NativeSelect";
 import { RetryWaitMessage } from "../../../components/RetryWaitMessage";
 import { Alert, AlertDescription } from "../../../components/ui/alert";
 import { Button } from "../../../components/ui/button";
@@ -365,15 +366,10 @@ export function ModeEditor({
           >
             {(control) =>
               row.visibility_editable ? (
-                <select
-                  {...control}
-                  className="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
-                  disabled={locked}
-                  {...form.register("visibility")}
-                >
+                <NativeSelect {...control} disabled={locked} {...form.register("visibility")}>
                   <option value="private">{VISIBILITY_PRIVATE}</option>
                   <option value="shared">{VISIBILITY_SHARED}</option>
-                </select>
+                </NativeSelect>
               ) : (
                 <Input {...control} readOnly value={visibilityText(row.visibility)} />
               )

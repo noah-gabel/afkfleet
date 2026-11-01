@@ -235,6 +235,8 @@ export function alreadyGone(name: string): string {
 
 /** The sharing section's texts. */
 export const NOBODY_ELSE = "Nobody else has access.";
+/** The caller's own row: Leave is their way out, not Revoke (ADR-0020, U83). */
+export const YOU = "You";
 export const PENDING_NOT_SHARED = "A link waiting for approval can't be shared yet.";
 export const TOO_MANY_NAMES = "You've tried too many names for now.";
 export const ACCESS_HINTS: Readonly<Record<"view" | "control" | "manage", string>> = {
