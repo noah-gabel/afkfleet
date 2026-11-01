@@ -437,7 +437,7 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
 - **The error boundary** *(the user's choice)*: a class component around everything, and the router's `defaultErrorComponent`. "Something went wrong in the app." with Try again and Restart (a reload, which starts at the launch). An API error shows describeError's text; any other error only its name, never its message or stack. The error goes to `console.error`.
 - **Logout** *(the user's choices)*: the header's "Log out" sets `logging_out`, then `/login` and the cache. `unconfirmed` adds a warning that the server's session may stay valid until it expires. A rejection (`ipc`, `interrupted`) stays signed in with "Couldn't log out: … Try again."
 - **Home** shows who is signed in, with which role, on which server.
-- **Light theme only** *(the user's choice)*; Plan.md's P11.10 follows Windows' setting later.
+- **Light theme only** *(the user's choice)*; Plan.md's P11.10 follows Windows' setting later. *(Built at Phase 11's group K: ADR-0020, U84, S92.)*
 
 ### As built (group D, P8.6)
 - **Layout (packages/ui/src):**

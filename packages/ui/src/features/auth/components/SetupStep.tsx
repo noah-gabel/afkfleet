@@ -114,7 +114,7 @@ export function SetupStep({
             <img
               src={enrollment.qr_svg}
               alt="QR code for your authenticator app"
-              className="size-48 bg-white p-2"
+              className="size-48 bg-qr-background p-2"
             />
           ) : (
             <p role="alert" className="text-sm text-destructive">
