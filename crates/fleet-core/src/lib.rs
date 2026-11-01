@@ -14,7 +14,7 @@
 //! - [`chat`]: the messages bots send, and sanitized messages they receive.
 //! - [`disconnect`]: why a session ended, and whether the bot retries.
 //! - [`enrollment`]: an agent's enrollment: the token's rules and the
-//!   bundle the Owner hands the agent.
+//!   bundle the server's host hands the agent.
 //! - [`agent`]: an agent's admission to the control plane: which of its
 //!   certificates admit it, and which refusals are audited.
 //! - [`resilience`]: retry backoff, failure windows and the circuit breaker.

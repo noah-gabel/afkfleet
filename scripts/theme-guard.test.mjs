@@ -82,6 +82,49 @@ describe("a hard-coded colour in a source", () => {
     });
   }
 
+  for (const [name, source] of [
+    ["a style's border", 'const s = <p style={{ border: "1px solid #e5e5e5" }} />;'],
+    ["a style's outline by name", 'const s = <p style={{ outline: "2px solid black" }} />;'],
+    ["a style's top border", 'const s = { borderTop: "1px solid red" };'],
+    ["a style's right border", 'const s = { borderRight: "1px solid red" };'],
+    ["a style's bottom border", 'const s = { borderBottom: "1px solid red" };'],
+    ["a style's left border", 'const s = { borderLeft: "1px solid red" };'],
+    ["a style's text decoration", 'const s = { textDecoration: "underline red" };'],
+    ["a style's column rule", 'const s = { columnRule: "1px solid red" };'],
+    ["a style's background image", 'const s = { backgroundImage: "linear-gradient(red, blue)" };'],
+  ]) {
+    it(`refuses ${name}`, () => {
+      assert.ok(rulesOf(source).includes("literal colour value"), source);
+    });
+  }
+
+  for (const [name, source] of [
+    ["a shadow's named colour", 'const a = "shadow-[0_0_0_1px_black]";'],
+    ["a shorthand property's named colour", 'const a = "[border:1px_solid_red]";'],
+    ["a named colour inside color-mix", 'const a = "bg-[color-mix(in_oklch,var(--a),white_5%)]";'],
+    ["a filter property's named colour", 'const a = "[filter:drop-shadow(0_0_1px_black)]";'],
+    ["a variable set to a named colour", 'const a = "[--glow:white]";'],
+  ]) {
+    it(`refuses ${name}`, () => {
+      assert.deepEqual(rulesOf(source), ["arbitrary colour"]);
+    });
+  }
+
+  for (const [name, source] of [
+    ["a ternary under an attribute", '<path fill={active ? "white" : "none"} />'],
+    ["its other side", '<path stroke={active ? "none" : "Tomato"} />'],
+    ["a ternary under a style's key", 'const s = { color: active ? "red" : "inherit" };'],
+    [
+      "a ternary over lines",
+      'const s = {\n  background: active\n    ? "white"\n    : "inherit",\n};',
+    ],
+    ["a string in a call", '<path fill={pick(active, "white")} />'],
+  ]) {
+    it(`refuses ${name}`, () => {
+      assert.deepEqual(rulesOf(source), ["literal colour value"]);
+    });
+  }
+
   it("says which line", () => {
     assert.equal(scanSource('\n\n<p className="bg-white" />')[0]?.line, 3);
   });
@@ -108,6 +151,20 @@ describe("what's fine in a source", () => {
     ["a line comment", '// bg-white and rgb(0, 0, 0) were here\nconst a = "b";'],
     ["a block comment", '/* text-red-500 */ const a = "b";'],
     ["a JSX comment", '<p>{/* fill="#000" */}</p>'],
+    ["a border from a token", 'const s = { border: "1px solid var(--border)" };'],
+    ["no outline", 'const s = { outline: "none" };'],
+    ["a select's option variant", 'const a = "[&_option]:bg-background";'],
+    ["a child selector's word", 'const a = "[&_svg]:size-4";'],
+    ["a data variant's whole value", 'const a = "data-[kind=white]:hidden";'],
+    ["a grid's arbitrary value", 'const a = "[grid-template-columns:repeat(2,minmax(0,1fr))]";'],
+    ["a shadow from a token", 'const a = "shadow-[0_0_0_1px_var(--ring)]";'],
+    ["a token in a ternary", '<path fill={active ? "currentColor" : "none"} />'],
+    ["a style's ternary of keywords", 'const s = { color: active ? "inherit" : "transparent" };'],
+    ["a colour word after the key's value", 'const s = { color: "inherit", label: "white" };'],
+    ["a colour word after the attribute", '<path fill={on ? "none" : "none"} title="white" />'],
+    ["a colour word that isn't the whole string", '<path fill={on ? "none" : "a white one"} />'],
+    ["a key's type", "interface Style { color: string; label: string }"],
+    ["a value from a constant, the guard's recorded limit", "<path fill={SHADE} />"],
   ]) {
     it(`takes ${name}`, () => {
       assert.deepEqual(scanSource(source), []);

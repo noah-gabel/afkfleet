@@ -6,13 +6,16 @@
 // say so. The sources of packages/ui/src and apps/desktop/src (no tests, no test helpers, no
 // generated types) may not hold, comments aside:
 // - a Tailwind palette utility, `white` and `black` included, with any variant or opacity
-// - a hex value or a colour function in a class's `[...]`; a named colour only in a colour
-//   utility's or a colour property's
+// - a hex value or a colour function in a class's `[...]`; a named colour, `_` read as a space,
+//   only in a colour utility's or an arbitrary property's
 // - `rgb(`, `oklch(` and the like in any string, or a string that is entirely `#hex`
 //   (`href` aside)
-// - a literal after a colour key or attribute, or as a `--*` style value
+// - a literal after a colour key or attribute, shorthands included, or as a `--*` style value;
+//   a named colour that is a whole string in such a key's expression (`fill={on ? "white" : "none"}`)
 // `currentColor`, `transparent`, `inherit`, `none`, `var(--x)` and `color-mix` over `var()` are
 // fine, and prose never counts: each rule needs a colour context. There is no file allowlist.
+// **Its limit:** a colour that reaches a key through a constant (`fill={SHADE}`) goes unseen, and
+// Tailwind's palette reset can't catch it either, since it's no class (ADR-0020, R186).
 //
 // A native `<select>` lives only in components/NativeSelect.tsx, whose one look holds the tokens
 // for the select and its options: WebView2 paints the open list from them, and a transparent
@@ -21,8 +24,8 @@
 //
 // styles.css may hold colour literals only as `--*` values directly in `:root`, `.dark` or the
 // `prefers-color-scheme` block. Every token is in both `:root` and `.dark`, each `--color-*` maps
-// to a token that exists, the media block equals `.dark`, and Tailwind's own palette stays reset,
-// so a class this scan misses gets no colour at all.
+// to a token that exists, what the media block sets equals `.dark`'s, and Tailwind's own palette
+// stays reset, so a class this scan misses gets no colour at all.
 //
 // `just scripts-test` runs the check on the real files through the tests, so CI runs it.
 // Tests: scripts/theme-guard.test.mjs.
@@ -57,19 +60,27 @@ const ARBITRARY_VALUE = new RegExp(`-\\[[^\\]\\s]*(?:${LITERAL})[^\\]\\s]*\\]`, 
 /** An arbitrary property holding a literal: `[color:#fff]`. */
 const ARBITRARY_PROPERTY = new RegExp(`\\[[a-z-]+:[^\\]\\s]*(?:${LITERAL})[^\\]\\s]*\\]`, "g");
 
-/** A colour utility's arbitrary word: `bg-[red]`, `text-[color:red]`. */
-const UTILITY_WORD = new RegExp(`(?<![\\w-])(?:${UTILITIES})-\\[(?:color:)?([a-zA-Z]+)\\]`, "g");
+/** A colour utility's arbitrary value, in group 1: `bg-[red]`, `shadow-[0_0_0_1px_black]`. */
+const UTILITY_VALUE = new RegExp(`(?<![\\w-])(?:${UTILITIES})-\\[([^\\]\\s]+)\\]`, "g");
 
-/** The CSS properties that take a colour, as CSS and as React's style keys spell them. */
+/** The CSS properties that take a colour, shorthands included. */
 const COLOUR_PROPERTIES =
-  "color|background|background-color|border|border-color|outline|outline-color|fill|stroke|accent-color|caret-color|stop-color|flood-color|lighting-color|text-decoration-color|column-rule-color|box-shadow|text-shadow";
+  "color|background|background-color|background-image|border|border-color|border-top|border-right|border-bottom|border-left|border-top-color|border-right-color|border-bottom-color|border-left-color|outline|outline-color|fill|stroke|accent-color|caret-color|stop-color|flood-color|lighting-color|text-decoration|text-decoration-color|column-rule|column-rule-color|box-shadow|text-shadow";
 
-/** An arbitrary property's word: `[color:red]`. */
-const PROPERTY_WORD = new RegExp(`\\[(?:${COLOUR_PROPERTIES}):([a-zA-Z]+)\\]`, "g");
+/** An arbitrary property's value, in group 1: `[color:red]`, `[border:1px_solid_red]`. */
+const PROPERTY_VALUE = /\[[a-z-]+:([^\]\s]+)\]/g;
+
+/** The same properties as React's style keys and SVG's attributes spell them. */
+const COLOUR_KEYS = COLOUR_PROPERTIES.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
 
 /** A colour key or attribute with a string value, its value in group 2. */
-const KEYED =
-  /(?<![\w-])["']?(?:color|background|backgroundColor|fill|stroke|stopColor|floodColor|lightingColor|borderColor|border(?:Top|Right|Bottom|Left)Color|outlineColor|caretColor|accentColor|textDecorationColor|columnRuleColor|boxShadow|textShadow)["']?\s*[=:]\s*\{?\s*(["'`])([^"'`\n]*)\1/g;
+const KEYED = new RegExp(
+  `(?<![\\w-])["']?(?:${COLOUR_KEYS})["']?\\s*[=:]\\s*\\{?\\s*(["'\`])([^"'\`\\n]*)\\1`,
+  "g",
+);
+
+/** Where a colour key's expression starts: an attribute's `={`, or a style key's `:`. */
+const KEY_EXPRESSION = new RegExp(`(?<![\\w-])["']?(?:${COLOUR_KEYS})["']?\\s*(?:=\\s*\\{|:)`, "g");
 
 /** A `--*` style value, in group 2. */
 const STYLE_VARIABLE = /["']--[\w-]+["']\s*:\s*(["'`])([^"'`\n]*)\1/g;
@@ -81,15 +92,41 @@ const NAMED = new Set(
   ),
 );
 
-/** Whether `value` holds a hex value, a colour function, or names a colour. */
-export function isColourLiteral(value) {
-  if (new RegExp(LITERAL).test(value)) {
-    return true;
-  }
+/** Whether `value` names a colour among its words. */
+function namesColour(value) {
   return value
     .toLowerCase()
-    .split(/[\s,/()]+/)
+    .split(/[\s,/():]+/)
     .some((word) => NAMED.has(word));
+}
+
+/** Whether `value` holds a hex value, a colour function, or names a colour. */
+export function isColourLiteral(value) {
+  return new RegExp(LITERAL).test(value) || namesColour(value);
+}
+
+/**
+ * Where the expression starting at `from` in `code` ends: at the closer of what it opened, or for
+ * a style key at a top-level `,` or `;`. Nothing inside `quoted`, which marks the strings, counts.
+ */
+function expressionEnd(code, quoted, from) {
+  let depth = 0;
+  for (let at = from; at < code.length; at += 1) {
+    const char = code[at] ?? "";
+    if (!quoted[at]) {
+      if ("([{".includes(char)) {
+        depth += 1;
+      } else if (")]}".includes(char)) {
+        if (depth === 0) {
+          return at;
+        }
+        depth -= 1;
+      } else if (depth === 0 && ",;".includes(char)) {
+        return at;
+      }
+    }
+  }
+  return code.length;
 }
 
 /**
@@ -198,9 +235,11 @@ export function scanSource(source) {
       add("arbitrary colour", match[0], match.index);
     }
   }
-  for (const pattern of [UTILITY_WORD, PROPERTY_WORD]) {
+  const literal = new RegExp(LITERAL);
+  for (const pattern of [UTILITY_VALUE, PROPERTY_VALUE]) {
     for (const match of code.matchAll(pattern)) {
-      if (NAMED.has((match[1] ?? "").toLowerCase())) {
+      const value = match[1] ?? "";
+      if (!literal.test(value) && namesColour(value.replaceAll("_", " "))) {
         add("arbitrary colour", match[0], match.index);
       }
     }
@@ -216,10 +255,27 @@ export function scanSource(source) {
       add("hex string", text, index);
     }
   }
+  const flagged = new Set();
   for (const pattern of [KEYED, STYLE_VARIABLE]) {
     for (const match of code.matchAll(pattern)) {
       if (isColourLiteral(match[2] ?? "")) {
         add("literal colour value", match[0], match.index);
+        flagged.add(match.index);
+      }
+    }
+  }
+  const quoted = new Array(code.length).fill(false);
+  for (const { text, start } of strings) {
+    quoted.fill(true, start, start + text.length);
+  }
+  for (const match of code.matchAll(KEY_EXPRESSION)) {
+    if (!flagged.has(match.index)) {
+      const from = match.index + match[0].length;
+      const end = expressionEnd(code, quoted, from);
+      for (const { text, start } of strings) {
+        if (start >= from && start < end && NAMED.has(text.trim().toLowerCase())) {
+          add("literal colour value", text, start);
+        }
       }
     }
   }

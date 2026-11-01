@@ -24,7 +24,7 @@ export function auditFailed(why: string): string {
   return `Couldn't load the audit log: ${why}`;
 }
 
-/** What the line above a filtered list says; `who` is a user's name or a target's ID. */
+/** What the line above a filtered list says, before the target's name or ID. */
 export function showingOnly(kind: AuditTargetKind): string {
   return `Showing only ${targetKindLabel(kind).toLowerCase()}`;
 }

@@ -37,6 +37,29 @@ async fn a_disabled_agents_bot_stops_and_waits_until_a_release_frees_it() {
     );
     assert!(!world.ledger.live(held), "the refusal stopped the bot");
 
+    // It stopped at the server's word that it's disabled, not at a retry its revoked
+    // certificate lost.
+    let refusals: Vec<_> = world
+        .logs
+        .buffer()
+        .json_lines()
+        .unwrap()
+        .into_iter()
+        .filter_map(|line| line.get("refusal").cloned())
+        .collect();
+    assert_ne!(refusals.len(), 0);
+    assert!(
+        refusals.iter().all(|refusal| refusal == "agent_disabled"),
+        "{refusals:?}"
+    );
+    let connects = world.server.entries(&AuditAction::AGENT_CONNECT).await;
+    assert!(
+        connects
+            .iter()
+            .all(|entry| crate::loopback::reason(entry).as_deref() != Some("revoked")),
+        "the agent tried again after it was disabled"
+    );
+
     // The pass that places another bot on the other agent, which has room,
     // leaves the first where it is.
     world.owner.start(other).await;

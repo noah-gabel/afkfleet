@@ -403,7 +403,7 @@ describe("reports", () => {
       95,
       100,
     ]);
-    files.push([desktopFile("lib.rs"), 0, 50], [desktopFile("main.rs"), 0, 5]);
+    files.push([desktopFile("main.rs"), 0, 5]);
 
     const results = evaluateGates(report(files), "C:\\path\\to\\afkfleet", gatesFor("desktop"));
 
@@ -424,7 +424,7 @@ describe("reports", () => {
 });
 
 describe("the desktop gate", () => {
-  it("is required at 90 % over the desktop crate's modules, never lib.rs or main.rs", () => {
+  it("is required at 90 % over the desktop crate's modules, lib.rs too, never main.rs", () => {
     const gate = GATES_IN_USE.find((g) => g.name === "desktop");
 
     assert.ok(gate);
@@ -437,14 +437,14 @@ describe("the desktop gate", () => {
       "endpoints.rs",
       "error.rs",
       "keychain.rs",
+      "lib.rs",
       "profile.rs",
       "state.rs",
+      "window_theme.rs",
     ]) {
       assert.ok(gate.prefixes.includes(`apps/desktop/src-tauri/src/${module}`), module);
     }
-    for (const entry of ["lib.rs", "main.rs"]) {
-      assert.ok(!gate.prefixes.includes(`apps/desktop/src-tauri/src/${entry}`), entry);
-    }
+    assert.ok(!gate.prefixes.includes("apps/desktop/src-tauri/src/main.rs"));
   });
 });
 

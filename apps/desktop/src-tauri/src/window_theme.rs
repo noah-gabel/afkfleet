@@ -75,13 +75,18 @@ pub(crate) fn follow_choice(window: &impl ThemedWindow, choice: WindowTheme) {
     }
 }
 
+/// That the main window was revealed: the app holds one once its setup ran, which is what a test on
+/// Tauri's mock runtime can see, as its windows report no visibility (ADR-0020, S98).
+pub(crate) struct Revealed(());
+
 /// Paints `window` as Windows says, then shows it. The window must show whatever failed before
 /// it, or the app would run with nothing on the screen.
-pub(crate) fn reveal_main_window(window: &(impl ThemedWindow + MainWindow)) {
+pub(crate) fn reveal_main_window(window: &(impl ThemedWindow + MainWindow)) -> Revealed {
     if let Ok(now) = window.theme() {
         paint(window, now);
     }
     focus_main_window(window);
+    Revealed(())
 }
 
 #[cfg(test)]

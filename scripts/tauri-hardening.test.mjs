@@ -1,11 +1,11 @@
 // Tests for tauri-hardening.mjs. Run with `just scripts-test`.
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-
+import { recipeBody } from "./justfile.mjs";
 import {
   COMMANDS,
   CSP,
@@ -407,6 +407,32 @@ describe("the repository", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
     assert.deepEqual(checkRepoFiles(repoRoot), []);
+  });
+});
+
+describe("the debug exe the AI launches (ADR-0020, U87)", () => {
+  const srcTauri = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "apps",
+    "desktop",
+    "src-tauri",
+  );
+  const config = (name) => JSON.parse(readFileSync(path.join(srcTauri, name), "utf8"));
+
+  it("changes the identifier and nothing else", () => {
+    const check = config("tauri.check.conf.json");
+
+    assert.deepEqual(Object.keys(check), ["identifier"]);
+    assert.notEqual(check.identifier, config("tauri.conf.json").identifier);
+  });
+
+  it("is what its recipe builds, in debug", () => {
+    const [line, ...rest] = recipeBody("app-build-check");
+
+    assert.deepEqual(rest, []);
+    assert.match(line, / tauri build --debug --config /);
+    assert.match(line, /\/apps\/desktop\/src-tauri\/tauri\.check\.conf\.json"$/);
   });
 });
 
