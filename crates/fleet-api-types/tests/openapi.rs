@@ -18,10 +18,10 @@ use std::fs;
 
 use fleet_api_types::accounts::{
     AccountKind, AccountLabel, AccountPage, AccountResponse, AccountStatus, ChangeGrantRequest,
-    CreateGrantRequest, CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantLevel,
-    GrantPage, GrantResponse, HeldGrantPage, HeldGrantResponse, LinkFlowResponse, LinkFlowState,
-    LinkStartedResponse, MC_NAME_MAX_CHARS, RefusalReason, USER_CODE_MAX_CHARS,
-    VERIFICATION_URI_MAX_CHARS,
+    CreateGrantRequest, CreateOfflineAccountRequest, CreatedOfflineAccountResponse,
+    GrantCandidates, GrantLevel, GrantPage, GrantResponse, HeldGrantPage, HeldGrantResponse,
+    LinkFlowResponse, LinkFlowState, LinkStartedResponse, MC_NAME_MAX_CHARS, RefusalReason,
+    USER_CODE_MAX_CHARS, VERIFICATION_URI_MAX_CHARS,
 };
 use fleet_api_types::agents::{
     AGENT_NAME_MAX_CHARS, AGENT_VERSION_MAX_CHARS, AgentPage, AgentResponse, AgentStatus,
@@ -129,6 +129,7 @@ fn declarations() -> BTreeMap<String, String> {
         ("SafeInt", SafeInt::decl(&config)),
         ("CreateGrantRequest", CreateGrantRequest::decl(&config)),
         ("GrantLevel", GrantLevel::decl(&config)),
+        ("GrantCandidates", GrantCandidates::decl(&config)),
         ("GrantPage", GrantPage::decl(&config)),
         ("GrantResponse", GrantResponse::decl(&config)),
         (

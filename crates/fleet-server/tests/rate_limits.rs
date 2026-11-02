@@ -94,6 +94,7 @@ fn loose() -> RateLimitConfig {
         per_user: loose,
         link_flows: LinkFlowLimits::default(),
         grants_by_name: loose,
+        grant_candidates: loose,
         enroll: loose,
         connect: loose,
         bot_actions: loose,

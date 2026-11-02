@@ -639,6 +639,11 @@ async fn the_authed_routes_are_registered_with_their_class(
                 "/api/v1/accounts/{id}/grants",
                 RateClass::Standard
             ),
+            entry(
+                Method::GET,
+                "/api/v1/accounts/{id}/grant-candidates",
+                RateClass::Standard
+            ),
             entry(Method::GET, "/api/v1/bots", RateClass::Standard),
             entry(Method::GET, "/api/v1/bots/{id}", RateClass::Standard),
             entry(Method::PUT, "/api/v1/bots/{id}/mode", RateClass::Standard),

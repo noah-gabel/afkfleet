@@ -220,6 +220,7 @@ per_user_burst = 60
 link_flows_total = 5
 link_flows_per_user_per_day = 20
 grants_by_name_per_user_per_hour = 4
+grant_candidates_per_user_per_hour = 90
 enroll_per_ip_per_min = 4
 connect_per_cert_per_min = 7
 bot_actions_per_bot_per_min = 3
@@ -243,6 +244,7 @@ fn every_rate_limit() -> RateLimitConfig {
             per_user_per_day: nonzero(20),
         },
         grants_by_name: Rate::per_hour(nonzero(4)),
+        grant_candidates: Rate::per_hour(nonzero(90)),
         enroll: Rate::per_minute(nonzero(4)),
         connect: Rate::per_minute(nonzero(7)),
         bot_actions: Rate::per_minute(nonzero(3)),
@@ -1149,6 +1151,7 @@ fn the_dev_config_holds_neither_the_database_path_nor_the_vault_key_file() {
 #[case::link_flows_total("link_flows_total", 1, 16)]
 #[case::link_flows_per_user_per_day("link_flows_per_user_per_day", 1, 100)]
 #[case::grants_by_name("grants_by_name_per_user_per_hour", 1, 100)]
+#[case::grant_candidates("grant_candidates_per_user_per_hour", 1, 600)]
 #[case::enroll("enroll_per_ip_per_min", 1, 60)]
 #[case::connect("connect_per_cert_per_min", 1, 60)]
 #[case::bot_actions("bot_actions_per_bot_per_min", 1, 60)]

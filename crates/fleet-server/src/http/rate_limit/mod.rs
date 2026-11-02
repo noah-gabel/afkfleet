@@ -174,6 +174,8 @@ pub struct Refusals {
     pub per_user: u64,
     /// The per-user limit of grants created by a username.
     pub grants_by_name: u64,
+    /// The per-user limit of reads of the suggestions behind "Share with".
+    pub grant_candidates: u64,
     /// The per-IP limit of `Enroll` calls on the gRPC port.
     pub enroll: u64,
     /// The per-certificate limit of `Connect` calls on the gRPC port.
@@ -200,6 +202,7 @@ impl Refusals {
             && self.register == 0
             && self.per_user == 0
             && self.grants_by_name == 0
+            && self.grant_candidates == 0
             && self.enroll == 0
             && self.connect == 0
             && self.bot_actions == 0
@@ -219,6 +222,7 @@ struct Counters {
     register: AtomicU64,
     per_user: AtomicU64,
     grants_by_name: AtomicU64,
+    grant_candidates: AtomicU64,
     enroll: AtomicU64,
     connect: AtomicU64,
     bot_actions: AtomicU64,
@@ -237,6 +241,7 @@ struct Limiters {
     register: Limiter<IpAddr>,
     per_user: Limiter<UserId>,
     grants_by_name: Limiter<UserId>,
+    grant_candidates: Limiter<UserId>,
     enroll: Limiter<IpAddr>,
     connect: Limiter<CertFingerprint>,
     bot_actions: Limiter<BotId>,
@@ -284,6 +289,7 @@ impl RateLimits {
             register: limiter(config.register, &clock),
             per_user: limiter(config.per_user, &clock),
             grants_by_name: limiter(config.grants_by_name, &clock),
+            grant_candidates: limiter(config.grant_candidates, &clock),
             enroll: limiter(config.enroll, &clock),
             connect: limiter(config.connect, &clock),
             bot_actions: limiter(config.bot_actions, &clock),
@@ -339,6 +345,22 @@ impl RateLimits {
             &limits.clock,
             &user,
             &limits.refused.grants_by_name,
+        )
+    }
+
+    /// Spends one of `user`'s reads of the suggestions behind "Share with",
+    /// after they're authorized, so a call refused before it spends nothing
+    /// (ADR-0020, S127).
+    ///
+    /// # Errors
+    /// [`Refused`] when their bucket is empty.
+    pub fn check_grant_candidates(&self, user: UserId) -> Result<(), Refused> {
+        let limits = &self.0;
+        spend(
+            &limits.grant_candidates,
+            &limits.clock,
+            &user,
+            &limits.refused.grant_candidates,
         )
     }
 
@@ -466,6 +488,7 @@ impl RateLimits {
         limits.register.retain_recent();
         limits.per_user.retain_recent();
         limits.grants_by_name.retain_recent();
+        limits.grant_candidates.retain_recent();
         limits.enroll.retain_recent();
         limits.connect.retain_recent();
         limits.bot_actions.retain_recent();
@@ -508,6 +531,7 @@ impl RateLimits {
             + limits.register.len()
             + limits.per_user.len()
             + limits.grants_by_name.len()
+            + limits.grant_candidates.len()
             + limits.enroll.len()
             + limits.connect.len()
             + limits.bot_actions.len()
@@ -528,6 +552,7 @@ impl RateLimits {
             register: take(&refused.register),
             per_user: take(&refused.per_user),
             grants_by_name: take(&refused.grants_by_name),
+            grant_candidates: take(&refused.grant_candidates),
             enroll: take(&refused.enroll),
             connect: take(&refused.connect),
             bot_actions: take(&refused.bot_actions),
@@ -657,6 +682,7 @@ mod tests {
             per_user: rate,
             link_flows: LinkFlowLimits::default(),
             grants_by_name: rate,
+            grant_candidates: rate,
             enroll: rate,
             connect: rate,
             bot_actions: rate,
@@ -763,6 +789,27 @@ mod tests {
         assert_eq!(limits.check_user(user(1)), Ok(()));
         clock.advance(Duration::from_millis(500));
         assert_eq!(limits.check_grant_by_name(user(1)), Ok(()));
+    }
+
+    #[test]
+    fn grant_candidates_are_refused_past_their_burst_apart_from_other_requests() {
+        let clock = ManualClock::new(start());
+        let limits = RateLimits::new(&tight(), Arc::new(clock.clone()));
+        for _ in 0..2 {
+            limits.check_grant_candidates(user(1)).unwrap();
+        }
+
+        assert_eq!(
+            limits.check_grant_candidates(user(1)),
+            Err(Refused {
+                retry_after: Duration::from_millis(500)
+            })
+        );
+        assert_eq!(limits.check_grant_candidates(user(2)), Ok(()));
+        assert_eq!(limits.check_grant_by_name(user(1)), Ok(()));
+        assert_eq!(limits.take_refusals().grant_candidates, 1);
+        clock.advance(Duration::from_millis(500));
+        assert_eq!(limits.check_grant_candidates(user(1)), Ok(()));
     }
 
     #[test]
@@ -989,6 +1036,7 @@ mod tests {
                 register: 0,
                 per_user: 1,
                 grants_by_name: 2,
+                grant_candidates: 0,
                 enroll: 1,
                 connect: 4,
                 bot_actions: 5,
@@ -1027,6 +1075,10 @@ mod tests {
             },
             Refusals {
                 grants_by_name: 1,
+                ..Refusals::default()
+            },
+            Refusals {
+                grant_candidates: 1,
                 ..Refusals::default()
             },
             Refusals {

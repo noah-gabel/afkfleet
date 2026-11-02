@@ -1222,6 +1222,22 @@ expression: answer.json()
         ],
         "type": "object"
       },
+      "GrantCandidates": {
+        "description": "`GET /accounts/{id}/grant-candidates`: the usernames that start with\nwhat's typed and can be given a grant on the account, in order, at most\n[`GRANT_CANDIDATES_MAX`] of them. Only names: never a role or an ID.",
+        "properties": {
+          "usernames": {
+            "description": "The usernames.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "usernames"
+        ],
+        "type": "object"
+      },
       "GrantLevel": {
         "description": "What a user may do with an account (Plan.md §7.3): `view` < `control` <\n`manage`.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
         "enum": [
@@ -3380,6 +3396,142 @@ expression: answer.json()
           "accounts"
         ],
         "x-step-up": true
+      }
+    },
+    "/api/v1/accounts/{id}/grant-candidates": {
+      "get": {
+        "operationId": "grant_candidates",
+        "parameters": [
+          {
+            "description": "The account's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The start of a username, in any case.",
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantCandidates"
+                }
+              }
+            },
+            "description": "At most 8 usernames, in order."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A query that doesn't parse: no `q`, or another parameter."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The caller may see the account but not its grants (Manage)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such account, or one the caller may not see."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The account is pending, and takes no grant until it's approved."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A `q` that can't start a username."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests, or too many of these in the last hour.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`GET /api/v1/accounts/{id}/grant-candidates?q=`: the usernames that start\nwith what's typed and could be given a grant on the account.",
+        "tags": [
+          "accounts"
+        ]
       }
     },
     "/api/v1/accounts/{id}/grants": {

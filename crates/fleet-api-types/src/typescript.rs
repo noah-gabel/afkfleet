@@ -27,8 +27,8 @@ use ts_rs::{Config, ExportError, TS};
 
 use crate::accounts::{
     AccountPage, AccountResponse, ChangeGrantRequest, CreateGrantRequest,
-    CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
-    HeldGrantPage, LinkFlowResponse, LinkStartedResponse,
+    CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantCandidates, GrantPage,
+    GrantResponse, HeldGrantPage, LinkFlowResponse, LinkStartedResponse,
 };
 use crate::agents::{AgentPage, AgentResponse, AgentStatus};
 use crate::app::{
@@ -204,6 +204,7 @@ fn write_api(config: &Config) -> Result<(), TypeScriptError> {
     CreateGrantRequest::export_all(config).map_err(TypeScriptError::Export)?;
     ChangeGrantRequest::export_all(config).map_err(TypeScriptError::Export)?;
     GrantResponse::export_all(config).map_err(TypeScriptError::Export)?;
+    GrantCandidates::export_all(config).map_err(TypeScriptError::Export)?;
     GrantPage::export_all(config).map_err(TypeScriptError::Export)?;
     AgentStatus::export_all(config).map_err(TypeScriptError::Export)?;
     AgentResponse::export_all(config).map_err(TypeScriptError::Export)?;

@@ -20,6 +20,9 @@
 //!   implicit Manage by now; lowering always works. The same level changes
 //!   nothing.
 //! - **Revoking one** ([`GrantService::revoke`]): in any status.
+//! - **Suggesting who** ([`GrantService::candidates`]): the usernames that
+//!   start with what's typed and could be given a grant, for whoever may manage
+//!   the account's grants (ADR-0020, U110, S127). What was typed is never logged.
 //!
 //! Each write reads the acting user, the account and the grantee again in
 //! its transaction and asks `authorize()` again on those facts.
@@ -33,8 +36,8 @@ use fleet_core::authz::{
 };
 use fleet_core::id::{AccountId, UserId};
 use fleet_core::system::Clock;
-use fleet_core::value::Username;
-use tracing::{debug, info};
+use fleet_core::value::{Username, UsernamePrefix};
+use tracing::{debug, error, info};
 
 use super::accounts::{Reread, reread};
 use super::audit::AuditService;
@@ -45,6 +48,8 @@ use crate::ports::live_hints::{LiveHints, NoLiveHints};
 use crate::ports::page::{Page, Paged};
 use crate::ports::store::{Store, StoreError, WriteTx};
 
+/// What a read of the suggestions logs. What was typed is never among it.
+const SUGGESTED: &str = "the suggestions for a grant were read";
 /// What a new grant logs.
 const GRANTED: &str = "an account was shared";
 /// What a name that can't be granted logs.
@@ -55,6 +60,26 @@ const CHANGED: &str = "a grant was changed";
 const REVOKED: &str = "a grant was revoked";
 /// What a grantee leaving an account logs.
 const LEFT: &str = "a grantee left an account";
+
+/// Why [`GrantService::candidates`] answers nothing.
+#[derive(Debug, thiserror::Error)]
+pub enum CandidatesError {
+    /// There's no such account.
+    #[error("no such account")]
+    NotFound,
+    /// The actor may not manage its grants.
+    #[error(transparent)]
+    Denied(AuthzError),
+    /// The account is pending, and takes no grant until it's approved.
+    #[error("the account is pending")]
+    Pending,
+    /// The query and `implicit_manage` disagree on a row.
+    #[error("the query and implicit Manage disagree")]
+    Disagreement,
+    /// The database failed.
+    #[error(transparent)]
+    Store(#[from] StoreError),
+}
 
 /// Why a name can't be granted. The API answers every one alike.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -231,6 +256,46 @@ impl GrantService {
     #[must_use]
     pub fn with_live_hints(self, live_hints: Arc<dyn LiveHints>) -> Self {
         Self { live_hints, ..self }
+    }
+
+    /// The usernames starting with `prefix` that `actor` could give a grant
+    /// on `account` to, in order, at most 8. It reads the account and asks
+    /// `authorize()` itself, and checks each row against `implicit_manage`,
+    /// since the query copies that rule: a row they disagree on fails the list.
+    ///
+    /// # Errors
+    /// [`CandidatesError`].
+    pub async fn candidates(
+        &self,
+        actor: &Actor,
+        account: AccountId,
+        prefix: &UsernamePrefix,
+    ) -> Result<Vec<Username>, CandidatesError> {
+        let listed = self
+            .store
+            .accounts()
+            .listed(account, actor.id)
+            .await?
+            .ok_or(CandidatesError::NotFound)?;
+        authorize(actor, Permission::ManageGrants, &listed.context())
+            .map_err(CandidatesError::Denied)?;
+        if awaits_review(listed.status) {
+            return Err(CandidatesError::Pending);
+        }
+        let rows = self
+            .store
+            .grants()
+            .candidates(account, listed.owner, actor.id, prefix)
+            .await?;
+        if rows
+            .iter()
+            .any(|row| implicit_manage(&actor_of(row.id, row.role), listed.owner))
+        {
+            error!(account_id = %account, "the query and implicit Manage disagree on a suggestion");
+            return Err(CandidatesError::Disagreement);
+        }
+        debug!(user_id = %actor.id, account_id = %account, rows = rows.len(), "{SUGGESTED}");
+        Ok(rows.into_iter().map(|row| row.username).collect())
     }
 
     /// The grants on `account`, which `owner` owns, on `page`, newest

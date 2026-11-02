@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use fleet_core::account::AccountStatus;
 use fleet_core::audit::{AuditAction, AuditTarget};
-use fleet_core::authz::{Actor, GrantLevel, Role};
+use fleet_core::authz::{Actor, GrantLevel, Role, UserRef};
 use fleet_core::bot::{DesiredRunState, LastReport};
 use fleet_core::id::{
     AccountId, AgentId, BotId, EnrollmentTokenId, InviteId, ModeId, ServerSettingsId, SessionId,
@@ -16,7 +16,9 @@ use fleet_core::id::{
 };
 use fleet_core::mode::ModeName;
 use fleet_core::pki::CertFingerprint;
-use fleet_core::value::{AgentName, McUsername, ServerAddress, ServerKey, Username};
+use fleet_core::value::{
+    AgentName, McUsername, ServerAddress, ServerKey, Username, UsernamePrefix,
+};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 use tokio::sync::watch;
 
@@ -45,7 +47,7 @@ use crate::ports::enrollment_tokens::{
 };
 use crate::ports::envelopes::{EnvelopeReads, EnvelopeWrites, SealedEnvelope, SealedRecord};
 use crate::ports::grants::{
-    AccountGrant, GrantReads, GrantWrites, HeldGrant, InsertGrantError, ListedGrant,
+    AccountGrant, GrantCandidate, GrantReads, GrantWrites, HeldGrant, InsertGrantError, ListedGrant,
 };
 use crate::ports::invites::{
     Invite, InviteReads, InviteWrites, ListedInvite, NewInvite, RevokedInvite,
@@ -219,6 +221,16 @@ impl GrantReads for Reads {
         page: Page<AccountId>,
     ) -> Result<Vec<HeldGrant>, StoreError> {
         grants::held_by(&self.pool, user, page).await
+    }
+
+    async fn candidates(
+        &self,
+        account: AccountId,
+        owner: UserRef,
+        caller: UserId,
+        prefix: &UsernamePrefix,
+    ) -> Result<Vec<GrantCandidate>, StoreError> {
+        grants::candidates(&self.pool, account, owner, caller, prefix).await
     }
 }
 

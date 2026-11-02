@@ -23,6 +23,7 @@
 
 mod at_rest;
 mod delete;
+mod grant_candidates;
 mod grants;
 mod grants_review;
 mod link_flows;
