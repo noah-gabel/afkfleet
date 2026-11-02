@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 
 import { useMe } from "../../../api/queries";
+import { Logo, Wordmark } from "../../../components/Brand";
 import { Tooltip } from "../../../components/Tooltip";
 import { Button } from "../../../components/ui/button";
 import {
@@ -58,7 +59,10 @@ export function Sidebar() {
   return (
     <aside className="fixed inset-y-0 left-0 z-30 flex w-52 flex-col gap-3 border-r bg-sidebar p-3 text-sm text-sidebar-foreground max-rail:w-16 max-rail:p-2">
       <div className="flex h-8 shrink-0 items-center gap-2 px-3 max-rail:justify-center max-rail:px-0">
-        <span className="font-semibold tracking-tight max-rail:sr-only">afkfleet</span>
+        <Logo />
+        <span className="text-base tracking-tight max-rail:sr-only">
+          <Wordmark />
+        </span>
       </div>
       <nav
         aria-label="Main"

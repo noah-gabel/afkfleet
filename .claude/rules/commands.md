@@ -54,7 +54,7 @@ On Linux, every workspace-wide Rust recipe adds `--exclude afkfleet-desktop`: th
 | `just dev-app` | `tauri dev` in `apps/desktop`: Vite's dev server on `localhost:1420` and the app, with hot reload |
 | `just app-build [args]` | `tauri build` in `apps/desktop`: the frontend, then the exe with it embedded (`target/release/`; `--debug` for a debug exe with devtools). No installer yet. **The AI never launches an exe it builds** |
 | `just app-build-check` | The debug exe at `target/app-check/afkfleet-check.exe`, under its own identifier, `io.github.noah-gabel.afkfleet.check`, from `src-tauri/tauri.check.conf.json`, copied by `scripts/app-check.mjs`, which refuses any other identifier: the only file the AI launches (below) |
-| `just icons` | Renders `apps/desktop/src-tauri/icons/icon.ico` from `icon.svg` with `tauri icon`, through a fresh folder in `target/`, keeping only `icon.ico` (`scripts/icons.mjs`) |
+| `just icons` | Renders `apps/desktop/src-tauri/icons/icon.ico` at 14 sizes from `icon.svg` and, for 16 px, `icon-16.svg`, with `tauri icon`, through a fresh folder in `target/`, writing only `icon.ico`, and only once every render checks out (`scripts/icons.mjs`) |
 | `just ui-test` / `just e2e` | Vitest in every frontend package / the e2e suite: builds both shipped bundles into `target/e2e/` and the e2e bundle, runs `scripts/e2e-bundle-guard.mjs`, then Playwright in the installed Edge (`channel: "msedge"`, nothing downloaded) under the release CSP (part of `check` and `ci`; ADR-0017) |
 | `just ci` | Everything CI runs |
 | `just testkit-check` | Fails if any workspace member depends on fleet-testkit outside its dev-dependencies (`cargo tree`, through `scripts/testkit-check.mjs`; ADR-0015) |

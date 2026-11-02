@@ -172,7 +172,7 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
   - npm packages `@afkfleet/ui` and `@afkfleet/desktop`
 
   The identifier names the app's data folder, its WebView2 profile and the single-instance mutex, so it never changes.
-- **The icon** *(the user's choice)*. An original placeholder, `icons/icon.svg`: a rounded square with three white dots, no text, no third-party logo. `just icons` (`scripts/icons.mjs`) renders `icon.ico` from it with `tauri icon` into a fresh folder under `target/`, keeps only `icon.ico` and removes that folder. Only the SVG and the ICO are committed; tauri-build embeds the ICO in the exe, and a Windows build fails without it.
+- **The icon** *(the user's choice)*. *Since P11.11 (ADR-0020, U95): Orbit, at 14 sizes, from two sources.* An original placeholder, `icons/icon.svg`: a rounded square with three white dots, no text, no third-party logo. `just icons` (`scripts/icons.mjs`) renders `icon.ico` from it with `tauri icon` into a fresh folder under `target/`, keeps only `icon.ico` and removes that folder. Only the SVG and the ICO are committed; tauri-build embeds the ICO in the exe, and a Windows build fails without it.
 
 ### Group B: the frontend *(the user's choices and approvals)*
 - **Layout.**

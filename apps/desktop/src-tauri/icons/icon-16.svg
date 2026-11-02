@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <title>afkfleet</title>
+  <!-- Orbit at 16 px (ADR-0020, U95, S118): a thicker stroke and a bigger gap, so the satellite doesn't merge into the ring. icon.svg is the master. -->
+  <defs><linearGradient id="tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2a2f35"/><stop offset="1" stop-color="#101316"/></linearGradient><linearGradient id="ring" x1="1" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a9cdec"/><stop offset="1" stop-color="#2f6291"/></linearGradient></defs>
+  <rect width="16" height="16" rx="3.28" fill="url(#tile)"/>
+  <rect x=".16" y=".16" width="15.68" height="15.68" rx="3.13" fill="none" stroke="#ffffff" stroke-opacity=".09" stroke-width=".31"/>
+  <path d="M 13 8 A 5 5 0 1 1 4.46 4.46" fill="none" stroke="url(#ring)" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="8" cy="8" r="1" fill="#3f78ab"/>
+  <circle cx="12.5" cy="3.5" r="1.5" fill="#e4f0fa"/>
+</svg>

@@ -63,6 +63,20 @@ test("the minimum window holds the whole sidebar, a certificate banner up", asyn
   }
 });
 
+test("the logo loads under the CSP, and the wordmark reads as one word", async ({
+  page,
+  context,
+}) => {
+  await signedIn(page, context);
+
+  const logo = sidebar(page).locator("img");
+  await expect(logo).toHaveAttribute("alt", "");
+  await expect
+    .poll(() => logo.evaluate((image: HTMLImageElement) => image.naturalWidth))
+    .toBeGreaterThan(0);
+  await expect(sidebar(page).locator("[data-slot=wordmark]")).toHaveText("afkfleet");
+});
+
 test("the banner runs the window's full width when signed out", async ({ page, context }) => {
   const backend = await fakeBackend(context);
   await page.goto("/");

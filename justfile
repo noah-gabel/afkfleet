@@ -340,7 +340,7 @@ app-build-check:
     pnpm --filter @afkfleet/desktop tauri build --debug --config "{{ justfile_directory() }}/apps/desktop/src-tauri/tauri.check.conf.json"
     node scripts/app-check.mjs
 
-# Render the desktop app's icon.ico from apps/desktop/src-tauri/icons/icon.svg (needs pnpm install).
+# Render the desktop app's icon.ico from apps/desktop/src-tauri/icons/ at every Windows size (needs pnpm install).
 icons:
     node scripts/icons.mjs
 
