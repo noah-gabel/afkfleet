@@ -7,6 +7,10 @@
 //   it. Only the outline counts, so a stop whose indicator is a shadow or a border fails: one
 //   stylesheet rule draws them all (styles.css). `outline-style: auto` fails too, since its painted
 //   colour can't be read.
+// - A stop marked `data-focus-indicator="cells"` (the six code boxes, U103, S121) has no outline and
+//   shows its focus in the cells beside it: every cell's border on `--ring` at 3:1, exactly one cell
+//   stronger, and neither once the focus has gone, which a plain ratio can't see: `--input` holds
+//   3:1 too. Cells without the marker fail, as they'd pass on the outline.
 //
 // **Left out, on purpose:** WCAG 1.4.11's graphics (a status square, an icon, an input's border, a
 // radio's mark), hover and pressed colours, generated content, and a select's open list, which
@@ -45,6 +49,8 @@ export interface TabStep {
 export interface TabEnd {
   readonly missed: readonly string[];
   readonly changed: readonly string[];
+  /** Marked stops whose cells look the same without the focus. */
+  readonly unchanged: readonly string[];
 }
 
 /** What the page can be asked. */
@@ -235,6 +241,79 @@ export function probe(request: Probe): Walked | number | TabStep | Promise<TabEn
       : undefined;
   };
 
+  /** A marked stop's cells, as they were read with the focus. */
+  interface FocusedCells {
+    readonly name: string;
+    readonly cells: readonly Element[];
+    readonly strong: Element;
+    readonly strongWidth: number;
+  }
+  const CELLS = 6;
+  const MARKED = "[data-focus-indicator=cells]";
+  const cellsBeside = (element: Element) => [
+    ...(element.closest("[data-slot=code-boxes]")?.querySelectorAll("[data-slot=code-cell]") ?? []),
+  ];
+  const SIDES = ["top", "right", "bottom", "left"] as const;
+  /** The thinnest of a cell's four borders. */
+  const borderWidth = (cell: Element) => {
+    const style = getComputedStyle(cell);
+    return Math.min(
+      ...SIDES.map((side) => {
+        const kind = style.getPropertyValue(`border-${side}-style`);
+        return kind === "none" || kind === "hidden"
+          ? 0
+          : Number.parseFloat(style.getPropertyValue(`border-${side}-width`));
+      }),
+    );
+  };
+  /** Whether every side of `cell` is `--ring`. */
+  const onRing = (cell: Element) => {
+    const style = getComputedStyle(cell);
+    const ring = rgba(style.getPropertyValue("--ring").trim()).join();
+    return SIDES.every(
+      (side) => rgba(style.getPropertyValue(`border-${side}-color`)).join() === ring,
+    );
+  };
+  /** What's wrong with the cells of `element`, the focused, marked one, or what to check at the end. */
+  const cellsReading = (element: Element): string | FocusedCells => {
+    const style = getComputedStyle(element);
+    if (style.outlineStyle !== "none") {
+      return `an outline around the field: ${style.outlineStyle}`;
+    }
+    if (rgba(style.backgroundColor)[3] > 0) {
+      return `a background that hides its cells: ${style.backgroundColor}`;
+    }
+    const cells = cellsBeside(element);
+    if (cells.length !== CELLS) {
+      return `${cells.length} cells beside it, not ${CELLS}`;
+    }
+    for (const cell of cells) {
+      if (!shown(cell)) {
+        return "a cell that isn't shown";
+      }
+      if (borderWidth(cell) === 0) {
+        return "a cell with no border on some side";
+      }
+      if (!onRing(cell)) {
+        return "a cell whose border isn't on --ring";
+      }
+      const [r, g, b, a] = rgba(getComputedStyle(cell).borderTopColor);
+      for (const under of [backdrop(cell), backdrop(cell.parentElement ?? cell)]) {
+        const ratio = ratioOf(over([r, g, b, a * opacity(cell)], under), under);
+        if (ratio < 3) {
+          return `a cell's border at ${rounded(ratio)}:1 against what's behind it`;
+        }
+      }
+    }
+    const thinnest = Math.min(...cells.map(borderWidth));
+    const strong = cells.filter((cell) => borderWidth(cell) > thinnest);
+    const [only] = strong;
+    if (strong.length !== 1 || only === undefined) {
+      return `${strong.length} stronger cells, not one`;
+    }
+    return { name: nameOf(element), cells, strong: only, strongWidth: borderWidth(only) };
+  };
+
   /** The state of a Tab walk, kept on the window between its calls. */
   interface Walk {
     readonly returnTo: Element | null;
@@ -242,6 +321,7 @@ export function probe(request: Probe): Walked | number | TabStep | Promise<TabEn
     readonly counts: string;
     readonly pending: Map<Element | string, string>;
     readonly seen: Set<Element>;
+    readonly marked: FocusedCells[];
     anchor: Element | null;
     bodies: number;
   }
@@ -250,6 +330,20 @@ export function probe(request: Probe): Walked | number | TabStep | Promise<TabEn
     element instanceof HTMLInputElement && element.type === "radio" && element.name !== ""
       ? `radio ${element.name}`
       : element;
+  /** What's wrong with the indicator of `element`, the focused one, or undefined. */
+  const focusProblem = (element: Element, walk: Walk): string | undefined => {
+    if (!element.matches(MARKED)) {
+      return cellsBeside(element).length > 0
+        ? "cells beside it, and no marker saying they show its focus"
+        : outlineProblem(element);
+    }
+    const reading = cellsReading(element);
+    if (typeof reading === "string") {
+      return reading;
+    }
+    walk.marked.push(reading);
+    return undefined;
+  };
   /** What a row shows that a Tab through it mustn't change. */
   const counts = () =>
     ["[role=alert]", "[aria-invalid=true]", "[data-slot=tooltip]"]
@@ -276,6 +370,7 @@ export function probe(request: Probe): Walked | number | TabStep | Promise<TabEn
         counts: counts(),
         pending,
         seen: new Set(),
+        marked: [],
         anchor: null,
         bodies: 0,
       };
@@ -316,7 +411,7 @@ export function probe(request: Probe): Walked | number | TabStep | Promise<TabEn
           ? { done: false, problem: `a stop that isn't shown: ${nameOf(active)}` }
           : { done: false };
       }
-      const problem = outlineProblem(active);
+      const problem = focusProblem(active, walk);
       return problem === undefined
         ? { done: false }
         : { done: false, problem: `${nameOf(active)}: ${problem}` };
@@ -330,6 +425,13 @@ export function probe(request: Probe): Walked | number | TabStep | Promise<TabEn
       if (document.activeElement instanceof HTMLElement) {
         document.activeElement.blur();
       }
+      // Read with nothing focused, before the focus goes back: the code step takes it on arrival.
+      const unchanged = walk.marked.flatMap(({ name, cells, strong, strongWidth }) =>
+        cells.some((cell) => cell.isConnected && onRing(cell)) ||
+        (strong.isConnected && borderWidth(strong) >= strongWidth)
+          ? [`${name}: its cells look the same without the focus`]
+          : [],
+      );
       if (walk.returnTo instanceof HTMLElement && walk.returnTo.isConnected) {
         walk.returnTo.focus({ preventScroll: true });
       }
@@ -348,6 +450,7 @@ export function probe(request: Probe): Walked | number | TabStep | Promise<TabEn
             missed,
             changed:
               now === walk.counts ? [] : [`the Tab changed the row: ${walk.counts} → ${now}`],
+            unchanged,
           });
         });
       });

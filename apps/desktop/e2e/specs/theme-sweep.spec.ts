@@ -175,6 +175,122 @@ test("the check holds AA: normal and large text, placeholders, and every form a 
   await page.evaluate(() => document.querySelector("[data-planted]")?.remove());
 });
 
+test("the check reads a marked control's focus from its cells, not an outline", async ({
+  page,
+  context,
+}) => {
+  await fakeBackend(context);
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
+
+  /** What a Tab finds at six planted cells, healthy unless `options` says otherwise. */
+  const atPlanted = async (options: {
+    control?: "input" | "button";
+    marked?: boolean;
+    cells?: number;
+    strong?: readonly number[];
+    focused?: string;
+    keepsFocusLook?: boolean;
+    outline?: string;
+    background?: string;
+    box?: string;
+    hidden?: boolean;
+  }) => {
+    await page.evaluate(
+      ({
+        control = "input",
+        marked = true,
+        cells = 6,
+        strong = [0],
+        focused = "var(--ring)",
+        keepsFocusLook = false,
+        outline = "none",
+        background = "transparent",
+        box = "var(--card)",
+        hidden = false,
+      }) => {
+        document.querySelector("[data-planted]")?.remove();
+        const holder = document.createElement("div");
+        holder.dataset.planted = "yes";
+        holder.dataset.slot = "code-boxes";
+        Object.assign(holder.style, {
+          position: "fixed",
+          top: "0",
+          left: "0",
+          width: "400px",
+          height: "48px",
+          padding: "8px",
+          display: "flex",
+          gap: "8px",
+          background: box,
+        });
+        const looks = [...Array(cells).keys()].map((index) => {
+          const cell = document.createElement("div");
+          cell.dataset.slot = "code-cell";
+          Object.assign(cell.style, {
+            width: "40px",
+            boxSizing: "border-box",
+            border: "1px solid var(--input)",
+          });
+          if (hidden && index === 1) {
+            cell.style.display = "none";
+          }
+          holder.append(cell);
+          return { cell, index };
+        });
+        const field = document.createElement(control);
+        field.setAttribute("aria-label", "Planted");
+        if (marked) {
+          field.dataset.focusIndicator = "cells";
+        }
+        Object.assign(field.style, {
+          position: "absolute",
+          inset: "0",
+          background,
+          outline,
+          color: "var(--foreground)",
+        });
+        const show = () => {
+          for (const { cell, index } of looks) {
+            cell.style.borderColor = focused;
+            cell.style.borderWidth = strong.includes(index) ? "2px" : "1px";
+          }
+        };
+        const hide = () => {
+          for (const { cell } of looks) {
+            cell.style.borderColor = "var(--input)";
+            cell.style.borderWidth = "1px";
+          }
+        };
+        field.addEventListener("focus", show);
+        field.addEventListener("blur", keepsFocusLook ? show : hide);
+        holder.append(field);
+        document.body.append(holder);
+      },
+      options,
+    );
+    return (await focusProblems(page)).filter((problem) => problem.includes("Planted"));
+  };
+  const fails = (text: string) => [expect.stringContaining(text)];
+
+  expect(await atPlanted({})).toEqual([]);
+  // `--input` holds 3:1 on a card, so a plain ratio would pass this.
+  expect(await atPlanted({ focused: "var(--input)" })).toEqual(fails("isn't on --ring"));
+  expect(await atPlanted({ strong: [] })).toEqual(fails("0 stronger cells"));
+  expect(await atPlanted({ strong: [0, 1] })).toEqual(fails("2 stronger cells"));
+  expect(await atPlanted({ cells: 0 })).toEqual(fails("0 cells"));
+  expect(await atPlanted({ cells: 5 })).toEqual(fails("5 cells"));
+  expect(await atPlanted({ outline: "2px solid var(--ring)" })).toEqual(fails("an outline"));
+  expect(await atPlanted({ outline: "auto" })).toEqual(fails("an outline"));
+  expect(await atPlanted({ control: "button", cells: 0 })).toEqual(fails("0 cells"));
+  expect(await atPlanted({ marked: false, outline: "" })).toEqual(fails("no marker"));
+  expect(await atPlanted({ keepsFocusLook: true })).toEqual(fails("the same without the focus"));
+  expect(await atPlanted({ background: "#fff" })).toEqual(fails("hides its cells"));
+  expect(await atPlanted({ hidden: true })).toEqual(fails("isn't shown"));
+  expect(await atPlanted({ box: "var(--ring)" })).toEqual(fails("at 1:1"));
+  await page.evaluate(() => document.querySelector("[data-planted]")?.remove());
+});
+
 test("the check holds each focus stop's outline, and walks the whole page", async ({
   page,
   context,

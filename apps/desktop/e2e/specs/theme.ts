@@ -25,9 +25,9 @@ export function walked(page: Page, floors: Floors): Promise<Walked> {
 }
 
 /**
- * Tabs through every focusable control on the page, holding each stop's outline at 3:1, and leaves
- * the page as it was. Answers what's wrong: a low or missing outline, a trap, a tabbable it never
- * reached, a cap it hit, or a change to the row.
+ * Tabs through every focusable control on the page, holding each stop's outline, or a marked stop's
+ * cells, at 3:1, and leaves the page as it was. Answers what's wrong: a low or missing indicator, a
+ * trap, a tabbable it never reached, a cap it hit, or a change to the row.
  */
 export async function focusProblems(page: Page): Promise<readonly string[]> {
   const problems: string[] = [];
@@ -45,7 +45,7 @@ export async function focusProblems(page: Page): Promise<readonly string[]> {
     problems.push(`the Tab walk passed its cap of ${tabbables + 20} stops`);
   }
   const end = await asked<TabEnd>(page, { kind: "tabEnd" });
-  return [...problems, ...end.missed, ...end.changed];
+  return [...problems, ...end.missed, ...end.changed, ...end.unchanged];
 }
 
 /** What a theme is called in the media query and in `<html>`'s class. */

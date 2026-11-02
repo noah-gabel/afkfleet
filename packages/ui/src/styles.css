@@ -201,9 +201,10 @@
  * Every focus stop's indicator, at 3:1 against what's behind it (ADR-0020, S107). It's outside
  * every layer on purpose: utilities and sonner's `outline: none` can't beat it, so no component
  * draws its own, and the sweep reads this outline alone. A heading that takes the focus by script
- * (`tabindex="-1"`) stays plain.
+ * (`tabindex="-1"`) stays plain, and a control marked `data-focus-indicator="cells"` shows its focus
+ * in its cells, which the sweep reads instead (U103, S121).
  */
-:focus-visible:not([tabindex="-1"]) {
+:focus-visible:not([tabindex="-1"], [data-focus-indicator="cells"]) {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }

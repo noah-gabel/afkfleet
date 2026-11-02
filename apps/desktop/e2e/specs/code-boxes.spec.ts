@@ -4,9 +4,10 @@
 
 import type { Page } from "@playwright/test";
 
-import { OWNER } from "../fake/backend";
+import { NEW_USER, OWNER } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
 import { expectHome, logIn } from "./steps";
+import { bothThemes } from "./theme";
 
 /** The Owner at the code step: the boxes, with the keyboard already in them. */
 async function atCode(page: Page, context: Parameters<typeof fakeBackend>[0]) {
@@ -133,4 +134,77 @@ test("a wrong code clears them, keeps the focus and counts the try", async ({ pa
   await expect(page.getByText("Wrong code. 2 tries left.")).toBeVisible();
   await expect(boxes).toHaveValue("");
   await expect(boxes).toBeFocused();
+});
+
+/** What the cells show now: each one's border, and where each one sits. */
+function cellsRead(page: Page) {
+  return page.evaluate(() => {
+    const probe = document.createElement("div");
+    probe.style.color = "var(--ring)";
+    document.body.append(probe);
+    const ring = getComputedStyle(probe).color;
+    probe.remove();
+    return [...document.querySelectorAll("[data-slot=code-cell]")].map((cell) => {
+      const style = getComputedStyle(cell);
+      const box = cell.getBoundingClientRect();
+      return {
+        ring: style.borderTopColor === ring,
+        width: style.borderTopWidth,
+        box: [box.left, box.top, box.width, box.height],
+      };
+    });
+  });
+}
+
+/** Which cell is marked: the one with the thicker border. */
+const strongOf = (cells: readonly { width: string }[]) =>
+  cells.flatMap((cell, index) => (cell.width === "2px" ? [index] : []));
+
+for (const [step, user] of [
+  ["the code step", OWNER],
+  ["the setup step", NEW_USER],
+] as const) {
+  test(`${step}: a click shows the focus in the cells, no outline around the field`, async ({
+    page,
+    context,
+  }) => {
+    await fakeBackend(context);
+    await page.goto("/");
+    await logIn(page, user);
+    const boxes = page.getByLabel("Code");
+    await expect(boxes).toBeEditable();
+    await boxes.blur();
+    const before = await cellsRead(page);
+    expect(before.map((cell) => cell.ring)).toEqual(Array(6).fill(false));
+    expect(strongOf(before)).toEqual([]);
+
+    await boxes.click();
+
+    await expect(boxes).toHaveCSS("outline-style", "none");
+    const focused = await cellsRead(page);
+    expect(focused.map((cell) => cell.ring)).toEqual(Array(6).fill(true));
+    expect(strongOf(focused)).toEqual([0]);
+    expect(focused.map((cell) => cell.box)).toEqual(before.map((cell) => cell.box));
+
+    await page.keyboard.type("12");
+
+    expect(strongOf(await cellsRead(page))).toEqual([2]);
+    await page.keyboard.press("Backspace");
+    expect(strongOf(await cellsRead(page))).toEqual([1]);
+  });
+}
+
+test("all six digits, held, keep the last cell marked and hold in both themes", async ({
+  page,
+  context,
+}) => {
+  const { backend, boxes } = await atCode(page, context);
+  backend.hold("login_mfa");
+
+  await page.keyboard.type("123456");
+  await expect(boxes).toHaveValue("123456");
+
+  expect(strongOf(await cellsRead(page))).toEqual([5]);
+  await bothThemes(page, "the code step, all six, held");
+  backend.release();
 });

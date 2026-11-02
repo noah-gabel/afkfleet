@@ -8,6 +8,11 @@
 // down to digits: a recovery code holds some, and they could add up to six.
 //
 // `locked` makes it read-only rather than disabled, which would drop the focus.
+//
+// The field is wider than the cells, so an outline around it would draw a box bigger than they are.
+// So it's marked `data-focus-indicator="cells"`, which styles.css's one focus rule leaves alone, and
+// the focus shows in the cells: all six on `--ring`, and the one the next digit goes to thicker, as
+// the colour alone changes by under 3:1 (ADR-0020, U103, S121). The sweep reads them through the mark.
 
 import { cn } from "cn";
 import type { ClipboardEvent, Ref } from "react";
@@ -84,15 +89,15 @@ export function CodeBoxes({
   };
 
   return (
-    <div className="group relative mx-auto h-12 w-82 max-w-full">
+    <div data-slot="code-boxes" className="group relative mx-auto h-12 w-82 max-w-full">
       <div aria-hidden className="absolute inset-y-0 left-6 flex gap-2">
         {CELLS.map((cell) => (
           <div
             key={cell}
             data-slot="code-cell"
             className={cn(
-              "w-10 rounded-lg border border-input",
-              cell === Math.min(value.length, CODE_DIGITS - 1) && "group-focus-within:border-ring",
+              "w-10 rounded-lg border border-input group-focus-within:border-ring",
+              cell === Math.min(value.length, CODE_DIGITS - 1) && "group-focus-within:border-2",
             )}
           />
         ))}
@@ -105,11 +110,12 @@ export function CodeBoxes({
         inputMode="numeric"
         autoComplete="one-time-code"
         spellCheck={false}
+        data-focus-indicator="cells"
         readOnly={locked}
         value={value}
         onChange={(event) => onInput(event.target.value, true)}
         onPaste={onPaste}
-        className="absolute inset-0 size-full rounded-lg bg-transparent pl-[calc(1.5rem+(2.5rem-1ch)/2)] font-mono text-xl text-foreground [letter-spacing:calc(3rem-1ch)]"
+        className="absolute inset-0 size-full rounded-lg bg-transparent outline-none pl-[calc(1.5rem+(2.5rem-1ch)/2)] font-mono text-xl text-foreground [letter-spacing:calc(3rem-1ch)]"
       />
     </div>
   );
