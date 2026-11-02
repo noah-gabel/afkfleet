@@ -1,6 +1,14 @@
 // Tests for app-check.mjs. Run with `just scripts-test`.
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -40,6 +48,28 @@ describe("identifierProblem", () => {
     assert.match(identifierProblem(Buffer.from("nothing here"), CHECK, REAL) ?? "", /check/);
   });
 
+  it("refuses identifiers the count rule can't read: the check one must extend the real one", () => {
+    const one = (check, real) => identifierProblem(Buffer.from(`${check} ${real}`), check, real);
+
+    // One of each counts equal, so without the premise an exe holding both would pass.
+    assert.match(one("io.other.check", REAL) ?? "", /must start with/);
+    assert.match(one(`${REAL}check`, REAL) ?? "", /must start with/);
+    assert.match(one(REAL, REAL) ?? "", /must start with/);
+  });
+
+  it("holds for the app's own two identifiers", () => {
+    const identifierIn = (name) =>
+      JSON.parse(
+        readFileSync(new URL(`../apps/desktop/src-tauri/${name}`, import.meta.url), "utf8"),
+      ).identifier;
+    const check = identifierIn("tauri.check.conf.json");
+
+    assert.equal(
+      identifierProblem(Buffer.from(check), check, identifierIn("tauri.conf.json")),
+      null,
+    );
+  });
+
   it("refuses an exe with both, as the real one could still be what runs", () => {
     assert.match(identifierProblem(Buffer.from(`${CHECK} ${REAL}main`), CHECK, REAL) ?? "", /real/);
   });
@@ -54,6 +84,33 @@ describe("adoptCheckExe", () => {
     assert.equal(readFileSync(dest, "utf8"), `aa${CHECK}bb`);
     assert.ok(existsSync(source));
     assert.deepEqual(readdirSync(path.dirname(dest)), ["check.exe"]);
+  });
+
+  it("leaves another run's part files alone: each run has its own", (t) => {
+    const { source, dest } = setUp(t, `aa${CHECK}bb`);
+    mkdirSync(path.dirname(dest), { recursive: true });
+    const others = [`${dest}.part`, `${dest}.1.part`];
+    for (const other of others) {
+      writeFileSync(other, "another run's");
+    }
+
+    assert.equal(adoptCheckExe({ source, dest, check: CHECK, real: REAL }), null);
+
+    assert.equal(readFileSync(dest, "utf8"), `aa${CHECK}bb`);
+    for (const other of others) {
+      assert.equal(readFileSync(other, "utf8"), "another run's");
+    }
+  });
+
+  it("leaves no part file when the copy itself fails", (t) => {
+    const { dir, dest } = setUp(t, undefined);
+    // A folder exists but can't be copied as a file.
+    const source = path.join(dir, "a-folder.exe");
+    mkdirSync(source);
+
+    assert.throws(() => adoptCheckExe({ source, dest, check: CHECK, real: REAL }));
+
+    assert.deepEqual(readdirSync(path.dirname(dest)), []);
   });
 
   it("replaces an older copy", (t) => {

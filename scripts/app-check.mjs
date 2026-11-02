@@ -33,9 +33,13 @@ function count(bytes, needle) {
 /**
  * What's wrong with an exe holding `bytes`, or null. The real identifier is a prefix of the check
  * one, so each of its appearances must be the start of a check one: anything more means the build
- * also holds the real one, and a plain search couldn't tell.
+ * also holds the real one, and a plain search couldn't tell. That rests on the prefix, so it's
+ * required: between unrelated identifiers, one of each would count equal and pass.
  */
 export function identifierProblem(bytes, check, real) {
+  if (!check.startsWith(`${real}.`)) {
+    return `the check identifier ${check} must start with the real one, ${real}, and a dot`;
+  }
   const checks = count(bytes, check);
   if (checks === 0) {
     return `it doesn't hold the check identifier ${check}`;
@@ -48,24 +52,27 @@ export function identifierProblem(bytes, check, real) {
 
 /**
  * Copies the check build at `source` to `dest`; a message if it can't be, and nothing at `dest`
- * then. `.part` holds the copy while it's checked, so `dest` only ever holds a checked exe.
+ * then. A part file of this run's own holds the copy while it's checked, so `dest` only ever holds
+ * a checked exe and two runs can't take each other's.
  */
 export function adoptCheckExe({ source, dest, check, real }) {
-  const part = `${dest}.part`;
+  const part = `${dest}.${process.pid}.part`;
   mkdirSync(path.dirname(dest), { recursive: true });
   rmSync(dest, { force: true });
-  rmSync(part, { force: true });
   if (!existsSync(source)) {
     return `there's no build at ${source}`;
   }
-  copyFileSync(source, part);
-  const problem = identifierProblem(readFileSync(part), check, real);
-  if (problem !== null) {
+  try {
+    copyFileSync(source, part);
+    const problem = identifierProblem(readFileSync(part), check, real);
+    if (problem !== null) {
+      return `refusing ${source}, wrong identifier: ${problem}`;
+    }
+    renameSync(part, dest);
+    return null;
+  } finally {
     rmSync(part, { force: true });
-    return `refusing ${source}, wrong identifier: ${problem}`;
   }
-  renameSync(part, dest);
-  return null;
 }
 
 function main() {
