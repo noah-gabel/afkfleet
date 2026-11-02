@@ -1,6 +1,6 @@
 // The frame in a small window (Plan.md P11.11; ADR-0020, U91, S101, S102, S106), in Edge, as a
 // Vitest has no layout: the app's minimum window holds the whole sidebar with the banner up, it
-// collapses at 1000 px with every name kept, and a tooltip isn't clipped.
+// collapses under 1056 px with every name kept (U113), and a tooltip isn't clipped.
 
 import { readFileSync } from "node:fs";
 
@@ -44,11 +44,11 @@ test("the minimum window holds the whole sidebar, a certificate banner up", asyn
   await expect(banner.getByRole("button", { name: "Server settings" })).toBeVisible();
 
   // The minimum window collapses the sidebar; the widest one at that height is its tallest form.
-  for (const width of [main.minWidth, 1000]) {
+  for (const width of [main.minWidth, 1056]) {
     await page.setViewportSize({ width, height: main.minHeight });
     await expect
       .poll(async () => (await sidebar(page).boundingBox())?.width)
-      .toBe(width < 1000 ? 64 : 208);
+      .toBe(width < 1056 ? 64 : 208);
 
     await expect(nav(page).getByRole("link", { name: "Audit log" })).toBeInViewport({ ratio: 1 });
     await expect(page.getByRole("button", { name: "Log out" })).toBeInViewport({ ratio: 1 });
@@ -234,17 +234,17 @@ test("the banner runs the window's full width when signed out", async ({ page, c
   expect((await banner.boundingBox())?.x).toBe(0);
 });
 
-test("the sidebar collapses under 1000 px, keeping each name and showing initials", async ({
+test("the sidebar collapses under 1056 px, keeping each name and showing initials", async ({
   page,
   context,
 }) => {
   await signedIn(page, context);
 
-  await page.setViewportSize({ width: 1000, height: 700 });
+  await page.setViewportSize({ width: 1056, height: 700 });
   await expect.poll(async () => (await sidebar(page).boundingBox())?.width).toBe(208);
   await expect(page.getByRole("group", { name: "Account" }).getByText(OWNER)).toBeVisible();
 
-  await page.setViewportSize({ width: 999, height: 700 });
+  await page.setViewportSize({ width: 1055, height: 700 });
   await expect.poll(async () => (await sidebar(page).boundingBox())?.width).toBe(64);
 
   for (const name of [

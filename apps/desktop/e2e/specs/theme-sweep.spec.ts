@@ -640,6 +640,70 @@ test("Home, its bots in every status, and a bot's screen", async ({ page, contex
   await expect(failed).toBeVisible();
 });
 
+test("a bot's console in every look, and its screen stacked and loading", async ({
+  page,
+  context,
+}) => {
+  const backend = await fakeBackend(context);
+  backend.addAccount(OWNER);
+  backend.addAccount(OWNER);
+  const at = new Date().toISOString();
+  const line = {
+    at,
+    direction: "in",
+    truncated: false,
+    arguments_hidden: false,
+    mine: false,
+  } as const;
+  backend.addChat("AfkBot1", { ...line, kind: "system", text: "The server said something" });
+  backend.addChat("AfkBot1", { ...line, kind: "chat", text: "hi", sender: { name: "Steve" } });
+  backend.addChat("AfkBot1", {
+    ...line,
+    kind: "system",
+    text: "[x] Notch : hi",
+    parsed_sender: "Notch",
+  });
+  backend.addChat("AfkBot1", { ...line, direction: "out", kind: "mode", text: "/spawn" });
+  backend.addChat("AfkBot1", { ...line, direction: "out", kind: "user", text: "mine", mine: true });
+  backend.addChat("AfkBot1", {
+    ...line,
+    direction: "out",
+    kind: "user",
+    text: "/login",
+    arguments_hidden: true,
+    truncated: true,
+  });
+  backend.setBot("AfkBot1", {
+    desiredState: "running",
+    status: { kind: "reported", state: "online" },
+  });
+  await signIn(page, backend, OWNER);
+  await page.getByRole("link", { name: "Open AfkBot1" }).click();
+  const chat = page.getByRole("main").getByRole("region", { name: "Chat" });
+  await expect(chat.getByText("The server said something")).toBeVisible();
+  await bothThemes(page, "a bot's console, every sender's look");
+
+  backend.chatOutcome = "pending";
+  await chat.getByLabel("Message or /command").fill("Still on its way");
+  await chat.getByRole("button", { name: "Send" }).click();
+  await expect(chat.getByLabel("Message or /command")).toHaveValue("");
+  await bothThemes(page, "a bot's console, a pending mark");
+
+  await page.setViewportSize({ width: 800, height: 600 });
+  await expect(chat.getByText("The server said something")).toBeAttached();
+  await bothThemes(page, "a bot's screen, stacked");
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  // A bot this sign-in hasn't read yet, its read held.
+  await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Home" }).click();
+  backend.hold("bot");
+  await page.getByRole("link", { name: "Open AfkBot2" }).click();
+  await expect(page.getByText("Loading bot…")).toBeVisible();
+  await bothThemes(page, "a bot, loading");
+  backend.release();
+  await expect(page.getByRole("heading", { name: "AfkBot2", level: 1 })).toBeVisible();
+});
+
 test("a card's Start, its refusal and its wait", async ({ page, context }) => {
   const backend = await fakeBackend(context);
   backend.addAccount(OWNER);

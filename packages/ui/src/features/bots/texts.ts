@@ -27,6 +27,8 @@ export const NO_BOTS = "No bots yet. Every Minecraft account you link gets one."
 export const LINK_AN_ACCOUNT = "Link an account";
 /** Home while the bots load. */
 export const LOADING_BOTS = "Loading bots…";
+/** A bot's screen while it loads. */
+export const LOADING_BOT = "Loading bot…";
 /** A bot's screen when its read answers 404. */
 export const BOT_NOT_FOUND = "This bot doesn't exist, or you can't see it.";
 /** A bot's mode the viewer can't see: another user's private mode (S68). */

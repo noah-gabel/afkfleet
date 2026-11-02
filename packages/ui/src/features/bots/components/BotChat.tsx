@@ -1,5 +1,6 @@
-// A bot's chat console (Plan.md P11.9; ADR-0020, U39, U43, U44, U49, S7, S9, S11, S70), the
-// right column of its screen, filling its height.
+// A bot's chat console (Plan.md P11.9, P11.11; ADR-0020, U39, U43, U44, U49, U92, S7, S9, S11, S70),
+// the right column of its screen, filling its height, in its own tokens and the mono font: light in
+// light mode, dark in dark. It's 70 % of the window's height when the screen stacks (U105).
 //
 // - **The history** (`useChat`, a cached query, U34) in the API's order, which is the
 //   server's commit order (U5): never sorted by time. Newest at the bottom; "Show older" on
@@ -21,7 +22,6 @@ import { type ChatMark, marks } from "../../../api/chatOutcomes";
 import { describeError } from "../../../api/describeError";
 import { useChat, useChatOutcomes } from "../../../api/queries";
 import { useLive } from "../../../app/context";
-import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import type { BotResponse } from "../../../generated/BotResponse";
 import type { ChatLine } from "../../../generated/ChatLine";
@@ -98,9 +98,11 @@ export function BotChat({ bot, children }: { bot: BotResponse; children?: ReactN
   return (
     <section
       aria-label={CHAT.heading}
-      className="flex h-[70dvh] min-h-96 flex-col gap-3 lg:h-[calc(100dvh-8rem)]"
+      className="flex h-[70dvh] min-h-96 min-w-0 flex-col gap-2 @min-[53rem]/content:h-full"
     >
-      <h2 className="text-lg font-semibold">{CHAT.heading}</h2>
+      <h2 className="font-mono text-[0.6875rem] font-semibold tracking-wider text-muted-foreground uppercase">
+        {CHAT.heading}
+      </h2>
       {chat.isPending ? <p className="text-sm text-muted-foreground">{CHAT.loading}</p> : null}
       {failure !== null && chat.data === undefined ? (
         <p role="alert" className="text-sm text-destructive">
@@ -112,7 +114,7 @@ export function BotChat({ bot, children }: { bot: BotResponse; children?: ReactN
           ref={box}
           role="log"
           aria-label={CHAT.heading}
-          className="min-h-0 flex-1 overflow-y-auto rounded-md border p-3"
+          className="min-h-0 flex-1 overflow-y-auto rounded-lg border bg-console-bg p-3 font-mono text-console-fg"
           onScroll={(event) => {
             const list = event.currentTarget;
             following.current =
@@ -136,9 +138,9 @@ export function BotChat({ bot, children }: { bot: BotResponse; children?: ReactN
                 {CHAT.older}
               </Button>
             ) : lines.length > 0 ? (
-              <p className="text-muted-foreground">{CHAT.noOlder}</p>
+              <p className="text-console-muted">{CHAT.noOlder}</p>
             ) : (
-              <p className="text-muted-foreground">{CHAT.empty}</p>
+              <p className="text-console-muted">{CHAT.empty}</p>
             )}
           </div>
           <ol className="grid grid-cols-[auto_auto_minmax(0,1fr)] gap-x-2 gap-y-2">
@@ -177,11 +179,11 @@ function Line({
     <li
       className={cn(
         "col-span-3 grid grid-cols-subgrid items-baseline text-sm",
-        sender.look === "server" && "italic text-muted-foreground",
-        line.mine && "border-l-2 border-primary pl-2",
+        sender.look === "server" && "italic text-console-muted",
+        line.mine && "border-l-2 border-console-accent pl-2",
       )}
     >
-      <time dateTime={line.at} title={time.full} className="text-xs text-muted-foreground">
+      <time dateTime={line.at} title={time.full} className="text-xs text-console-muted">
         {time.shown}
       </time>
       <SenderCell sender={sender} />
@@ -190,7 +192,7 @@ function Line({
           {line.text}
         </span>
         {lineNotes(line).map((note) => (
-          <span key={note} className="ml-2 text-xs text-muted-foreground">
+          <span key={note} className="ml-2 text-xs text-console-muted">
             {note}
           </span>
         ))}
@@ -198,7 +200,7 @@ function Line({
           <span
             className={cn(
               "ml-2 text-xs",
-              mark.kind === "failed" ? "text-destructive" : "text-muted-foreground",
+              mark.kind === "failed" ? "text-destructive" : "text-console-muted",
             )}
           >
             {markText(mark)}
@@ -213,7 +215,7 @@ function Line({
 function SenderCell({ sender }: { sender: Sender }) {
   switch (sender.look) {
     case "player":
-      return <Capped className="font-medium text-primary" label={sender.label} />;
+      return <Capped className="font-semibold text-console-accent" label={sender.label} />;
     case "server":
       return <Capped label={sender.label} />;
     case "parsed":
@@ -222,24 +224,24 @@ function SenderCell({ sender }: { sender: Sender }) {
       return (
         <span className="flex min-w-0 items-baseline gap-1">
           <span title={CHAT.parsedMark} className="shrink-0 self-center">
-            <ScanTextIcon aria-hidden className="size-3.5 text-muted-foreground" />
+            <ScanTextIcon aria-hidden className="size-3.5 text-console-muted" />
             <span className="sr-only">{CHAT.parsedMark}</span>
           </span>
-          <Capped className="font-medium text-foreground" label={sender.label} />
+          <Capped className="font-semibold text-console-fg" label={sender.label} />
         </span>
       );
     case "mode":
       return (
-        <span className="flex min-w-0 items-baseline gap-1 font-medium">
-          <Badge variant="outline" className="px-1.5 py-0 text-xs font-normal">
+        <span className="flex min-w-0 items-baseline gap-1 font-semibold">
+          <span className="rounded-sm border border-console-muted px-1 text-[0.6875rem] font-normal">
             {CHAT.modeTag}
-          </Badge>
+          </span>
           <Capped label={sender.label} />
         </span>
       );
     case "user":
       return (
-        <span className="min-w-0 font-medium">
+        <span className="min-w-0 font-semibold">
           <span className="sr-only">{sender.asked}</span>
           <Capped label={sender.label} hidden />
         </span>

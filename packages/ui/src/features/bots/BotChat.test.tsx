@@ -282,7 +282,7 @@ describe("the chat console's look (PR #77's review)", () => {
     for (const text of ["AfkBot2 joined the game", "Restart in 5 minutes"]) {
       const item = (await screen.findByText(text)).closest("li");
       expect(item?.className).toContain("italic");
-      expect(item?.className).toContain("text-muted-foreground");
+      expect(item?.className).toContain("text-console-muted");
     }
   });
 
@@ -302,16 +302,18 @@ describe("the chat console's look (PR #77's review)", () => {
     const marked = label.closest("[title]");
 
     expect(matched?.className).not.toContain("italic");
-    expect(matched?.className).not.toContain("text-muted-foreground");
+    expect(matched?.className).not.toContain("text-console-muted");
     expect(marked?.getAttribute("title")).toBe(mark);
     expect(marked?.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
     expect(label.className).toContain("sr-only");
     expect(name.contains(label)).toBe(false);
     expect(name.className).toContain("truncate");
-    expect(name.className).toContain("font-medium");
-    expect(name.className).not.toContain("text-primary");
+    expect(name.className).toContain("font-semibold");
+    expect(name.className).not.toContain("text-console-accent");
     expect(name.getAttribute("title")).toBe("Notch");
-    expect(within(screen.getByRole("log")).getByText("Steve").className).toContain("text-primary");
+    expect(within(screen.getByRole("log")).getByText("Steve").className).toContain(
+      "text-console-accent",
+    );
     const unmatched = screen.getByText("Server restarting soon").closest("li");
     expect(unmatched?.className).toContain("italic");
     expect(within(unmatched as HTMLElement).getByText("Server")).toBeDefined();

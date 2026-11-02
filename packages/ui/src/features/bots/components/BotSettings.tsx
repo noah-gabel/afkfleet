@@ -28,6 +28,7 @@ import { FormField } from "../../../components/FormField";
 import { NativeSelect } from "../../../components/NativeSelect";
 import { RetryWaitMessage } from "../../../components/RetryWaitMessage";
 import { Button } from "../../../components/ui/button";
+import { Card } from "../../../components/ui/card";
 import { Input } from "../../../components/ui/input";
 import type { BotPatchRequest } from "../../../generated/BotPatchRequest";
 import type { BotResponse } from "../../../generated/BotResponse";
@@ -54,12 +55,14 @@ export function BotSettings({ bot }: { bot: BotResponse }) {
     return null;
   }
   return (
-    <section aria-labelledby={headingId} className="flex flex-col gap-4">
-      <h2 id={headingId} className="text-lg font-semibold">
-        {SETTINGS.heading}
-      </h2>
-      {actions.chooseMode ? <ModeSetting bot={bot} actions={actions} /> : null}
-      {actions.configure ? <ServerSetting bot={bot} /> : null}
+    <section aria-labelledby={headingId}>
+      <Card className="gap-3 p-3">
+        <h2 id={headingId} className="text-base font-semibold">
+          {SETTINGS.heading}
+        </h2>
+        {actions.chooseMode ? <ModeSetting bot={bot} actions={actions} /> : null}
+        {actions.configure ? <ServerSetting bot={bot} /> : null}
+      </Card>
     </section>
   );
 }
@@ -79,7 +82,7 @@ function ModeSetting({ bot, actions }: { bot: BotResponse; actions: BotActions }
   if (typeof known === "string") {
     return (
       <div className="flex flex-col gap-1.5 text-sm">
-        <span className="font-medium">{SETTINGS.mode}</span>
+        <span className="font-semibold">{SETTINGS.mode}</span>
         <span className="text-muted-foreground">{modeLabel(bot.mode_id, known)}</span>
       </div>
     );
@@ -132,7 +135,7 @@ function ModeSetting({ bot, actions }: { bot: BotResponse; actions: BotActions }
 
   return (
     <div className="flex flex-col gap-1.5">
-      <label htmlFor={id} className="text-sm font-medium">
+      <label htmlFor={id} className="text-sm font-semibold">
         {SETTINGS.mode}
       </label>
       <div className="flex flex-wrap items-center gap-3">
@@ -234,9 +237,13 @@ function ServerSetting({ bot }: { bot: BotResponse }) {
   if (!editing) {
     return (
       <div className="flex flex-col gap-1.5 text-sm">
-        <span className="font-medium">{SETTINGS.server}</span>
+        <span className="font-semibold">{SETTINGS.server}</span>
         <div className="flex flex-wrap items-center gap-3">
-          <span className={bot.server_address === undefined ? "text-muted-foreground" : ""}>
+          <span
+            className={
+              bot.server_address === undefined ? "text-muted-foreground" : "font-mono break-all"
+            }
+          >
             {bot.server_address ?? SETTINGS.notSet}
           </span>
           <Button
