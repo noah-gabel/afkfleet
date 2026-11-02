@@ -608,7 +608,8 @@ test("Home, its bots in every status, and a bot's screen", async ({ page, contex
   await page.getByRole("link", { name: "Open AfkBot1" }).click();
   const chat = main.getByRole("region", { name: "Chat" });
   await expect(chat.getByText("Hello from the server")).toBeVisible();
-  await bothThemes(page, "a bot, its chat");
+  await expect(page.getByRole("button", { name: "Back", exact: true })).toBeVisible();
+  await bothThemes(page, "a bot, its chat, with Back");
 
   await push(page, {
     update: "event",

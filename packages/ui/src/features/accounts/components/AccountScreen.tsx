@@ -2,7 +2,8 @@
 // the viewer may see them, a pending link's note or review, the re-auth prompt, "Who has
 // access" for a Manage holder, then Link again and Delete, and Leave where the server says the
 // viewer may (ADR-0020, U23, S51, U83). Deleting and leaving ask first, then "Confirm it's you" when the
-// server wants it, and go back to the list.
+// server wants it, and go back to the list, replacing this screen's entry, as it's gone (U111); a late
+// answer moves nothing once the user has gone elsewhere.
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
@@ -14,6 +15,7 @@ import { describeError } from "../../../api/describeError";
 import { ACCOUNTS_KEY, BOTS_LIST_KEY, useAccount, useMe } from "../../../api/queries";
 import { Alert, AlertDescription } from "../../../components/ui/alert";
 import { Button } from "../../../components/ui/button";
+import { useAlive } from "../../../hooks/useStepGuard";
 import { isStepUpRequired } from "../../../lib/stepUp";
 import { formatTime } from "../../../lib/time";
 import { StepUpPrompt } from "../../admin/components/StepUpPrompt";
@@ -52,7 +54,6 @@ export function AccountScreen({ id }: { id: string }) {
     return (
       <main className="flex max-w-3xl flex-col gap-4 p-6">
         <p role="alert">{error.api?.status === 404 ? NOT_FOUND : describeError(error)}</p>
-        <BackLink />
       </main>
     );
   }
@@ -92,7 +93,7 @@ export function AccountScreen({ id }: { id: string }) {
         <ReviewActions
           account={data}
           writes={writes}
-          onGone={() => void navigate({ to: "/accounts" })}
+          onGone={() => void navigate({ to: "/accounts", replace: true })}
         />
       ) : null}
       <ReauthPrompt account={data} canLinkAgain={actions.linkAgain} place="screen" />
@@ -108,17 +109,7 @@ export function AccountScreen({ id }: { id: string }) {
       </div>
       {actions.delete ? <DeleteAction id={data.id} name={data.name} writes={writes} /> : null}
       {actions.leave ? <LeaveAction id={data.id} name={data.name} writes={writes} /> : null}
-      <BackLink />
     </main>
-  );
-}
-
-/** "Back to accounts". */
-function BackLink() {
-  return (
-    <Button asChild variant="link" className="self-start px-0">
-      <Link to="/accounts">Back to accounts</Link>
-    </Button>
   );
 }
 
@@ -135,6 +126,7 @@ function DeleteAction({
   const api = useApiClient();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const alive = useAlive();
   const [asking, setAsking] = useState(false);
   const key = "delete";
 
@@ -144,7 +136,9 @@ function DeleteAction({
       await api.deleteAccount(id);
       toast.success(deleted(name));
       void queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY });
-      void navigate({ to: "/accounts" });
+      if (alive.current) {
+        void navigate({ to: "/accounts", replace: true });
+      }
     });
   }
 
@@ -204,12 +198,15 @@ function LeaveAction({
   const api = useApiClient();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const alive = useAlive();
   const [asking, setAsking] = useState(false);
   const key = "leave";
 
   /** Goes back first, so the account's own read never answers its 404 on this screen (R179). */
   async function goBack(): Promise<void> {
-    await navigate({ to: "/accounts" });
+    if (alive.current) {
+      await navigate({ to: "/accounts", replace: true });
+    }
     void queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY });
     void queryClient.invalidateQueries({ queryKey: BOTS_LIST_KEY });
   }

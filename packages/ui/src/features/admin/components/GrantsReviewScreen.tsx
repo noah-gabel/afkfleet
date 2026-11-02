@@ -7,7 +7,6 @@
 // Nothing here carries a secret but the step-up's password, which StepUpForm holds. Every answer
 // only reads the lists again (ADR-0020, S87).
 import { useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
 import { Fragment, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -32,7 +31,6 @@ import { accessLabel, NOBODY_ELSE, revoked, revokeQuestion } from "../../account
 import { useStepUpAction } from "../hooks/useStepUpAction";
 import { StepUpPrompt } from "./StepUpPrompt";
 
-const BACK_TO_USERS = "Back to users";
 const HELD_HEADING = "Grants they hold";
 const HELD_NONE = "They hold no grants.";
 const DORMANT =
@@ -449,9 +447,6 @@ export function GrantsReviewScreen({ id }: { id: string }) {
       <h1 className="text-2xl font-semibold tracking-tight break-all">{`Grants of ${who}`}</h1>
       <HeldSection id={id} who={who} revoking={revoking} />
       <SharedSection id={id} revoking={revoking} />
-      <Button asChild variant="link" className="self-start px-0">
-        <Link to="/admin/users">{BACK_TO_USERS}</Link>
-      </Button>
     </main>
   );
 }

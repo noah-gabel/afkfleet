@@ -35,8 +35,6 @@ export const HIDDEN_MODE = "A mode you can't see";
 export const MODE_LOADING = "…";
 /** A mode's name when the modes couldn't be read. */
 export const MODE_FAILED = "Couldn't load the mode";
-/** The link back from a bot's screen. */
-export const BACK_HOME = "Home";
 
 /** The facts' labels, on the cards and on a bot's screen. */
 export const LABEL = {

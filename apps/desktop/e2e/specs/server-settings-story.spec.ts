@@ -38,7 +38,7 @@ test("the Owner adds a server's conflict texts, edits them and deletes them", as
     "You logged in\nfrom another location",
   );
 
-  await main.getByRole("link", { name: "Minecraft servers" }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(entry.getByText("1 conflict text")).toBeVisible();
   await entry.getByRole("link", { name: `Open ${SERVER}` }).click();
   await main.getByRole("button", { name: "Add text" }).click();
@@ -52,7 +52,7 @@ test("the Owner adds a server's conflict texts, edits them and deletes them", as
     "You logged in\nfrom another location",
   );
 
-  await main.getByRole("link", { name: "Minecraft servers" }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(entry.getByText("2 conflict texts")).toBeVisible();
   await entry.getByRole("link", { name: `Open ${SERVER}` }).click();
   await main.getByRole("button", { name: "Delete", exact: true }).click();

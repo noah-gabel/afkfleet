@@ -20,6 +20,8 @@
 // - `record`: the live record (api/liveRecord.ts, S71) that the timeline and the notices
 //   show, which the live layer feeds and clears; and the bot whose screen is open (R109).
 // - `theme`: light or dark, from what this PC remembers and what Windows says (theme.ts, S92).
+// - `back`: whether a step on screen has taken the frame's Back away, as leaving it would lose
+//   what it shows for good (U112).
 import { createStore, type StoreApi } from "zustand/vanilla";
 import {
   acknowledge,
@@ -164,6 +166,14 @@ export interface RecordState {
   clear(): void;
 }
 
+/** The Back control's store; see the module comment. */
+export interface BackState {
+  /** A step on screen has taken Back away. */
+  readonly held: boolean;
+  /** Says whether a step on screen takes Back away. */
+  hold(held: boolean): void;
+}
+
 /** The stores of one App. */
 export interface AppStores {
   readonly session: StoreApi<SessionState>;
@@ -172,6 +182,7 @@ export interface AppStores {
   readonly live: StoreApi<LiveState>;
   readonly record: StoreApi<RecordState>;
   readonly theme: StoreApi<ThemeState>;
+  readonly back: StoreApi<BackState>;
 }
 
 /** Fresh stores for one App. */
@@ -179,6 +190,12 @@ export function createAppStores(): AppStores {
   const choice = readThemeChoice();
   const windows = windowsTheme();
   return {
+    back: createStore<BackState>()((set) => ({
+      held: false,
+      hold(held) {
+        set({ held });
+      },
+    })),
     theme: createStore<ThemeState>()((set, get) => ({
       choice,
       windows,

@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiClient } from "../../api/ApiClient";
@@ -239,8 +239,8 @@ describe("a bot's screen", () => {
     });
 
     expect(await screen.findByText(BOT_NOT_FOUND)).toBeDefined();
-    await app.user.click(within(screen.getByRole("main")).getByRole("link", { name: "Home" }));
-    expect(app.path()).toBe("/home");
+    await app.user.click(screen.getByRole("button", { name: "Back" }));
+    await waitFor(() => expect(app.path()).toBe("/home"));
   });
 
   it("says so when the bot goes while its screen is open", async () => {

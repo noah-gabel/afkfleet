@@ -103,7 +103,7 @@ test("the Owner promotes a Member and reviews their grants, revoking one", async
   await held.getByRole("button", { name: `Revoke ${MEMBER}'s access to AfkBot1` }).click();
   await held.getByRole("button", { name: "Revoke", exact: true }).click();
   await expect(held.getByText("They hold no grants.")).toBeVisible();
-  await main.getByRole("link", { name: "Back to users" }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(main.getByRole("heading", { name: "Users", level: 1 })).toBeVisible();
 });
 

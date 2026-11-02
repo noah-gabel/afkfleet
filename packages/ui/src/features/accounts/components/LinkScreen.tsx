@@ -199,7 +199,9 @@ export function LinkScreen({ again }: { again?: string }) {
               Get a code
             </Button>
             <Button asChild variant="outline">
-              <Link to="/accounts">Back to accounts</Link>
+              <Link to="/accounts" replace>
+                Back to accounts
+              </Link>
             </Button>
           </div>
         </>
@@ -255,13 +257,15 @@ export function LinkScreen({ again }: { again?: string }) {
             ) : null}
             {linkedId === undefined ? null : (
               <Button asChild>
-                <Link to="/accounts/$id" params={{ id: linkedId }}>
+                <Link to="/accounts/$id" params={{ id: linkedId }} replace>
                   Open account
                 </Link>
               </Button>
             )}
             <Button asChild variant="outline">
-              <Link to="/accounts">Back to accounts</Link>
+              <Link to="/accounts" replace>
+                Back to accounts
+              </Link>
             </Button>
           </div>
         </>

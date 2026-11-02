@@ -8,6 +8,7 @@ import { useStore } from "zustand";
 import type { ApiClient } from "../api/ApiClient";
 import type {
   AppStores,
+  BackState,
   ConnectionState,
   LiveState,
   NoticesState,
@@ -68,4 +69,9 @@ export function useTheme<T>(select: (state: ThemeState) => T): T {
 /** A value of the live record's store, re-rendering when it changes. */
 export function useRecord<T>(select: (state: RecordState) => T): T {
   return useStore(useAppStores().record, select);
+}
+
+/** A value from the Back control's store. */
+export function useBackHold<T>(select: (state: BackState) => T): T {
+  return useStore(useAppStores().back, select);
 }

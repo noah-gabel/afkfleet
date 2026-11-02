@@ -111,7 +111,7 @@ describe("the notices (U42, R109, R110)", () => {
     );
 
     expect(app.path()).toBe(`/bots/${ID}`);
-    await app.user.click(within(screen.getByRole("main")).getByRole("link", { name: "Home" }));
+    await app.user.click(screen.getByRole("button", { name: "Back" }));
     await screen.findByRole("link", { name: "Open AfkBot1" });
     expect(lines()).toEqual([]);
   });
@@ -126,7 +126,7 @@ describe("the notices (U42, R109, R110)", () => {
     await push(watch, refetch("ready"), botFrame(ONLINE), died());
 
     expect(await screen.findByText("AfkBot1 died.")).toBeDefined();
-    await app.user.click(within(screen.getByRole("main")).getByRole("link", { name: "Home" }));
+    await app.user.click(screen.getByRole("button", { name: "Back" }));
     await screen.findByRole("link", { name: "Open AfkBot1" });
     expect(lines()).toEqual([]);
   });

@@ -135,8 +135,8 @@ describe("an account's screen", () => {
     });
 
     expect(await screen.findByText(NOT_FOUND)).toBeDefined();
-    await app.user.click(screen.getByRole("link", { name: "Back to accounts" }));
-    expect(app.path()).toBe("/accounts");
+    await app.user.click(screen.getByRole("button", { name: "Back" }));
+    await waitFor(() => expect(app.path()).toBe("/home"));
   });
 
   it("says so when the account goes while its screen is open and its read answers 404", async () => {

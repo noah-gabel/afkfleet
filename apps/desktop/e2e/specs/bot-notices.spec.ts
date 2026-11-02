@@ -28,7 +28,7 @@ test("a death toasts, waits on Home until its bot's screen opens, and shows in i
   await line.getByRole("link", { name: "Open" }).click();
   const main = page.getByRole("main");
   await expect(main.getByRole("region", { name: "Timeline" }).getByText("Died")).toBeVisible();
-  await main.getByRole("link", { name: "Home" }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(page.getByRole("link", { name: "Open AfkBot1" })).toBeVisible();
   await expect(line).toHaveCount(0);
 });

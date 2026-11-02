@@ -3,18 +3,16 @@
 // comes into the right one. While it's open, its notices are acknowledged (R109).
 // A read that answers 404 says the bot doesn't exist or can't be seen, also when it goes
 // while its screen is open (a `bot_removed` resets its query, which reads it again, R98).
-import { Link } from "@tanstack/react-router";
 import { useEffect, useId } from "react";
 
 import { toApiError } from "../../../api/ApiError";
 import { describeError } from "../../../api/describeError";
 import { useBot, useModes } from "../../../api/queries";
 import { useRecord } from "../../../app/context";
-import { Button } from "../../../components/ui/button";
 import { useNow } from "../../../hooks/useNow";
 import { botFacts, modesOf, uptimeNextChange } from "../facts";
 import { botActions } from "../permissions";
-import { agentLastSeen, BACK_HOME, BOT_NOT_FOUND } from "../texts";
+import { agentLastSeen, BOT_NOT_FOUND } from "../texts";
 import { BotChat } from "./BotChat";
 import { BotControls } from "./BotControls";
 import { BotState, Facts } from "./BotParts";
@@ -45,7 +43,6 @@ export function BotScreen({ id }: { id: string }) {
     return (
       <main className="flex max-w-3xl flex-col gap-4 p-6">
         <p role="alert">{failure.api?.status === 404 ? BOT_NOT_FOUND : describeError(failure)}</p>
-        <BackLink />
       </main>
     );
   }
@@ -74,18 +71,8 @@ export function BotScreen({ id }: { id: string }) {
         <BotControls bot={data} />
         <BotSettings bot={data} />
         <BotTimeline id={data.id} />
-        <BackLink />
       </section>
       <BotChat bot={data}>{actions.chat ? <ChatSend bot={data} /> : null}</BotChat>
     </main>
-  );
-}
-
-/** Back to Home. */
-function BackLink() {
-  return (
-    <Button asChild variant="link" className="self-start px-0">
-      <Link to="/home">{BACK_HOME}</Link>
-    </Button>
   );
 }

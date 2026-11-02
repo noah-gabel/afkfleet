@@ -982,7 +982,7 @@ describe("a mode that isn't there", () => {
     expect(
       await screen.findByText("This mode doesn't exist any more, or you can't see it."),
     ).toBeDefined();
-    expect(within(screen.getByRole("main")).getByRole("link", { name: "Modes" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Back" })).toBeDefined();
   });
 
   it("says why the modes couldn't be read", async () => {

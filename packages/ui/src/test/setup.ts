@@ -25,3 +25,6 @@ afterEach(() => {
 afterEach(() => {
   assertNoInjectedStyles(document);
 });
+
+// jsdom has no layout, so no Element.scrollTo, which the router calls on the content column (S123).
+Element.prototype.scrollTo = () => {};

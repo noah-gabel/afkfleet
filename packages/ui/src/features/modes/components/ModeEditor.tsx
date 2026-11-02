@@ -83,7 +83,7 @@ import {
   visibilityText,
 } from "../texts";
 import { DeleteMode } from "./DeleteMode";
-import { BackLink, ModeSummary } from "./ModeParts";
+import { ModeSummary } from "./ModeParts";
 import { StepSection } from "./StepSection";
 
 /** The one write's key. */
@@ -436,7 +436,7 @@ export function ModeEditor({
             disabled={writes.running !== null}
             onClick={() => {
               writes.cancel();
-              void navigate({ to: "/modes" });
+              void navigate({ to: "/modes", replace: true });
             }}
           >
             {CANCEL}
@@ -472,7 +472,6 @@ export function ModeEditor({
       {row?.deletable && !gone ? (
         <DeleteMode mode={row} writes={writes} onGone={() => setGoneToSave(true)} />
       ) : null}
-      <BackLink />
     </main>
   );
 }
