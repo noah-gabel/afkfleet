@@ -87,7 +87,11 @@ describe("Tooltip", () => {
     await user.hover(button);
 
     expect(tip()?.className).toContain("pointer-events-none");
-    expect(tip()?.className).not.toMatch(/p[lxa-]?-?d/);
+    expect(
+      tip()
+        ?.className.split(" ")
+        .filter((name) => /^p[lrxy]?-/.test(name)),
+    ).toEqual([]);
   });
 
   it("is seen, not read: the name comes from the control, once", async () => {
