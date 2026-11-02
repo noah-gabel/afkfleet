@@ -205,8 +205,9 @@ export function probe(request: Probe): Walked | number | TabStep | Promise<TabEn
       [middle.x, box.top - out],
       [middle.x, box.bottom + out],
     ];
-    // What floats over the page covers the outline; it isn't what the outline is drawn on.
-    const FLOATING = "[data-sonner-toaster], [data-slot=tooltip]";
+    // A toast covers the outline; it isn't what the outline is drawn on. A tip takes no pointer, so
+    // it's never among these.
+    const FLOATING = "[data-sonner-toaster]";
     let lowest = Number.POSITIVE_INFINITY;
     let lowestOn = element;
     for (const [x, y] of sides) {

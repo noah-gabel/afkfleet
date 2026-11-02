@@ -124,6 +124,7 @@ function Account() {
         <Tooltip
           label={`${user.username}, ${roleLabel(user.role)}`}
           className="min-w-0 flex-1 max-rail:w-full max-rail:flex-none"
+          tipClassName="rail:hidden"
         >
           <Link
             to="/profile"

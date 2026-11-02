@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
@@ -79,18 +79,15 @@ describe("Tooltip", () => {
     expect(document.activeElement).toBe(button);
   });
 
-  it("stays open while the pointer is on the tip itself", async () => {
+  // jsdom has no stylesheet, so this reads the class; frame.spec.ts proves what it does in Edge.
+  it("takes no pointer, and has no padding to bridge a gap, so it can't eat a click", async () => {
     const user = userEvent.setup();
     const button = sample();
 
     await user.hover(button);
-    const held = tip();
-    expect(held).not.toBeNull();
-    await act(async () => {
-      await user.pointer({ target: held as HTMLElement });
-    });
 
-    expect(tip()).not.toBeNull();
+    expect(tip()?.className).toContain("pointer-events-none");
+    expect(tip()?.className).not.toMatch(/p[lxa-]?-?d/);
   });
 
   it("is seen, not read: the name comes from the control, once", async () => {

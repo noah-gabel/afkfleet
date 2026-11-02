@@ -153,6 +153,8 @@ test("a collapsed entry's tooltip shows its name, unclipped; a wide one's doesn'
   await expect(tip).toBeVisible();
   await expect(tip).toHaveText("Home");
   const onTop = await tip.evaluate((held) => {
+    // It takes no pointer, so hit-testing needs it to for this one read.
+    held.style.pointerEvents = "auto";
     const box = held.getBoundingClientRect();
     const hit = document.elementFromPoint(box.right - 2, box.top + box.height / 2);
     return hit !== null && held.contains(hit);
@@ -176,4 +178,100 @@ test("Log out's tooltip shows in the wide form too", async ({ page, context }) =
   await page.getByRole("button", { name: "Log out" }).hover();
 
   await expect(page.locator("[data-slot=tooltip]")).toHaveText("Log out");
+});
+
+for (const [form, width] of [
+  ["wide", 1200],
+  ["collapsed", 900],
+] as const) {
+  test(`in the ${form} sidebar, hovering the box then moving onto Log out, one click logs out`, async ({
+    page,
+    context,
+  }) => {
+    await signedIn(page, context);
+    await page.setViewportSize({ width, height: 700 });
+    const account = page.getByRole("group", { name: "Account" });
+    const center = async (locator: ReturnType<Page["locator"]>) => {
+      const box = await locator.boundingBox();
+      if (box === null) {
+        throw new Error("nothing to hover");
+      }
+      return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    };
+    const box = await center(account.getByRole("link"));
+    const logOut = await center(account.getByRole("button", { name: "Log out" }));
+
+    // The raw mouse: `hover()` and `click()` would wait for a clear shot and hide what a tip covers.
+    await page.mouse.move(box.x, box.y);
+    await page.mouse.move(logOut.x, logOut.y, { steps: 5 });
+    await page.mouse.click(logOut.x, logOut.y);
+
+    await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
+  });
+}
+
+test("the wide box shows its name and role, so it has no tip", async ({ page, context }) => {
+  await signedIn(page, context);
+  await page.setViewportSize({ width: 1200, height: 700 });
+
+  await page.getByRole("group", { name: "Account" }).getByRole("link").hover();
+
+  await expect(page.locator("[data-slot=tooltip]")).toBeHidden();
+});
+
+test("no tip covers a control or takes the pointer, in either form", async ({ page, context }) => {
+  await signedIn(page, context);
+  const tip = page.locator("[data-slot=tooltip]");
+  const account = page.getByRole("group", { name: "Account" });
+
+  for (const [width, height, controls] of [
+    [1200, 700, [account.getByRole("button", { name: "Log out" })]],
+    [
+      main.minWidth,
+      main.minHeight,
+      [
+        nav(page).getByRole("link", { name: "Home", exact: true }),
+        nav(page).getByRole("link", { name: "Audit log", exact: true }),
+        account.getByRole("link"),
+        account.getByRole("button", { name: "Log out" }),
+      ],
+    ],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    for (const control of controls) {
+      await control.hover();
+      await expect(tip).toBeVisible();
+
+      const seen = await tip.evaluate((held) => {
+        const box = held.getBoundingClientRect();
+        const covered = [...document.querySelectorAll("aside a, aside button")].flatMap((other) => {
+          const rect = other.getBoundingClientRect();
+          const apart =
+            rect.right <= box.left ||
+            rect.left >= box.right ||
+            rect.bottom <= box.top ||
+            rect.top >= box.bottom;
+          return apart ? [] : [other.getAttribute("aria-label") ?? other.textContent];
+        });
+        const middle = { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+        const hit = document.elementFromPoint(middle.x, middle.y);
+        return {
+          covered,
+          inWindow:
+            box.left >= 0 &&
+            box.top >= 0 &&
+            box.right <= window.innerWidth &&
+            box.bottom <= window.innerHeight,
+          takesPointer: hit !== null && held.contains(hit),
+          middle,
+        };
+      });
+
+      expect(seen.covered, `at ${width} px`).toEqual([]);
+      expect(seen.inWindow, `at ${width} px`).toBe(true);
+      expect(seen.takesPointer, `at ${width} px`).toBe(false);
+      await page.mouse.move(seen.middle.x, seen.middle.y);
+      await expect(tip).toHaveCount(0);
+    }
+  }
 });

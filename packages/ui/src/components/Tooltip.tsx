@@ -1,10 +1,12 @@
-// A name for a control that shows only an icon (Plan.md P11.11; ADR-0020, S105), since `title` never
-// shows on keyboard focus. It opens on hover and when Tab reaches the control (the Tab's keyup lands
-// there), not on focus as such: a click, a script or the window coming back says nothing about what
-// the user wants named. Escape closes it, and the pointer can rest on the tip itself. It's `fixed`,
-// so a scrolling list can't clip it, placed through React's `style`, which the CSP allows. It's only
-// seen: the control's own name is what's read, once. `className` goes on the box around the control,
-// `tipClassName` on the tip, so a form of the frame can leave the tip out.
+// A name for a control that shows only an icon (Plan.md P11.11; ADR-0020, S105, U102), since `title`
+// never shows on keyboard focus: where the text is on screen, there's no tip. It opens on hover and
+// when Tab reaches the control (the Tab's keyup lands there), not on focus as such: a click, a script
+// or the window coming back says nothing about what the user wants named. Escape closes it. It takes
+// no pointer, so it can never eat a click, and it closes as the pointer leaves the control, before it
+// reaches anything beneath. It's `fixed`, so a scrolling list can't clip it, placed through React's
+// `style`, which the CSP allows. It's only seen: the control's own name is what's read, once.
+// `className` goes on the box around the control, `tipClassName` on the tip, so a form of the frame
+// can leave the tip out.
 //
 // The box listens natively: it only watches what happens to the control inside it, and has no role
 // of its own to give JSX handlers.
@@ -70,11 +72,10 @@ export function Tooltip({
     <span ref={box} className={cn("flex", className)}>
       {children}
       {at === null ? null : (
-        // The transparent padding bridges the gap, so the pointer can reach the tip.
         <span
           data-slot="tooltip"
           aria-hidden="true"
-          className={cn("fixed z-50 -translate-y-1/2 pl-2", tipClassName)}
+          className={cn("pointer-events-none fixed z-50 ml-2 -translate-y-1/2", tipClassName)}
           style={{ left: at.left, top: at.top }}
         >
           <span className="block rounded-md border bg-popover px-2 py-1 text-xs whitespace-nowrap text-popover-foreground">
