@@ -1,6 +1,7 @@
 // shadcn/ui alert (MIT, https://ui.shadcn.com), style radix-nova, copied from
 // https://ui.shadcn.com/r/styles/radix-nova/alert.json on 2026-10-13 (ADR-0017): re-copy
 // it the same way, never through the CLI, and repeat these edits.
+// Bridge's look (ADR-0020, U91, S107, S114, S115): a semibold title; `destructive` at full strength, for AA; a button inside isn't underlined as a link.
 // Edits: `import * as React` → `import type * as React` (Biome's useImportType); Biome's
 // formatting and import order.
 
@@ -15,7 +16,7 @@ const alertVariants = cva(
       variant: {
         default: "bg-card text-card-foreground",
         destructive:
-          "bg-card text-destructive *:data-[slot=alert-description]:text-destructive/90 *:[svg]:text-current",
+          "bg-card text-destructive *:data-[slot=alert-description]:text-destructive *:[svg]:text-current",
       },
     },
     defaultVariants: {
@@ -44,7 +45,7 @@ function AlertTitle({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="alert-title"
       className={cn(
-        "font-medium group-has-[>svg]/alert:col-start-2 [&_a]:underline [&_a]:underline-offset-3 [&_a]:hover:text-foreground",
+        "font-semibold group-has-[>svg]/alert:col-start-2 [&_a]:underline [&_a]:underline-offset-3 [&_a]:hover:text-foreground",
         className,
       )}
       {...props}
@@ -57,7 +58,7 @@ function AlertDescription({ className, ...props }: React.ComponentProps<"div">) 
     <div
       data-slot="alert-description"
       className={cn(
-        "text-sm text-balance text-muted-foreground md:text-pretty [&_a]:underline [&_a]:underline-offset-3 [&_a]:hover:text-foreground [&_p:not(:last-child)]:mb-4",
+        "text-sm text-balance text-muted-foreground md:text-pretty [&_a:not([data-slot=button])]:underline [&_a:not([data-slot=button])]:underline-offset-3 [&_a:not([data-slot=button])]:hover:text-foreground [&_p:not(:last-child)]:mb-4",
         className,
       )}
       {...props}

@@ -1,7 +1,7 @@
 // The user's sessions (Plan.md P8.7, ADR-0016, ADR-0017): every live login of the account,
 // newest first, a page at a time. The server keeps no device, address or user agent, so a
 // row is told apart by its times only.
-// - This session's "Log out" is the header's logout (`DELETE /me/sessions/{id}` refuses it).
+// - This session's "Log out" is the sidebar's logout (`DELETE /me/sessions/{id}` refuses it).
 // - Another one's "Log out" ends it at once: whoever used it just logs in again.
 // - "Log out all other sessions" asks first, then ends every other session the server lists
 //   (useLogOutOthers), the remedy for a lost PC.
@@ -13,8 +13,17 @@ import { toApiError } from "../../../api/ApiError";
 import { useApiClient } from "../../../api/context";
 import { describeError } from "../../../api/describeError";
 import { SESSIONS_KEY, useSessions } from "../../../api/queries";
+import { ScreenState } from "../../../components/ScreenState";
 import { Alert, AlertDescription } from "../../../components/ui/alert";
 import { Button } from "../../../components/ui/button";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "../../../components/ui/table";
 import type { SessionResponse } from "../../../generated/SessionResponse";
 import { formatTime } from "../../../lib/time";
 import { useLogout } from "../../shell/hooks/useLogout";
@@ -39,36 +48,40 @@ export function SessionList() {
   const busy = revoke.isPending || others.running || loggingOut;
 
   return (
-    <section aria-labelledby="sessions-heading" className="flex flex-col gap-3">
-      <h2 id="sessions-heading" className="text-lg font-semibold">
+    <section
+      aria-labelledby="sessions-heading"
+      className="flex flex-col gap-2 rounded-lg border bg-card p-3"
+    >
+      <h2
+        id="sessions-heading"
+        className="text-xs font-semibold tracking-wider text-muted-foreground uppercase"
+      >
         Sessions
       </h2>
       <p className="text-sm text-muted-foreground">
-        Every PC where your account is logged in. The server doesn't record which PC a session is,
-        only its times.
+        Every login of your account. The server records only times, not which PC.
       </p>
       {sessions.isError ? (
-        <p role="alert" className="text-sm text-destructive">
-          {describeError(toApiError(sessions.error).error)}
-        </p>
+        <ScreenState kind="error">{describeError(toApiError(sessions.error).error)}</ScreenState>
       ) : null}
+      {sessions.isPending ? <ScreenState kind="loading">Loading…</ScreenState> : null}
       {failure === undefined ? null : (
         <p role="alert" className="text-sm text-destructive">
           {`Couldn't log that session out: ${failure}`}
         </p>
       )}
-      <table aria-label="Sessions" className="w-full text-left text-sm">
-        <thead className="text-muted-foreground">
-          <tr>
-            <th className="py-1 font-medium">Logged in</th>
-            <th className="py-1 font-medium">Last used</th>
-            <th className="py-1 font-medium">Expires</th>
-            <th className="py-1 font-medium">
+      <Table aria-label="Sessions">
+        <TableHeader>
+          <TableRow>
+            <TableHead>Logged in</TableHead>
+            <TableHead>Last used</TableHead>
+            <TableHead>Expires</TableHead>
+            <TableHead>
               <span className="sr-only">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {rows.map((session) => (
             <Row
               key={session.id}
@@ -83,8 +96,8 @@ export function SessionList() {
               }}
             />
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
       {sessions.hasNextPage ? (
         <Button
           type="button"
@@ -100,8 +113,8 @@ export function SessionList() {
         <Alert>
           <AlertDescription className="flex flex-col gap-2 text-foreground">
             <p>
-              This logs out every other session of your account, on every PC, including ones not
-              shown here. Whoever uses them has to log in again.
+              Logs out every other session on every PC, including ones not listed. They must log in
+              again.
             </p>
             <div className="flex gap-2">
               <Button
@@ -157,17 +170,17 @@ function Row({
 }) {
   const created = formatTime(session.created_at);
   return (
-    <tr className="border-t">
-      <td className="py-2">{created}</td>
-      <td className="py-2">{formatTime(session.last_used_at)}</td>
-      <td className="py-2">{formatTime(session.expires_at)}</td>
-      <td className="py-2">
+    <TableRow>
+      <TableCell className="font-mono">{created}</TableCell>
+      <TableCell className="font-mono">{formatTime(session.last_used_at)}</TableCell>
+      <TableCell className="font-mono">{formatTime(session.expires_at)}</TableCell>
+      <TableCell>
         <div className="flex items-center justify-end gap-2">
           {session.current ? <span className="text-muted-foreground">This session</span> : null}
           <Button
             type="button"
             size="sm"
-            variant="outline"
+            variant="ghost"
             disabled={busy}
             aria-label={
               session.current ? "Log out this session" : `Log out the session logged in ${created}`
@@ -177,7 +190,7 @@ function Row({
             Log out
           </Button>
         </div>
-      </td>
-    </tr>
+      </TableCell>
+    </TableRow>
   );
 }

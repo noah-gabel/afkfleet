@@ -21,6 +21,8 @@ export default defineConfig({
   build: {
     outDir: "../dist-e2e",
     emptyOutDir: true,
+    // Nothing inlined as `data:`: the CSP refuses a font that way (ADR-0020, S111).
+    assetsInlineLimit: 0,
   },
   preview: {
     host: HOST,

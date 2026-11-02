@@ -119,9 +119,37 @@ describe("a hard-coded colour in a source", () => {
       'const s = {\n  background: active\n    ? "white"\n    : "inherit",\n};',
     ],
     ["a string in a call", '<path fill={pick(active, "white")} />'],
+    ["a colour word inside a longer string", '<path fill={on ? "none" : "a white one"} />'],
+    [
+      "a shorthand in a border's ternary, by hex",
+      'const s = { border: on ? "1px solid #fff" : "none" };',
+    ],
+    [
+      "a shorthand in a shadow's ternary",
+      'const s = { boxShadow: on ? "0 0 0 1px black" : undefined };',
+    ],
+    [
+      "a shorthand in a text decoration's ternary",
+      'const s = { textDecoration: on ? "underline red" : "none" };',
+    ],
+    ["a shorthand under an attribute", '<path stroke={on ? "1px solid red" : "none"} />'],
   ]) {
     it(`refuses ${name}`, () => {
-      assert.deepEqual(rulesOf(source), ["literal colour value"]);
+      assert.ok(rulesOf(source).includes("literal colour value"), source);
+    });
+  }
+
+  for (const [name, source] of [
+    ["a hex before an underscore in a shadow", 'const a = "shadow-[0_0_0_1px_#000_inset]";'],
+    [
+      "a hex before an underscore in a gradient",
+      'const a = "bg-[linear-gradient(#fff_0%,transparent)]";',
+    ],
+    ["a hex before an underscore in a property", 'const a = "[border:#e5e5e5_1px_solid]";'],
+    ["the fade idiom", 'const a = "[mask-image:linear-gradient(to_bottom,black,transparent)]";'],
+  ]) {
+    it(`refuses ${name}`, () => {
+      assert.deepEqual(rulesOf(source), ["arbitrary colour"]);
     });
   }
 
@@ -162,12 +190,60 @@ describe("what's fine in a source", () => {
     ["a style's ternary of keywords", 'const s = { color: active ? "inherit" : "transparent" };'],
     ["a colour word after the key's value", 'const s = { color: "inherit", label: "white" };'],
     ["a colour word after the attribute", '<path fill={on ? "none" : "none"} title="white" />'],
-    ["a colour word that isn't the whole string", '<path fill={on ? "none" : "a white one"} />'],
     ["a key's type", "interface Style { color: string; label: string }"],
+    [
+      "a colour word that only names a tone",
+      '<path fill={tone === "green" ? "var(--success)" : "currentColor"} />',
+    ],
+    ["a tone compared the other way", '<path fill={"red" !== tone ? "none" : "currentColor"} />'],
+    ["a tone in a style's key", 'const s = { color: tone == "red" ? "inherit" : "transparent" };'],
+    ["a tone with spaces", '<path fill={tone != "green" ? "none" : "currentColor"} />'],
+    ["Tailwind's mask utility", 'const a = "mask-b-from-50% mask-b-to-100%";'],
     ["a value from a constant, the guard's recorded limit", "<path fill={SHADE} />"],
   ]) {
     it(`takes ${name}`, () => {
       assert.deepEqual(scanSource(source), []);
+    });
+  }
+});
+
+describe("a corner outside the --radius scale (ADR-0020, U101)", () => {
+  for (const [name, source] of [
+    ["an arbitrary value", 'const a = "rounded-[3px]";'],
+    ["an arbitrary value over a token", 'const a = "rounded-[min(var(--radius-md),10px)]";'],
+    ["an arbitrary side", 'const a = "rounded-t-[4px]";'],
+    ["a variable's shorthand", 'const a = "rounded-(--radius-lg)";'],
+    ["a step off the scale", 'const a = "p-2 rounded-2xl";'],
+    ["a side's step off the scale", 'const a = "rounded-t-3xl";'],
+    ["a corner's step off the scale", 'const a = "rounded-tl-xs";'],
+    ["a variant's step off the scale", 'const a = "hover:data-[on=true]:rounded-4xl";'],
+    ["the bare utility", 'const a = "border rounded";'],
+    ["a template's step", `const a = \`rounded-${HOLE}size}\`;`],
+    ["an arbitrary property", 'const a = "[border-radius:3px]";'],
+    ["an arbitrary corner property", 'const a = "[border-top-left-radius:3px]";'],
+    ["a style's literal", 'const s = { borderRadius: "4px" };'],
+    ["a style's corner", 'const s = { borderTopLeftRadius: "4px" };'],
+    ["a style's number", "const s = { borderRadius: 4 };"],
+    ["sonner's variable", 'const s = { "--border-radius": "4px" };'],
+  ]) {
+    it(`refuses ${name}`, () => {
+      assert.deepEqual(rulesOf(source), ["corner off the scale"], source);
+    });
+  }
+
+  for (const [name, source] of [
+    ["each step", 'const a = "rounded-sm rounded-md rounded-lg rounded-xl";'],
+    ["sides and corners", 'const a = "rounded-t-xl rounded-r-lg rounded-tl-sm rounded-ee-md";'],
+    ["a real circle", 'const a = "rounded-full";'],
+    ["no corner", 'const a = "rounded-t-none rounded-none";'],
+    ["a variant", 'const a = "hover:rounded-lg data-[on=true]:rounded-md";'],
+    ["a word in a sentence", 'const text = "The wait is rounded, so it never ends early.";'],
+    ["a style from the token", 'const s = { "--border-radius": "var(--radius)" };'],
+    ["a style's radius from a step", 'const s = { borderRadius: "var(--radius-md)" };'],
+    ["a variable named for it", "const rounded = Math.round(1);"],
+  ]) {
+    it(`takes ${name}`, () => {
+      assert.deepEqual(scanSource(source), [], source);
     });
   }
 });
@@ -232,9 +308,12 @@ describe("isScanned", () => {
 /** A stylesheet that passes, with `changes` applied to its text. */
 function stylesheet(changes = (css) => css) {
   return changes(`@import "tailwindcss" source(".");
-@theme { --color-*: initial; }
+@theme { --color-*: initial; --radius-*: initial; }
 @theme inline {
-  --radius-sm: calc(var(--radius) - 4px);
+  --radius-sm: calc(var(--radius) * 0.5);
+  --radius-md: calc(var(--radius) * 0.75);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.5);
   --color-background: var(--background);
   --color-qr-background: var(--qr-background);
 }
@@ -271,6 +350,47 @@ function cssRules(changes) {
 describe("the stylesheet", () => {
   it("takes the one above", () => {
     assert.deepEqual(checkStylesheet(stylesheet()), []);
+  });
+
+  it("refuses a theme that keeps Tailwind's radius steps", () => {
+    assert.deepEqual(
+      cssRules((css) => css.replace(" --radius-*: initial;", "")),
+      ["radius scale"],
+    );
+  });
+
+  it("refuses a step that isn't derived from --radius", () => {
+    assert.deepEqual(
+      cssRules((css) =>
+        css.replace("--radius-md: calc(var(--radius) * 0.75);", "--radius-md: 3px;"),
+      ),
+      ["radius scale"],
+    );
+  });
+
+  it("refuses a step off the scale, and a scale without a step", () => {
+    assert.deepEqual(
+      cssRules((css) => css.replace("--radius-lg: var(--radius);", "--radius-2xl: var(--radius);")),
+      ["radius scale", "radius scale"],
+    );
+  });
+
+  it("refuses a hard-coded corner in a rule", () => {
+    assert.deepEqual(
+      cssRules((css) =>
+        css.replace("@apply bg-background text-foreground;", "border-radius: 3px;"),
+      ),
+      ["radius scale"],
+    );
+  });
+
+  it("takes a corner from the scale in a rule", () => {
+    assert.deepEqual(
+      cssRules((css) =>
+        css.replace("@apply bg-background text-foreground;", "border-radius: var(--radius);"),
+      ),
+      [],
+    );
   });
 
   it("refuses a colour in a rule, outside the token blocks", () => {
@@ -341,7 +461,7 @@ describe("the stylesheet", () => {
 
   it("refuses losing the palette's reset", () => {
     assert.deepEqual(
-      cssRules((css) => css.replace("@theme { --color-*: initial; }\n", "")),
+      cssRules((css) => css.replace(" --color-*: initial;", "")),
       ["palette reset"],
     );
   });

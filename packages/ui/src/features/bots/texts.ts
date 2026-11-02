@@ -2,7 +2,9 @@
 // state, its reasons and its last disconnect read as. Every value comes from an `Open<…>`,
 // so each switch has a default branch that shows a value this version doesn't know as it
 // came. A kick's message is a Minecraft server's text: shown as plain text, as it came.
+
 import type { Entry, Notice } from "../../api/liveRecord";
+import type { Tone } from "../../components/StatusLine";
 import type { AccountRestriction } from "../../generated/AccountRestriction";
 import type { AgentStatus } from "../../generated/AgentStatus";
 import type { BotAgent } from "../../generated/BotAgent";
@@ -68,62 +70,60 @@ export function agentLastSeen(iso: string, now: number): string {
     : `Its agent was last seen on ${formatDate(iso)} at ${formatClock(iso)}.`;
 }
 
-/** The badge's look, one of the Badge's variants. */
-export type BadgeVariant = "default" | "secondary" | "outline" | "destructive";
-
-/** A bot's state as its badge shows it. */
-export interface StateBadge {
+/** A bot's state as its status line shows it. */
+export interface StateLine {
   readonly text: string;
-  readonly variant: BadgeVariant;
+  readonly tone: Tone;
 }
 
 /**
- * A bot's badge: its reported state; a Paused or Failed it rests in while not placed;
- * Starting while its agent hasn't reported it yet; Agent offline while its agent can't be
- * reached; Stopped or Not running while it isn't placed.
+ * `bot`'s state: what its agent reported, the state a paused or failed bot rests in, Starting
+ * while its agent hasn't reported it yet; Agent offline while its agent can't be reached; Stopped
+ * or Not running while it isn't placed. A state this app doesn't know shows as the server sent it,
+ * neutral.
  */
-export function stateBadge(bot: Pick<BotResponse, "status" | "desired_state">): StateBadge {
+export function stateLine(bot: Pick<BotResponse, "status" | "desired_state">): StateLine {
   const { status } = bot;
   switch (status.kind) {
     case "reported":
-      return reportedBadge(status.state);
+      return reportedLine(status.state);
     case "awaiting_report":
-      return { text: "Starting", variant: "secondary" };
+      return { text: "Starting", tone: "info" };
     case "unknown":
-      return { text: "Agent offline", variant: "outline" };
+      return { text: "Agent offline", tone: "neutral" };
     case "unplaced":
       if (status.state === "paused" || status.state === "failed") {
-        return reportedBadge(status.state);
+        return reportedLine(status.state);
       }
       return bot.desired_state === "stopped"
-        ? { text: "Stopped", variant: "outline" }
-        : { text: "Not running", variant: "outline" };
+        ? { text: "Stopped", tone: "neutral" }
+        : { text: "Not running", tone: "neutral" };
     default:
-      return { text: String(status.kind), variant: "outline" };
+      return { text: String(status.kind), tone: "neutral" };
   }
 }
 
-/** A reported state's badge. */
-function reportedBadge(state: BotStateKind | undefined): StateBadge {
+/** A reported state's line. */
+function reportedLine(state: BotStateKind | undefined): StateLine {
   switch (state) {
     case "online":
-      return { text: "Online", variant: "default" };
+      return { text: "Online", tone: "success" };
     case "connecting":
-      return { text: "Connecting", variant: "secondary" };
+      return { text: "Connecting", tone: "info" };
     case "awaiting_session":
-      return { text: "Signing in", variant: "secondary" };
+      return { text: "Signing in", tone: "info" };
     case "backoff":
-      return { text: "Reconnecting", variant: "secondary" };
+      return { text: "Reconnecting", tone: "info" };
     case "stopping":
-      return { text: "Stopping", variant: "secondary" };
+      return { text: "Stopping", tone: "info" };
     case "stopped":
-      return { text: "Stopped", variant: "outline" };
+      return { text: "Stopped", tone: "neutral" };
     case "paused":
-      return { text: "Paused", variant: "secondary" };
+      return { text: "Paused", tone: "warning" };
     case "failed":
-      return { text: "Failed", variant: "destructive" };
+      return { text: "Failed", tone: "destructive" };
     default:
-      return { text: String(state), variant: "outline" };
+      return { text: String(state), tone: "neutral" };
   }
 }
 
@@ -386,7 +386,7 @@ export function entryText(entry: Entry, modeNamed: (id: string) => string): stri
       const { status } = entry;
       const last = entry.newDisconnect ? status.last_disconnect : undefined;
       return [
-        stateBadge({ status, desired_state: entry.desired }).text,
+        stateLine({ status, desired_state: entry.desired }).text,
         notRunningText(status),
         restingText(status),
         last === undefined ? null : disconnectText(last),

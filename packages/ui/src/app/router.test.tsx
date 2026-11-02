@@ -7,7 +7,7 @@ import { me, PROFILE } from "../test/fixtures";
 import { renderApp } from "../test/renderApp";
 import { onHome } from "../test/signedIn";
 
-const NOT_FOUND = "This page doesn't exist or isn't available to you.";
+const NOT_FOUND = "Page not found or not available to you.";
 
 async function signedInAs(role: UserRole) {
   const app = renderApp({
@@ -153,7 +153,7 @@ describe("the router", () => {
     const app = await signedInAs("member");
     await act(() => app.runtime.router.navigate({ to: "/admin/users" }));
 
-    await app.user.click(await screen.findByRole("link", { name: "Go to Home" }));
+    await app.user.click(await screen.findByRole("link", { name: "Home" }));
 
     await waitFor(() => expect(app.path()).toBe("/home"));
   });
@@ -170,7 +170,7 @@ describe("the router", () => {
 
     await act(() => app.runtime.router.navigate({ to: "/admin/users" }));
 
-    expect(await screen.findByText("Something went wrong in the app.")).toBeDefined();
+    expect(await screen.findByText("App error.")).toBeDefined();
     expect(screen.getByText("fake interrupted")).toBeDefined();
   });
 });

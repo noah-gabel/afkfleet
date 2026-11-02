@@ -97,12 +97,12 @@ describe("server setup, signed out", () => {
   });
 
   it.each<[ProfileUnreadable, string]>([
-    ["io", "The saved server settings couldn't be read."],
-    ["json", "The saved server settings are damaged."],
-    ["version", "The saved server settings are from another version of the app."],
-    ["url", "The saved server address is no longer valid."],
-    ["ca", "The saved custom CA is no longer valid."],
-    ["client", "The app can't connect with the saved settings."],
+    ["io", "Saved settings unreadable."],
+    ["json", "Saved settings damaged."],
+    ["version", "Saved settings from another app version."],
+    ["url", "Saved address invalid."],
+    ["ca", "Saved custom CA invalid."],
+    ["client", "Can't connect with the saved settings."],
   ])("says why an unreadable profile (%s) needs the server again", async (reason, text) => {
     await atSetup({}, { state: "unreadable", reason });
 
@@ -212,9 +212,7 @@ describe("server setup, signed out", () => {
 
     fireEvent.change(screen.getByLabelText("CA file"), { target: { files: [large] } });
 
-    expect(
-      await screen.findByText("The file is too large for a CA: at most 64 KiB."),
-    ).toBeDefined();
+    expect(await screen.findByText("File too large: at most 64 KiB.")).toBeDefined();
     expect(read).toBe(false);
     expect((screen.getByLabelText("CA certificates (PEM)") as HTMLTextAreaElement).value).toBe("");
   });
@@ -356,7 +354,7 @@ describe("the server settings, signed in", () => {
 
     expect(
       await screen.findByText(
-        "You're logged out on this PC, but the server couldn't be told (The server can't be reached.), so your session there may stay valid until it expires.",
+        "Logged out here. Server not told (The server can't be reached.): the session may stay valid until it expires.",
       ),
     ).toBeDefined();
   });

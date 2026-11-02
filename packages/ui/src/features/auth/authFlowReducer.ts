@@ -20,18 +20,22 @@ import type { WaitRequest } from "../../hooks/useRetryWait";
 export const CODE_TRIES = 3;
 
 /** A step that ended: expired, used up or gone. */
-export const STEP_ENDED = "That sign-in step ended. Enter your password again.";
+export const STEP_ENDED = "Step ended. Enter your password again.";
 /** Registered, but the login right after failed. */
-export const REGISTERED = "Your account was created. Log in to set up 2FA.";
+export const REGISTERED = "Account created. Log in to set up 2FA.";
 /** Set up, but the login after the recovery codes failed. */
-export const SETUP_DONE = "2FA is set up. Log in with your password and a code from your app.";
+export const SETUP_DONE = "2FA set up. Log in with your password and a code from your app.";
 /** The code step after the 2FA setup. */
-export const NEXT_CODE =
-  "Wait until your authenticator app shows a new code, then enter it. The code you just used won't work again.";
+export const NEXT_CODE = "Wait for a new code. The last one won't work again.";
+
+/** The tries left, as the code step shows them. */
+export function triesLeft(tries: number): string {
+  return tries === 1 ? "1 try left." : `${tries} tries left.`;
+}
 
 /** A wrong code's text, with the tries left. */
-export function wrongCode(triesLeft: number): string {
-  return triesLeft === 1 ? "Wrong code. 1 try left." : `Wrong code. ${triesLeft} tries left.`;
+export function wrongCode(tries: number): string {
+  return `Wrong code. ${triesLeft(tries)}`;
 }
 
 /** What the password step says above its form. */
@@ -194,11 +198,11 @@ export function authFlowReducer(state: FlowState, action: FlowAction): FlowState
       if (step.kind !== "code") {
         return state;
       }
-      const triesLeft = step.triesLeft - 1;
-      if (triesLeft <= 0) {
+      const left = step.triesLeft - 1;
+      if (left <= 0) {
         return back(state, { text: STEP_ENDED });
       }
-      return { ...state, step: { ...step, triesLeft, message: wrongCode(triesLeft) } };
+      return { ...state, step: { ...step, triesLeft: left, message: wrongCode(left) } };
     }
     case "enrolling":
     case "enrolled":

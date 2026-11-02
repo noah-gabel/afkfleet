@@ -4,12 +4,12 @@
 import type { ProfileUnreadable } from "../../generated/ProfileUnreadable";
 
 const REASONS: Record<ProfileUnreadable, string> = {
-  io: "The saved server settings couldn't be read.",
-  json: "The saved server settings are damaged.",
-  version: "The saved server settings are from another version of the app.",
-  url: "The saved server address is no longer valid.",
-  ca: "The saved custom CA is no longer valid.",
-  client: "The app can't connect with the saved settings.",
+  io: "Saved settings unreadable.",
+  json: "Saved settings damaged.",
+  version: "Saved settings from another app version.",
+  url: "Saved address invalid.",
+  ca: "Saved custom CA invalid.",
+  client: "Can't connect with the saved settings.",
 };
 
 /** What server setup says about an unreadable profile. */

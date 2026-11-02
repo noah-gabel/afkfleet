@@ -1,4 +1,4 @@
-// A deliberate logout (Plan.md P8.6, ADR-0017), from the header or the start screen. While
+// A deliberate logout (Plan.md P8.6, ADR-0017), from the sidebar or the start screen. While
 // it runs the session is `logging_out`, so a `no_session` answer from a call still in
 // flight ends nothing, and after it the session is `signed_out` until the next sign-in.
 // `logout()` always ends the session in the app; when it couldn't tell the server, a
@@ -17,7 +17,7 @@ import type { CommandError } from "../../../generated/CommandError";
 
 /** The warning after a logout the server couldn't confirm. */
 export function unconfirmedLogout(error: CommandError): string {
-  return `You're logged out on this PC, but the server couldn't be told (${describeError(error)}), so your session there may stay valid until it expires.`;
+  return `Logged out here. Server not told (${describeError(error)}): the session may stay valid until it expires.`;
 }
 
 /** Logging out; see the module comment. */

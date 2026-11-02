@@ -23,7 +23,7 @@ export const launchRoute = createRoute({
   component: StartScreen,
 });
 
-/** The layout of the signed-in screens: header, navigation, then the screen. */
+/** The layout of the signed-in screens: the sidebar, then the screen. */
 export const appRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: "app",

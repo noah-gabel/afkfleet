@@ -21,23 +21,23 @@ export const RECOVERY_CODES_WARN_AT = 3;
 
 /** The wrong-codes warning: `count` of them, the newest at `lastAt`. */
 export function failedCodesWarning(count: number, lastAt: string | undefined): string {
-  const when = lastAt === undefined ? "" : `, the last on ${formatTime(lastAt)}`;
+  const on = lastAt === undefined ? "" : formatTime(lastAt);
   const what =
     count === 1
-      ? "A wrong 2FA code was entered for your account since your previous login"
-      : `${count} wrong 2FA codes were entered for your account since your previous login`;
-  return `${what}${when}. If that wasn't you, someone may know your password: change it.`;
+      ? `1 wrong 2FA code since your last login${lastAt === undefined ? "" : `, on ${on}`}`
+      : `${count} wrong 2FA codes since your last login${lastAt === undefined ? "" : `, the last on ${on}`}`;
+  return `${what}. Not you? Someone may know your password: change it.`;
 }
 
 /** The recovery-codes warning, with `left` codes left. */
 export function recoveryCodesWarning(left: number): string {
   const what =
     left === 0
-      ? "You have no recovery codes left."
+      ? "No recovery codes left."
       : left === 1
-        ? "You have only 1 recovery code left."
-        : `You have only ${left} recovery codes left.`;
-  return `${what} Replace your authenticator to get 10 new ones.`;
+        ? "Only 1 recovery code left."
+        : `Only ${left} recovery codes left.`;
+  return `${what} Replace your authenticator for 10 new ones.`;
 }
 
 /** The warnings `user`'s account needs, on the profile or on Home. */

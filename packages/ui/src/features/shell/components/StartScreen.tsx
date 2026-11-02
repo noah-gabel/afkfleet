@@ -6,6 +6,7 @@
 import { useLoaderData, useNavigate, useRouter } from "@tanstack/react-router";
 
 import { describeError } from "../../../api/describeError";
+import { Logo, Wordmark } from "../../../components/Brand";
 import { Alert, AlertDescription } from "../../../components/ui/alert";
 import { Button } from "../../../components/ui/button";
 import type { CommandError } from "../../../generated/CommandError";
@@ -18,7 +19,12 @@ export function StartScreen() {
   return (
     <main className="flex flex-1 items-center justify-center p-8">
       <div className="flex w-full max-w-md flex-col gap-4">
-        <h1 className="text-3xl font-semibold tracking-tight">afkfleet</h1>
+        <div className="flex items-center gap-3">
+          <Logo size={32} />
+          <h1 className="text-2xl tracking-tight">
+            <Wordmark />
+          </h1>
+        </div>
         {outcome.kind === "unreachable" ? (
           <p className="text-muted-foreground">Waiting for the server…</p>
         ) : (

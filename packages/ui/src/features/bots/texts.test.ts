@@ -16,7 +16,7 @@ import {
   noticeToast,
   notRunningText,
   restingText,
-  stateBadge,
+  stateLine,
   stateReasonText,
   unplacedText,
 } from "./texts";
@@ -26,35 +26,35 @@ function withStatus(status: BotStatus, desired: BotResponse["desired_state"] = "
   return bot(1, { status, desired_state: desired });
 }
 
-describe("a bot's state badge", () => {
+describe("a bot's state line", () => {
   it.each([
-    [{ kind: "reported", state: "online" }, "Online", "default"],
-    [{ kind: "reported", state: "connecting" }, "Connecting", "secondary"],
-    [{ kind: "reported", state: "awaiting_session" }, "Signing in", "secondary"],
-    [{ kind: "reported", state: "backoff" }, "Reconnecting", "secondary"],
-    [{ kind: "reported", state: "stopping" }, "Stopping", "secondary"],
-    [{ kind: "reported", state: "stopped" }, "Stopped", "outline"],
-    [{ kind: "reported", state: "paused", reason: "duplicate_login" }, "Paused", "secondary"],
+    [{ kind: "reported", state: "online" }, "Online", "success"],
+    [{ kind: "reported", state: "connecting" }, "Connecting", "info"],
+    [{ kind: "reported", state: "awaiting_session" }, "Signing in", "info"],
+    [{ kind: "reported", state: "backoff" }, "Reconnecting", "info"],
+    [{ kind: "reported", state: "stopping" }, "Stopping", "info"],
+    [{ kind: "reported", state: "stopped" }, "Stopped", "neutral"],
+    [{ kind: "reported", state: "paused", reason: "duplicate_login" }, "Paused", "warning"],
     [{ kind: "reported", state: "failed", reason: "banned" }, "Failed", "destructive"],
-    [{ kind: "awaiting_report" }, "Starting", "secondary"],
-    [{ kind: "unknown", state: "online" }, "Agent offline", "outline"],
-    [{ kind: "unplaced", why: "no_server", state: "stopped" }, "Not running", "outline"],
-    [{ kind: "unplaced", why: "pending", state: "paused", reason: "auth" }, "Paused", "secondary"],
+    [{ kind: "awaiting_report" }, "Starting", "info"],
+    [{ kind: "unknown", state: "online" }, "Agent offline", "neutral"],
+    [{ kind: "unplaced", why: "no_server", state: "stopped" }, "Not running", "neutral"],
+    [{ kind: "unplaced", why: "pending", state: "paused", reason: "auth" }, "Paused", "warning"],
     [
       { kind: "unplaced", why: "no_server", state: "failed", reason: "crash_loop" },
       "Failed",
       "destructive",
     ],
-    [{ kind: "reported", state: "hibernating" }, "hibernating", "outline"],
-    [{ kind: "teleported" }, "teleported", "outline"],
-  ] as [BotStatus, string, string][])("%o reads %s", (status, text, variant) => {
-    expect(stateBadge(withStatus(status))).toEqual({ text, variant });
+    [{ kind: "reported", state: "hibernating" }, "hibernating", "neutral"],
+    [{ kind: "teleported" }, "teleported", "neutral"],
+  ] as [BotStatus, string, string][])("%o reads %s", (status, text, tone) => {
+    expect(stateLine(withStatus(status))).toEqual({ text, tone });
   });
 
   it("reads Stopped for a bot that isn't placed because it's wanted stopped", () => {
-    expect(stateBadge(withStatus({ kind: "unplaced", why: "stopped" }, "stopped"))).toEqual({
+    expect(stateLine(withStatus({ kind: "unplaced", why: "stopped" }, "stopped"))).toEqual({
       text: "Stopped",
-      variant: "outline",
+      tone: "neutral",
     });
   });
 });

@@ -68,11 +68,11 @@ export async function logIn(app: Awaited<ReturnType<typeof atLogin>>, username =
   await app.user.click(screen.getByRole("button", { name: "Log in" }));
 }
 
+/** Types `code` into the six boxes, which send at the sixth digit. */
 export async function enterCode(app: Pick<RenderedApp, "user">, code: string) {
   const field = await screen.findByLabelText("Code");
   await app.user.clear(field);
   await app.user.type(field, code);
-  await app.user.click(screen.getByRole("button", { name: /^(Verify|Confirm)$/ }));
 }
 
 /** Everything the QueryClient holds, as text. */

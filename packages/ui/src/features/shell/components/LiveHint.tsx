@@ -1,9 +1,10 @@
-// The Header's line about the live events (Plan.md P11.8; ADR-0020, U30, R85): only while a
+// The line about the live events, under the banner (Plan.md P11.8; ADR-0020, U30, R85): only while a
 // reconnect waits, counting down, or once the watch stopped, with an error that isn't the
 // session's end or by itself (R91), each stop ending with Reconnect (U47); nothing while
 // live, and nothing for the routine reconnect that doesn't wait. A screen reader hears each
 // change once, never each second: the ticking line is hidden from it, and the status region
 // holds the text the change started with.
+import { cn } from "cn";
 import { useEffect, useState } from "react";
 
 import { describeError } from "../../../api/describeError";
@@ -14,7 +15,7 @@ import type { CommandError } from "../../../generated/CommandError";
 
 /** After `too_many_connections`: D's approved text, the server's own message. */
 export const TOO_MANY =
-  "Live updates are already open in too many places. Close the app somewhere else, or try again in a minute.";
+  "Live updates open in too many places. Close the app elsewhere, or retry in a minute.";
 
 /** What the line shows while a reconnect waits `seconds` more. */
 export function pausedShown(seconds: number): string {
@@ -27,7 +28,7 @@ export function pausedSpoken(seconds: number): string {
 }
 
 /** The line once the watch stopped by itself while signed in (R91). */
-export const STOPPED = "Live updates stopped. Screens update when you open them.";
+export const STOPPED = "Live updates stopped. Screens update on open.";
 
 /** The line once the watch stopped with `error`, or by itself; the period isn't doubled. */
 export function stopped(error: CommandError | null): string {
@@ -36,7 +37,7 @@ export function stopped(error: CommandError | null): string {
   }
   const why = describeError(error);
   const sentence = /[.!?]$/.test(why) ? why : `${why}.`;
-  return `Live updates stopped: ${sentence} Screens update when you open them.`;
+  return `Live updates stopped: ${sentence} Screens update on open.`;
 }
 
 /** The line; see the module comment. */
@@ -45,8 +46,15 @@ export function LiveHint() {
   const restart = useLive((state) => state.restart);
   const left = useSecondsLeft(hint);
   const [shown, spoken] = texts(hint, left);
+  const showing = shown !== "" || hint.kind === "stopped";
   return (
-    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+    <fieldset
+      aria-label="Live updates"
+      className={cn(
+        "flex min-w-0 items-center gap-2 text-sm text-muted-foreground",
+        showing && "border-b bg-muted px-4 py-1.5",
+      )}
+    >
       {shown === "" ? null : <span aria-hidden="true">{shown}</span>}
       {hint.kind === "stopped" ? (
         <Button size="xs" variant="outline" onClick={restart}>
@@ -56,7 +64,7 @@ export function LiveHint() {
       <span role="status" className="sr-only">
         {spoken}
       </span>
-    </div>
+    </fieldset>
   );
 }
 

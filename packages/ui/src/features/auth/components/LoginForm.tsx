@@ -22,7 +22,7 @@ import { useRetryWait } from "../../../hooks/useRetryWait";
 import { showFieldErrors } from "../../../lib/formErrors";
 import type { Notice } from "../authFlowReducer";
 import { type LoginValues, loginForm } from "../schemas";
-import { AuthCard, FormError } from "./AuthCard";
+import { AuthCard, FormError, ServerLine } from "./AuthCard";
 
 /** The login form. `onSubmit` throws what the form should show. */
 export function LoginForm({
@@ -75,7 +75,11 @@ export function LoginForm({
   });
 
   return (
-    <AuthCard title="Log in" intro={origin === undefined ? undefined : `Logging in to ${origin}`}>
+    <AuthCard
+      brand
+      title="Log in"
+      intro={origin === undefined ? undefined : <ServerLine origin={origin} />}
+    >
       {notice === undefined ? null : (
         <Alert>
           <AlertDescription className="flex flex-col gap-2 text-foreground">
@@ -98,7 +102,7 @@ export function LoginForm({
           </AlertDescription>
         </Alert>
       )}
-      <form className="flex flex-col gap-4" noValidate onSubmit={(event) => void submit(event)}>
+      <form className="flex flex-col gap-3" noValidate onSubmit={(event) => void submit(event)}>
         <FormField id="login-username" label="Username" error={errors.username?.message}>
           {(control) => (
             <Input {...control} autoComplete="username" {...form.register("username")} />
@@ -148,8 +152,8 @@ export function StillSignedIn({
   onLogOut: () => void;
 }) {
   return (
-    <AuthCard title="Log in">
-      <p>{`You're still signed in as ${username}.`}</p>
+    <AuthCard brand title="Log in">
+      <p>{`Still signed in as ${username}.`}</p>
       <div className="flex gap-2">
         <Button type="button" disabled={pending} onClick={onContinue}>
           {`Continue as ${username}`}

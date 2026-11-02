@@ -15,10 +15,12 @@ export interface SignedInOptions {
   readonly strict?: boolean;
 }
 
-/** Waits until Home shows for `username`: its bots' heading, and the Header's user. */
+/** Waits until Home shows for `username`: its bots' heading, and the sidebar's Account box. */
 export async function onHome(username = me().username): Promise<void> {
   await screen.findByRole("heading", { name: "Bots" });
-  await within(screen.getByRole("banner")).findByText(username, { exact: true });
+  await within(screen.getByRole("group", { name: "Account" })).findByText(username, {
+    exact: true,
+  });
 }
 
 /** The App signed in as `options.user`, on Home, without bots unless `handlers` give some. */

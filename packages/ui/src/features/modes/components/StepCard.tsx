@@ -66,7 +66,7 @@ export interface StepView {
  * Move up or down at its edge: it looks disabled, but only `aria-disabled`, so a step just moved
  * there keeps the keyboard's place on the button (a disabled one would drop the focus).
  */
-const EDGE = "aria-disabled:cursor-default aria-disabled:opacity-50";
+const EDGE = "aria-disabled:cursor-default aria-disabled:text-muted-foreground";
 
 /** The choices of `on` for a kind that starts and stops. */
 function onChoices(starts: string, stops: string) {

@@ -18,7 +18,7 @@ import { Input } from "../../../components/ui/input";
 import { useRetryWait } from "../../../hooks/useRetryWait";
 import { showFieldErrors } from "../../../lib/formErrors";
 import { type RegisterInput, type RegisterValues, registerForm } from "../schemas";
-import { AuthCard, FormError } from "./AuthCard";
+import { AuthCard, FormError, ServerLine } from "./AuthCard";
 
 /** The register form. `onSubmit` throws what the form should show. */
 export function RegisterForm({
@@ -60,14 +60,15 @@ export function RegisterForm({
 
   return (
     <AuthCard
+      brand
       title="Register"
-      intro={origin === undefined ? undefined : `Registering on ${origin}`}
+      intro={origin === undefined ? undefined : <ServerLine origin={origin} />}
     >
-      <form className="flex flex-col gap-4" noValidate onSubmit={(event) => void submit(event)}>
+      <form className="flex flex-col gap-3" noValidate onSubmit={(event) => void submit(event)}>
         <FormField
           id="register-invite"
           label="Invite code"
-          hint="The code from the invite you were sent."
+          hint="From your invite."
           error={errors.invite?.message}
         >
           {(control) => <Input {...control} autoComplete="off" {...form.register("invite")} />}

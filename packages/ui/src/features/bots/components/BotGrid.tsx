@@ -22,7 +22,7 @@ import {
   NO_BOTS,
   openBot,
 } from "../texts";
-import { Facts, StateBadge } from "./BotParts";
+import { BotState, Facts } from "./BotParts";
 
 /** Home's bots. */
 export function BotGrid() {
@@ -119,7 +119,7 @@ function BotCard({ bot, modes, now }: { bot: BotResponse; modes: Modes; now: num
             {name}
           </Link>
         </h2>
-        <StateBadge bot={bot} />
+        <BotState bot={bot} />
       </CardHeader>
       <CardContent>
         <Facts facts={botFacts(bot, modes, now, "card")} place="card" />

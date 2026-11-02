@@ -81,6 +81,8 @@ const COMMANDS: &[&str] = &[
 ];
 
 fn main() -> Result<(), Box<dyn Error>> {
+    // tauri-build embeds the icon without saying so, so a new icon.ico alone wouldn't rebuild.
+    println!("cargo:rerun-if-changed=icons/icon.ico");
     tauri_build::try_build(Attributes::new().app_manifest(AppManifest::new().commands(COMMANDS)))?;
     Ok(())
 }

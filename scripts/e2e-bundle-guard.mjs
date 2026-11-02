@@ -11,7 +11,9 @@
 //   purpose), fetchInvoke's path `/e2e/ipc/`, or the live events hook's name
 //   (e2e/app/push.ts's `PUSH_HOOK`, repeated too; a test pins both copies to their sources);
 // - the e2e bundle does hold every one of them, so the search finds what it looks for;
-// - every bundle exists and holds files, so a skipped build can't pass.
+// - every bundle exists and holds files, so a skipped build can't pass;
+// - every bundle holds the Latin fonts as files of their own, none inlined as `data:`, which the
+//   CSP refuses (Vite inlines a small asset unless told not to; ADR-0020, S111).
 // Exits with 1, naming each problem. Tests: scripts/e2e-bundle-guard.test.mjs.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
@@ -55,6 +57,38 @@ function empty(folder) {
   return files(folder).length === 0 ? [`${folder} holds no files: build it first (just e2e)`] : [];
 }
 
+/** The Latin faces a bundle must hold as files of their own, as Vite names them. */
+export const FACES = ["geist-latin-wght", "ibm-plex-mono-latin-400", "ibm-plex-mono-latin-600"];
+
+/**
+ * A bundle's problems with its fonts: one inlined, which the CSP refuses, a face it doesn't hold,
+ * or a font its CSS names and it doesn't hold.
+ */
+function fontProblems(folder) {
+  const problems = [];
+  const held = files(folder);
+  const names = held.map((file) => file.path.split("/").at(-1) ?? "");
+  for (const { path, text } of held) {
+    if (/\.(?:css|js|html)$/.test(path)) {
+      if (/data:(?:font\/|application\/(?:x-)?font)/.test(text)) {
+        problems.push(`${folder}/${path} holds an inlined font: the CSP would block it`);
+      }
+      for (const match of text.matchAll(/url\(["']?([^"')]+\.woff2)/g)) {
+        const name = (match[1] ?? "").split("/").at(-1) ?? "";
+        if (!names.includes(name)) {
+          problems.push(`${folder}/${path} names ${name}, which the bundle doesn't hold`);
+        }
+      }
+    }
+  }
+  for (const face of FACES) {
+    if (!names.some((name) => name.startsWith(`${face}-`) && name.endsWith(".woff2"))) {
+      problems.push(`${folder} holds no ${face} font`);
+    }
+  }
+  return problems;
+}
+
 /** The problems of the shipped bundles `shipped` and the e2e bundle `e2e`; see the module comment. */
 export function check({ shipped, e2e }) {
   const problems = [];
@@ -64,6 +98,7 @@ export function check({ shipped, e2e }) {
     if (missing.length > 0) {
       continue;
     }
+    problems.push(...fontProblems(folder));
     for (const file of files(folder)) {
       for (const needle of NEEDLES) {
         if (file.text.includes(needle)) {
@@ -77,6 +112,7 @@ export function check({ shipped, e2e }) {
   const missing = empty(e2e);
   problems.push(...missing);
   if (missing.length === 0) {
+    problems.push(...fontProblems(e2e));
     const built = files(e2e);
     for (const needle of NEEDLES) {
       if (!built.some((file) => file.text.includes(needle))) {

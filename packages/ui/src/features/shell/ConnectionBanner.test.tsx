@@ -10,7 +10,7 @@ import { fakeTime, renderApp } from "../../test/renderApp";
 import { onHome } from "../../test/signedIn";
 import { CERTIFICATE_HELP } from "../server/certificateHelp";
 
-const DOWN = "Can't reach the server. Trying again every 10 s.";
+const DOWN = "Server unreachable. Retrying every 10 s.";
 
 function refusal(code: string, status: number, retry?: number): ApiErrorDetails {
   return {
@@ -51,6 +51,60 @@ async function signedIn(check: () => Promise<void>) {
 }
 
 describe("the connection banner", () => {
+  it("announces through one status region that's there before it goes up and after", async () => {
+    const { fail } = await signedIn(async () => {});
+    const before = screen
+      .getAllByRole("status")
+      .find((region) => region.closest("[data-slot=connection-banner]") !== null);
+    expect(before).toBeDefined();
+    expect(before?.textContent).toBe("");
+
+    await fail("unreachable");
+
+    expect(await screen.findByText(DOWN)).toBeDefined();
+    const after = screen
+      .getAllByRole("status")
+      .find((region) => region.closest("[data-slot=connection-banner]") !== null);
+    expect(after).toBe(before);
+    expect(after?.textContent).toContain(DOWN);
+  });
+
+  it("keeps its buttons out of the status region, so they aren't read as news", async () => {
+    const { fail } = await signedIn(async () => {});
+
+    await fail("unreachable");
+    const retry = await screen.findByRole("button", { name: "Retry now" });
+
+    expect(retry.closest("[role=status]")).toBeNull();
+    expect(retry.closest("[data-slot=connection-banner]")).not.toBeNull();
+  });
+
+  it("keeps its check's rhythm across a logout, as it never remounts", async () => {
+    const { app, fail, time, checks } = await signedIn(async () => {
+      throw fakeApiError("unreachable");
+    });
+    await fail("unreachable");
+    await screen.findByText(DOWN);
+    await time.advance(10_000);
+    const before = checks();
+    expect(before).toBeGreaterThan(0);
+    const region = screen
+      .getAllByRole("status")
+      .find((one) => one.closest("[data-slot=connection-banner]") !== null);
+
+    act(() => app.runtime.stores.session.getState().signOut());
+    await act(() => app.runtime.router.navigate({ to: "/login" }));
+
+    expect(
+      screen
+        .getAllByRole("status")
+        .find((one) => one.closest("[data-slot=connection-banner]") !== null),
+    ).toBe(region);
+    expect(checks()).toBe(before);
+    await time.advance(10_000);
+    expect(checks()).toBe(before + 1);
+  });
+
   afterEach(() => {
     vi.useRealTimers();
     onlineManager.setOnline(true);
@@ -119,7 +173,7 @@ describe("the connection banner", () => {
     await fail("unreachable");
     await time.advance(10_500);
 
-    expect(await screen.findByText("The server is busy. Trying again in 30 s.")).toBeDefined();
+    expect(await screen.findByText("Server busy. Retrying in 30 s.")).toBeDefined();
     await time.advance(25_000);
     expect(checks()).toBe(1);
     await time.advance(6_000);
@@ -133,7 +187,7 @@ describe("the connection banner", () => {
     await fail("unreachable");
     await time.advance(10_500);
 
-    expect(await screen.findByText("The server is busy. Trying again in 10 s.")).toBeDefined();
+    expect(await screen.findByText("Server busy. Retrying in 10 s.")).toBeDefined();
     await time.advance(5_000);
     expect(checks()).toBe(1);
     await time.advance(6_000);

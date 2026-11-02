@@ -68,7 +68,7 @@ function report(
   if (ended > 0 || (failures.length === 0 && listError === undefined)) {
     parts.push(
       ended === 0
-        ? "There were no other sessions."
+        ? "No other sessions."
         : `Logged out ${ended} other ${ended === 1 ? "session" : "sessions"}.`,
     );
   }
@@ -77,9 +77,7 @@ function report(
     parts.push(`${failures.length} couldn't be logged out: ${describeError(first)} Try again.`);
   }
   if (listError !== undefined) {
-    parts.push(
-      `The list of your sessions couldn't be read to the end: ${describeError(listError)} Try again.`,
-    );
+    parts.push(`Session list incomplete: ${describeError(listError)} Try again.`);
   }
   return { text: parts.join(" "), failed: first !== undefined || listError !== undefined };
 }

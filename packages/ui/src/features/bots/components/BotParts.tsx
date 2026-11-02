@@ -1,14 +1,13 @@
-// The parts a bot's card and its screen share (Plan.md P11.9): its state badge and its
-// labelled facts.
-import { Badge } from "../../../components/ui/badge";
+// The parts a bot's card and its screen share (Plan.md P11.9): its state and its labelled facts.
+import { StatusLine } from "../../../components/StatusLine";
 import type { BotResponse } from "../../../generated/BotResponse";
 import type { Fact, Place } from "../facts";
-import { stateBadge } from "../texts";
+import { stateLine } from "../texts";
 
-/** `bot`'s state, as its badge. */
-export function StateBadge({ bot }: { bot: Pick<BotResponse, "status" | "desired_state"> }) {
-  const badge = stateBadge(bot);
-  return <Badge variant={badge.variant}>{badge.text}</Badge>;
+/** `bot`'s state, as its status line. */
+export function BotState({ bot }: { bot: Pick<BotResponse, "status" | "desired_state"> }) {
+  const line = stateLine(bot);
+  return <StatusLine tone={line.tone}>{line.text}</StatusLine>;
 }
 
 /**

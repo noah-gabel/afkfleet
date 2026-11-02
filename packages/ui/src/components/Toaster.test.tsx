@@ -40,6 +40,54 @@ describe("Toaster", () => {
     });
   });
 
+  // An error or a warning stands out; the rest stay plain (ADR-0020, U91, S116).
+  it.each([
+    ["error", "--destructive"],
+    ["warning", "--warning"],
+  ] as const)("tints a toast of type %s from its token", async (type, token) => {
+    const { toast } = await freshToaster();
+
+    act(() => {
+      toast[type]("Look.");
+    });
+
+    const shown = (await screen.findByText("Look.")).closest<HTMLElement>("[data-sonner-toast]");
+    expect(shown?.className).toContain(`[--normal-bg:color-mix(in_srgb,var(${token})_12%`);
+    expect(shown?.className).toContain(`[--normal-border:var(${token})]`);
+    act(() => {
+      toast.dismiss();
+    });
+  });
+
+  it.each(["success", "info"] as const)("leaves a toast of type %s plain", async (type) => {
+    const { toast } = await freshToaster();
+
+    act(() => {
+      toast[type]("Fine.");
+    });
+
+    const shown = (await screen.findByText("Fine.")).closest<HTMLElement>("[data-sonner-toast]");
+    expect(shown?.className).not.toContain("--normal-bg");
+    act(() => {
+      toast.dismiss();
+    });
+  });
+
+  it("leaves a toast of no type plain, in the app's font", async () => {
+    const { toast, shown } = await freshToaster();
+
+    act(() => {
+      toast("Fine.");
+    });
+
+    const held = (await screen.findByText("Fine.")).closest<HTMLElement>("[data-sonner-toast]");
+    expect(held?.className).not.toContain("--normal-bg");
+    expect(shown()?.className).toContain("font-sans");
+    act(() => {
+      toast.dismiss();
+    });
+  });
+
   // sonner reads its theme from our store, not next-themes (ADR-0020, U84).
   it("follows the app's theme, live", async () => {
     const { toast, shown, stores } = await freshToaster();

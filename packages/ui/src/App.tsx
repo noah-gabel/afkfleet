@@ -41,8 +41,10 @@ export function AppRoot({ runtime, onRestart }: { runtime: AppRuntime; onRestart
       <ApiClientProvider client={runtime.apiClient}>
         <QueryClientProvider client={runtime.queryClient}>
           <StoresProvider stores={runtime.stores}>
-            <RouterProvider router={runtime.router} />
+            {/* Before the router: sonner's blur handler sends focus back to the previous control, so
+                last in the page, Tab could never leave its toast (ADR-0020, S107). */}
             <Toaster />
+            <RouterProvider router={runtime.router} />
           </StoresProvider>
         </QueryClientProvider>
       </ApiClientProvider>

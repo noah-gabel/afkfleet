@@ -50,16 +50,14 @@ describe("with a frozen Object.prototype", () => {
     await app.user.type(screen.getByLabelText("Password"), "placeholder password");
     await app.user.click(screen.getByRole("button", { name: "Log in" }));
     await app.user.type(await screen.findByLabelText("Code"), "654321");
-    await app.user.click(screen.getByRole("button", { name: "Confirm" }));
     await app.user.click(await screen.findByLabelText("I've saved these codes"));
     await app.user.click(screen.getByRole("button", { name: "Continue" }));
     await app.user.type(await screen.findByLabelText("Code"), "111222");
-    await app.user.click(screen.getByRole("button", { name: "Verify" }));
     await onHome("afkbot1");
     await app.user.click(screen.getByRole("button", { name: "Log out" }));
 
     await waitFor(() => expect(app.path()).toBe("/login"));
-    expect(await screen.findByText(/You're logged out on this PC/)).toBeDefined();
+    expect(await screen.findByText(/Logged out here/)).toBeDefined();
     expect(Object.isFrozen(Object.prototype)).toBe(true);
   });
 });

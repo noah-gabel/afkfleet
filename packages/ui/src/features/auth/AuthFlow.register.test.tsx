@@ -77,7 +77,7 @@ describe("registering with an invite", () => {
   it("names the server and links back to the login", async () => {
     await atRegister();
 
-    expect(screen.getByText("Registering on https://example.com")).toBeDefined();
+    expect(screen.getByText("https://example.com")).toBeDefined();
     expect(screen.getByRole("link", { name: "Back to login" })).toBeDefined();
   });
 
@@ -100,7 +100,7 @@ describe("registering with an invite", () => {
 
     await fill(app, INVITE, "another placeholder");
 
-    expect(await screen.findByText("The passwords don't match.")).toBeDefined();
+    expect(await screen.findByText("Passwords don't match.")).toBeDefined();
     expect(app.fake.calls.map((call) => call.method)).not.toContain("register");
   });
 

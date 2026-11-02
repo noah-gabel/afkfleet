@@ -17,7 +17,7 @@ import { botActions } from "../permissions";
 import { agentLastSeen, BACK_HOME, BOT_NOT_FOUND } from "../texts";
 import { BotChat } from "./BotChat";
 import { BotControls } from "./BotControls";
-import { Facts, StateBadge } from "./BotParts";
+import { BotState, Facts } from "./BotParts";
 import { BotSettings } from "./BotSettings";
 import { BotTimeline } from "./BotTimeline";
 import { ChatSend } from "./ChatSend";
@@ -65,7 +65,7 @@ export function BotScreen({ id }: { id: string }) {
           <h1 id={nameId} className="text-2xl font-semibold tracking-tight">
             {data.account.name}
           </h1>
-          <StateBadge bot={data} />
+          <BotState bot={data} />
         </div>
         <Facts facts={facts} place="screen" />
         {lastSeen === undefined ? null : (

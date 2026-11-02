@@ -76,7 +76,7 @@ export function StepUpForm({
   });
 
   return (
-    <form className="flex flex-col gap-4" noValidate onSubmit={(event) => void submit(event)}>
+    <form className="flex flex-col gap-3" noValidate onSubmit={(event) => void submit(event)}>
       <FormField id={id} label="Current password" error={form.formState.errors.password?.message}>
         {(control) => (
           <PasswordInput

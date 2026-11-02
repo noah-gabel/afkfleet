@@ -3,10 +3,10 @@
  * (`source(".")`), so the classes of packages/ui's components are found when the desktop
  * app bundles it from apps/desktop.
  *
- * The theme tokens are shadcn/ui's (MIT, https://ui.shadcn.com), style radix-nova, base
- * color neutral. Group D's components need neither tw-animate-css nor shadcn's own
- * tailwind.css (component variants and animations); they arrive with the first component
- * that does (ADR-0017).
+ * The theme tokens' names are shadcn/ui's (MIT, https://ui.shadcn.com), style radix-nova, and their
+ * values are U92's palette (ADR-0020). The components need neither tw-animate-css nor shadcn's own
+ * tailwind.css (component variants and animations); they arrive with the first component that does
+ * (ADR-0017).
  *
  * sonner's stylesheet comes in here, bundled and so served from 'self', in Tailwind's
  * components layer so utilities still win. sonner itself is patched not to inject it as a
@@ -16,21 +16,35 @@
  * a palette class gets none, and scripts/theme-guard.mjs refuses one (ADR-0020, S95).
  * `--background` stays a hex value: the desktop app's Rust side paints the window with it before
  * the page loads, and a test keeps the two equal (S93).
+ *
+ * Every corner comes from `--radius`: Tailwind's own steps are reset, the four below are multiples
+ * of it, so 0 squares them all, and scripts/theme-guard.mjs refuses anything else (U101). Fonts are
+ * files of their own, never inlined as `data:`, which the CSP refuses (U93, S111); THIRD-PARTY-NOTICES.md
+ * holds their licence.
  */
 @import "tailwindcss" source(".");
 @import "sonner/dist/styles.css" layer(components);
+@import "@fontsource-variable/geist/wght.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/600.css";
 
 @custom-variant dark (&:is(.dark *));
 
 @theme {
   --color-*: initial;
+  --radius-*: initial;
+  --font-*: initial;
+  --font-sans: "Geist Variable", "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", Consolas, monospace;
+  /* Below this the sidebar collapses to icons (ADR-0020, U91, S106). */
+  --breakpoint-rail: 62.5rem;
 }
 
 @theme inline {
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) * 0.5);
+  --radius-md: calc(var(--radius) * 0.75);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --radius-xl: calc(var(--radius) * 1.5);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -49,6 +63,13 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-console-bg: var(--console-bg);
+  --color-console-fg: var(--console-fg);
+  --color-console-muted: var(--console-muted);
+  --color-console-accent: var(--console-accent);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -67,75 +88,89 @@
 
 :root {
   color-scheme: light;
-  --radius: 0.625rem;
-  --background: #ffffff;
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --radius: 0.25rem;
+  --background: #f4f5f6;
+  --foreground: #16191c;
+  --card: #ffffff;
+  --card-foreground: #16191c;
+  --popover: #ffffff;
+  --popover-foreground: #16191c;
+  --primary: #2f6291;
+  --primary-foreground: #ffffff;
+  --secondary: #e7e9ec;
+  --secondary-foreground: #16191c;
+  --muted: #e9ebed;
+  --muted-foreground: #4e545b;
+  --accent: #e1e5ea;
+  --accent-foreground: #16191c;
+  --destructive: #b42318;
+  --border: #d7dadf;
+  --input: #858b93;
+  --ring: #2f6291;
+  --success: #0b6b5c;
+  --warning: #8a5200;
+  --info: #2f6291;
+  --console-bg: #e3e6ea;
+  --console-fg: #16191c;
+  --console-muted: #4a5057;
+  --console-accent: #2a5985;
+  --chart-1: #2f6291;
+  --chart-2: #0b6b5c;
+  --chart-3: #8a5200;
+  --chart-4: #4e545b;
+  --chart-5: #b42318;
+  --sidebar: #e9ebed;
+  --sidebar-foreground: #16191c;
+  --sidebar-primary: #2f6291;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #e1e5ea;
+  --sidebar-accent-foreground: #16191c;
+  --sidebar-border: #d7dadf;
+  --sidebar-ring: #2f6291;
   /* The same in both themes: the server's QR code draws its own white, and this is its margin. */
   --qr-background: #fff;
 }
 
 .dark {
   color-scheme: dark;
-  --background: #0a0a0a;
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --background: #0f1113;
+  --foreground: #e9ebee;
+  --card: #181b1e;
+  --card-foreground: #e9ebee;
+  --popover: #1e2124;
+  --popover-foreground: #e9ebee;
+  --primary: #8fbde3;
+  --primary-foreground: #0d2133;
+  --secondary: #25282c;
+  --secondary-foreground: #e9ebee;
+  --muted: #212427;
+  --muted-foreground: #a8aeb5;
+  --accent: #2a2e33;
+  --accent-foreground: #e9ebee;
+  --destructive: #ff8a7d;
+  --border: #2f3338;
+  --input: #686e75;
+  --ring: #8fbde3;
+  --success: #4fd6bf;
+  --warning: #eeb158;
+  --info: #8fbde3;
+  --console-bg: #0a0c0d;
+  --console-fg: #e4e7ea;
+  --console-muted: #a1a7ae;
+  --console-accent: #8fbde3;
+  --chart-1: #8fbde3;
+  --chart-2: #4fd6bf;
+  --chart-3: #eeb158;
+  --chart-4: #a8aeb5;
+  --chart-5: #ff8a7d;
+  --sidebar: #181b1e;
+  --sidebar-foreground: #e9ebee;
+  --sidebar-primary: #8fbde3;
+  --sidebar-primary-foreground: #0d2133;
+  --sidebar-accent: #2a2e33;
+  --sidebar-accent-foreground: #e9ebee;
+  --sidebar-border: #2f3338;
+  --sidebar-ring: #8fbde3;
   --qr-background: #fff;
 }
 
@@ -143,13 +178,13 @@
 @media (prefers-color-scheme: dark) {
   :root:not(.light) {
     color-scheme: dark;
-    --background: #0a0a0a;
+    --background: #0f1113;
   }
 }
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border;
   }
   body {
     @apply bg-background text-foreground;
@@ -160,4 +195,16 @@
   input::-ms-clear {
     display: none;
   }
+}
+
+/*
+ * Every focus stop's indicator, at 3:1 against what's behind it (ADR-0020, S107). It's outside
+ * every layer on purpose: utilities and sonner's `outline: none` can't beat it, so no component
+ * draws its own, and the sweep reads this outline alone. A heading that takes the focus by script
+ * (`tabindex="-1"`) stays plain, and a control marked `data-focus-indicator="cells"` shows its focus
+ * in its cells, which the sweep reads instead (U103, S121).
+ */
+:focus-visible:not([tabindex="-1"], [data-focus-indicator="cells"]) {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }

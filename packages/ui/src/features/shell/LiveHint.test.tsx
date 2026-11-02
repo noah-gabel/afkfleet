@@ -13,7 +13,7 @@ afterEach(() => {
 
 /** The Header, where the hint shows. */
 function header() {
-  return within(screen.getByRole("banner"));
+  return within(screen.getByRole("group", { name: "Live updates" }));
 }
 
 /** The hint's screen reader text: the Header's one status region. */
@@ -23,7 +23,7 @@ function spoken(): string {
 
 /** The Header's text without the screen reader's. */
 function shown(): string {
-  const banner = screen.getByRole("banner").cloneNode(true) as HTMLElement;
+  const banner = screen.getByRole("group", { name: "Live updates" }).cloneNode(true) as HTMLElement;
   for (const status of banner.querySelectorAll("[role=status]")) {
     status.remove();
   }
@@ -39,7 +39,7 @@ async function live() {
 }
 
 const TOO_MANY =
-  "Live updates are already open in too many places. Close the app somewhere else, or try again in a minute.";
+  "Live updates open in too many places. Close the app elsewhere, or retry in a minute.";
 
 describe("the live events' hint", () => {
   it("counts a reconnect's wait down, and tells a screen reader once", async () => {
@@ -110,7 +110,7 @@ describe("the live events' hint", () => {
     [
       "certificate",
       { code: "certificate", message: "The server's certificate isn't trusted." },
-      "Live updates stopped: The server's certificate isn't trusted. Screens update when you open them.",
+      "Live updates stopped: The server's certificate isn't trusted. Screens update on open.",
     ],
     [
       "a refusal without a period",
@@ -119,7 +119,7 @@ describe("the live events' hint", () => {
         message: "The server refused the request.",
         api: { status: 418, code: "from_a_newer_server", message: "Refused", request_id: "r-1" },
       },
-      "Live updates stopped: Refused (request r-1). Screens update when you open them.",
+      "Live updates stopped: Refused (request r-1). Screens update on open.",
     ],
   ] as const)("says the watch stopped after %s, with why", async (_, error, text) => {
     const { watch, time } = await live();
@@ -133,7 +133,7 @@ describe("the live events' hint", () => {
 
   it("says the watch stopped when it ends by itself, and Reconnect starts a new one (R91)", async () => {
     const { app, watch, time } = await live();
-    const text = "Live updates stopped. Screens update when you open them.";
+    const text = "Live updates stopped. Screens update on open.";
 
     watch.latest().end();
     await time.advance(0);

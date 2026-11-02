@@ -21,7 +21,7 @@ export function PasswordInput({
         aria-label={toggleLabel}
         aria-pressed={shown}
         onClick={() => setShown((value) => !value)}
-        className="absolute inset-y-0 right-0 flex w-8 items-center justify-center rounded-r-lg text-muted-foreground hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+        className="absolute inset-y-0 right-0 flex w-8 items-center justify-center rounded-r-lg text-muted-foreground hover:text-foreground"
       >
         {shown ? (
           <EyeOffIcon className="size-4" aria-hidden />

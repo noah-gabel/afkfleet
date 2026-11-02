@@ -14,12 +14,18 @@ export function ThemeSection() {
   const chosen = useTheme((state) => state.choice);
   const store = useAppStores().theme;
   return (
-    <section aria-labelledby="appearance-heading" className="flex flex-col gap-2">
-      <h2 id="appearance-heading" className="text-lg font-semibold">
+    <section
+      aria-labelledby="appearance-heading"
+      className="flex flex-col gap-2 rounded-lg border bg-card p-3"
+    >
+      <h2
+        id="appearance-heading"
+        className="text-xs font-semibold tracking-wider text-muted-foreground uppercase"
+      >
         Appearance
       </h2>
       <fieldset className="flex flex-col gap-2">
-        <legend className="text-sm font-medium">Theme</legend>
+        <legend className="text-sm font-semibold">Theme</legend>
         {CHOICES.map(({ choice, label, hint }) => (
           <div key={choice} className="flex flex-col">
             <label className="flex items-start gap-2 text-sm">
@@ -30,7 +36,7 @@ export function ThemeSection() {
                 checked={chosen === choice}
                 aria-describedby={hint === undefined ? undefined : `theme-hint-${choice}`}
                 onChange={() => store.getState().choose(choice)}
-                className="mt-1"
+                className="mt-1 accent-primary"
               />
               {label}
             </label>

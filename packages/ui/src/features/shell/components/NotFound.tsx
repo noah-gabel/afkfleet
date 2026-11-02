@@ -6,9 +6,9 @@ import { Link } from "@tanstack/react-router";
 export function NotFound() {
   return (
     <main className="flex flex-1 flex-col items-center justify-center gap-3 p-8">
-      <p>This page doesn't exist or isn't available to you.</p>
-      <Link to="/home" className="text-sm font-medium underline underline-offset-4">
-        Go to Home
+      <p>Page not found or not available to you.</p>
+      <Link to="/home" className="text-sm font-semibold underline underline-offset-4">
+        Home
       </Link>
     </main>
   );

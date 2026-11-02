@@ -1171,6 +1171,11 @@ export class FakeBackend {
     });
   }
 
+  /** Ends the page's live watch by itself, while its session goes on: the hint's stopped row. */
+  stopWatch(): void {
+    this.#endWatch(value());
+  }
+
   /** Ends the held watch, if there is one, with `outcome`. */
   #endWatch(outcome: Outcome): void {
     this.#watch?.(outcome);
