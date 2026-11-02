@@ -704,6 +704,28 @@ test("a bot's console in every look, and its screen stacked and loading", async 
   await expect(page.getByRole("heading", { name: "AfkBot2", level: 1 })).toBeVisible();
 });
 
+test("a bot waiting for its agent, as the Owner and as a Member", async ({ page, context }) => {
+  const backend = await fakeBackend(context);
+  const account = backend.addAccount(OWNER);
+  backend.share(account, MEMBER, "control");
+  backend.setBot("AfkBot1", {
+    desiredState: "stopped",
+    status: { kind: "unknown", state: "online", agent_last_seen_at: new Date().toISOString() },
+  });
+  await signIn(page, backend, OWNER);
+  await expect(page.getByText("Tied until it returns or an admin releases it.")).toBeVisible();
+  await bothThemes(page, "Home, a bot waiting for its agent");
+
+  await page.getByRole("link", { name: "Open AfkBot1" }).click();
+  const main = page.getByRole("main");
+  await expect(main.getByText("Waiting for agent")).toBeVisible();
+  await bothThemes(page, "a bot waiting for its agent");
+
+  await main.getByRole("button", { name: "Start" }).click();
+  await expect(main.getByText("Saved. Agent unreachable, so nothing changes yet.")).toBeVisible();
+  await bothThemes(page, "a bot waiting for its agent, saved");
+});
+
 test("a card's Start, its refusal and its wait", async ({ page, context }) => {
   const backend = await fakeBackend(context);
   backend.addAccount(OWNER);

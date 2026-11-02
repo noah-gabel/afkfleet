@@ -6,7 +6,8 @@
 // when the bot comes back to that state (R106). A refusal shows by the control (U48): a 409's or a
 // 403's message, after which the bot is read again, as it is after a 404, which shows the screen's own
 // 404. A 429 counts down on the controls that spend the bot's limit, never on Stop, which the limit
-// exempts (S52, R104).
+// exempts (S52, R104). A start or a stop that its bot's agent can't be told of yet says so, the same
+// way (S125).
 //
 // A card reads the list, not the bot, so it says `onCard`. The list costs a read per loaded page, and
 // a live frame patches it anyway, so a success reads it only while the watch is down (R115); a refusal
@@ -43,12 +44,20 @@ function refusal(error: CommandError): string {
     : describeError(error);
 }
 
+/** What a call leaves to say: which note, and the bot's state it's about. */
+interface Note {
+  readonly kind: "sent" | "saved";
+  readonly at: string;
+}
+
 /** One bot's lifecycle calls. */
 export interface BotControl {
   /** The call that's running. */
   readonly running: Control | null;
   /** A call was sent to its agent, and the bot hasn't changed since. */
   readonly sent: boolean;
+  /** A start or a stop was saved that its agent can't be told of yet, and the bot hasn't changed. */
+  readonly saved: boolean;
   /** Why the last call was refused. */
   readonly failure: string | null;
   readonly wait: RetryWait;
@@ -66,13 +75,12 @@ export function useBotControl(bot: BotResponse, { onCard = false } = {}): BotCon
   const alive = useAlive();
   const wait = useRetryWait();
   const [running, setRunning] = useState<Control | null>(null);
-  /** The bot's state when a call was sent to its agent. */
-  const [sentAt, setSentAt] = useState<string | null>(null);
+  const [note, setNote] = useState<Note | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const shown = stateOf(bot);
-  // The bot changed since the call was sent: its note goes for good (R106).
+  // The bot changed since the call: its note goes for good (R106).
   useEffect(() => {
-    setSentAt((sent) => (sent === null || sent === shown ? sent : null));
+    setNote((held) => (held === null || held.at === shown ? held : null));
   }, [shown]);
   // A card's refusal goes with the state it was about. A 403's stays, as it says why the button went:
   // the viewer's level isn't part of the state.
@@ -83,17 +91,17 @@ export function useBotControl(bot: BotResponse, { onCard = false } = {}): BotCon
     }
   }, [onCard, refusedAt, shown]);
 
-  /** The call behind `control`: its answer's state when its agent was sent it, else null. */
-  async function call(control: Control): Promise<string | null> {
-    const sent = (answer: BotCommandResponse) =>
-      answer.effect === "sent" ? stateOf(answer.bot) : null;
+  /** The call behind `control`, and the note its answer leaves, if any. */
+  async function call(control: Control): Promise<Note | null> {
+    const sent = (answer: BotCommandResponse): Note | null =>
+      answer.effect === "sent" ? { kind: "sent", at: stateOf(answer.bot) } : null;
+    const saved = (answer: BotResponse): Note | null =>
+      answer.status.kind === "unknown" ? { kind: "saved", at: stateOf(answer) } : null;
     switch (control) {
       case "start":
-        await api.startBot(bot.id);
-        return null;
+        return saved(await api.startBot(bot.id));
       case "stop":
-        await api.stopBot(bot.id);
-        return null;
+        return saved(await api.stopBot(bot.id));
       case "restart":
         return sent(await api.restartBot(bot.id));
       case "resume":
@@ -113,14 +121,14 @@ export function useBotControl(bot: BotResponse, { onCard = false } = {}): BotCon
     }
     setRunning(control);
     setFailure(null);
-    setSentAt(null);
+    setNote(null);
     wait.reset();
     let readAgain = true;
     let refused = false;
     try {
-      const sent = await call(control);
+      const left = await call(control);
       if (alive.current) {
-        setSentAt(sent);
+        setNote(left);
       }
     } catch (rejection) {
       const error = toApiError(rejection).error;
@@ -145,7 +153,8 @@ export function useBotControl(bot: BotResponse, { onCard = false } = {}): BotCon
 
   return {
     running,
-    sent: sentAt !== null && sentAt === shown,
+    sent: note?.kind === "sent" && note.at === shown,
+    saved: note?.kind === "saved" && note.at === shown,
     failure,
     wait,
     locked: (control) => running !== null || (wait.waiting !== null && control !== "stop"),

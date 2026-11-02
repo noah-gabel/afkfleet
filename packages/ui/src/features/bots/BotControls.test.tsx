@@ -11,7 +11,7 @@ import { fakeTime } from "../../test/renderApp";
 import { expectWait, limited } from "../../test/retryWait";
 import { atBot } from "../../test/signedIn";
 import { refusal } from "../../test/signIn";
-import { SENT_NOTE, VIEW_ONLY } from "./texts";
+import { SAVED_NOTE, SENT_NOTE, VIEW_ONLY } from "./texts";
 
 const ID = botId(1);
 const NOW = new Date("2026-10-26T14:05:00.000Z");
@@ -207,5 +207,53 @@ describe("a bot's controls", () => {
       false,
     );
     await expectWait(app, time, { button: "Restart", method: "restartBot", seconds: 3 });
+  });
+});
+
+describe("a call on a bot its agent can't be reached for (S125)", () => {
+  const OFFLINE = bot(1, {
+    desired_state: "stopped",
+    status: { kind: "unknown", state: "online", since: SINCE, agent_last_seen_at: SINCE },
+  });
+  const WANTED = { ...OFFLINE, desired_state: "running" as const };
+
+  it("says it's saved and nothing changes yet", async () => {
+    const { app } = await controls(OFFLINE, { startBot: async () => WANTED }, WANTED);
+
+    await app.user.click(screen.getByRole("button", { name: "Start" }));
+
+    expect((await screen.findByText(SAVED_NOTE)).getAttribute("role")).toBe("status");
+  });
+
+  it("drops the note when the bot changes, for good", async () => {
+    const reachable = {
+      ...WANTED,
+      status: { kind: "reported" as const, state: "connecting" as const, since: SINCE },
+    };
+    const { app } = await controls(OFFLINE, { startBot: async () => WANTED }, WANTED);
+    await app.user.click(screen.getByRole("button", { name: "Start" }));
+    await screen.findByText(SAVED_NOTE);
+
+    act(() => {
+      app.runtime.queryClient.setQueryData(botKey(ID), reachable);
+    });
+
+    await vi.waitFor(() => expect(screen.queryByText(SAVED_NOTE)).toBeNull());
+  });
+
+  it("says nothing when the answer reads as anything else", async () => {
+    const stopped = bot(1, {
+      desired_state: "stopped",
+      status: { kind: "unplaced", why: "stopped", since: SINCE },
+    });
+    const started = { ...stopped, desired_state: "running" as const };
+    const { app } = await controls(stopped, { startBot: async () => started }, started);
+
+    await app.user.click(screen.getByRole("button", { name: "Start" }));
+
+    await vi.waitFor(() =>
+      expect(app.fake.calls.some((one) => one.method === "startBot")).toBe(true),
+    );
+    expect(screen.queryByText(SAVED_NOTE)).toBeNull();
   });
 });

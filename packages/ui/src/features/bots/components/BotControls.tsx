@@ -9,7 +9,7 @@ import type { BotResponse } from "../../../generated/BotResponse";
 import { controlsFor } from "../controls";
 import { useBotControl } from "../hooks/useBotControl";
 import { botActions } from "../permissions";
-import { CONTROL, SENT_NOTE, VIEW_ONLY } from "../texts";
+import { CONTROL, SAVED_NOTE, SENT_NOTE, VIEW_ONLY } from "../texts";
 
 /** `bot`'s controls. */
 export function BotControls({ bot }: { bot: BotResponse }) {
@@ -43,6 +43,11 @@ export function BotControls({ bot }: { bot: BotResponse }) {
       {control.sent ? (
         <p role="status" className="text-sm text-muted-foreground">
           {SENT_NOTE}
+        </p>
+      ) : null}
+      {control.saved ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          {SAVED_NOTE}
         </p>
       ) : null}
       {control.failure === null ? null : (

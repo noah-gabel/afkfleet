@@ -5,6 +5,7 @@
 // of it (U113). While it's open, its notices are acknowledged (R109).
 // A read that answers 404 says the bot doesn't exist or can't be seen, also when it goes
 // while its screen is open (a `bot_removed` resets its query, which reads it again, R98).
+import { Link } from "@tanstack/react-router";
 import { useEffect, useId } from "react";
 
 import { toApiError } from "../../../api/ApiError";
@@ -13,11 +14,12 @@ import { useBot, useModes } from "../../../api/queries";
 import { useRecord } from "../../../app/context";
 import { Facts } from "../../../components/Facts";
 import { ScreenState } from "../../../components/ScreenState";
+import { Button } from "../../../components/ui/button";
 import { Card } from "../../../components/ui/card";
 import { useNow } from "../../../hooks/useNow";
 import { botFacts, modesOf, uptimeNextChange } from "../facts";
 import { botActions } from "../permissions";
-import { agentLastSeen, BOT_NOT_FOUND, LOADING_BOT } from "../texts";
+import { AGENTS_LINK, agentLastSeen, BOT_NOT_FOUND, LOADING_BOT } from "../texts";
 import { BotChat } from "./BotChat";
 import { BotControls } from "./BotControls";
 import { BotState } from "./BotParts";
@@ -83,6 +85,11 @@ export function BotScreen({ id }: { id: string }) {
               {lastSeen === undefined ? null : (
                 <p className="text-sm text-muted-foreground">{agentLastSeen(lastSeen, now)}</p>
               )}
+              {data.status.kind === "unknown" && data.agent !== undefined ? (
+                <Button asChild variant="link" size="sm" className="self-start px-0">
+                  <Link to="/admin/agents">{AGENTS_LINK}</Link>
+                </Button>
+              ) : null}
             </Card>
           </section>
           <BotSettings bot={data} />

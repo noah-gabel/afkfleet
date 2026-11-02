@@ -1812,6 +1812,10 @@ export class FakeBackend {
   /** `bot` wanted running or stopped: a paused or failed one keeps its state (S51). */
   #want(bot: Bot, running: boolean): void {
     bot.desiredState = running ? "running" : "stopped";
+    // Start and stop only write the wish: a bot stays tied to an agent that can't be reached (S125).
+    if (bot.status.kind === "unknown") {
+      return;
+    }
     const { state, reason } = bot.status;
     const resting =
       (state === "paused" || state === "failed") && reason !== undefined ? { state, reason } : {};

@@ -316,3 +316,21 @@ describe("the notices' texts (U42)", () => {
     expect([noticeToast(notice), noticeLine(notice)]).toEqual([toast, line]);
   });
 });
+
+describe("the timeline stays short for a bot its agent can't reach (S125)", () => {
+  it("names the state, not the wait", () => {
+    const text = entryText(
+      {
+        kind: "status",
+        arrived: 0,
+        status: { kind: "unknown", state: "online" },
+        desired: "running",
+        newDisconnect: false,
+      } as Parameters<typeof entryText>[0],
+      (id) => id,
+    );
+
+    expect(text).toBe("Agent offline");
+    expect(text).not.toContain("Tied");
+  });
+});

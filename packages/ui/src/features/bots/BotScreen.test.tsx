@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiClient } from "../../api/ApiClient";
@@ -260,5 +260,45 @@ describe("a bot's screen", () => {
     watch.latest().push(event({ type: "bot_removed", bot_id: ID }));
 
     expect(await screen.findByText(BOT_NOT_FOUND)).toBeDefined();
+  });
+});
+
+describe("the way to a waiting bot's agent (S125)", () => {
+  const waiting = (changes: Parameters<typeof bot>[1] = {}) =>
+    bot(1, {
+      desired_state: "stopped",
+      status: { kind: "unknown", state: "online", since: SINCE, agent_last_seen_at: SINCE },
+      ...changes,
+    });
+  const AGENT = {
+    id: "01900000-0000-7000-8000-000000000301",
+    name: "agent-main",
+    status: "offline" as const,
+  };
+
+  it("is offered when the server names the agent", async () => {
+    await botScreen(waiting({ agent: AGENT }));
+
+    const link = within(screen.getByRole("main")).getByRole("link", { name: "Agents" });
+    expect(link.getAttribute("href")).toBe("/admin/agents");
+  });
+
+  it("isn't offered to a Member, whom the server doesn't tell", async () => {
+    await botScreen(waiting());
+
+    expect(within(screen.getByRole("main")).queryByRole("link", { name: "Agents" })).toBeNull();
+    expect(screen.getByText("Tied until it returns or an admin releases it.")).toBeDefined();
+  });
+
+  it("isn't offered while the bot's agent answers", async () => {
+    await botScreen(
+      bot(1, {
+        agent: { ...AGENT, status: "online" },
+        desired_state: "running",
+        status: { kind: "reported", state: "online", since: SINCE },
+      }),
+    );
+
+    expect(within(screen.getByRole("main")).queryByRole("link", { name: "Agents" })).toBeNull();
   });
 });

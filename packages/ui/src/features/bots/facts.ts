@@ -20,6 +20,7 @@ import {
   modeName,
   notRunningText,
   restingText,
+  waitingText,
 } from "./texts";
 
 /** Every mode the viewer may see, or that they're still loading or couldn't be read. */
@@ -80,7 +81,7 @@ export function botFacts(
   if (place === "screen" && status.attempt !== undefined && trying(status)) {
     facts.push({ term: LABEL.attempt, value: String(status.attempt) });
   }
-  facts.push(...reasons(status));
+  facts.push(...reasons(bot));
   // A card shows how the last session ended only while the bot isn't online.
   if (status.last_disconnect !== undefined && (place === "screen" || uptime === null)) {
     facts.push({ term: LABEL.lastDisconnect, value: disconnectText(status.last_disconnect) });
@@ -141,17 +142,24 @@ function trying(status: BotStatus): boolean {
 }
 
 /**
- * Why a bot doesn't run: why it isn't placed, why it rests paused or failed, or both, the
- * not-running one first, each under its own label; one alone under "Reason".
+ * Why a bot doesn't run: that it waits for an agent that can't be reached (S125), why it isn't placed,
+ * why it rests paused or failed, or two of them, the first one first, each under its own label; a
+ * reason alone under "Reason".
  */
-function reasons(status: BotStatus): Fact[] {
-  const notRunning = notRunningText(status);
+function reasons(bot: BotResponse): Fact[] {
+  const { status } = bot;
   const resting = restingText(status);
+  const restingFact = (value: string): Fact => ({
+    term: status.state === "failed" ? LABEL.failed : LABEL.paused,
+    value,
+  });
+  if (status.kind === "unknown") {
+    const waiting = waitingText(bot.agent?.status);
+    return resting === null ? [waiting] : [waiting, restingFact(resting)];
+  }
+  const notRunning = notRunningText(status);
   if (notRunning !== null && resting !== null) {
-    return [
-      { term: LABEL.notRunning, value: notRunning },
-      { term: status.state === "failed" ? LABEL.failed : LABEL.paused, value: resting },
-    ];
+    return [{ term: LABEL.notRunning, value: notRunning }, restingFact(resting)];
   }
   const reason = notRunning ?? resting;
   return reason === null ? [] : [{ term: LABEL.reason, value: reason }];

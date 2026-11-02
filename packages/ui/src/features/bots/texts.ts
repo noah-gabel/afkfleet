@@ -49,6 +49,8 @@ export const LABEL = {
   lastDisconnect: "Last disconnect",
   agent: "Agent",
   notRunning: "Not running",
+  waitingAgent: "Waiting for agent",
+  waitingRelease: "Waiting for release",
   paused: "Paused",
   failed: "Failed",
 } as const;
@@ -191,6 +193,35 @@ export function notRunningText(status: BotStatus): string | null {
     : null;
 }
 
+/**
+ * Why a bot tied to an agent that can't be reached waits, as a fact (S125). It's chosen by what the
+ * server sent: `agent` reaches only Admins and the Owner, so a Member learns nothing about the agent's
+ * health. An agent that's disabled or expired can't return: enrolling mints a new agent, so its bots
+ * wait for a release. A bot with a last known state keeps running on an unreachable agent, so this
+ * never says it doesn't run.
+ */
+export function waitingText(agent: AgentStatus | undefined): {
+  readonly term: string;
+  readonly value: string;
+} {
+  switch (agent) {
+    case undefined:
+      return { term: LABEL.waitingAgent, value: TIED_ASK_ADMIN };
+    case "expired":
+      return { term: LABEL.waitingRelease, value: "Agent certificate expired." };
+    case "disabled":
+      return { term: LABEL.waitingRelease, value: "Agent disabled." };
+    default:
+      return { term: LABEL.waitingAgent, value: "Tied until it returns or is released." };
+  }
+}
+
+/** A Member's reason to turn to an admin, who alone sees the agents (S125). */
+const TIED_ASK_ADMIN = "Tied until it returns or an admin releases it.";
+
+/** The way to the agents, for whoever the server names a bot's agent to (S125). */
+export const AGENTS_LINK = "Agents";
+
 /** How a bot's last session ended. */
 export function disconnectText(last: LastDisconnect): string {
   switch (last.kind) {
@@ -314,6 +345,8 @@ export const CONTROL = {
 export function cardControlName(control: string, name: string): string {
   return `${control} ${name}`;
 }
+/** After a start or a stop that its bot's agent can't be told of yet (S125). */
+export const SAVED_NOTE = "Saved. Agent unreachable, so nothing changes yet.";
 /** After a call its bot's agent was sent (S73). */
 export const SENT_NOTE = "Sent. The state changes when its agent reports back.";
 /** Where the controls would be, for a viewer whose level allows none (U38). */
