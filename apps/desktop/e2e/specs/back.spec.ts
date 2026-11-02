@@ -74,14 +74,32 @@ test("the side-button and Alt+Left each go back one screen", async ({ page, cont
   await page.keyboard.press("Alt+ArrowLeft");
   const bots = page.getByRole("heading", { name: "Bots", level: 1 });
   await expect(bots).toBeVisible();
-  // After a key, a focused heading would show the browser's ring unless told not to.
   await expect(bots).toBeFocused();
-  await expect(bots).toHaveCSS("outline-style", "none");
 
   // Nothing more to go back to: both stay put, and the app stays where it is.
   await page.keyboard.press("Alt+ArrowLeft");
   await sideButton(page);
   await expect(page.getByRole("heading", { name: "Bots", level: 1 })).toBeVisible();
+});
+
+test("Back pressed with Enter leaves no ring on the heading it lands on", async ({
+  page,
+  context,
+}) => {
+  const backend = await fakeBackend(context);
+  backend.addAccount(OWNER);
+  await signIn(page, backend, OWNER);
+  await page.getByRole("link", { name: "Open AfkBot1" }).click();
+  await expect(back(page)).toBeVisible();
+
+  // Chromium doesn't count Alt+Left as keyboard use, so only a plain key can show the ring.
+  await back(page).focus();
+  await page.keyboard.press("Enter");
+
+  const bots = page.getByRole("heading", { name: "Bots", level: 1 });
+  await expect(bots).toBeFocused();
+  expect(await bots.evaluate((heading) => heading.matches(":focus-visible"))).toBe(true);
+  await expect(bots).toHaveCSS("outline-style", "none");
 });
 
 test("across a logout and a login, Back never reaches the sign-in screens", async ({

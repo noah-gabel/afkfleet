@@ -640,6 +640,35 @@ test("Home, its bots in every status, and a bot's screen", async ({ page, contex
   await expect(failed).toBeVisible();
 });
 
+test("a card's Start, its refusal and its wait", async ({ page, context }) => {
+  const backend = await fakeBackend(context);
+  backend.addAccount(OWNER);
+  backend.addAccount(OWNER);
+  backend.setBot("AfkBot2", {
+    desiredState: "running",
+    status: { kind: "reported", state: "online" },
+  });
+  await signIn(page, backend, OWNER);
+  const card = (name: string) => page.locator("[data-slot=card]").filter({ hasText: name });
+  await expect(card("AfkBot1").getByRole("button", { name: "Start AfkBot1" })).toBeVisible();
+  await expect(card("AfkBot2").getByRole("button", { name: "Stop AfkBot2" })).toBeVisible();
+  await bothThemes(page, "Home, Start and Stop");
+
+  backend.refuseNext("start_bot", 409, "conflict");
+  await card("AfkBot1").getByRole("button", { name: "Start AfkBot1" }).click();
+  await expect(card("AfkBot1").getByRole("alert")).toBeVisible();
+  await bothThemes(page, "Home, a card's refusal");
+
+  backend.refuseNext("start_bot", 429, "rate_limited", 300);
+  await card("AfkBot1").getByRole("button", { name: "Start AfkBot1" }).click();
+  await expect(
+    card("AfkBot1")
+      .getByText(/Try again in/)
+      .first(),
+  ).toBeVisible();
+  await textsInBothThemes(page, "Home, a card's wait");
+});
+
 test("the bot screen and the empty lists of someone with nothing yet", async ({
   page,
   context,

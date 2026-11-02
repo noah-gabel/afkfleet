@@ -308,6 +308,10 @@ export const CONTROL = {
   resume: "Resume",
   reset: "Reset",
 } as const;
+/** A card's button, as a screen reader names it among the others (U88, S124). */
+export function cardControlName(control: string, name: string): string {
+  return `${control} ${name}`;
+}
 /** After a call its bot's agent was sent (S73). */
 export const SENT_NOTE = "Sent. The state changes when its agent reports back.";
 /** Where the controls would be, for a viewer whose level allows none (U38). */

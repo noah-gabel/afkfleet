@@ -722,6 +722,7 @@ export class FakeBackend {
   #refusing: CommandErrorCode | null = null;
   readonly #held = new Set<string>();
   readonly #called = new Map<string, number>();
+  readonly #refuseNext = new Map<string, Outcome>();
   readonly #waiting: (() => void)[] = [];
 
   constructor() {
@@ -806,6 +807,11 @@ export class FakeBackend {
    */
   handle(command: string, args: Record<string, unknown>): Outcome | Promise<Outcome> {
     this.#called.set(command, (this.#called.get(command) ?? 0) + 1);
+    const refusal = this.#refuseNext.get(command);
+    if (refusal !== undefined) {
+      this.#refuseNext.delete(command);
+      return refusal;
+    }
     // Not the theme's, which reaches no server, nor the profile, which only the app holds.
     if (this.#refusing !== null && command !== "set_window_theme" && command !== "server_profile") {
       return refused(this.#refusing);
@@ -816,6 +822,23 @@ export class FakeBackend {
       );
     }
     return this.#answer(command, args);
+  }
+
+  /** The next `command` answers `status` and `code`, with `retryAfter` seconds to wait if given. */
+  refuseNext(command: string, status: number, code: ErrorCode, retryAfter?: number): void {
+    const outcome = api(status, code) as Extract<Outcome, { ok: false }>;
+    this.#refuseNext.set(
+      command,
+      retryAfter === undefined || outcome.error.api === undefined
+        ? outcome
+        : {
+            ...outcome,
+            error: {
+              ...outcome.error,
+              api: { ...outcome.error.api, retry_after_secs: retryAfter },
+            },
+          },
+    );
   }
 
   /** How many times `command` reached the fake. Names only: arguments may hold a secret. */

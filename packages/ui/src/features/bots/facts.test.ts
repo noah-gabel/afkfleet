@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { bot } from "../../test/live";
-import { botFacts, type Place, uptimeNextChange } from "./facts";
+import type { Place } from "../../components/Facts";
+import { botFacts, uptimeNextChange } from "./facts";
 
 const NOW = Date.parse("2026-10-26T14:05:00.000Z");
 

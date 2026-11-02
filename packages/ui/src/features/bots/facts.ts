@@ -4,6 +4,7 @@
 // mode's name comes from every mode the viewer may see; a mode missing from that list is
 // another user's private one, named as such, never by its ID (S68). An uptime counts from
 // the agent's `online_since` on the PC's clock, never below zero (R93).
+import type { Fact, Place } from "../../components/Facts";
 import type { BotResponse } from "../../generated/BotResponse";
 import type { BotStatus } from "../../generated/BotStatus";
 import type { ModeResponse } from "../../generated/ModeResponse";
@@ -21,12 +22,6 @@ import {
   restingText,
 } from "./texts";
 
-/** One fact: its label and its value. */
-export interface Fact {
-  readonly term: string;
-  readonly value: string;
-}
-
 /** Every mode the viewer may see, or that they're still loading or couldn't be read. */
 export type Modes = readonly ModeResponse[] | "loading" | "failed";
 
@@ -42,9 +37,6 @@ export function modesOf(modes: {
   }
   return modes.error === null ? "loading" : "failed";
 }
-
-/** Where the facts show: a card only what matters at a glance (U35, U37). */
-export type Place = "card" | "screen";
 
 /** A second and a minute, the uptime's ticks in its first minute and after it. */
 const SECOND = 1000;
