@@ -711,19 +711,38 @@ test("a bot waiting for its agent, as the Owner and as a Member", async ({ page,
   backend.setBot("AfkBot1", {
     desiredState: "stopped",
     status: { kind: "unknown", state: "online", agent_last_seen_at: new Date().toISOString() },
+    agent: { id: "01900000-0000-7000-8000-000000000301", name: "agent-main", status: "offline" },
   });
   await signIn(page, backend, OWNER);
-  await expect(page.getByText("Tied until it returns or an admin releases it.")).toBeVisible();
+  await expect(page.getByText("Tied until it returns or is released.")).toBeVisible();
   await bothThemes(page, "Home, a bot waiting for its agent");
 
   await page.getByRole("link", { name: "Open AfkBot1" }).click();
   const main = page.getByRole("main");
   await expect(main.getByText("Waiting for agent")).toBeVisible();
-  await bothThemes(page, "a bot waiting for its agent");
+  await expect(main.getByRole("link", { name: "Agents" })).toBeVisible();
+  await bothThemes(page, "a bot waiting for its agent, with the way to the agents");
 
   await main.getByRole("button", { name: "Start" }).click();
   await expect(main.getByText("Saved. Agent unreachable, so nothing changes yet.")).toBeVisible();
   await bothThemes(page, "a bot waiting for its agent, saved");
+
+  backend.setBot("AfkBot1", {
+    agent: { id: "01900000-0000-7000-8000-000000000301", name: "agent-main", status: "disabled" },
+  });
+  await page.reload();
+  await expect(page.getByText("Agent disabled.")).toBeVisible();
+  await bothThemes(page, "Home, a bot waiting for a release");
+
+  await page.getByRole("button", { name: "Log out" }).click();
+  await logIn(page, MEMBER);
+  await enterCode(page, backend.code(MEMBER));
+  await expectHome(page, MEMBER);
+  await expect(page.getByText("Tied until it returns or an admin releases it.")).toBeVisible();
+  await bothThemes(page, "Home, a bot waiting, as a Member");
+  await page.getByRole("link", { name: "Open AfkBot1" }).click();
+  await expect(main.getByRole("link", { name: "Agents" })).toHaveCount(0);
+  await bothThemes(page, "a bot waiting, as a Member");
 });
 
 test("an account's screen: a row's question, the step-up, and below Manage", async ({

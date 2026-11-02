@@ -37,6 +37,7 @@ import type { AgentResponse } from "@afkfleet/ui/generated/AgentResponse";
 import type { ApiErrorDetails } from "@afkfleet/ui/generated/ApiErrorDetails";
 import type { AuditEntryResponse } from "@afkfleet/ui/generated/AuditEntryResponse";
 import type { AuditPage } from "@afkfleet/ui/generated/AuditPage";
+import type { BotAgent } from "@afkfleet/ui/generated/BotAgent";
 import type { BotCommandResponse } from "@afkfleet/ui/generated/BotCommandResponse";
 import type { BotPage } from "@afkfleet/ui/generated/BotPage";
 import type { BotResponse } from "@afkfleet/ui/generated/BotResponse";
@@ -283,6 +284,8 @@ interface Bot {
   serverAddress?: string;
   desiredState: BotResponse["desired_state"];
   status: BotStatus;
+  /** The agent it's tied to, which the server names only to Admins and the Owner. */
+  agent?: BotAgent;
   /** Its chat, oldest first, as the server keeps it: the whole line, every field. */
   readonly chat: ChatLine[];
 }
@@ -1788,6 +1791,7 @@ export class FakeBackend {
       mode_id: bot.modeId,
       desired_state: bot.desiredState,
       status: bot.status,
+      ...(bot.agent !== undefined && user.role !== "member" ? { agent: bot.agent } : {}),
     };
   }
 

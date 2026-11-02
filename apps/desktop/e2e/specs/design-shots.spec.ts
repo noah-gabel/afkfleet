@@ -1,5 +1,5 @@
 // Screenshots of L3's screens in both themes, from the fake's placeholder data, for the user to
-// look at (Plan.md P11.11; ADR-0020, group L3). They're no test: the spec runs only when
+// look at (Plan.md P11.11; ADR-0020, group L3), run on the unchanged screens first and at the end. They're no test: the spec runs only when
 // AFK_DESIGN_SHOTS names a folder, and L4 replaces it with the baselines (U97).
 //
 //   AFK_DESIGN_SHOTS=target/design-l3/after pnpm --filter @afkfleet/desktop exec playwright test design-shots
