@@ -17,6 +17,7 @@ import {
   inScheme,
   measured,
   selectsInTokens,
+  textsInBothThemes,
   walked,
 } from "./theme";
 
@@ -627,16 +628,36 @@ test("the banner, the start screen, loading and the error panel", async ({ page,
   const backend = await fakeBackend(context);
   backend.addAccount(OWNER);
   await signIn(page, backend, OWNER);
-  const status = page.getByRole("status");
+  const banner = page.locator("[data-slot=connection-banner]");
 
   backend.refuseAll("unreachable");
   await nav(page, "Accounts");
-  await expect(status.getByText(/Can't reach the server/)).toBeVisible();
+  await expect(banner.getByText(/Server unreachable/)).toBeVisible();
   await bothThemes(page, "the banner, unreachable");
   backend.refuseAll("certificate");
   await nav(page, "Modes");
-  await expect(status.getByRole("button", { name: "Server settings" })).toBeVisible();
+  await expect(banner.getByRole("button", { name: "Server settings" })).toBeVisible();
   await bothThemes(page, "the banner, certificate");
+  backend.refuseAll(null);
+  await banner.getByRole("button", { name: "Retry now" }).click();
+  await expect(banner.getByRole("button", { name: "Retry now" })).toHaveCount(0);
+
+  await page.setViewportSize({ width: 900, height: 700 });
+  const logOut = page
+    .getByRole("group", { name: "Account" })
+    .getByRole("button", { name: "Log out" });
+  await logOut.hover();
+  await expect(page.locator("[data-slot=tooltip]")).toBeVisible();
+  // A Tab moves the focus, which closes a tip, so this row holds its texts only.
+  await textsInBothThemes(page, "the collapsed sidebar, a tooltip open");
+  await page.mouse.move(600, 600);
+  await expect(page.locator("[data-slot=tooltip]")).toHaveCount(0);
+  await bothThemes(page, "the collapsed sidebar");
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  backend.stopWatch();
+  await expect(page.getByRole("button", { name: "Reconnect" })).toBeVisible();
+  await bothThemes(page, "the live hint, stopped");
 
   backend.refuseAll("unreachable");
   await page.reload();
@@ -651,7 +672,9 @@ test("the banner, the start screen, loading and the error panel", async ({ page,
 
   backend.hold("bots");
   await page.reload();
-  await expect(page.getByRole("banner").getByText(OWNER, { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("group", { name: "Account" }).getByText(OWNER, { exact: true }),
+  ).toBeVisible();
   await bothThemes(page, "Home, loading");
   backend.release();
   await expect(page.getByRole("link", { name: "Open AfkBot1" })).toBeVisible();

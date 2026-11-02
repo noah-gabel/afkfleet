@@ -80,7 +80,7 @@ describe("the launch", () => {
       });
 
       expect(await screen.findByText("Waiting for the server…")).toBeDefined();
-      expect(await screen.findByText(/Can't reach the server/)).toBeDefined();
+      expect(await screen.findByText(/Server unreachable/)).toBeDefined();
       reachable = true;
       await app.user.click(screen.getByRole("button", { name: "Retry now" }));
 

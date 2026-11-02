@@ -83,6 +83,16 @@ export async function measured(page: Page, row: string, scheme: Scheme): Promise
   expect(colorScheme, `${row} in ${scheme}`).toBe(scheme);
 }
 
+/** Only the texts on the page, in both themes: for a row a Tab would change, as it should. */
+export async function textsInBothThemes(page: Page, row: string): Promise<void> {
+  for (const scheme of ["dark", "light"] as const) {
+    await inScheme(page, scheme);
+    const found = await walked(page, AA);
+    expect(found.walked, `${row} in ${scheme}: nothing was measured`).toBeGreaterThan(0);
+    expect(found.low, `${row} in ${scheme}`).toEqual([]);
+  }
+}
+
 /**
  * Every native select on the page, and its options, hold the theme's tokens for `scheme`: what
  * WebView2 paints the open list from. The list itself isn't in the DOM, so that stays a hands-on

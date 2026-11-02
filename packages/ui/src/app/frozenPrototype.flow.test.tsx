@@ -59,7 +59,7 @@ describe("with a frozen Object.prototype", () => {
     await app.user.click(screen.getByRole("button", { name: "Log out" }));
 
     await waitFor(() => expect(app.path()).toBe("/login"));
-    expect(await screen.findByText(/You're logged out on this PC/)).toBeDefined();
+    expect(await screen.findByText(/Logged out here/)).toBeDefined();
     expect(Object.isFrozen(Object.prototype)).toBe(true);
   });
 });

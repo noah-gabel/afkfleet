@@ -36,6 +36,8 @@
   --font-*: initial;
   --font-sans: "Geist Variable", "Segoe UI", sans-serif;
   --font-mono: "IBM Plex Mono", Consolas, monospace;
+  /* Below this the sidebar collapses to icons (ADR-0020, U91, S106). */
+  --breakpoint-rail: 62.5rem;
 }
 
 @theme inline {

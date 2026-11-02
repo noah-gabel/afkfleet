@@ -356,7 +356,7 @@ describe("the server settings, signed in", () => {
 
     expect(
       await screen.findByText(
-        "You're logged out on this PC, but the server couldn't be told (The server can't be reached.), so your session there may stay valid until it expires.",
+        "Logged out here. Server not told (The server can't be reached.): the session may stay valid until it expires.",
       ),
     ).toBeDefined();
   });

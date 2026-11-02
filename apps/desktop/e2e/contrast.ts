@@ -55,7 +55,7 @@ export type Probe =
   | { readonly kind: "tabEnd" };
 
 /** Answers `request` in the page; see the module comment. */
-export function probe(request: Probe): Walked | number | TabStep | TabEnd {
+export function probe(request: Probe): Walked | number | TabStep | Promise<TabEnd> {
   type Rgba = readonly [number, number, number, number];
   const canvas = document.createElement("canvas");
   canvas.width = 1;
@@ -326,22 +326,30 @@ export function probe(request: Probe): Walked | number | TabStep | TabEnd {
         throw new Error("no Tab walk started");
       }
       delete holder.__focusWalk;
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
       if (walk.returnTo instanceof HTMLElement && walk.returnTo.isConnected) {
         walk.returnTo.focus({ preventScroll: true });
-      } else if (document.activeElement instanceof HTMLElement) {
-        document.activeElement.blur();
       }
       for (const [element, top, left] of walk.scrolls) {
         element.scrollTop = top;
         element.scrollLeft = left;
       }
-      const now = counts();
-      return {
-        missed: [...walk.pending]
-          .filter(([key]) => typeof key === "string" || key.isConnected)
-          .map(([, name]) => `Tab never reached ${name}`),
-        changed: now === walk.counts ? [] : [`the Tab changed the row: ${walk.counts} → ${now}`],
-      };
+      const missed = [...walk.pending]
+        .filter(([key]) => typeof key === "string" || key.isConnected)
+        .map(([, name]) => `Tab never reached ${name}`);
+      // A control let go of just now only renders its change once this task ends.
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          const now = counts();
+          resolve({
+            missed,
+            changed:
+              now === walk.counts ? [] : [`the Tab changed the row: ${walk.counts} → ${now}`],
+          });
+        });
+      });
     }
   }
 }

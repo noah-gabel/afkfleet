@@ -1,7 +1,7 @@
 // The user's sessions (Plan.md P8.7, ADR-0016, ADR-0017): every live login of the account,
 // newest first, a page at a time. The server keeps no device, address or user agent, so a
 // row is told apart by its times only.
-// - This session's "Log out" is the header's logout (`DELETE /me/sessions/{id}` refuses it).
+// - This session's "Log out" is the sidebar's logout (`DELETE /me/sessions/{id}` refuses it).
 // - Another one's "Log out" ends it at once: whoever used it just logs in again.
 // - "Log out all other sessions" asks first, then ends every other session the server lists
 //   (useLogOutOthers), the remedy for a lost PC.

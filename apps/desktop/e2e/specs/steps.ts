@@ -62,12 +62,14 @@ export async function push(page: Page, update: LiveUpdateMessage): Promise<void>
   );
 }
 
-/** Home, for `username`: the bots' heading, and the Header's user, with `role` when given. */
+/** Home, for `username`: the bots' heading, and the Account box's user, with `role` when given. */
 export async function expectHome(page: Page, username: string, role?: string): Promise<void> {
   await expect(page.getByRole("heading", { name: "Bots" })).toBeVisible();
-  const banner = page.getByRole("banner");
-  await expect(banner.getByText(username, { exact: true })).toBeVisible();
+  const account = page.getByRole("group", { name: "Account" });
+  await expect(account.getByRole("link", { name: new RegExp(`^${username}, `) })).toBeVisible();
   if (role !== undefined) {
-    await expect(banner.getByText(role, { exact: true })).toBeVisible();
+    await expect(
+      account.getByRole("link", { name: `${username}, ${role}, Profile` }),
+    ).toBeVisible();
   }
 }

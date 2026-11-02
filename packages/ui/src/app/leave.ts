@@ -12,7 +12,7 @@ import type { AppRouter } from "./router";
 export const SESSION_ENDED_TOAST_ID = "session-ended";
 
 /** The "session ended" toast's text. */
-export const SESSION_ENDED = "Your session ended. Log in again.";
+export const SESSION_ENDED = "Session ended. Log in again.";
 
 /** Dismisses every toast, goes to /login, then empties the cache; see the module comment. */
 export async function leaveSession(router: AppRouter, queryClient: QueryClient): Promise<void> {

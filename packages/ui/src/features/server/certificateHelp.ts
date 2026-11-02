@@ -3,4 +3,4 @@
 
 /** What a refused certificate means and what to do. */
 export const CERTIFICATE_HELP =
-  "The server's certificate isn't trusted. It may have changed or expired, the server may use its own CA (ask its admin for the CA file and compare the fingerprints), or someone may be intercepting the connection. Don't go on until the server's admin has confirmed it.";
+  "Certificate not trusted. It may have changed or expired, the server may use its own CA (get the file from its admin, compare fingerprints), or someone may be intercepting. Don't go on until the admin confirms.";
