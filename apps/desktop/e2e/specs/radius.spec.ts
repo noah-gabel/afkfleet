@@ -97,11 +97,7 @@ test("--radius: 0 squares every sign-in screen", async ({ page, context }) => {
   await logIn(page, NEW_USER);
   await expect(page.getByRole("img", { name: /QR code/ })).toBeVisible();
   await squared(page, "2FA setup");
-  await page.getByLabel("Code").fill(backend.setupCode());
-  await page
-    .getByRole("button", { name: "Confirm" })
-    .click({ timeout: 1_000 })
-    .catch(() => {});
+  await enterCode(page, backend.setupCode());
   await expect(page.getByRole("list", { name: "Recovery codes" })).toBeVisible();
   await squared(page, "recovery codes");
 });

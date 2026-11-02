@@ -121,7 +121,7 @@ describe("changing the password", () => {
     await confirmPassword(app);
 
     expect(await screen.findByLabelText("New password")).toBeDefined();
-    expect(screen.getByText("This step ends in 5 minutes.")).toBeDefined();
+    expect(screen.getByText("Ends in 5 min.")).toBeDefined();
     expect(called(app, "stepUp")).toEqual([[{ password: PASSWORD }]]);
   });
 
@@ -131,7 +131,7 @@ describe("changing the password", () => {
 
     await enterNew(app, NEW, `${NEW}!`);
 
-    expect(await screen.findByText("The passwords don't match.")).toBeDefined();
+    expect(await screen.findByText("Passwords don't match.")).toBeDefined();
     expect(called(app, "changePassword")).toEqual([]);
   });
 

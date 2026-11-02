@@ -12,7 +12,7 @@ import { renderApp } from "../test/renderApp";
 import { atScreen, onHome } from "../test/signedIn";
 import { SESSION_ENDED } from "./leave";
 
-const NOT_FOUND = "This page doesn't exist or isn't available to you.";
+const NOT_FOUND = "Page not found or not available to you.";
 
 const NO_SESSION = async (): Promise<never> => {
   throw fakeApiError("no_session");

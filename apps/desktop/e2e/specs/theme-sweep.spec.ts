@@ -392,6 +392,12 @@ test("before signing in", async ({ page, context }) => {
   await enterCode(page, "000000");
   await expect(page.getByText("Wrong code. 2 tries left.")).toBeVisible();
   await bothThemes(page, "the code step, refused");
+  // The digits themselves, so their colour is measured; a fifth doesn't send.
+  await page.getByLabel("Code").pressSequentially("12345");
+  await bothThemes(page, "the code step, digits in the boxes");
+  await page.getByRole("button", { name: "Use a recovery code" }).click();
+  await expect(page.getByLabel("Recovery code")).toBeVisible();
+  await bothThemes(page, "the code step, a recovery code");
   await page.reload();
 
   await page.getByRole("link", { name: "Server settings" }).click();
@@ -413,8 +419,7 @@ test("before signing in", async ({ page, context }) => {
     await inScheme(page, scheme);
     await expect(qr).toHaveCSS("background-color", "rgb(255, 255, 255)");
   }
-  await page.getByLabel("Code").fill(backend.setupCode());
-  await page.getByRole("button", { name: "Confirm" }).click();
+  await enterCode(page, backend.setupCode());
   await expect(page.getByRole("list", { name: "Recovery codes" })).toBeVisible();
   await bothThemes(page, "recovery codes");
 });
@@ -682,7 +687,7 @@ test("the banner, the start screen, loading and the error panel", async ({ page,
   for (const scheme of ["dark", "light"] as const) {
     await page.emulateMedia({ colorScheme: scheme });
     await page.goto("/?panel=error");
-    await expect(page.getByRole("heading", { name: /Something went wrong/ })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /App error/ })).toBeVisible();
     await measured(page, "the error panel", scheme);
   }
 });

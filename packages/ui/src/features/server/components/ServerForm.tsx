@@ -28,6 +28,7 @@ import type { ServerProfileState } from "../../../generated/ServerProfileState";
 import { useRetryWait } from "../../../hooks/useRetryWait";
 import { showFieldErrors } from "../../../lib/formErrors";
 import { displayOrigin } from "../../../lib/origin";
+import { Brand } from "../../auth/components/AuthCard";
 import { CERTIFICATE_HELP } from "../certificateHelp";
 import { useSaveServer } from "../hooks/useSaveServer";
 import { type ServerValues, serverForm } from "../schemas";
@@ -35,7 +36,7 @@ import { unreadableText } from "../unreadable";
 import { CaDetails } from "./CaDetails";
 
 /** A chosen file larger than a CA can be. */
-export const FILE_TOO_LARGE = "The file is too large for a CA: at most 64 KiB.";
+export const FILE_TOO_LARGE = "File too large: at most 64 KiB.";
 
 /** The server form, titled `title`. */
 export function ServerForm({ title }: { title: "Server setup" | "Server" }) {
@@ -114,9 +115,10 @@ function ServerFormBody({ title, state }: { title: string; state: ServerProfileS
   }
 
   return (
-    <main className="flex flex-1 justify-center p-6">
-      <div className="flex w-full max-w-lg flex-col gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+    <main className="flex flex-1 flex-col items-center gap-4 p-6">
+      {signedIn ? null : <Brand />}
+      <div className="flex w-full max-w-lg flex-col gap-3 rounded-lg border bg-card p-4">
+        <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
         {state.state === "unreadable" ? (
           <Alert>
             <AlertDescription className="text-foreground">
@@ -124,11 +126,11 @@ function ServerFormBody({ title, state }: { title: string; state: ServerProfileS
             </AlertDescription>
           </Alert>
         ) : null}
-        <form className="flex flex-col gap-4" noValidate onSubmit={(event) => void submit(event)}>
+        <form className="flex flex-col gap-3" noValidate onSubmit={(event) => void submit(event)}>
           <FormField
             id="server-url"
             label="Server address"
-            hint="The address the server's admin gave you, such as https://afk.example.com."
+            hint="From the server's admin, e.g. https://afk.example.com."
             error={errors.url?.message}
           >
             {(control) => (

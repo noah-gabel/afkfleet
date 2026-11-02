@@ -58,11 +58,7 @@ test("before signing in", async ({ page, context }) => {
   await logIn(page, NEW_USER);
   await expect(page.getByRole("img", { name: /QR code/ })).toBeVisible();
   await shoot(page, "2fa-setup");
-  await page.getByLabel("Code").fill(backend.setupCode());
-  await page
-    .getByRole("button", { name: "Confirm" })
-    .click({ timeout: 1_000 })
-    .catch(() => {});
+  await enterCode(page, backend.setupCode());
   await expect(page.getByRole("list", { name: "Recovery codes" })).toBeVisible();
   await shoot(page, "recovery-codes");
 

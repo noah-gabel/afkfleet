@@ -7,7 +7,7 @@ import type { CustomCaView } from "../../../generated/CustomCaView";
 export function CaDetails({ ca }: { ca: CustomCaView }) {
   return (
     <div className="flex flex-col gap-1 rounded-lg border p-3 text-sm">
-      <p className="font-medium">
+      <p className="font-semibold">
         {`Current custom CA: ${ca.certificates} ${ca.certificates === 1 ? "certificate" : "certificates"}`}
       </p>
       <ul aria-label="Certificate fingerprints" className="font-mono text-xs break-all">
@@ -15,9 +15,7 @@ export function CaDetails({ ca }: { ca: CustomCaView }) {
           <li key={fingerprint}>{fingerprint}</li>
         ))}
       </ul>
-      <p className="text-muted-foreground">
-        Compare these with the fingerprints the server's admin gave you.
-      </p>
+      <p className="text-muted-foreground">Compare with the admin's fingerprints.</p>
     </div>
   );
 }

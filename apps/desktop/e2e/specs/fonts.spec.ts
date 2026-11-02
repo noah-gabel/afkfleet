@@ -6,7 +6,7 @@ import type { Page } from "@playwright/test";
 
 import { NEW_USER } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
-import { logIn } from "./steps";
+import { enterCode, logIn } from "./steps";
 
 /** What the browser drew the first `selector` with: each family, and whether it's a web font. */
 async function drawnWith(page: Page, selector: string) {
@@ -88,11 +88,7 @@ test("a toast is drawn in the bundled font, though sonner sets its own", async (
   await page.goto("/");
   await logIn(page, NEW_USER);
   await expect(page.getByRole("img", { name: /QR code/ })).toBeVisible();
-  await page.getByLabel("Code").fill(backend.setupCode());
-  await page
-    .getByRole("button", { name: "Confirm" })
-    .click({ timeout: 1_000 })
-    .catch(() => {});
+  await enterCode(page, backend.setupCode());
   await page.getByRole("button", { name: "Copy all" }).click();
   const toast = page.locator("[data-sonner-toast] [data-title]");
   await expect(toast).toBeVisible();

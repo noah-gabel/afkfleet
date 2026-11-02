@@ -22,10 +22,9 @@ export async function logIn(page: Page, username: string, password = PASSWORD): 
   await page.getByRole("button", { name: "Log in" }).click();
 }
 
-/** A code at the code step. */
+/** A code in the six boxes, which send when full. */
 export async function enterCode(page: Page, code: string): Promise<void> {
   await page.getByLabel("Code").fill(code);
-  await page.getByRole("button", { name: "Verify" }).click();
 }
 
 /**
@@ -34,19 +33,16 @@ export async function enterCode(page: Page, code: string): Promise<void> {
  * Answers the recovery codes the clipboard held.
  */
 export async function setUp2fa(page: Page, backend: FakeBackend, username: string) {
-  await expect(
-    page.getByRole("heading", { name: "Set up two-factor authentication" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Set up 2FA" })).toBeVisible();
   await expect(page.getByRole("img", { name: "QR code for your authenticator app" })).toBeVisible();
   await expect(page.getByText("JBSW Y3DP EHPK 3PXP")).toBeVisible();
-  await page.getByLabel("Code").fill(backend.setupCode());
-  await page.getByRole("button", { name: "Confirm" }).click();
+  await enterCode(page, backend.setupCode());
   await expect(page.getByRole("list", { name: "Recovery codes" })).toBeVisible();
   await page.getByRole("button", { name: "Copy all" }).click();
   const copied = await page.evaluate(() => navigator.clipboard.readText());
   await page.getByLabel("I've saved these codes").check();
   await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByText(/Wait until your authenticator app shows a new code/)).toBeVisible();
+  await expect(page.getByText(/Wait for a new code/)).toBeVisible();
   await enterCode(page, backend.code(username));
   await expectHome(page, username);
   return copied;

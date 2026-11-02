@@ -284,6 +284,7 @@ export function AuthFlow({ mode }: { mode: "login" | "register" }) {
       return (
         <SetupStep
           key={state.stepId}
+          brand
           step={step}
           pending={pending}
           onNewSecret={() => void requestSecret(state.stepId)}
@@ -293,7 +294,9 @@ export function AuthFlow({ mode }: { mode: "login" | "register" }) {
         />
       );
     case "recovery":
-      return <RecoveryCodesStep codes={step.codes} pending={pending} onContinue={afterCodes} />;
+      return (
+        <RecoveryCodesStep brand codes={step.codes} pending={pending} onContinue={afterCodes} />
+      );
     case "stillSignedIn":
       return (
         <StillSignedIn

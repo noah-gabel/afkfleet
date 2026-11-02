@@ -11,9 +11,9 @@ import { AuthCard } from "./AuthCard";
 
 /** The toast after "Copy all". */
 export const COPIED =
-  "Recovery codes copied. Paste them into a password manager or another safe place; Windows' clipboard history may keep a copy.";
+  "Copied. Keep them in a password manager. Windows' clipboard history may keep a copy.";
 /** The toast when copying failed. */
-export const COPY_FAILED = "Couldn't copy. Select the codes and copy them by hand.";
+export const COPY_FAILED = "Copy failed. Select the codes by hand.";
 
 /** The step's own texts. */
 export interface CodesTexts {
@@ -25,8 +25,7 @@ export interface CodesTexts {
 /** The first login's codes. */
 export const SIGN_IN_CODES: CodesTexts = {
   title: "Recovery codes",
-  intro:
-    "Each of these codes works once instead of a code from your app. They won't be shown again.",
+  intro: "Each works once in place of an app code. Shown only now.",
   continueLabel: "Continue",
 };
 
@@ -34,11 +33,14 @@ export const SIGN_IN_CODES: CodesTexts = {
 export function RecoveryCodesStep({
   codes,
   texts = SIGN_IN_CODES,
+  brand = false,
   pending,
   onContinue,
 }: {
   codes: readonly string[];
   texts?: CodesTexts;
+  /** Shows the brand above it: while signing in. */
+  brand?: boolean;
   /** The flow's call (the login that follows) is running. */
   pending: boolean;
   onContinue: () => Promise<void>;
@@ -46,7 +48,7 @@ export function RecoveryCodesStep({
   const [saved, setSaved] = useState(false);
 
   return (
-    <AuthCard title={texts.title} intro={texts.intro}>
+    <AuthCard brand={brand} title={texts.title} intro={texts.intro}>
       <ul
         aria-label="Recovery codes"
         className="grid grid-cols-2 gap-1 rounded-lg border bg-muted p-3 font-mono text-sm select-text"

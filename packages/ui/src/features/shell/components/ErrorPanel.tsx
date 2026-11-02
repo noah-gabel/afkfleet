@@ -34,7 +34,7 @@ export function ErrorPanel({
     <main className="flex flex-1 items-center justify-center p-8">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <h1 className="text-lg font-semibold">Something went wrong in the app.</h1>
+          <h1 className="text-lg font-semibold tracking-tight">App error.</h1>
         </CardHeader>
         <CardContent>
           <p className="text-muted-foreground">{detail}</p>

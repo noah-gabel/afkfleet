@@ -63,6 +63,18 @@ test("the minimum window holds the whole sidebar, a certificate banner up", asyn
   }
 });
 
+test("a sign-in step's heading takes the focus without looking focused", async ({
+  page,
+  context,
+}) => {
+  await fakeBackend(context);
+  await page.goto("/");
+  const heading = page.getByRole("heading", { name: "Log in" });
+  await expect(heading).toBeFocused();
+
+  await expect(heading).toHaveCSS("outline-style", "none");
+});
+
 test("the logo loads under the CSP, and the wordmark reads as one word", async ({
   page,
   context,

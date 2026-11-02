@@ -9,7 +9,7 @@ export const newPasswordForm = z
   .object({ password: newPassword, repeat: z.string() })
   .refine((values) => values.password === values.repeat, {
     path: ["repeat"],
-    message: "The passwords don't match.",
+    message: "Passwords don't match.",
   });
 
 /** The new password form's values. */

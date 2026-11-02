@@ -12,7 +12,7 @@ describe("ErrorPanel", () => {
   it("shows an API error's text", () => {
     render(<ErrorPanel error={fakeApiError("store")} onReset={() => {}} />);
 
-    expect(screen.getByRole("heading", { name: "Something went wrong in the app." })).toBeDefined();
+    expect(screen.getByRole("heading", { name: "App error." })).toBeDefined();
     expect(screen.getByText("fake store")).toBeDefined();
   });
 

@@ -28,11 +28,11 @@ export function useDeadline(deadline: number, onExpire: () => void): boolean {
   return lastMinute;
 }
 
-/** "This step ends in 5 minutes.", from the step's `expires_in` in seconds. */
+/** "Ends in 5 min.", from the step's `expires_in` in seconds. */
 export function endsIn(expiresIn: number): string {
   const minutes = Math.round(expiresIn / 60);
   if (minutes < 1) {
-    return "This step ends in under a minute.";
+    return "Ends in under a minute.";
   }
-  return `This step ends in ${minutes} ${minutes === 1 ? "minute" : "minutes"}.`;
+  return `Ends in ${minutes} min.`;
 }

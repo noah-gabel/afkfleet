@@ -32,7 +32,7 @@ describe("logging in", () => {
   it("names the server and links to registering and the server settings", async () => {
     await atLogin();
 
-    expect(screen.getByText("Logging in to https://example.com")).toBeDefined();
+    expect(screen.getByText("https://example.com")).toBeDefined();
     expect(screen.getByRole("link", { name: "Register with an invite" })).toBeDefined();
     expect(screen.getByRole("link", { name: "Server settings" })).toBeDefined();
   });
@@ -87,7 +87,7 @@ describe("logging in", () => {
     const app = await atLogin({ login: async () => MFA });
 
     await logIn(app);
-    expect(await screen.findByText("This step ends in 5 minutes.")).toBeDefined();
+    expect(await screen.findByText("Ends in 5 min.")).toBeDefined();
     await enterCode(app, " 123 456\t");
 
     await waitFor(() => expect(app.path()).toBe("/home"));
@@ -134,9 +134,9 @@ describe("logging in", () => {
     });
     await logIn(app);
 
-    await enterCode(app, "12345");
-    expect(await screen.findByText("must be 6 digits or a recovery code")).toBeDefined();
     await enterCode(app, "123456");
+    expect(await screen.findByText("must be 6 digits or a recovery code")).toBeDefined();
+    await enterCode(app, "654321");
 
     expect(await screen.findByText("Wrong code. 2 tries left.")).toBeDefined();
   });
@@ -162,9 +162,9 @@ describe("logging in", () => {
     await screen.findByLabelText("Code");
 
     await time.advance(238_000);
-    const early = screen.queryByText("This step ends in under a minute.");
+    const early = screen.queryByText("Ends in under a minute.");
     await time.advance(4_000);
-    expect(await screen.findByText("This step ends in under a minute.")).toBeDefined();
+    expect(await screen.findByText("Ends in under a minute.")).toBeDefined();
     await time.advance(60_000);
 
     expect(early).toBeNull();
@@ -225,10 +225,10 @@ describe("the first login's 2FA setup", () => {
     })) as HTMLImageElement;
     expect(qr.getAttribute("src")).toBe(ENROLLMENT.qr_svg);
     expect(screen.getByText("ABCD EFGH IJKL MNOP QRST")).toBeDefined();
-    expect(screen.getByText("This step ends in 10 minutes.")).toBeDefined();
+    expect(screen.getByText("Ends in 10 min.")).toBeDefined();
     expect(
       screen.getByText(
-        "Only the newest QR code works. Delete any entry you scanned from an earlier one in your authenticator app.",
+        "Only the newest QR code works. Delete entries from earlier ones in your app.",
       ),
     ).toBeDefined();
     await enterCode(app, "654 321");
@@ -310,9 +310,7 @@ describe("the first login's 2FA setup", () => {
     await logIn(app);
 
     expect(
-      await screen.findByText(
-        "The server's QR code can't be shown. Type the key below into your authenticator app instead.",
-      ),
+      await screen.findByText("QR code can't be shown. Type the key into your app."),
     ).toBeDefined();
     expect(screen.queryByRole("img", { name: "QR code for your authenticator app" })).toBeNull();
   });
@@ -362,7 +360,7 @@ describe("the first login's 2FA setup", () => {
     expect(await navigator.clipboard.readText()).toBe(CODES.join("\n"));
     expect(
       await screen.findByText(
-        "Recovery codes copied. Paste them into a password manager or another safe place; Windows' clipboard history may keep a copy.",
+        "Copied. Keep them in a password manager. Windows' clipboard history may keep a copy.",
       ),
     ).toBeDefined();
   });
@@ -375,9 +373,7 @@ describe("the first login's 2FA setup", () => {
 
     await app.user.click(await screen.findByRole("button", { name: "Copy all" }));
 
-    expect(
-      await screen.findByText("Couldn't copy. Select the codes and copy them by hand."),
-    ).toBeDefined();
+    expect(await screen.findByText("Copy failed. Select the codes by hand.")).toBeDefined();
   });
 
   it("goes back to the password step when the login after the codes fails", async () => {
@@ -451,7 +447,7 @@ describe("a login while a session is still held", () => {
     Object.assign(app.fake, { me: async () => me("member", "otherbot") });
 
     await logIn(app);
-    expect(await screen.findByText("You're still signed in as otherbot.")).toBeDefined();
+    expect(await screen.findByText("Still signed in as otherbot.")).toBeDefined();
     await app.user.click(screen.getByRole("button", { name: "Continue as otherbot" }));
     await waitFor(() => expect(app.path()).toBe("/home"));
     await act(() => app.runtime.apiClient.sessions().catch(() => {}));
