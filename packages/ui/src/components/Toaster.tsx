@@ -32,13 +32,20 @@ const THEME = {
 // An error or a warning takes a tint and a border of its own (ADR-0020, U91, S116); the rest stay
 // plain. sonner's background, close button and action all read these two, so they follow. It isn't
 // `richColors`, which would tint every type. The text stays `--foreground`.
+//
+// Sonner's own stylesheet gives the action a fixed corner and draws a shadow around whatever has the
+// focus. These classes win over it, as it's in the components layer: the action's corner comes from
+// `--radius` (U101), and the focus shows only styles.css's one outline (S107).
+const NO_FOCUS_SHADOW = "focus-visible:[box-shadow:none]";
 const TINTS = {
+  toast: NO_FOCUS_SHADOW,
+  closeButton: NO_FOCUS_SHADOW,
   error:
     "[--normal-bg:color-mix(in_srgb,var(--destructive)_12%,var(--popover))] [--normal-border:var(--destructive)]",
   warning:
     "[--normal-bg:color-mix(in_srgb,var(--warning)_12%,var(--popover))] [--normal-border:var(--warning)]",
   title: "font-semibold",
-  actionButton: "font-semibold",
+  actionButton: `rounded-lg font-semibold ${NO_FOCUS_SHADOW}`,
 };
 
 /** Where the app's toasts appear; rendered once, next to the router. */

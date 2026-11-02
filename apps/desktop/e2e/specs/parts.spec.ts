@@ -3,7 +3,9 @@
 // doesn't widen its columns. Both read the classes as `components/ui/table.tsx` writes them, which
 // Tailwind only generates because that file holds them.
 
+import { OWNER } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
+import { enterCode, expectHome, logIn, push } from "./steps";
 
 test("a column drops by its box's width, and a spanning row follows the table", async ({
   page,
@@ -58,4 +60,57 @@ test("a column drops by its box's width, and a spanning row follows the table", 
   expect(widths.span).toBeLessThanOrEqual(Math.ceil(widths.box));
 
   await page.evaluate(() => document.getElementById("planted")?.remove());
+});
+
+test("a toast's focus shows the one outline, none of sonner's shadows", async ({
+  page,
+  context,
+}) => {
+  const backend = await fakeBackend(context);
+  backend.addAccount(OWNER);
+  await page.goto("/");
+  await logIn(page, OWNER);
+  await enterCode(page, backend.code(OWNER));
+  await expectHome(page, OWNER);
+  await push(page, {
+    update: "event",
+    event: {
+      type: "bot_died",
+      bot_id: backend.bot("AfkBot1").id,
+      at: new Date().toISOString(),
+    },
+  });
+  const toast = page.locator("[data-sonner-toast]");
+  const action = toast.getByRole("button", { name: "Open" });
+  await expect(action).toBeVisible();
+  await toast.hover();
+
+  for (const [name, stop] of [
+    ["the toast", toast],
+    ["its close button", toast.locator("[data-close-button]")],
+    ["its action", action],
+  ] as const) {
+    // A real Tab: a script's focus isn't always `:focus-visible`.
+    let reached = false;
+    for (let tabs = 0; !reached && tabs < 40; tabs += 1) {
+      await page.keyboard.press("Tab");
+      reached = await stop.evaluate((element) => element === document.activeElement);
+    }
+    expect(reached, name).toBe(true);
+    const read = await stop.evaluate((element) => {
+      for (const animation of document.getAnimations()) {
+        if (animation.effect?.getComputedTiming().endTime !== Number.POSITIVE_INFINITY) {
+          animation.finish();
+        }
+      }
+      const style = getComputedStyle(element);
+      return {
+        focusVisible: element.matches(":focus-visible"),
+        outline: style.outlineStyle,
+        shadow: style.boxShadow,
+      };
+    });
+
+    expect(read, name).toEqual({ focusVisible: true, outline: "solid", shadow: "none" });
+  }
 });

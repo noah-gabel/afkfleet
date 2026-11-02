@@ -5,9 +5,9 @@
 
 import type { Page } from "@playwright/test";
 
-import { MEMBER, NEW_USER } from "../fake/backend";
+import { MEMBER, NEW_USER, OWNER } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
-import { enterCode, expectHome, logIn } from "./steps";
+import { enterCode, expectHome, logIn, push } from "./steps";
 
 /** Every element on the page with `--radius: 0` that's still rounded, and how many it read. */
 async function stillRounded(page: Page): Promise<{ read: number; rounded: readonly string[] }> {
@@ -115,4 +115,26 @@ test("--radius: 0 squares Profile and the frame around it", async ({ page, conte
   await expect(page.getByRole("group", { name: "Theme" })).toBeVisible();
 
   await squared(page, "Profile");
+});
+
+test("--radius: 0 squares a toast and its action", async ({ page, context }) => {
+  const backend = await fakeBackend(context);
+  backend.addAccount(OWNER);
+  await page.goto("/");
+  await logIn(page, OWNER);
+  await enterCode(page, backend.code(OWNER));
+  await expectHome(page, OWNER);
+  await push(page, {
+    update: "event",
+    event: {
+      type: "bot_died",
+      bot_id: backend.bot("AfkBot1").id,
+      at: new Date().toISOString(),
+    },
+  });
+  const toast = page.locator("[data-sonner-toast]");
+  await expect(toast.getByRole("button", { name: "Open" })).toBeVisible();
+  await toast.hover();
+
+  await squared(page, "a toast with an action");
 });
