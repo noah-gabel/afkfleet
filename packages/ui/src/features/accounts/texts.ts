@@ -1,6 +1,7 @@
 // The account screens' texts (Plan.md P9.8), as the user approved them at group F's plan
 // review (ADR-0018). An open value this version doesn't know (a status, a reason, a flow's
 // state) shows as the server sent it.
+import type { Tone } from "../../components/StatusLine";
 import type { AccountKind } from "../../generated/AccountKind";
 import type { AccountStatus } from "../../generated/AccountStatus";
 import type { GrantLevel } from "../../generated/GrantLevel";
@@ -77,6 +78,22 @@ export function statusLabel(status: AccountStatus): string {
       return "Refused";
     default:
       return status;
+  }
+}
+
+/** An account's status as its status line shows it. */
+export function accountLine(status: AccountStatus): { readonly text: string; readonly tone: Tone } {
+  const text = statusLabel(status);
+  switch (status) {
+    case "active":
+      return { text, tone: "success" };
+    case "pending":
+    case "reauth_required":
+      return { text, tone: "warning" };
+    case "refused":
+      return { text, tone: "destructive" };
+    default:
+      return { text, tone: "neutral" };
   }
 }
 
@@ -191,11 +208,6 @@ export function waitingFailed(detail: string): string {
   return `Couldn't check for links waiting for your approval: ${detail}`;
 }
 
-/** Who linked an account, and when. */
-export function linkedBy(username: string, at: string): string {
-  return `Linked by ${username} on ${at}`;
-}
-
 /** The review's questions and toasts. */
 export function approveQuestion(name: string, owner: string): string {
   return `Approve ${name}, linked by ${owner}? Bots can use it from then on.`;
@@ -262,6 +274,30 @@ export function revokeQuestion(user: string, name: string): string {
 export function revoked(user: string): string {
   return `${user} no longer has access.`;
 }
+
+/** The labels of an account's facts. */
+export const ACCOUNT_LABEL = {
+  type: "Type",
+  access: "Your access",
+  linkedBy: "Linked by",
+  linkedOn: "Linked on",
+} as const;
+
+/** The Accounts screen's ways to add an account (U106). */
+export const ADD_MICROSOFT = "Link Microsoft account";
+export const ADD_OFFLINE = "Add offline account";
+export const NO_ACCOUNTS = "No accounts.";
+export const LOADING_ACCOUNTS = "Loading accounts…";
+export const TILE_MICROSOFT = {
+  title: "Microsoft account",
+  line: "For online-mode servers. Signs in once with a code.",
+} as const;
+export const TILE_OFFLINE = {
+  title: "Offline account",
+  line: "For offline-mode servers. Just a name.",
+} as const;
+/** The offline screen's title and first words (U107). */
+export const OFFLINE_TITLE = "Add an offline account";
 
 /** The offline form's texts (S6). */
 export const OFFLINE_HINT =

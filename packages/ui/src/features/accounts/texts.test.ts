@@ -6,6 +6,7 @@ import type { GrantLevel } from "../../generated/GrantLevel";
 import type { RefusalReason } from "../../generated/RefusalReason";
 import {
   accessLabel,
+  accountLine,
   badgeNumber,
   kindLabel,
   LINK_WARNING,
@@ -50,5 +51,20 @@ describe("the account texts", () => {
     expect(LINK_WARNING).toBe(
       "Only enter a code you started yourself here. Never enter a code someone sent you, it would hand them your Minecraft account.",
     );
+  });
+});
+
+describe("an account's status line (U106)", () => {
+  it.each([
+    ["active", "Active", "success"],
+    ["pending", "Waiting for approval", "warning"],
+    ["reauth_required", "Needs a new sign-in", "warning"],
+    ["refused", "Refused", "destructive"],
+  ] as const)("%s reads %s, in %s", (status, text, tone) => {
+    expect(accountLine(status)).toEqual({ text, tone });
+  });
+
+  it("shows a status this version doesn't know as it came, neutral", () => {
+    expect(accountLine("frozen" as AccountStatus)).toEqual({ text: "frozen", tone: "neutral" });
   });
 });

@@ -15,7 +15,7 @@ test("an account that needs a new sign-in is linked again", async ({ page, conte
 
   await page.getByRole("link", { name: "Accounts" }).click();
   await expect(page.getByText("Microsoft no longer accepts this account's sign-in.")).toBeVisible();
-  await page.getByRole("link", { name: "Open AfkBot1" }).click();
+  await page.getByRole("link", { name: "AfkBot1", exact: true }).click();
   await expect(
     page.getByText(
       "Microsoft no longer accepts this account's sign-in. Link it again to keep using it.",

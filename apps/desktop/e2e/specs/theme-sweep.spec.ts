@@ -496,7 +496,7 @@ test("every native select holds the theme's tokens, its options too", async ({ p
   await check("a bot's mode");
 
   await nav(page, "Accounts");
-  await main.getByRole("link", { name: "Open AfkBot1" }).click();
+  await main.getByRole("link", { name: "AfkBot1", exact: true }).click();
   await expect(main.getByLabel(`Access of ${MEMBER}`)).toBeVisible();
   await check("who has access");
 
@@ -766,9 +766,25 @@ test("the bot screen and the empty lists of someone with nothing yet", async ({
   await bothThemes(page, "Home, empty");
   await nav(page, "Accounts");
   await expect(main.getByRole("heading", { name: "Accounts", level: 1 })).toBeVisible();
-  await bothThemes(page, "accounts, empty");
+  const tile = main.getByRole("link", { name: "Offline account" });
+  await expect(tile).toBeVisible();
+  await bothThemes(page, "accounts, empty, the tiles");
+  await tile.hover();
+  await textsInBothThemes(page, "accounts, empty, a tile hovered");
+  await main.getByRole("link", { name: "Microsoft account" }).hover();
+  await textsInBothThemes(page, "accounts, empty, the main tile hovered");
+  await page.mouse.move(0, 0);
 
-  await page.getByRole("link", { name: "Link Microsoft account" }).click();
+  await tile.click();
+  await expect(page.getByRole("heading", { name: "Add an offline account" })).toBeVisible();
+  await bothThemes(page, "the offline screen");
+  await page.getByRole("button", { name: "Add" }).click();
+  await expect(page.locator("[aria-invalid=true]").first()).toBeVisible();
+  await bothThemes(page, "the offline screen, refused");
+  await page.getByRole("link", { name: "Back to accounts" }).click();
+  await expect(main.getByRole("link", { name: "Microsoft account" })).toBeVisible();
+
+  await page.getByRole("link", { name: "Microsoft account" }).click();
   await page.getByRole("button", { name: "Get a code" }).click();
   await expect(page.getByText("B7X4-KDLQ", { exact: true })).toBeVisible();
   await bothThemes(page, "a link's code");
@@ -855,9 +871,10 @@ test("servers, accounts with their grants, and the Owner's admin screens", async
   await bothThemes(page, "servers");
 
   await nav(page, "Accounts");
-  await expect(main.getByRole("link", { name: "Open AfkBot1" })).toBeVisible();
+  const accountLink = main.getByRole("link", { name: "AfkBot1", exact: true });
+  await expect(accountLink).toBeVisible();
   await bothThemes(page, "accounts");
-  await main.getByRole("link", { name: "Open AfkBot1" }).click();
+  await accountLink.click();
   await expect(main.getByRole("table", { name: "Who has access" })).toBeVisible();
   await bothThemes(page, "an account and who has access");
 

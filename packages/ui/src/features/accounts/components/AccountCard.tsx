@@ -1,26 +1,36 @@
-// One account on the Accounts screen (Plan.md P9.8, the user's U12 at group F's plan review):
-// a summary, the re-auth prompt where one is needed, and "Open" to the account's own screen.
-// A link waiting for the user's approval gets Approve and Refuse on its card, in the waiting
-// section.
+// One account on the Accounts screen (Plan.md P9.8, P11.11; ADR-0020, U106, R209): its name, status
+// line and labelled facts, the whole card opening its screen, as a bot's on Home. The re-auth prompt
+// where one is needed, and Approve and Refuse on a link waiting for the user, sit above the card's
+// link, so they never open the account, their text can be selected and a step-up's field works.
 import { Link } from "@tanstack/react-router";
 
-import { Button } from "../../../components/ui/button";
-import { Card, CardContent, CardHeader } from "../../../components/ui/card";
+import { type Fact, Facts } from "../../../components/Facts";
+import { ABOVE_LINK, CARD_NAME, LINKED_CARD, STRETCHED_LINK } from "../../../components/linkedCard";
+import { StatusLine } from "../../../components/StatusLine";
+import { Card } from "../../../components/ui/card";
 import type { AccountResponse } from "../../../generated/AccountResponse";
-import { formatTime } from "../../../lib/time";
 import type { AccountWrites } from "../hooks/useAccountWrites";
 import { accountActions } from "../permissions";
-import { accessLabel, kindLabel, linkedBy, statusLabel } from "../texts";
+import { ACCOUNT_LABEL, accessLabel, accountLine, kindLabel } from "../texts";
 import { ReauthPrompt } from "./ReauthPrompt";
 import { ReviewActions } from "./ReviewActions";
 
-/** Who linked `account`, and when, if the viewer may see it; "you" for the viewer. */
-export function linkedLine(account: AccountResponse, viewer: string | undefined): string | null {
-  if (account.owner === undefined || account.linked_at === undefined) {
-    return null;
-  }
-  const who = account.owner.id === viewer ? "you" : account.owner.username;
-  return linkedBy(who, formatTime(account.linked_at));
+/** Who linked `account`, if the viewer may see it; "you" for the viewer. */
+export function linkedByName(
+  account: AccountResponse,
+  viewer: string | undefined,
+): string | undefined {
+  return account.owner?.id === viewer ? "you" : account.owner?.username;
+}
+
+/** `account`'s facts on its card. */
+function cardFacts(account: AccountResponse, viewer: string | undefined): Fact[] {
+  const linked = linkedByName(account, viewer);
+  return [
+    { term: ACCOUNT_LABEL.type, value: kindLabel(account.kind) },
+    { term: ACCOUNT_LABEL.access, value: accessLabel(account.level) },
+    ...(linked === undefined ? [] : [{ term: ACCOUNT_LABEL.linkedBy, value: linked }]),
+  ];
 }
 
 /** `account`'s card; `review` adds Approve and Refuse. */
@@ -33,29 +43,24 @@ export function AccountCard({
   viewer: string | undefined;
   review?: AccountWrites;
 }) {
-  const line = linkedLine(account, viewer);
+  const line = accountLine(account.status);
   return (
-    <Card className="gap-3 py-4">
-      <CardHeader className="gap-1">
-        <h3 className="font-semibold">{account.name}</h3>
-        <p className="text-sm text-muted-foreground">
-          {`${kindLabel(account.kind)} · ${statusLabel(account.status)} · ${accessLabel(account.level)}`}
-        </p>
-        {line === null ? null : <p className="text-sm text-muted-foreground">{line}</p>}
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+    <Card className={LINKED_CARD}>
+      <h3 className={CARD_NAME}>
+        <Link to="/accounts/$id" params={{ id: account.id }} className={STRETCHED_LINK}>
+          {account.name}
+        </Link>
+      </h3>
+      <StatusLine tone={line.tone}>{line.text}</StatusLine>
+      <Facts facts={cardFacts(account, viewer)} place="card" />
+      <div className={`${ABOVE_LINK} flex flex-col gap-2 empty:hidden`}>
         <ReauthPrompt
           account={account}
           canLinkAgain={accountActions(account).linkAgain}
           place="card"
         />
         {review === undefined ? null : <ReviewActions account={account} writes={review} />}
-        <Button asChild size="sm" variant="outline" className="self-start">
-          <Link to="/accounts/$id" params={{ id: account.id }} aria-label={`Open ${account.name}`}>
-            Open
-          </Link>
-        </Button>
-      </CardContent>
+      </div>
     </Card>
   );
 }

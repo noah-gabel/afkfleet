@@ -35,6 +35,7 @@ import {
   statusLabel,
 } from "../texts";
 import { AccessSection } from "./AccessSection";
+import { linkedByName } from "./AccountCard";
 import { ReauthPrompt } from "./ReauthPrompt";
 import { ReviewActions } from "./ReviewActions";
 
@@ -69,7 +70,7 @@ export function AccountScreen({ id }: { id: string }) {
     ["Your access", accessLabel(data.level)],
     ...(data.owner === undefined
       ? []
-      : ([["Linked by", data.owner.id === user?.id ? "you" : data.owner.username]] as [
+      : ([["Linked by", linkedByName(data, user?.id) ?? data.owner.username]] as [
           string,
           string,
         ][])),

@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../../api/ApiClient";
 import { fakeApiError } from "../../api/FakeApiClient";
 import type { AccountResponse } from "../../generated/AccountResponse";
-import { formatTime } from "../../lib/time";
 import { account, accountId, BOB_ID, seenBelowManage } from "../../test/accounts";
 import { me } from "../../test/fixtures";
 import { atScreen } from "../../test/signedIn";
@@ -44,6 +43,20 @@ function card(name: string, list = "Accounts") {
   return within(item);
 }
 
+/** The labelled facts on `name`'s card, in order. */
+function facts(name: string, list = "Accounts"): (string | null)[][] {
+  const item = card(name, list);
+  return item
+    .getAllByRole("term")
+    .map((term) => [term.textContent, term.nextElementSibling?.textContent ?? null]);
+}
+
+/** What `element`'s description reads. */
+function description(element: HTMLElement): string | null | undefined {
+  const id = element.getAttribute("aria-describedby");
+  return id === null ? null : document.getElementById(id)?.textContent;
+}
+
 function called(app: { fake: { calls: { method: string }[] } }, method: string) {
   return app.fake.calls.filter((call) => call.method === method).length;
 }
@@ -62,16 +75,42 @@ describe("the Accounts screen", () => {
 
     const own = await screen.findByRole("heading", { name: "AfkBot1" });
     expect(own).toBeDefined();
-    expect(card("AfkBot1").getByText("Microsoft · Active · Manage")).toBeDefined();
-    expect(
-      card("AfkBot1").getByText(`Linked by you on ${formatTime("2026-10-15T10:00:00.000Z")}`),
-    ).toBeDefined();
-    expect(card("AfkBot2").getByText("Offline · Active · Manage")).toBeDefined();
-    expect(card("AfkBot2").getByText(/^Linked by bob on /)).toBeDefined();
-    expect(card("AfkBot3").getByText("Microsoft · Active · View")).toBeDefined();
-    expect(card("AfkBot3").queryByText(/^Linked by/)).toBeNull();
-    expect(card("AfkBot1").getByRole("link", { name: "Open AfkBot1" })).toBeDefined();
-    expect(screen.getByRole("link", { name: "Link Microsoft account" })).toBeDefined();
+    expect(facts("AfkBot1")).toEqual([
+      ["Type", "Microsoft"],
+      ["Your access", "Manage"],
+      ["Linked by", "you"],
+    ]);
+    expect(card("AfkBot1").getByText("Active")).toBeDefined();
+    expect(facts("AfkBot2")).toEqual([
+      ["Type", "Offline"],
+      ["Your access", "Manage"],
+      ["Linked by", "bob"],
+    ]);
+    expect(facts("AfkBot3")).toEqual([
+      ["Type", "Microsoft"],
+      ["Your access", "View"],
+    ]);
+  });
+
+  it("makes each card one link, named by the account, with no Open button", async () => {
+    await accountsScreen({ accounts: async () => ({ items: [account(1)] }) });
+
+    await screen.findByRole("heading", { name: "AfkBot1" });
+    expect(card("AfkBot1").getByRole("link", { name: "AfkBot1" })).toBeDefined();
+    expect(screen.queryByRole("link", { name: /^Open/ })).toBeNull();
+  });
+
+  it("offers both ways to add an account at the top, with a first account", async () => {
+    await accountsScreen({ accounts: async () => ({ items: [account(1)] }) });
+
+    await screen.findByRole("heading", { name: "AfkBot1" });
+    const add = screen.getByRole("link", { name: "Add offline account" });
+    expect(add.getAttribute("href")).toBe("/accounts/offline");
+    expect(screen.getByRole("link", { name: "Link Microsoft account" }).getAttribute("href")).toBe(
+      "/accounts/link",
+    );
+    expect(add.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+    expect(screen.queryByRole("link", { name: "Microsoft account" })).toBeNull();
   });
 
   it("opens an account's screen from its card", async () => {
@@ -80,17 +119,57 @@ describe("the Accounts screen", () => {
       account: async () => account(1),
     });
 
-    await app.user.click(await screen.findByRole("link", { name: "Open AfkBot1" }));
+    await app.user.click(await screen.findByRole("link", { name: "AfkBot1" }));
 
     expect(app.path()).toBe(`/accounts/${accountId(1)}`);
   });
 
-  it("says so when there are no accounts", async () => {
+  it("offers two tiles when there are no accounts, and the top's buttons hide", async () => {
     await accountsScreen({ accounts: async () => ({ items: [] }) });
 
-    expect(
-      await screen.findByText("No accounts yet. Link a Microsoft account to add one."),
-    ).toBeDefined();
+    const microsoft = await screen.findByRole("link", { name: "Microsoft account" });
+    expect(microsoft.getAttribute("href")).toBe("/accounts/link");
+    expect(description(microsoft)).toBe("For online-mode servers. Signs in once with a code.");
+    const offline = screen.getByRole("link", { name: "Offline account" });
+    expect(offline.getAttribute("href")).toBe("/accounts/offline");
+    expect(description(offline)).toBe("For offline-mode servers. Just a name.");
+    expect(screen.queryByRole("link", { name: "Link Microsoft account" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Add offline account" })).toBeNull();
+  });
+
+  it("shows neither the buttons nor the tiles while the list loads", async () => {
+    await accountsScreen({ accounts: () => new Promise(() => {}) });
+
+    expect(await screen.findByText("Loading accounts…")).toBeDefined();
+    expect(screen.queryByRole("link", { name: "Link Microsoft account" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Microsoft account" })).toBeNull();
+  });
+
+  it("keeps the buttons when the list can't be read, with no tiles", async () => {
+    await accountsScreen({
+      accounts: async () => {
+        throw refusal(500, "internal");
+      },
+    });
+
+    await screen.findByText(/refused: internal \(request /);
+    expect(screen.getByRole("link", { name: "Link Microsoft account" })).toBeDefined();
+    expect(screen.queryByRole("link", { name: "Microsoft account" })).toBeNull();
+  });
+
+  it("keeps the buttons for a reviewer with links waiting and none of their own", async () => {
+    await accountsScreen(
+      {
+        accounts: async () => ({ items: [] }),
+        accountsAwaitingApproval: async () => ({ items: [bobsPending(5)] }),
+      },
+      me("admin"),
+    );
+
+    await screen.findByRole("list", { name: "Waiting for your approval" });
+    expect(await screen.findByRole("link", { name: "Link Microsoft account" })).toBeDefined();
+    expect(screen.queryByRole("link", { name: "Microsoft account" })).toBeNull();
+    expect(screen.getByText("No accounts.")).toBeDefined();
   });
 
   it("shows the list's failure", async () => {
@@ -201,11 +280,11 @@ describe("the Accounts screen", () => {
       await reviewer();
 
       const waiting = card("AfkBot3", "Waiting for your approval");
-      expect(waiting.getByText(/^Linked by bob on /)).toBeDefined();
+      expect(facts("AfkBot3", "Waiting for your approval")).toContainEqual(["Linked by", "bob"]);
       expect(waiting.getByRole("button", { name: "Approve AfkBot3" })).toBeDefined();
       expect(waiting.getByRole("button", { name: "Refuse AfkBot3" })).toBeDefined();
       expect(screen.getByRole("heading", { name: "Accounts you can see" })).toBeDefined();
-      expect(card("AfkBot3").getByText("Microsoft · Waiting for approval · Manage")).toBeDefined();
+      expect(card("AfkBot3").getByText("Waiting for approval")).toBeDefined();
     });
 
     it("approves after asking, with Confirm it's you when the server wants it", async () => {
@@ -268,12 +347,12 @@ describe("the Accounts screen", () => {
         createOfflineAccount,
       });
       expect(screen.queryByLabelText("Minecraft name")).toBeNull();
-      await app.user.click(await screen.findByRole("button", { name: "Add an offline account" }));
-      await app.user.type(screen.getByLabelText("Minecraft name"), "AfkBot9");
+      await app.user.click(await screen.findByRole("link", { name: "Offline account" }));
+      await app.user.type(await screen.findByLabelText("Minecraft name"), "AfkBot9");
       return app;
     }
 
-    it("is added from a form behind its own button, then listed", async () => {
+    it("is added on a screen of its own, then listed", async () => {
       let items: AccountResponse[] = [];
       const app = await atScreen(
         "/accounts",
@@ -286,19 +365,30 @@ describe("the Accounts screen", () => {
         },
         {},
       );
-      await app.user.click(await screen.findByRole("button", { name: "Add an offline account" }));
-      expect(
-        screen.getByRole("heading", { name: "Offline account (test servers only)" }),
-      ).toBeDefined();
+      await app.user.click(await screen.findByRole("link", { name: "Offline account" }));
+      expect(await screen.findByRole("heading", { name: "Add an offline account" })).toBeDefined();
+      expect(app.path()).toBe("/accounts/offline");
       await app.user.type(screen.getByLabelText("Minecraft name"), "AfkBot9");
       await app.user.click(screen.getByRole("button", { name: "Add" }));
 
       expect(await screen.findByText("AfkBot9 added.")).toBeDefined();
       expect(await screen.findByRole("heading", { name: "AfkBot9" })).toBeDefined();
       expect(screen.queryByLabelText("Minecraft name")).toBeNull();
+      expect(app.path()).toBe("/accounts");
       expect(app.fake.calls.find((call) => call.method === "createOfflineAccount")?.args).toEqual([
         { name: "AfkBot9" },
       ]);
+    });
+
+    it("goes back to the list from its way out", async () => {
+      const app = await offlineForm(async () => {
+        throw refusal(500, "internal");
+      });
+
+      await app.user.click(screen.getByRole("link", { name: "Back to accounts" }));
+
+      await screen.findByRole("heading", { name: "Accounts", level: 1 });
+      expect(app.path()).toBe("/accounts");
     });
 
     it("says when the server doesn't allow offline accounts", async () => {
@@ -323,8 +413,8 @@ describe("the Accounts screen", () => {
 
     it("checks the name before sending it", async () => {
       const app = await accountsScreen({ accounts: async () => ({ items: [] }) });
-      await app.user.click(await screen.findByRole("button", { name: "Add an offline account" }));
-      await app.user.type(screen.getByLabelText("Minecraft name"), "no spaces");
+      await app.user.click(await screen.findByRole("link", { name: "Offline account" }));
+      await app.user.type(await screen.findByLabelText("Minecraft name"), "no spaces");
 
       await app.user.click(screen.getByRole("button", { name: "Add" }));
 
