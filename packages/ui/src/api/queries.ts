@@ -9,12 +9,12 @@ import {
   type DataTag,
   type InfiniteData,
   infiniteQueryOptions,
+  keepPreviousData,
   type QueryClient,
   type QueryKey,
   queryOptions,
   skipToken,
   useInfiniteQuery,
-  keepPreviousData,
   useQuery,
 } from "@tanstack/react-query";
 
