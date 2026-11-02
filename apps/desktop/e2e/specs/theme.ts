@@ -3,6 +3,7 @@ import type { Page } from "@playwright/test";
 
 import {
   type Floors,
+  type LogoPart,
   type Probe,
   probe,
   type TabEnd,
@@ -46,6 +47,11 @@ export async function focusProblems(page: Page): Promise<readonly string[]> {
   }
   const end = await asked<TabEnd>(page, { kind: "tabEnd" });
   return [...problems, ...end.missed, ...end.changed, ...end.unchanged];
+}
+
+/** The logo's three parts, ring, dot and satellite, against what's behind it. */
+export function logoParts(page: Page): Promise<readonly LogoPart[]> {
+  return asked<readonly LogoPart[]>(page, { kind: "logo" });
 }
 
 /** What a theme is called in the media query and in `<html>`'s class. */

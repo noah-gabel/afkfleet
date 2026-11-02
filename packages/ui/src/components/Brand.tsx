@@ -1,14 +1,19 @@
-// afkfleet's name and logo (Plan.md P11.11; ADR-0020, U94, U95, S119). The wordmark is one word in
-// two weights, so a screen reader and a search get "afkfleet" while the eye gets the two spans. The
-// logo is a bundled image: Orbit's tile keeps its own colours in both themes, as an image can't take
-// a theme's tokens, and that's the one place the app's colours aren't tokens. It's decorative beside
-// the wordmark, which always holds the name.
+// afkfleet's name and logo (Plan.md P11.11; ADR-0020, U94, U95, U104, S120). The wordmark is one word
+// in two weights, so a screen reader and a search get "afkfleet" while the eye gets the two spans. The
+// logo is Orbit's marks with no tile, drawn from the theme's tokens, so they read in both themes; the
+// Windows icon keeps its tile. It's decorative beside the wordmark, which always holds the name.
+
+/** Orbit's marks, as in apps/desktop/src-tauri/icons/icon.svg: Brand.test.tsx keeps them equal. */
+const RING = { d: "M 700 262 A 312 312 0 1 1 262 324", strokeWidth: 88 };
+const DOT = { cx: 512, cy: 512, r: 66 };
+const SATELLITE = { cx: 768, cy: 226, r: 92 };
 
 /**
- * Orbit's file, which Vite emits and rewrites. By URL rather than an import: the package's entry also
- * reaches Node, in the e2e suite's specs without a browser, which can't load an SVG as a module.
+ * The hole the satellite leaves in the ring: it overlaps the ring's end, and no two tokens part them
+ * at 3:1. A clip keeps the ring's path whole and needs no colour, so it works on any background.
  */
-const LOGO = new URL("../assets/orbit.svg", import.meta.url).href;
+const HOLE = SATELLITE.r + 32;
+const GAP = `M 0 0 H 1024 V 1024 H 0 Z M ${SATELLITE.cx - HOLE} ${SATELLITE.cy} A ${HOLE} ${HOLE} 0 1 0 ${SATELLITE.cx + HOLE} ${SATELLITE.cy} A ${HOLE} ${HOLE} 0 1 0 ${SATELLITE.cx - HOLE} ${SATELLITE.cy} Z`;
 
 /** `afkfleet`: afk regular, fleet bold, in Geist. */
 export function Wordmark() {
@@ -22,7 +27,32 @@ export function Wordmark() {
   );
 }
 
-/** Orbit, `size` CSS pixels square. */
+/**
+ * Orbit, `size` CSS pixels square, its view cropped to the marks now the tile's gone. A screen shows
+ * one logo, so one clip's ID is enough.
+ */
 export function Logo({ size = 24 }: { size?: number }) {
-  return <img src={LOGO} alt="" width={size} height={size} className="shrink-0" />;
+  return (
+    <svg
+      data-slot="logo"
+      viewBox="140 128 744 744"
+      width={size}
+      height={size}
+      aria-hidden="true"
+      className="shrink-0"
+    >
+      <clipPath id="orbit-gap">
+        <path clipRule="evenodd" d={GAP} />
+      </clipPath>
+      <path
+        {...RING}
+        fill="none"
+        strokeLinecap="round"
+        clipPath="url(#orbit-gap)"
+        className="stroke-primary"
+      />
+      <circle {...DOT} className="fill-primary" />
+      <circle {...SATELLITE} className="fill-foreground" />
+    </svg>
+  );
 }

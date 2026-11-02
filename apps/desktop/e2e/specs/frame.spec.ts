@@ -9,6 +9,7 @@ import type { Page } from "@playwright/test";
 import { OWNER } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
 import { enterCode, expectHome, logIn } from "./steps";
+import { inScheme, logoParts } from "./theme";
 
 const tauri: { app: { windows: { minWidth: number; minHeight: number }[] } } = JSON.parse(
   readFileSync(new URL("../../src-tauri/tauri.conf.json", import.meta.url), "utf8"),
@@ -75,17 +76,36 @@ test("a sign-in step's heading takes the focus without looking focused", async (
   await expect(heading).toHaveCSS("outline-style", "none");
 });
 
-test("the logo loads under the CSP, and the wordmark reads as one word", async ({
+test("the logo's three parts read on a sign-in card and the sidebar, in both themes", async ({
   page,
   context,
 }) => {
+  const backend = await fakeBackend(context);
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
+  const holds = async (where: string) => {
+    for (const scheme of ["dark", "light"] as const) {
+      await inScheme(page, scheme);
+      const parts = await logoParts(page);
+      expect(parts, `${where} in ${scheme}`).toHaveLength(3);
+      for (const part of parts) {
+        expect(part.ratio, `${where} in ${scheme}: ${part.color}`).toBeGreaterThanOrEqual(3);
+      }
+      const [ring, , satellite] = parts;
+      expect(satellite?.ratio, `${where} in ${scheme}`).toBeGreaterThan(ring?.ratio ?? 0);
+    }
+  };
+
+  await holds("the sign-in card");
+  await logIn(page, OWNER);
+  await enterCode(page, backend.code(OWNER));
+  await expectHome(page, OWNER);
+  await holds("the sidebar");
+});
+
+test("the wordmark reads as one word", async ({ page, context }) => {
   await signedIn(page, context);
 
-  const logo = sidebar(page).locator("img");
-  await expect(logo).toHaveAttribute("alt", "");
-  await expect
-    .poll(() => logo.evaluate((image: HTMLImageElement) => image.naturalWidth))
-    .toBeGreaterThan(0);
   await expect(sidebar(page).locator("[data-slot=wordmark]")).toHaveText("afkfleet");
 });
 

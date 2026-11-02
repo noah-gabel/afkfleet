@@ -223,21 +223,4 @@ describe("the committed icon", () => {
 
     assert.ok(build.includes('println!("cargo:rerun-if-changed=icons/icon.ico");'));
   });
-
-  it("is the logo the app shows, byte for byte", () => {
-    const logo = path.resolve(
-      ICONS,
-      "..",
-      "..",
-      "..",
-      "..",
-      "packages",
-      "ui",
-      "src",
-      "assets",
-      "orbit.svg",
-    );
-
-    assert.deepEqual(readFileSync(logo), readFileSync(path.join(ICONS, "icon.svg")));
-  });
 });

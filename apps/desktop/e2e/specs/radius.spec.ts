@@ -1,7 +1,6 @@
 // Every corner comes from `--radius` (Plan.md P11.11; ADR-0020, U101): with it at 0, nothing on a
-// sign-in screen or Profile is rounded but a real circle. The logo's tile lives inside its SVG, so
-// it's no element's corner. scripts/theme-guard.mjs keeps the source on the scale; this proves the
-// one line does what it promises.
+// sign-in screen or Profile is rounded but a real circle. scripts/theme-guard.mjs keeps the source on
+// the scale; this proves the one line does what it promises.
 
 import type { Page } from "@playwright/test";
 

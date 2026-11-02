@@ -53,15 +53,24 @@ export interface TabEnd {
   readonly unchanged: readonly string[];
 }
 
+/** One part of the logo, against what's behind it. */
+export interface LogoPart {
+  readonly color: string;
+  readonly ratio: number;
+}
+
 /** What the page can be asked. */
 export type Probe =
   | { readonly kind: "text"; readonly floors: Floors }
+  | { readonly kind: "logo" }
   | { readonly kind: "tabStart" }
   | { readonly kind: "tabStep" }
   | { readonly kind: "tabEnd" };
 
 /** Answers `request` in the page; see the module comment. */
-export function probe(request: Probe): Walked | number | TabStep | Promise<TabEnd> {
+export function probe(
+  request: Probe,
+): Walked | readonly LogoPart[] | number | TabStep | Promise<TabEnd> {
   type Rgba = readonly [number, number, number, number];
   const canvas = document.createElement("canvas");
   canvas.width = 1;
@@ -353,6 +362,18 @@ export function probe(request: Probe): Walked | number | TabStep | Promise<TabEn
   switch (request.kind) {
     case "text":
       return walkTexts(request.floors);
+    case "logo": {
+      const logo = document.querySelector("[data-slot=logo]");
+      if (logo === null) {
+        throw new Error("no logo on the page");
+      }
+      const under = backdrop(logo);
+      return [...logo.querySelectorAll(":scope > path, :scope > circle")].map((part) => {
+        const style = getComputedStyle(part);
+        const color = style.stroke === "none" ? style.fill : style.stroke;
+        return { color, ratio: rounded(ratioOf(rgba(color), under)) };
+      });
+    }
     case "tabStart": {
       const pending = new Map<Element | string, string>();
       for (const element of document.querySelectorAll(
