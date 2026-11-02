@@ -158,7 +158,7 @@ describe("the send box (U45, S70)", () => {
     await app.user.type(field(), "/op AfkBot2");
     await app.user.click(screen.getByRole("button", { name: "Send" }));
     expect(
-      await screen.findByText("Enter your password to send this command. It counts for 5 minutes."),
+      await screen.findByText("Enter your password to send this command. Counts for 5 minutes."),
     ).toBeDefined();
     await app.user.type(field(), "3");
     expect(field().value).toBe("/op AfkBot2");
@@ -281,7 +281,7 @@ describe("the send box (U45, S70)", () => {
     await app.user.type(field(), "hello");
     await app.user.click(screen.getByRole("button", { name: "Send" }));
 
-    expect(await screen.findByText("This bot doesn't exist, or you can't see it.")).toBeDefined();
+    expect(await screen.findByText("Bot not found or not available to you.")).toBeDefined();
     expect(reads).toBe(2);
   });
 

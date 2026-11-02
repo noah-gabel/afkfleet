@@ -3,7 +3,7 @@
 //
 // - **The mode** (Control and above): a native drop-down that switches at once, "Switching…"
 //   meanwhile. Its choices are the modes the viewer may choose by each one's
-//   `unlisted_command`; the bot's mode is its value, by name, or "A mode you can't see" when
+//   `unlisted_command`; the bot's mode is its value, by name, or "Hidden mode" when
 //   the list lacks it, and a choice only when the viewer may choose it. The current mode is
 //   never sent. A 403 says only a manager may choose that mode and reads the bot and the
 //   modes again; a 422 shows its field text and reads the modes again; a 404 reads the bot

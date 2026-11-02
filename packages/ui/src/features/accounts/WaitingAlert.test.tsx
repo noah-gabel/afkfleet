@@ -34,9 +34,7 @@ describe("the links waiting for approval", () => {
   it("are counted on Home and on the nav's Accounts, for the Owner", async () => {
     const app = await home([pending(1), pending(2)]);
 
-    expect(
-      await screen.findByText("2 Microsoft links are waiting for your approval."),
-    ).toBeDefined();
+    expect(await screen.findByText("2 Microsoft links wait for your approval.")).toBeDefined();
     expect(
       screen.getByRole("link", { name: "Accounts, 2 waiting for your approval" }),
     ).toBeDefined();
@@ -47,7 +45,7 @@ describe("the links waiting for approval", () => {
   it("say one link in the singular, for an Admin", async () => {
     await home([pending(1)], me("admin", "admin"));
 
-    expect(await screen.findByText("1 Microsoft link is waiting for your approval.")).toBeDefined();
+    expect(await screen.findByText("1 Microsoft link waits for your approval.")).toBeDefined();
   });
 
   it("show nothing when none wait", async () => {
@@ -76,9 +74,7 @@ describe("the links waiting for approval", () => {
       { user: me("owner", "owner") },
     );
 
-    expect(
-      await screen.findByText("101 Microsoft links are waiting for your approval."),
-    ).toBeDefined();
+    expect(await screen.findByText("101 Microsoft links wait for your approval.")).toBeDefined();
     expect(
       screen.getByRole("link", { name: "Accounts, 101 waiting for your approval" }).textContent,
     ).toContain("99+");
@@ -100,9 +96,7 @@ describe("the links waiting for approval", () => {
     });
 
     expect(
-      await screen.findByText(
-        /^Couldn't check for links waiting for your approval: refused: internal \(request /,
-      ),
+      await screen.findByText(/^Couldn't check waiting links: refused: internal \(request /),
     ).toBeDefined();
     expect(screen.getByRole("link", { name: "Accounts" })).toBeDefined();
   });
@@ -112,7 +106,7 @@ describe("the links waiting for approval", () => {
     const app = await home([], me("owner", "owner"), {
       accountsAwaitingApproval: async () => ({ items: waiting }),
     });
-    await screen.findByText("1 Microsoft link is waiting for your approval.");
+    await screen.findByText("1 Microsoft link waits for your approval.");
     const before = reads(app);
     waiting = [pending(1), pending(2)];
 
@@ -121,9 +115,7 @@ describe("the links waiting for approval", () => {
       fireEvent.focus(window);
     });
 
-    expect(
-      await screen.findByText("2 Microsoft links are waiting for your approval."),
-    ).toBeDefined();
+    expect(await screen.findByText("2 Microsoft links wait for your approval.")).toBeDefined();
     expect(reads(app)).toBe(before + 1);
   });
 

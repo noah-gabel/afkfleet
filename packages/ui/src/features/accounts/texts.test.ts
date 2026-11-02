@@ -58,7 +58,7 @@ describe("an account's status line (U106)", () => {
   it.each([
     ["active", "Active", "success"],
     ["pending", "Waiting for approval", "warning"],
-    ["reauth_required", "Needs a new sign-in", "warning"],
+    ["reauth_required", "Needs sign-in", "warning"],
     ["refused", "Refused", "destructive"],
   ] as const)("%s reads %s, in %s", (status, text, tone) => {
     expect(accountLine(status)).toEqual({ text, tone });

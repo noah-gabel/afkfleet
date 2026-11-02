@@ -156,7 +156,7 @@ describe("the chat console (U43, U44)", () => {
 
     expect(screen.getByText("Loading chat…")).toBeDefined();
     answer.resolve(page([]));
-    expect(await screen.findByText("No chat yet.")).toBeDefined();
+    expect(await screen.findByText("No chat.")).toBeDefined();
     expect(app.fake.calls.filter((call) => call.method === "botChat")).toHaveLength(1);
   });
 
@@ -165,7 +165,7 @@ describe("the chat console (U43, U44)", () => {
       throw refusal(404, "not_found");
     });
 
-    expect(await screen.findByText(/^Couldn't load the chat: /)).toBeDefined();
+    expect(await screen.findByText(/^Couldn't load chat: /)).toBeDefined();
   });
 
   it("loads older lines above, then says there are none", async () => {
@@ -287,7 +287,7 @@ describe("the chat console's look (PR #77's review)", () => {
   });
 
   it("marks a name a chat format read with its icon and label, outside the capped name, never in the players' color (U55)", async () => {
-    const mark = "Read from the server's text by a chat format. Minecraft doesn't check this name.";
+    const mark = "Read by a chat format. Minecraft doesn't check this name.";
     await console_(async () =>
       page([
         said(3, { kind: "chat", text: "hello there", sender: { name: "Steve" } }),

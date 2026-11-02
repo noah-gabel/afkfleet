@@ -41,7 +41,7 @@ export const INVITATION_COPIED =
 export const CODE_COPIED =
   "Code copied. Send it, then copy something else: Windows' clipboard history may keep a copy.";
 /** The toast when copying failed. */
-export const COPY_FAILED = "Couldn't copy. Select the code and copy it by hand.";
+export const COPY_FAILED = "Copy failed. Select the code by hand.";
 
 /** The key of the create form's write. */
 const CREATE = "create";

@@ -9,7 +9,7 @@ import { expect, fakeBackend, test } from "../fixtures";
 import { enterCode, expectHome, logIn } from "./steps";
 
 const SERVER = "mc.example.com:25565";
-const MARK = "Read from the server's text by a chat format. Minecraft doesn't check this name.";
+const MARK = "Read by a chat format. Minecraft doesn't check this name.";
 
 test("a format read from the server's line marks its sender until the format is deleted", async ({
   page,

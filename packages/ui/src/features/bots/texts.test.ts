@@ -64,12 +64,12 @@ describe("a bot's reason", () => {
     ["duplicate_login", "Someone logged in with its account"],
     ["banned", "Banned from this server"],
     ["not_whitelisted", "Not on this server's whitelist"],
-    ["wrong_version", "This server runs another Minecraft version"],
-    ["account_banned", "Its Minecraft account is banned"],
-    ["multiplayer_disabled", "Multiplayer is turned off for its account"],
-    ["auth", "Microsoft refused its sign-in: link the account again"],
-    ["session_denied", "Its session was refused: link the account again, then Reset"],
-    ["crash_loop", "It kept crashing"],
+    ["wrong_version", "Server runs another Minecraft version"],
+    ["account_banned", "Minecraft account banned"],
+    ["multiplayer_disabled", "Multiplayer off for its account"],
+    ["auth", "Microsoft refused sign-in: link the account again"],
+    ["session_denied", "Session refused: link the account again, then Reset"],
+    ["crash_loop", "Crash loop"],
     ["a_newer_reason", "a_newer_reason"],
   ] as [BotStatus["reason"] & string, string][])(
     "paused or failed for %s reads %s",
@@ -80,12 +80,12 @@ describe("a bot's reason", () => {
 
   it.each([
     ["no_server", "No server set"],
-    ["owner_disabled", "Its owner's login is disabled"],
-    ["pending", "Its account waits for approval"],
-    ["reauth_required", "Its account must be linked again"],
-    ["refused", "Its account's link was refused"],
-    ["offline_not_allowed", "This server doesn't allow offline accounts"],
-    ["awaiting_agent", "Waiting for an agent with room"],
+    ["owner_disabled", "Owner's login disabled"],
+    ["pending", "Account waits for approval"],
+    ["reauth_required", "Account must be linked again"],
+    ["refused", "Account link refused"],
+    ["offline_not_allowed", "Offline accounts not allowed"],
+    ["awaiting_agent", "No agent with room yet"],
     ["a_newer_why", "a_newer_why"],
   ] as [BotStatus["why"] & string, string][])("not running for %s reads %s", (why, text) => {
     expect(unplacedText(why)).toBe(text);
@@ -97,7 +97,7 @@ describe("a bot's reason", () => {
     );
     expect(
       restingText({ kind: "unplaced", why: "no_server", state: "failed", reason: "auth" }),
-    ).toBe("Microsoft refused its sign-in: link the account again");
+    ).toBe("Microsoft refused sign-in: link the account again");
     expect(restingText({ kind: "unknown", state: "paused", reason: "duplicate_login" })).toBe(
       "Someone logged in with its account",
     );
@@ -110,7 +110,7 @@ describe("a bot's reason", () => {
     );
     expect(
       notRunningText({ kind: "unplaced", why: "pending", state: "failed", reason: "auth" }),
-    ).toBe("Its account waits for approval");
+    ).toBe("Account waits for approval");
     expect(notRunningText({ kind: "unplaced", why: "stopped" })).toBeNull();
     expect(notRunningText({ kind: "reported", state: "online" })).toBeNull();
   });
@@ -144,14 +144,14 @@ describe("a bot's last disconnect", () => {
     [{ kind: "connect_failed", connect_failure: "other" }, "Couldn't connect: network error"],
     [
       { kind: "connect_failed", connect_failure: "blocked" },
-      "Blocked: its agent refuses this address. Ask whoever runs the agent to allow it.",
+      "Blocked by its agent. Ask whoever runs it to allow this address.",
     ],
     [
       { kind: "connect_failed", connect_failure: "a_newer_failure" },
       "Couldn't connect: a_newer_failure",
     ],
     [{ kind: "connect_failed" }, "Couldn't connect"],
-    [{ kind: "auth_rejected" }, "The server refused its sign-in"],
+    [{ kind: "auth_rejected" }, "Server refused sign-in"],
     [{ kind: "account_restricted", restriction: "banned" }, "Account restricted: banned"],
     [
       { kind: "account_restricted", restriction: "multiplayer_disabled" },
@@ -160,25 +160,25 @@ describe("a bot's last disconnect", () => {
     [{ kind: "account_restricted" }, "Account restricted"],
     [
       { kind: "session_server_failed", session_server_failure: "unreachable" },
-      "Minecraft's session server was unreachable",
+      "Minecraft session server unreachable",
     ],
     [
       { kind: "session_server_failed", session_server_failure: "rate_limited" },
-      "Minecraft's session server rate-limited it",
+      "Minecraft session server rate-limited",
     ],
     [
       { kind: "session_server_failed", session_server_failure: "timed_out" },
-      "Minecraft's session server timed out",
+      "Minecraft session server timed out",
     ],
     [
       { kind: "session_server_failed", session_server_failure: "unexpected" },
-      "Minecraft's session server answered unexpectedly",
+      "Minecraft session server unexpected answer",
     ],
-    [{ kind: "session_server_failed" }, "Minecraft's session server failed"],
-    [{ kind: "session_crashed" }, "Its session crashed"],
-    [{ kind: "watchdog_timeout" }, "It stopped responding"],
-    [{ kind: "liveness_timeout" }, "The server stopped answering"],
-    [{ kind: "respawn_failed" }, "It couldn't respawn after dying"],
+    [{ kind: "session_server_failed" }, "Minecraft session server failed"],
+    [{ kind: "session_crashed" }, "Session crashed"],
+    [{ kind: "watchdog_timeout" }, "Stopped responding"],
+    [{ kind: "liveness_timeout" }, "Server stopped answering"],
+    [{ kind: "respawn_failed" }, "Couldn't respawn"],
     [{ kind: "a_newer_kind" }, "a_newer_kind"],
   ] as [LastDisconnect, string][])("%o reads %s", (last, text) => {
     expect(disconnectText(last)).toBe(text);
@@ -191,9 +191,9 @@ describe("the other texts", () => {
     const today = new Date(2026, 9, 26, 0, 30).toISOString();
     const yesterday = new Date(2026, 9, 25, 23, 30).toISOString();
 
-    expect(agentLastSeen(today, now)).toBe(`Its agent was last seen at ${formatClock(today)}.`);
+    expect(agentLastSeen(today, now)).toBe(`Agent last seen at ${formatClock(today)}.`);
     expect(agentLastSeen(yesterday, now)).toBe(
-      `Its agent was last seen on ${formatDate(yesterday)} at ${formatClock(yesterday)}.`,
+      `Agent last seen on ${formatDate(yesterday)} at ${formatClock(yesterday)}.`,
     );
   });
 
@@ -266,9 +266,9 @@ describe("the timeline's texts (U46, R111)", () => {
     ],
     [
       { kind: "alert", arrived: 0, at: AT, state: "failed", reason: "crash_loop" },
-      "Failed: It kept crashing",
+      "Failed: Crash loop",
     ],
-    [{ kind: "mode", arrived: 0, from: "a", to: "b" }, "Mode: mode a → mode b"],
+    [{ kind: "mode", arrived: 0, from: "a", to: "b" }, "Mode: mode a to mode b"],
     [{ kind: "desired", arrived: 0, desired: "running" }, "Start requested"],
     [{ kind: "desired", arrived: 0, desired: "stopped" }, "Stop requested"],
   ] as [Entry, string][])("read %o as %s", (entry, text) => {
@@ -276,7 +276,7 @@ describe("the timeline's texts (U46, R111)", () => {
   });
 
   it("say how long live updates were down", () => {
-    expect(gapText(754_000)).toBe("Live updates were down for 12 min; some events may be missing.");
+    expect(gapText(754_000)).toBe("Live updates down for 12 min. Events may be missing.");
   });
 });
 
@@ -293,23 +293,23 @@ describe("the notices' texts (U42)", () => {
     ],
     [
       { ...base, kind: "paused", reason: "banned" },
-      "AfkBot1 was paused: Banned from this server.",
-      "AfkBot1 was paused: Banned from this server.",
+      "AfkBot1 paused: banned from this server.",
+      "AfkBot1 paused: banned from this server.",
     ],
     [
       { ...base, kind: "failed", reason: "auth" },
-      "AfkBot1 failed: Microsoft refused its sign-in: link the account again.",
-      "AfkBot1 failed: Microsoft refused its sign-in: link the account again.",
+      "AfkBot1 failed: Microsoft refused sign-in: link the account again.",
+      "AfkBot1 failed: Microsoft refused sign-in: link the account again.",
     ],
     [
       { ...base, kind: "blocked" },
-      "AfkBot1 can't connect: its agent refuses this server's address.",
-      "AfkBot1 can't connect: its agent refuses this server's address.",
+      "AfkBot1 blocked: its agent refuses this address.",
+      "AfkBot1 blocked: its agent refuses this address.",
     ],
     [
       { ...base, kind: "respawn" },
-      "AfkBot1 couldn't respawn and left the server. It reconnects by itself.",
-      "AfkBot1 couldn't respawn and left the server. It reconnects by itself.",
+      "AfkBot1 couldn't respawn and left. Reconnects by itself.",
+      "AfkBot1 couldn't respawn and left. Reconnects by itself.",
     ],
     [{ ...base, kind: "died", name: null }, "A bot died.", `A bot died at ${formatClock(AT)}.`],
   ] as [Notice, string, string][])("read %o as its toast and its line", (notice, toast, line) => {
@@ -332,5 +332,24 @@ describe("the timeline stays short for a bot its agent can't reach (S125)", () =
 
     expect(text).toBe("Agent offline");
     expect(text).not.toContain("Tied");
+  });
+});
+
+describe("a reason inside a notice's sentence (R213)", () => {
+  const failed = (reason: Parameters<typeof stateReasonText>[0]) =>
+    noticeLine({ id: 1, botId: "b", name: "AfkBot5", kind: "failed", reason } as Notice);
+
+  it("starts in lowercase, as the rest of the sentence reads", () => {
+    expect(failed("crash_loop")).toBe("AfkBot5 failed: crash loop.");
+  });
+
+  it("keeps a name's capital", () => {
+    expect(failed("auth")).toBe(
+      "AfkBot5 failed: Microsoft refused sign-in: link the account again.",
+    );
+  });
+
+  it("keeps the capital of a reason shown alone", () => {
+    expect(stateReasonText("crash_loop")).toBe("Crash loop");
   });
 });

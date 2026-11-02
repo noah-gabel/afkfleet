@@ -17,7 +17,7 @@ export const LOADING_MODES = "Loading modes…";
 
 /** The list, or a mode, when the modes couldn't be read. */
 export function modesFailed(why: string): string {
-  return `Couldn't load the modes: ${why}`;
+  return `Couldn't load modes: ${why}`;
 }
 
 /** A card's link, for screen readers. */

@@ -995,6 +995,6 @@ describe("a mode that isn't there", () => {
     });
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toMatch(/^Couldn't load the modes: refused: internal/);
+    expect(alert.textContent).toMatch(/^Couldn't load modes: refused: internal/);
   });
 });

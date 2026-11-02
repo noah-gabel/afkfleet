@@ -103,7 +103,7 @@ describe("Home", () => {
 
     const online = await card("AfkBot2");
 
-    expect(await online.findByText("Couldn't load the mode")).toBeDefined();
+    expect(await online.findByText("Couldn't load mode")).toBeDefined();
   });
 
   it("shows why a bot isn't running, and no address where the server sent none", async () => {
@@ -180,7 +180,7 @@ describe("Home", () => {
       },
     );
 
-    expect(await screen.findByText(/^Couldn't load the bots: /)).toBeDefined();
+    expect(await screen.findByText(/^Couldn't load bots: /)).toBeDefined();
   });
 
   it("shows a warning as one compact line above the cards, never a box", async () => {

@@ -158,7 +158,7 @@ describe("a bot's screen", () => {
     );
 
     expect(screen.getByText("Agent offline")).toBeDefined();
-    expect(screen.getByText(`Its agent was last seen at ${formatClock(SINCE)}.`)).toBeDefined();
+    expect(screen.getByText(`Agent last seen at ${formatClock(SINCE)}.`)).toBeDefined();
   });
 
   it("says on which day its agent was last seen before today", async () => {
@@ -171,7 +171,7 @@ describe("a bot's screen", () => {
     );
 
     expect(
-      screen.getByText(`Its agent was last seen on ${formatDate(seen)} at ${formatClock(seen)}.`),
+      screen.getByText(`Agent last seen on ${formatDate(seen)} at ${formatClock(seen)}.`),
     ).toBeDefined();
   });
 
@@ -195,7 +195,7 @@ describe("a bot's screen", () => {
       },
     });
 
-    expect(await screen.findByText("Couldn't load the mode")).toBeDefined();
+    expect(await screen.findByText("Couldn't load mode")).toBeDefined();
   });
 
   it("shows its agent when the server sends it, as it does to Admins and the Owner", async () => {

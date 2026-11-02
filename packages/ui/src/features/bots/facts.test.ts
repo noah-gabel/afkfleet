@@ -64,8 +64,8 @@ describe("a bot's facts", () => {
         ["Paused", "Banned from this server"],
       ]);
       expect(shown(failed, place).filter(([term]) => term !== "Mode")).toEqual([
-        ["Not running", "Its account waits for approval"],
-        ["Failed", "It kept crashing"],
+        ["Not running", "Account waits for approval"],
+        ["Failed", "Crash loop"],
       ]);
     },
   );
@@ -80,7 +80,7 @@ describe("a bot's facts", () => {
   });
 
   it("say the mode couldn't be loaded when the modes can't be read", () => {
-    expect(shown(bot(1), "card", "failed")).toContainEqual(["Mode", "Couldn't load the mode"]);
+    expect(shown(bot(1), "card", "failed")).toContainEqual(["Mode", "Couldn't load mode"]);
     expect(shown(bot(1), "card", "loading")).toContainEqual(["Mode", "…"]);
   });
 });

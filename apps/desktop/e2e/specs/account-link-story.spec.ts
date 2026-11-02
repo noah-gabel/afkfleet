@@ -25,7 +25,7 @@ test("a Member's link waits for the Owner's approval, then is shared and deleted
   // The page opens after the code shows, through its own request: poll for it.
   await expect.poll(() => backend.opened()).toBe(1);
   await expect(
-    page.getByText("AfkBot1 is linked. It waits for an Admin's or the Owner's approval", {
+    page.getByText("AfkBot1 linked. Waits for an Admin's or the Owner's approval", {
       exact: false,
     }),
   ).toBeVisible({ timeout: FLOW_END_MS });
@@ -36,7 +36,7 @@ test("a Member's link waits for the Owner's approval, then is shared and deleted
 
   await logIn(page, OWNER);
   await enterCode(page, backend.code(OWNER));
-  await expect(page.getByText("1 Microsoft link is waiting for your approval.")).toBeVisible();
+  await expect(page.getByText("1 Microsoft link waits for your approval.")).toBeVisible();
   await expect(
     page.getByRole("link", { name: "Accounts, 1 waiting for your approval" }),
   ).toBeVisible();
@@ -58,7 +58,7 @@ test("a Member's link waits for the Owner's approval, then is shared and deleted
   await page.getByRole("button", { name: "Share" }).click();
   await page.getByLabel("Current password").fill(PASSWORD);
   await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByText(`AfkBot1 is shared with ${NEW_USER}.`)).toBeVisible();
+  await expect(page.getByText(`AfkBot1 shared with ${NEW_USER}.`)).toBeVisible();
   await expect(page.getByLabel(`Access of ${NEW_USER}`)).toHaveValue("view");
 
   await page.getByRole("button", { name: "Delete", exact: true }).click();

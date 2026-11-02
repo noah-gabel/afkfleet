@@ -109,9 +109,7 @@ describe("the link screen", () => {
     expect(screen.getByText(LINK_WARNING)).toBeDefined();
     expect(calls(app, "openVerificationLink")).toBe(1);
     expect(
-      await screen.findByText(
-        /^Waiting for you to enter the code on Microsoft's page\. It works until /,
-      ),
+      await screen.findByText(/^Enter the code on Microsoft's page\. Works until /),
     ).toBeDefined();
     await app.user.click(screen.getByRole("button", { name: "Open Microsoft's page" }));
     expect(calls(app, "openVerificationLink")).toBe(2);
@@ -133,17 +131,17 @@ describe("the link screen", () => {
     });
     app.runtime.queryClient.setQueryData(["accounts", "one", accountId(5)], account(5));
     await getCode(app);
-    await screen.findByText(/^Waiting for you/);
+    await screen.findByText(/^Enter the code/);
 
     await time.advance(2000);
     expect(
-      await screen.findByText("Microsoft confirmed your sign-in. Checking the Minecraft profile…"),
+      await screen.findByText("Sign-in confirmed. Checking the Minecraft profile…"),
     ).toBeDefined();
     await time.advance(2000);
 
     expect(
       await screen.findByText(
-        "AfkBot5 is linked. It waits for an Admin's or the Owner's approval before a bot can use it.",
+        "AfkBot5 linked. Waits for an Admin's or the Owner's approval before a bot can use it.",
       ),
     ).toBeDefined();
     expect(screen.queryByText(USER_CODE)).toBeNull();
@@ -164,7 +162,7 @@ describe("the link screen", () => {
 
     await app.user.click(screen.getByRole("button", { name: "Get a code" }));
 
-    expect(await screen.findByText("AfkBot5 is linked.")).toBeDefined();
+    expect(await screen.findByText("AfkBot5 linked.")).toBeDefined();
   });
 
   it("says a flow that's gone is gone, stops reading and offers a new code", async () => {
@@ -183,9 +181,9 @@ describe("the link screen", () => {
   });
 
   it.each<[string, LinkFlowResponse, string]>([
-    ["declined", { status: "declined" }, "The sign-in was declined at Microsoft."],
-    ["expired", { status: "expired" }, "The code expired before it was entered."],
-    ["failed", { status: "failed" }, "The link couldn't be finished."],
+    ["declined", { status: "declined" }, "Sign-in declined at Microsoft."],
+    ["expired", { status: "expired" }, "Code expired."],
+    ["failed", { status: "failed" }, "Link failed."],
     ["refused", { status: "refused", reason: "not_owned" }, reasonText("not_owned", "the account")],
   ])("offers a new code after %s, which starts again", async (_state, ended, text) => {
     const { app } = await linkScreen({ linkStatus: statuses(ended, WAITING) });
@@ -199,7 +197,7 @@ describe("the link screen", () => {
   });
 
   it.each<[string, LinkFlowResponse, string]>([
-    ["taken", { status: "taken" }, "This Minecraft account is already linked in afkfleet."],
+    ["taken", { status: "taken" }, "This Minecraft account is already linked."],
     ["over_quota", { status: "over_quota" }, START_OVER_QUOTA],
   ])("offers only the way back after %s", async (_state, ended, text) => {
     const { app } = await linkScreen({ linkStatus: statuses(ended) });
@@ -229,7 +227,7 @@ describe("the link screen", () => {
       linkStatus: statuses(WAITING, limited(5), WAITING),
     });
     await getCode(app);
-    await screen.findByText(/^Waiting for you/);
+    await screen.findByText(/^Enter the code/);
     await time.advance(2000);
     await vi.waitFor(() => expect(calls(app, "linkStatus")).toBe(2));
 
@@ -249,7 +247,7 @@ describe("the link screen", () => {
 
     expect(await screen.findByText(/refused: internal \(request /)).toBeDefined();
     await app.user.click(screen.getByRole("button", { name: "Try again" }));
-    expect(await screen.findByText(/^Waiting for you/)).toBeDefined();
+    expect(await screen.findByText(/^Enter the code/)).toBeDefined();
   });
 
   describe("a refused start", () => {
@@ -358,7 +356,7 @@ describe("the link screen", () => {
       ).toBeDefined();
       await app.user.click(screen.getByRole("button", { name: "Get a code" }));
 
-      expect(await screen.findByText("AfkBot1 is linked again.")).toBeDefined();
+      expect(await screen.findByText("AfkBot1 linked again.")).toBeDefined();
       expect(app.fake.calls.find((call) => call.method === "relinkAccount")?.args).toEqual([
         accountId(1),
       ]);
@@ -399,7 +397,7 @@ describe("the link screen", () => {
       const { app, time } = await linkScreen({ linkStatus: statuses(WAITING, linked(5)) });
       await getCode(app);
       await time.advance(2000);
-      await screen.findByText(/is linked/);
+      await screen.findByText(/ linked/);
 
       expect(cacheText(app)).not.toContain(USER_CODE);
     });

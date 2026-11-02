@@ -14,19 +14,17 @@ test("an account that needs a new sign-in is linked again", async ({ page, conte
   await enterCode(page, backend.code(MEMBER));
 
   await page.getByRole("link", { name: "Accounts" }).click();
-  await expect(page.getByText("Microsoft no longer accepts this account's sign-in.")).toBeVisible();
+  await expect(page.getByText("Microsoft no longer accepts its sign-in.")).toBeVisible();
   await page.getByRole("link", { name: "AfkBot1", exact: true }).click();
   await expect(
-    page.getByText(
-      "Microsoft no longer accepts this account's sign-in. Link it again to keep using it.",
-    ),
+    page.getByText("Microsoft no longer accepts its sign-in. Link it again."),
   ).toBeVisible();
   await page.getByRole("link", { name: "Link again" }).click();
   await expect(page.getByRole("heading", { name: "Link AfkBot1 again" })).toBeVisible();
   await page.getByRole("button", { name: "Get a code" }).click();
   await expect(page.getByText(LINK_CODE, { exact: true })).toBeVisible();
 
-  await expect(page.getByText("AfkBot1 is linked again.")).toBeVisible({ timeout: FLOW_END_MS });
+  await expect(page.getByText("AfkBot1 linked again.")).toBeVisible({ timeout: FLOW_END_MS });
   await page.getByRole("link", { name: "Open account" }).click();
   await expect(page.getByText("Active", { exact: true })).toBeVisible();
   await expect.poll(() => backend.opened()).toBe(1);

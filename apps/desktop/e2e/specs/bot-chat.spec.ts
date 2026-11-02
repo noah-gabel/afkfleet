@@ -21,7 +21,7 @@ test("a server's line shows, and the user's own line shows pending, then sent", 
   await expectHome(page, OWNER);
   await page.getByRole("link", { name: "Open AfkBot1" }).click();
   const chat = page.getByRole("main").getByRole("region", { name: "Chat" });
-  await expect(chat.getByText("No chat yet.")).toBeVisible();
+  await expect(chat.getByText("No chat.")).toBeVisible();
   const id = backend.bot("AfkBot1").id;
 
   const said = backend.addChat("AfkBot1", {
