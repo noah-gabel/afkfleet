@@ -68,6 +68,10 @@ export function validated(client: ApiClient): ApiClient {
       checkAll([...problems(schemas.id, id, "id"), ...pageProblems(before, limit)]);
       return client.accountGrants(id, before, limit);
     },
+    grantCandidates: async (id, q) => {
+      checkAll([...problems(schemas.id, id, "id"), ...problems(schemas.usernamePrefix, q, "q")]);
+      return client.grantCandidates(id, q);
+    },
     createGrant: async (id, request) => {
       checkAll([
         ...problems(schemas.id, id, "id"),

@@ -25,6 +25,7 @@ import type { CreateInviteRequest } from "../generated/CreateInviteRequest";
 import type { CreateModeRequest } from "../generated/CreateModeRequest";
 import type { CreateOfflineAccountRequest } from "../generated/CreateOfflineAccountRequest";
 import type { CreateServerSettingsRequest } from "../generated/CreateServerSettingsRequest";
+import type { GrantCandidates } from "../generated/GrantCandidates";
 import type { GrantPage } from "../generated/GrantPage";
 import type { GrantResponse } from "../generated/GrantResponse";
 import type { HeldGrantPage } from "../generated/HeldGrantPage";
@@ -127,6 +128,8 @@ export interface ApiClient {
   /** A page of who else has access to an account (Manage). */
   accountGrants(id: string, before?: string, limit?: number): Promise<GrantPage>;
   /** Gives a user access by their exact username, after a step-up. */
+  /** Who could be given a grant on account `id`, by what's typed so far of their name (U110). */
+  grantCandidates(id: string, q: string): Promise<GrantCandidates>;
   createGrant(id: string, request: CreateGrantRequest): Promise<GrantResponse>;
   /** Changes a grant's level, after a step-up. */
   changeGrant(id: string, user: string, request: ChangeGrantRequest): Promise<GrantResponse>;
@@ -267,6 +270,7 @@ export const API_METHODS = [
   "refuseAccount",
   "relinkAccount",
   "accountGrants",
+  "grantCandidates",
   "createGrant",
   "changeGrant",
   "revokeGrant",

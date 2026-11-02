@@ -133,6 +133,7 @@ export const COMMANDS = [
   "refuse_account",
   "relink_account",
   "account_grants",
+  "grant_candidates",
   "create_grant",
   "change_grant",
   "revoke_grant",
@@ -2100,6 +2101,23 @@ export class FakeBackend {
     });
   }
 
+  /** Who could be given a grant on `account`, by the start of their name: at most 8, in order. */
+  #candidates(caller: User, account: Account, q: string): string[] {
+    const start = q.toLowerCase();
+    return this.#users
+      .filter(
+        (user) =>
+          user.username.startsWith(start) &&
+          !user.disabled &&
+          user.id !== caller.id &&
+          !this.#implicitManage(user, account) &&
+          !account.grants.has(user.id),
+      )
+      .map((user) => user.username)
+      .sort()
+      .slice(0, 8);
+  }
+
   #createGrant(target: unknown, request: Record<string, unknown>): Outcome {
     return this.#steppedUp((session) =>
       this.#managed(session, target, (account) => {
@@ -2321,6 +2339,14 @@ export class FakeBackend {
             value({
               items: this.#grantsOf(account).map((grant) => this.#asSeen(session, account, grant)),
             } satisfies GrantPage),
+          ),
+        );
+      case "grant_candidates":
+        return this.#signedIn((session) =>
+          this.#managed(session, args.id, (account) =>
+            account.status === "pending"
+              ? api(409, "conflict")
+              : value({ usernames: this.#candidates(session.user, account, String(args.q)) }),
           ),
         );
       case "create_grant":

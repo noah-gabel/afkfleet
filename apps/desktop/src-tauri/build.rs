@@ -42,6 +42,7 @@ const COMMANDS: &[&str] = &[
     "refuse_account",
     "relink_account",
     "account_grants",
+    "grant_candidates",
     "create_grant",
     "change_grant",
     "revoke_grant",

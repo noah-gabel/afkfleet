@@ -1,6 +1,8 @@
 //! The grants' commands: who else has access to an account (Plan.md P9.8).
 
-use fleet_api_types::accounts::{ChangeGrantRequest, CreateGrantRequest, GrantPage, GrantResponse};
+use fleet_api_types::accounts::{
+    ChangeGrantRequest, CreateGrantRequest, GrantCandidates, GrantPage, GrantResponse,
+};
 use fleet_api_types::app::CommandError;
 use fleet_api_types::{AccountId, UserId};
 
@@ -14,6 +16,15 @@ pub(crate) async fn account_grants(
     limit: Option<u32>,
 ) -> Result<GrantPage, CommandError> {
     state.account_grants(id, before, limit).await
+}
+
+#[tauri::command]
+pub(crate) async fn grant_candidates(
+    state: Managed<'_>,
+    id: AccountId,
+    q: String,
+) -> Result<GrantCandidates, CommandError> {
+    state.grant_candidates(id, q).await
 }
 
 #[tauri::command]

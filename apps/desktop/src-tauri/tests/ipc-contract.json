@@ -242,6 +242,16 @@
       "expect": { "error": "no_server" }
     },
     {
+      "command": "grant_candidates",
+      "method": "grantCandidates",
+      "inputs": ["01900000-0000-7000-8000-00000000000a", "afk"],
+      "args": {
+        "id": "01900000-0000-7000-8000-00000000000a",
+        "q": "afk"
+      },
+      "expect": { "error": "no_server" }
+    },
+    {
       "command": "create_grant",
       "method": "createGrant",
       "inputs": [

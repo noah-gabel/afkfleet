@@ -4,7 +4,7 @@
 
 import type { Page } from "@playwright/test";
 
-import { MEMBER, NEW_USER, OWNER } from "../fake/backend";
+import { MEMBER, NEW_USER, OWNER, PASSWORD } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
 import { enterCode, expectHome, logIn } from "./steps";
 
@@ -168,4 +168,61 @@ test("the owner's own row says You where a Manage grantee's does", async ({ page
   const mine = access(page).getByRole("row", { name: new RegExp(MEMBER) });
   await expect(mine.getByText("You", { exact: true })).toBeVisible();
   await expect(mine.getByRole("button", { name: /Revoke/ })).toHaveCount(0);
+});
+
+test("Share with suggests a name by the keyboard, and sharing it still takes the password", async ({
+  page,
+  context,
+}) => {
+  await atAccount(page, context, OWNER);
+  const field = main(page).getByRole("combobox", { name: "Username" });
+
+  // All of it but the last letter, so it matches this name alone.
+  await field.pressSequentially(MEMBER.slice(0, -1));
+  const option = main(page).getByRole("option", { name: MEMBER });
+  await expect(option).toBeVisible();
+  await page.keyboard.press("ArrowDown");
+  await expect(option).toHaveAttribute("aria-selected", "true");
+  await expect(field).toBeFocused();
+  await page.keyboard.press("Enter");
+
+  await expect(field).toHaveValue(MEMBER);
+  await expect(main(page).getByRole("listbox")).toHaveCount(0);
+  await expect(main(page).getByLabel("Current password")).toHaveCount(0);
+
+  await main(page).getByRole("button", { name: "Share" }).click();
+  await main(page).getByLabel("Current password").fill(PASSWORD);
+  await main(page).getByRole("button", { name: "Continue" }).click();
+  await expect(access(page).getByRole("table", { name: "Who has access" })).toContainText(MEMBER);
+});
+
+test("Share with takes a click on a name, which keeps the focus and sends nothing", async ({
+  page,
+  context,
+}) => {
+  const backend = await atAccount(page, context, OWNER);
+  const field = main(page).getByRole("combobox", { name: "Username" });
+
+  await field.pressSequentially(MEMBER.slice(0, 2));
+  await main(page).getByRole("option", { name: MEMBER }).click();
+
+  await expect(field).toHaveValue(MEMBER);
+  await expect(field).toBeFocused();
+  expect(backend.timesCalled("create_grant")).toBe(0);
+});
+
+test("Share with still takes an exact name when the suggestions are limited", async ({
+  page,
+  context,
+}) => {
+  const backend = await atAccount(page, context, OWNER);
+  backend.refuseNext("grant_candidates", 429, "rate_limited", 60);
+  const field = main(page).getByRole("combobox", { name: "Username" });
+
+  await field.pressSequentially(MEMBER);
+  await expect.poll(() => backend.timesCalled("grant_candidates")).toBeGreaterThan(0);
+
+  await expect(main(page).getByRole("alert")).toHaveCount(0);
+  await main(page).getByRole("button", { name: "Share" }).click();
+  await expect(main(page).getByLabel("Current password")).toBeVisible();
 });

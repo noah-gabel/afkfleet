@@ -750,6 +750,19 @@ test("an account's screen: a row's question, the step-up, and below Manage", asy
   await table.getByRole("button", { name: `Revoke ${MEMBER}'s access` }).click();
   await expect(table.getByRole("button", { name: "Cancel" })).toBeVisible();
   await bothThemes(page, "an account, a row's question");
+  await table.getByRole("button", { name: "Cancel" }).click();
+  const shareField = main.getByRole("combobox", { name: "Username" });
+  await shareField.pressSequentially(NEW_USER.slice(0, 2));
+  await expect(main.getByRole("option", { name: NEW_USER })).toBeVisible();
+  await page.keyboard.press("ArrowDown");
+  await expect(main.getByRole("option", { name: NEW_USER })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await textsInBothThemes(page, "Share with, its list open and an option active");
+  await page.keyboard.press("Escape");
+  await shareField.fill("");
+  await table.getByRole("button", { name: `Revoke ${MEMBER}'s access` }).click();
   await table.getByRole("button", { name: "Revoke", exact: true }).click();
   await expect(main.getByLabel("Current password")).toBeVisible();
   await bothThemes(page, "an account, a row's step-up");

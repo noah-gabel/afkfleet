@@ -300,6 +300,10 @@ export const TILE_OFFLINE = {
 /** The offline screen's title and first words (U107). */
 export const OFFLINE_TITLE = "Add an offline account";
 
+/** The sharing form's field: its hint, and what its list of names is called (U110). */
+export const SHARE_HINT = "Exact username, or pick a match.";
+export const MATCHING_USERS = "Matching users";
+
 /** The offline form's texts (S6). */
 export const OFFLINE_HINT =
   "For servers in offline mode. Anyone can join under this name there, and the connection isn't encrypted.";

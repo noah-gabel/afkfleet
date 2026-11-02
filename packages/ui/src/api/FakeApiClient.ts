@@ -27,6 +27,7 @@ import type { CreateModeRequest } from "../generated/CreateModeRequest";
 import type { CreateOfflineAccountRequest } from "../generated/CreateOfflineAccountRequest";
 import type { CreateServerSettingsRequest } from "../generated/CreateServerSettingsRequest";
 import type { FieldError } from "../generated/FieldError";
+import type { GrantCandidates } from "../generated/GrantCandidates";
 import type { GrantPage } from "../generated/GrantPage";
 import type { GrantResponse } from "../generated/GrantResponse";
 import type { HeldGrantPage } from "../generated/HeldGrantPage";
@@ -356,6 +357,10 @@ export class FakeApiClient implements ApiClient {
 
   async accountGrants(id: string, before?: string, limit?: number): Promise<GrantPage> {
     return this.#handler("accountGrants", [id, before, limit])(id, before, limit);
+  }
+
+  async grantCandidates(id: string, q: string): Promise<GrantCandidates> {
+    return this.#handler("grantCandidates", [id, q])(id, q);
   }
 
   async createGrant(id: string, request: CreateGrantRequest): Promise<GrantResponse> {

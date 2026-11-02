@@ -24,7 +24,6 @@ import { ScreenState } from "../../../components/ScreenState";
 import { Alert, AlertDescription } from "../../../components/ui/alert";
 import { Button } from "../../../components/ui/button";
 import { Card } from "../../../components/ui/card";
-import { Input } from "../../../components/ui/input";
 import {
   Table,
   TableBody,
@@ -55,10 +54,12 @@ import {
   PENDING_NOT_SHARED,
   revoked,
   revokeQuestion,
+  SHARE_HINT,
   shared,
   TOO_MANY_NAMES,
   YOU,
 } from "../texts";
+import { UsernameCombobox } from "./UsernameCombobox";
 
 const LEVELS = ["view", "control", "manage"] as const;
 
@@ -283,6 +284,8 @@ function ShareForm({ account, writes }: { account: AccountResponse; writes: Acco
   const wait = useRetryWait();
   const key = "share";
   const headingId = useId();
+  const username = form.register("username");
+  const typed = form.watch("username");
 
   /** What a refusal other than the step-up's says, at the form. */
   function show(error: CommandError, user: string): void {
@@ -330,10 +333,22 @@ function ShareForm({ account, writes }: { account: AccountResponse; writes: Acco
           <FormField
             id="share-username"
             label="Username"
-            hint="Their exact username."
+            hint={SHARE_HINT}
             error={form.formState.errors.username?.message}
           >
-            {(control) => <Input {...control} autoComplete="off" {...form.register("username")} />}
+            {(control) => (
+              <UsernameCombobox
+                {...control}
+                name={username.name}
+                onChange={username.onChange}
+                onBlur={username.onBlur}
+                inputRef={username.ref}
+                account={account.id}
+                searching={account.status !== "pending"}
+                value={typed}
+                onPick={(name) => form.setValue("username", name)}
+              />
+            )}
           </FormField>
           <fieldset className="flex flex-col gap-2">
             <legend className="text-sm font-semibold">Access</legend>

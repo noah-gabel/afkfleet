@@ -118,6 +118,7 @@ export function watched(client: ApiClient, stores: AppStores, events: WatchEvent
     refuseAccount: watch((id) => client.refuseAccount(id)),
     relinkAccount: watch((id) => client.relinkAccount(id)),
     accountGrants: watch((id, before, limit) => client.accountGrants(id, before, limit)),
+    grantCandidates: watch((id, q) => client.grantCandidates(id, q)),
     createGrant: watch((id, request) => client.createGrant(id, request)),
     changeGrant: watch((id, user, request) => client.changeGrant(id, user, request)),
     revokeGrant: watch((id, user) => client.revokeGrant(id, user)),
