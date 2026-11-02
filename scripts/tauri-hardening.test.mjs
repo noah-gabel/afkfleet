@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { recipeBody } from "./justfile.mjs";
+import { CHECK_EXE } from "./app-check.mjs";
+import { readJustfile, recipeBody } from "./justfile.mjs";
 import {
   COMMANDS,
   CSP,
@@ -427,12 +428,26 @@ describe("the debug exe the AI launches (ADR-0020, U87)", () => {
     assert.notEqual(check.identifier, config("tauri.conf.json").identifier);
   });
 
-  it("is what its recipe builds, in debug", () => {
-    const [line, ...rest] = recipeBody("app-build-check");
+  it("is what its recipe builds, in debug, and copies to its own path", () => {
+    assert.deepEqual(recipeBody("app-build-check"), [
+      'pnpm --filter @afkfleet/desktop tauri build --debug --config "{{ justfile_directory() }}/apps/desktop/src-tauri/tauri.check.conf.json"',
+      "node scripts/app-check.mjs",
+    ]);
+  });
 
-    assert.deepEqual(rest, []);
-    assert.match(line, / tauri build --debug --config /);
-    assert.match(line, /\/apps\/desktop\/src-tauri\/tauri\.check\.conf\.json"$/);
+  it("lands at a path no other recipe names", () => {
+    assert.equal(CHECK_EXE, "target/app-check/afkfleet-check.exe");
+    const naming = readJustfile()
+      .split("\n")
+      .filter((line) => !line.startsWith("#") && /app-check/.test(line));
+    assert.deepEqual(naming, ["    node scripts/app-check.mjs"]);
+  });
+
+  it("is the path the rules name", () => {
+    const root = path.resolve(srcTauri, "..", "..", "..");
+    for (const file of ["CLAUDE.md", ".claude/rules/commands.md", "README.md"]) {
+      assert.ok(readFileSync(path.join(root, file), "utf8").includes(CHECK_EXE), file);
+    }
   });
 });
 

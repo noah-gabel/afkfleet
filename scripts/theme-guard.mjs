@@ -10,10 +10,13 @@
 //   only in a colour utility's or an arbitrary property's
 // - `rgb(`, `oklch(` and the like in any string, or a string that is entirely `#hex`
 //   (`href` aside)
-// - a literal after a colour key or attribute, shorthands included, or as a `--*` style value;
-//   a named colour that is a whole string in such a key's expression (`fill={on ? "white" : "none"}`)
+// - a literal after a colour key or attribute, shorthands included, or as a `--*` style value; or
+//   in any string in such a key's expression (`fill={on ? "white" : "none"}`), unless that string
+//   is only compared (`tone === "green"`)
 // `currentColor`, `transparent`, `inherit`, `none`, `var(--x)` and `color-mix` over `var()` are
 // fine, and prose never counts: each rule needs a colour context. There is no file allowlist.
+// A fade like `[mask-image:linear-gradient(…black…)]` is refused too: use Tailwind v4's `mask-*`
+// utilities.
 // **Its limit:** a colour that reaches a key through a constant (`fill={SHADE}`) goes unseen, and
 // Tailwind's palette reset can't catch it either, since it's no class (ADR-0020, R186).
 //
@@ -52,7 +55,7 @@ const PALETTE_CLASS = new RegExp(
 const FUNCTION = "(?<![\\w-])(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\\(";
 
 /** A hex value or a colour function. */
-const LITERAL = `#[0-9a-fA-F]{3,8}\\b|${FUNCTION}`;
+const LITERAL = `#[0-9a-fA-F]{3,8}(?![0-9a-zA-Z])|${FUNCTION}`;
 
 /** A utility's arbitrary value holding a literal: `bg-[#fff]`. */
 const ARBITRARY_VALUE = new RegExp(`-\\[[^\\]\\s]*(?:${LITERAL})[^\\]\\s]*\\]`, "g");
@@ -127,6 +130,17 @@ function expressionEnd(code, quoted, from) {
     }
   }
   return code.length;
+}
+
+/**
+ * Whether the string of `length` at `start` in `code`, between its quotes, is an operand of a
+ * comparison: `tone === "green"` only names a tone, and no colour reaches the key.
+ */
+function isCompared(code, start, length) {
+  return (
+    /[=!]==?\s*$/.test(code.slice(0, start - 1)) ||
+    /^\s*[=!]==?/.test(code.slice(start + length + 1))
+  );
 }
 
 /**
@@ -258,7 +272,9 @@ export function scanSource(source) {
   const flagged = new Set();
   for (const pattern of [KEYED, STYLE_VARIABLE]) {
     for (const match of code.matchAll(pattern)) {
-      if (isColourLiteral(match[2] ?? "")) {
+      const value = match[2] ?? "";
+      const start = match.index + match[0].length - value.length - 1;
+      if (isColourLiteral(value) && !isCompared(code, start, value.length)) {
         add("literal colour value", match[0], match.index);
         flagged.add(match.index);
       }
@@ -273,7 +289,12 @@ export function scanSource(source) {
       const from = match.index + match[0].length;
       const end = expressionEnd(code, quoted, from);
       for (const { text, start } of strings) {
-        if (start >= from && start < end && NAMED.has(text.trim().toLowerCase())) {
+        if (
+          start >= from &&
+          start < end &&
+          isColourLiteral(text) &&
+          !isCompared(code, start, text.length)
+        ) {
           add("literal colour value", text, start);
         }
       }

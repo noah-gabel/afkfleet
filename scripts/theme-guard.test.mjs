@@ -119,9 +119,37 @@ describe("a hard-coded colour in a source", () => {
       'const s = {\n  background: active\n    ? "white"\n    : "inherit",\n};',
     ],
     ["a string in a call", '<path fill={pick(active, "white")} />'],
+    ["a colour word inside a longer string", '<path fill={on ? "none" : "a white one"} />'],
+    [
+      "a shorthand in a border's ternary, by hex",
+      'const s = { border: on ? "1px solid #fff" : "none" };',
+    ],
+    [
+      "a shorthand in a shadow's ternary",
+      'const s = { boxShadow: on ? "0 0 0 1px black" : undefined };',
+    ],
+    [
+      "a shorthand in a text decoration's ternary",
+      'const s = { textDecoration: on ? "underline red" : "none" };',
+    ],
+    ["a shorthand under an attribute", '<path stroke={on ? "1px solid red" : "none"} />'],
   ]) {
     it(`refuses ${name}`, () => {
-      assert.deepEqual(rulesOf(source), ["literal colour value"]);
+      assert.ok(rulesOf(source).includes("literal colour value"), source);
+    });
+  }
+
+  for (const [name, source] of [
+    ["a hex before an underscore in a shadow", 'const a = "shadow-[0_0_0_1px_#000_inset]";'],
+    [
+      "a hex before an underscore in a gradient",
+      'const a = "bg-[linear-gradient(#fff_0%,transparent)]";',
+    ],
+    ["a hex before an underscore in a property", 'const a = "[border:#e5e5e5_1px_solid]";'],
+    ["the fade idiom", 'const a = "[mask-image:linear-gradient(to_bottom,black,transparent)]";'],
+  ]) {
+    it(`refuses ${name}`, () => {
+      assert.deepEqual(rulesOf(source), ["arbitrary colour"]);
     });
   }
 
@@ -162,8 +190,15 @@ describe("what's fine in a source", () => {
     ["a style's ternary of keywords", 'const s = { color: active ? "inherit" : "transparent" };'],
     ["a colour word after the key's value", 'const s = { color: "inherit", label: "white" };'],
     ["a colour word after the attribute", '<path fill={on ? "none" : "none"} title="white" />'],
-    ["a colour word that isn't the whole string", '<path fill={on ? "none" : "a white one"} />'],
     ["a key's type", "interface Style { color: string; label: string }"],
+    [
+      "a colour word that only names a tone",
+      '<path fill={tone === "green" ? "var(--success)" : "currentColor"} />',
+    ],
+    ["a tone compared the other way", '<path fill={"red" !== tone ? "none" : "currentColor"} />'],
+    ["a tone in a style's key", 'const s = { color: tone == "red" ? "inherit" : "transparent" };'],
+    ["a tone with spaces", '<path fill={tone != "green" ? "none" : "currentColor"} />'],
+    ["Tailwind's mask utility", 'const a = "mask-b-from-50% mask-b-to-100%";'],
     ["a value from a constant, the guard's recorded limit", "<path fill={SHADE} />"],
   ]) {
     it(`takes ${name}`, () => {

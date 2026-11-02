@@ -332,9 +332,13 @@ app-build *args:
 
 # The debug exe the AI launches, under its own identifier from its very first launch, so it can
 # never reach the user's running app, its single-instance lock, its profile or its Credential
-# Manager entries (ADR-0020, U87). The path is absolute, as the CLI may change folders.
+# Manager entries (ADR-0020, U87). The config's path is absolute, as the CLI may change folders.
+# Every debug build writes the same exe in target/debug/, and `just test` rewrites it under the
+# real identifier, so the second line copies this one to target/app-check/afkfleet-check.exe, the
+# only file the AI launches, and refuses any other identifier (S99).
 app-build-check:
     pnpm --filter @afkfleet/desktop tauri build --debug --config "{{ justfile_directory() }}/apps/desktop/src-tauri/tauri.check.conf.json"
+    node scripts/app-check.mjs
 
 # Render the desktop app's icon.ico from apps/desktop/src-tauri/icons/icon.svg (needs pnpm install).
 icons:
