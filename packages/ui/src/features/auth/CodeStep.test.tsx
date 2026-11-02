@@ -295,7 +295,7 @@ describe("the code step's boxes", () => {
     await logIn(app);
     const field = (await screen.findByLabelText("Code")) as HTMLInputElement;
     await app.user.type(field, "123456");
-    await screen.findByText(/Try again in 30 s./);
+    await screen.findByText("Try again in 30 seconds.");
 
     await app.user.paste("654321");
     await act(() => vi.advanceTimersByTimeAsync(0));
@@ -484,7 +484,7 @@ describe("the setup step's boxes (U99)", () => {
     const field = (await screen.findByLabelText("Code")) as HTMLInputElement;
     await screen.findByRole("img", { name: /QR code/ });
     await app.user.type(field, "123456");
-    await screen.findByText(/Try again in 30 s./);
+    await screen.findByText("Try again in 30 seconds.");
 
     await app.user.paste("654321");
     await act(() => vi.advanceTimersByTimeAsync(0));
