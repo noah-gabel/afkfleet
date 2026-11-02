@@ -288,6 +288,7 @@ export const ADD_MICROSOFT = "Link Microsoft account";
 export const ADD_OFFLINE = "Add offline account";
 export const NO_ACCOUNTS = "No accounts.";
 export const LOADING_ACCOUNTS = "Loading accounts…";
+export const LOADING_ACCOUNT = "Loading account…";
 export const TILE_MICROSOFT = {
   title: "Microsoft account",
   line: "For online-mode servers. Signs in once with a code.",

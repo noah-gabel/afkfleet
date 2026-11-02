@@ -111,7 +111,7 @@ describe("an account's screen", () => {
     await accountScreen({ account: account(1, { owner: { id: BOB_ID, username: "bob" } }) });
 
     expect(fact("Type")).toBe("Microsoft");
-    expect(fact("Status")).toBe("Active");
+    expect(screen.getByText("Active").closest("[data-slot=status-line]")).not.toBeNull();
     expect(fact("Your access")).toBe("Manage");
     expect(fact("Linked by")).toBe("bob");
     expect(fact("Linked on")).toBe(formatTime("2026-10-15T10:00:00.000Z"));

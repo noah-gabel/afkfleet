@@ -726,6 +726,66 @@ test("a bot waiting for its agent, as the Owner and as a Member", async ({ page,
   await bothThemes(page, "a bot waiting for its agent, saved");
 });
 
+test("an account's screen: a row's question, the step-up, and below Manage", async ({
+  page,
+  context,
+}) => {
+  const backend = await fakeBackend(context);
+  const account = backend.addAccount(OWNER);
+  backend.share(account, MEMBER, "view");
+  backend.addAccount(OWNER, "reauth_required");
+  backend.addAccount(MEMBER, "pending");
+  await signIn(page, backend, OWNER);
+  const main = page.getByRole("main");
+  await nav(page, "Accounts");
+  await expect(main.getByRole("link", { name: "AfkBot1", exact: true })).toBeVisible();
+  await expect(main.getByText(/no longer accepts/)).toBeVisible();
+  await bothThemes(page, "accounts, a re-auth prompt and a link waiting");
+  await main.getByRole("button", { name: "Approve AfkBot3" }).click();
+  await expect(main.getByText(/Approve AfkBot3, linked by/)).toBeVisible();
+  await bothThemes(page, "accounts, a review's question");
+
+  await main.getByRole("link", { name: "AfkBot1", exact: true }).click();
+  const table = main.getByRole("table", { name: "Who has access" });
+  await table.getByRole("button", { name: `Revoke ${MEMBER}'s access` }).click();
+  await expect(table.getByRole("button", { name: "Cancel" })).toBeVisible();
+  await bothThemes(page, "an account, a row's question");
+  await table.getByRole("button", { name: "Revoke", exact: true }).click();
+  await expect(main.getByLabel("Current password")).toBeVisible();
+  await bothThemes(page, "an account, a row's step-up");
+
+  await page.getByRole("button", { name: "Log out" }).click();
+  await logIn(page, MEMBER);
+  await enterCode(page, backend.code(MEMBER));
+  await expectHome(page, MEMBER);
+  await nav(page, "Accounts");
+  await main.getByRole("link", { name: "AfkBot1", exact: true }).click();
+  await expect(main.getByRole("button", { name: "Leave", exact: true })).toBeVisible();
+  await bothThemes(page, "an account below Manage");
+  await main.getByRole("button", { name: "Leave", exact: true }).click();
+  await expect(main.getByRole("button", { name: "Leave account" })).toBeVisible();
+  await bothThemes(page, "an account below Manage, the question");
+});
+
+test("accounts and an account while they load", async ({ page, context }) => {
+  const backend = await fakeBackend(context);
+  backend.addAccount(OWNER);
+  await signIn(page, backend, OWNER);
+  const main = page.getByRole("main");
+  backend.hold("accounts");
+  await nav(page, "Accounts");
+  await expect(main.getByText("Loading accounts…")).toBeVisible();
+  await bothThemes(page, "accounts, loading");
+  backend.release();
+  const link = main.getByRole("link", { name: "AfkBot1", exact: true });
+  await expect(link).toBeVisible();
+  backend.hold("account");
+  await link.click();
+  await expect(main.getByText("Loading account…")).toBeVisible();
+  await bothThemes(page, "an account, loading");
+  backend.release();
+});
+
 test("a card's Start, its refusal and its wait", async ({ page, context }) => {
   const backend = await fakeBackend(context);
   backend.addAccount(OWNER);

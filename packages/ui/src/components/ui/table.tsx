@@ -17,10 +17,12 @@ import type * as React from "react";
  * name. Give a head and its cells the same value. Never drop the first column, a row's controls or
  * anything a row is found by: a row's accessible name comes from the cells that stay.
  */
-export type TableDrop = "under-810";
+export type TableDrop = "under-810" | "under-620" | "under-520";
 
 const DROP: Record<TableDrop, string> = {
   "under-810": "@max-[50.5rem]/table:hidden",
+  "under-620": "@max-[38.625rem]/table:hidden",
+  "under-520": "@max-[32.375rem]/table:hidden",
 };
 
 function Table({ className, ...props }: React.ComponentProps<"table">) {
