@@ -7,7 +7,7 @@
 import type { ComponentProps } from "react";
 
 const LOOK =
-  "h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground [&_option]:bg-background [&_option]:text-foreground";
+  "h-8 rounded-lg border border-input bg-background px-2.5 text-sm text-foreground disabled:opacity-50 [&_option]:bg-background [&_option]:text-foreground";
 
 /** A `<select>` in the app's one look; everything but `className` passes through. */
 export function NativeSelect(props: Omit<ComponentProps<"select">, "className">) {

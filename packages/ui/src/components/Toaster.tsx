@@ -22,8 +22,24 @@ const THEME = {
   "--normal-bg": "var(--popover)",
   "--normal-text": "var(--popover-foreground)",
   "--normal-border": "var(--border)",
+  "--normal-bg-hover": "var(--accent)",
+  "--normal-border-hover": "var(--border)",
+  "--gray2": "var(--accent)",
+  "--gray5": "var(--border)",
   "--border-radius": "var(--radius)",
 } as CSSProperties;
+
+// An error or a warning takes a tint and a border of its own (ADR-0020, U91, S116); the rest stay
+// plain. sonner's background, close button and action all read these two, so they follow. It isn't
+// `richColors`, which would tint every type. The text stays `--foreground`.
+const TINTS = {
+  error:
+    "[--normal-bg:color-mix(in_srgb,var(--destructive)_12%,var(--popover))] [--normal-border:var(--destructive)]",
+  warning:
+    "[--normal-bg:color-mix(in_srgb,var(--warning)_12%,var(--popover))] [--normal-border:var(--warning)]",
+  title: "font-semibold",
+  actionButton: "font-semibold",
+};
 
 /** Where the app's toasts appear; rendered once, next to the router. */
 export function Toaster() {
@@ -35,6 +51,7 @@ export function Toaster() {
       closeButton
       style={THEME}
       className="font-sans"
+      toastOptions={{ classNames: TINTS }}
       icons={{
         success: <CircleCheckIcon className="size-4" />,
         info: <InfoIcon className="size-4" />,

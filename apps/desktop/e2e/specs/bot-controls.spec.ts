@@ -30,7 +30,7 @@ test("the Owner sets a bot's server after the password, switches its mode and st
   await expectHome(page, OWNER);
   await page.getByRole("link", { name: "Open AfkBot1" }).click();
   const main = page.getByRole("main");
-  const badge = main.locator("[data-slot=badge]");
+  const badge = main.locator("[data-slot=status-line]");
   const settings = main.getByRole("region", { name: "Settings" });
 
   await settings.getByRole("button", { name: "Set" }).click();

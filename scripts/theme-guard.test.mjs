@@ -218,7 +218,7 @@ describe("a corner outside the --radius scale (ADR-0020, U101)", () => {
     ["a corner's step off the scale", 'const a = "rounded-tl-xs";'],
     ["a variant's step off the scale", 'const a = "hover:data-[on=true]:rounded-4xl";'],
     ["the bare utility", 'const a = "border rounded";'],
-    ["a template's step", "const a = `rounded-${size}`;"],
+    ["a template's step", `const a = \`rounded-${HOLE}size}\`;`],
     ["an arbitrary property", 'const a = "[border-radius:3px]";'],
     ["an arbitrary corner property", 'const a = "[border-top-left-radius:3px]";'],
     ["a style's literal", 'const s = { borderRadius: "4px" };'],

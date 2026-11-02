@@ -39,8 +39,8 @@ test("a bot's card and its screen follow its frames, and a removed bot leaves Ho
 
   await link.click();
   const main = page.getByRole("main");
-  // The badge: the timeline lists the states too.
-  const badge = main.locator("[data-slot=badge]");
+  // The status line: the timeline lists the states too.
+  const badge = main.locator("[data-slot=status-line]");
   await expect(main.getByRole("heading", { name: "AfkBot1" })).toBeVisible();
   await expect(badge).toHaveText("Online");
   backend.setBot("AfkBot1", { status: { kind: "reported", state: "stopping", since: SINCE } });
