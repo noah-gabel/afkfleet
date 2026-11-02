@@ -125,9 +125,7 @@ describe("logging out every other session", () => {
     await table();
 
     await app.user.click(screen.getByRole("button", { name: "Log out all other sessions" }));
-    expect(
-      screen.getByText(/logs out every other session of your account, on every PC/),
-    ).toBeDefined();
+    expect(screen.getByText(/Logs out every other session on every PC/)).toBeDefined();
     await app.user.click(screen.getByRole("button", { name: "Cancel" }));
 
     expect(revoked(app)).toEqual([]);

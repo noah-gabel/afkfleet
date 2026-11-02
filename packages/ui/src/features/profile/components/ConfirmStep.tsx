@@ -22,7 +22,7 @@ export function ConfirmStep({
   return (
     <AuthCard title={title} intro={intro}>
       {notice === undefined ? null : (
-        <p role="status" className="text-sm font-medium">
+        <p role="status" className="text-sm font-semibold">
           {notice}
         </p>
       )}

@@ -33,18 +33,17 @@ import { ConfirmStep } from "./ConfirmStep";
 import { NewPasswordStep } from "./NewPasswordStep";
 
 /** The toast after a password change. */
-export const PASSWORD_CHANGED = "Your password was changed. Every other session was logged out.";
+export const PASSWORD_CHANGED = "Password changed. Other sessions logged out.";
 /** The toast after the authenticator was replaced. */
 export const MFA_REPLACED =
-  "Your authenticator was replaced. Every other session was logged out; delete the old entry from your authenticator app.";
+  "Authenticator replaced. Other sessions logged out. Delete the old entry from your app.";
 
 /** Each flow's first step. */
 const CONFIRM = {
-  password: { title: "Change password", intro: "First, enter your current password." },
+  password: { title: "Change password", intro: "Enter your current password." },
   mfa: {
     title: "Replace your authenticator",
-    intro:
-      "First, enter your password. Your current authenticator keeps working until the new one is confirmed.",
+    intro: "Enter your password. Your current authenticator works until the new one is confirmed.",
   },
 } as const;
 
@@ -52,15 +51,15 @@ const CONFIRM = {
 const REPLACE_SETUP = {
   title: "Set up your new authenticator",
   intro:
-    "Scan the QR code with your authenticator app, or type the key into it, then enter the code it shows. Your current authenticator keeps working until you confirm.",
-  hint: "Only the newest QR code works. Once you've confirmed, delete the old entry for this account from your authenticator app.",
+    "Scan the QR code or type the key into your authenticator app, then enter its code. Your current one works until then.",
+  hint: "Only the newest QR code works. Once confirmed, delete the old entry from your app.",
 };
 
 /** The recovery codes step's texts here. */
 const NEW_CODES = {
   title: "New recovery codes",
   intro:
-    "Your old recovery codes no longer work. Each of these works once instead of a code from your app. They won't be shown again.",
+    "Old codes no longer work. Each of these works once in place of an app code. Shown only now.",
   continueLabel: "Finish",
 };
 

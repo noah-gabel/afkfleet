@@ -69,15 +69,15 @@ export function NewPasswordStep({
   return (
     <AuthCard
       title="Choose a new password"
-      intro="12 to 128 characters. Every other session of your account is logged out."
+      intro="12 to 128 characters. Logs out your other sessions."
     >
       <p className="text-sm text-muted-foreground">{endsIn(step.expiresIn)}</p>
       {lastMinute ? (
-        <p role="status" className="text-sm font-medium">
-          This step ends in under a minute.
+        <p role="status" className="text-sm font-semibold">
+          Ends in under a minute.
         </p>
       ) : null}
-      <form className="flex flex-col gap-4" noValidate onSubmit={(event) => void submit(event)}>
+      <form className="flex flex-col gap-3" noValidate onSubmit={(event) => void submit(event)}>
         <FormField id="new-password" label="New password" error={errors.password?.message}>
           {(control) => (
             <PasswordInput

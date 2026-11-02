@@ -20,6 +20,7 @@ import { useServerProfile } from "../../../api/queries";
 import { useSession } from "../../../app/context";
 import { FormField } from "../../../components/FormField";
 import { RetryWaitMessage } from "../../../components/RetryWaitMessage";
+import { ScreenState } from "../../../components/ScreenState";
 import { Alert, AlertDescription } from "../../../components/ui/alert";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
@@ -43,8 +44,8 @@ export function ServerForm({ title }: { title: "Server setup" | "Server" }) {
   const { data: state } = useServerProfile();
   if (state === undefined) {
     return (
-      <main className="p-6">
-        <p className="text-muted-foreground">Loading…</p>
+      <main className="p-4">
+        <ScreenState kind="loading">Loading…</ScreenState>
       </main>
     );
   }

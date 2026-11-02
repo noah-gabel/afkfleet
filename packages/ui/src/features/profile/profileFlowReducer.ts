@@ -19,7 +19,7 @@ import {
 } from "../auth/authFlowReducer";
 
 /** A step that ended: the step-up or the setup token expired. */
-export const STEP_ENDED = "That step ended. Enter your password again.";
+export const STEP_ENDED = "Step ended. Enter your password again.";
 
 /** Where a profile flow is. */
 export type ProfileStep =

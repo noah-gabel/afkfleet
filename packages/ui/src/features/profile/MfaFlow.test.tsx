@@ -73,7 +73,7 @@ describe("replacing the authenticator", () => {
 
     expect(await screen.findByText("ABCD EFGH IJKL MNOP QRST")).toBeDefined();
     expect(screen.getByRole("heading", { name: "Set up your new authenticator" })).toBeDefined();
-    expect(screen.getByText(/current authenticator keeps working until you confirm/)).toBeDefined();
+    expect(screen.getByText(/current one works until then/)).toBeDefined();
     const flow = ["stepUp", "mfaReset", "mfaEnroll", "mfaConfirm", "login"];
     expect(app.fake.calls.map((call) => call.method).filter((m) => flow.includes(m))).toEqual([
       "stepUp",
