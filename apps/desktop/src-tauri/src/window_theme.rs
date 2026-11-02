@@ -15,9 +15,9 @@ use tauri::utils::config::Color;
 use crate::focus::{MainWindow, focus_main_window};
 
 /// `--background` in `:root`.
-const LIGHT: Color = Color(0xff, 0xff, 0xff, 0xff);
+const LIGHT: Color = Color(0xf4, 0xf5, 0xf6, 0xff);
 /// `--background` in `.dark`.
-const DARK: Color = Color(0x0a, 0x0a, 0x0a, 0xff);
+const DARK: Color = Color(0x0f, 0x11, 0x13, 0xff);
 
 /// What following a theme needs from a window.
 pub(crate) trait ThemedWindow: Sized {
@@ -203,7 +203,7 @@ mod tests {
 
         paint(&&window, Theme::Dark);
 
-        assert_eq!(window.calls(), ["paint 0x0a"]);
+        assert_eq!(window.calls(), ["paint 0x0f"]);
     }
 
     #[test]
@@ -216,11 +216,11 @@ mod tests {
 
         assert_eq!(
             light.calls(),
-            ["set_theme Some(Light)", "theme", "paint 0xff"]
+            ["set_theme Some(Light)", "theme", "paint 0xf4"]
         );
         assert_eq!(
             dark.calls(),
-            ["set_theme Some(Dark)", "theme", "paint 0x0a"]
+            ["set_theme Some(Dark)", "theme", "paint 0x0f"]
         );
     }
 
@@ -230,7 +230,7 @@ mod tests {
 
         follow_choice(&&window, WindowTheme::Windows);
 
-        assert_eq!(window.calls(), ["set_theme None", "theme", "paint 0x0a"]);
+        assert_eq!(window.calls(), ["set_theme None", "theme", "paint 0x0f"]);
     }
 
     #[test]
@@ -244,7 +244,7 @@ mod tests {
 
         assert_eq!(
             window.calls(),
-            ["set_theme Some(Dark)", "theme", "paint 0xff"]
+            ["set_theme Some(Dark)", "theme", "paint 0xf4"]
         );
     }
 
@@ -259,7 +259,7 @@ mod tests {
 
         assert_eq!(
             window.calls(),
-            ["set_theme Some(Dark)", "theme", "paint 0x0a"]
+            ["set_theme Some(Dark)", "theme", "paint 0x0f"]
         );
     }
 
@@ -271,7 +271,7 @@ mod tests {
 
         assert_eq!(
             window.calls(),
-            ["theme", "paint 0x0a", "unminimize", "show", "set_focus"]
+            ["theme", "paint 0x0f", "unminimize", "show", "set_focus"]
         );
     }
 
@@ -298,7 +298,7 @@ mod tests {
 
         assert_eq!(
             window.calls(),
-            ["theme", "paint 0xff", "unminimize", "show", "set_focus"]
+            ["theme", "paint 0xf4", "unminimize", "show", "set_focus"]
         );
     }
 }

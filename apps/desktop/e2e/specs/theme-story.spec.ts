@@ -43,13 +43,13 @@ test("the app follows Windows' setting live, its toasts too, without a restart",
   await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
 
   await expect(html).toHaveClass(/\bdark\b/);
-  expect(await background()).toBe("rgb(10, 10, 10)");
+  expect(await background()).toBe("rgb(15, 17, 19)");
 
   await page.emulateMedia({ colorScheme: "light" });
 
   await expect(html).toHaveClass(/\blight\b/);
   await expect(html).not.toHaveClass(/\bdark\b/);
-  expect(await background()).toBe("rgb(255, 255, 255)");
+  expect(await background()).toBe("rgb(244, 245, 246)");
 
   await logIn(page, OWNER);
   await enterCode(page, backend.code(OWNER));

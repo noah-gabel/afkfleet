@@ -25,15 +25,24 @@ function withBundles(bundles, use) {
   }
 }
 
-const CLEAN = { "index.html": "<div id=root>", "assets/app.js": "invoke('me')" };
+/** The fonts every bundle ships, as Vite names them, and the CSS that points at them. */
+const FONTS = {
+  "assets/geist-latin-wght-normal-abc123.woff2": "font",
+  "assets/ibm-plex-mono-latin-400-normal-abc123.woff2": "font",
+  "assets/ibm-plex-mono-latin-600-normal-abc123.woff2": "font",
+  "assets/app.css":
+    "@font-face{src:url(/assets/geist-latin-wght-normal-abc123.woff2)}@font-face{src:url(/assets/ibm-plex-mono-latin-400-normal-abc123.woff2)}@font-face{src:url(/assets/ibm-plex-mono-latin-600-normal-abc123.woff2)}",
+};
+const CLEAN = { "index.html": "<div id=root>", "assets/app.js": "invoke('me')", ...FONTS };
 const E2E = {
   "index.html": "<div>",
   "assets/app.js": `dataset.build="${MARKER}";fetch("/e2e/ipc/"+c);window["${PUSH_HOOK}"]=p`,
+  ...FONTS,
 };
 
 /** The e2e bundle without `needle`. */
 function without(needle) {
-  return { "index.html": "<div>", "assets/app.js": E2E["assets/app.js"].replace(needle, "x") };
+  return { ...E2E, "assets/app.js": E2E["assets/app.js"].replace(needle, "x") };
 }
 
 /** The value `name` an e2e source file exports, as its text spells it. */
@@ -41,6 +50,86 @@ function exported(path, name) {
   const text = readFileSync(join(ROOT, path), "utf8");
   return new RegExp(`export const ${name} = "([^"]*)";`).exec(text)?.[1];
 }
+
+describe("check's fonts (ADR-0020, S111)", () => {
+  const problemsOf = (changes) => {
+    let found = [];
+    withBundles({ desktop: { ...CLEAN, ...changes }, ui: CLEAN, e2e: E2E }, (at) => {
+      found = check({ shipped: [at("desktop"), at("ui")], e2e: at("e2e") });
+    });
+    return found;
+  };
+
+  for (const [name, css] of [
+    ["data:font", "@font-face{src:url(data:font/woff2;base64,AAAA)}"],
+    ["data:application/font", "@font-face{src:url(data:application/font-woff2;base64,AAAA)}"],
+    ["data:application/x-font", "@font-face{src:url(data:application/x-font-woff;base64,AAAA)}"],
+  ]) {
+    it(`refuses an inlined font, ${name}, which the CSP would block`, () => {
+      const problems = problemsOf({ "assets/app.css": `${FONTS["assets/app.css"]}${css}` });
+      assert.equal(problems.length, 1, problems.join());
+      assert.match(problems[0] ?? "", /inlined font/);
+    });
+  }
+
+  for (const face of ["geist-latin-wght", "ibm-plex-mono-latin-400", "ibm-plex-mono-latin-600"]) {
+    it(`refuses a bundle without ${face}`, () => {
+      let found = [];
+      const desktop = Object.fromEntries(
+        Object.entries(CLEAN).filter(([path]) => !path.includes(face)),
+      );
+      withBundles({ desktop, ui: CLEAN, e2e: E2E }, (at) => {
+        found = check({ shipped: [at("desktop"), at("ui")], e2e: at("e2e") });
+      });
+      assert.ok(
+        found.some((problem) => problem.includes(`no ${face} font`)),
+        found.join(),
+      );
+    });
+  }
+
+  it("refuses a font the CSS names and the bundle doesn't hold", () => {
+    const problems = problemsOf({
+      "assets/app.css": `${FONTS["assets/app.css"]}@font-face{src:url(/assets/gone.woff2)}`,
+    });
+    assert.deepEqual(
+      problems.map((problem) => problem.includes("gone.woff2")),
+      [true],
+    );
+  });
+
+  it("checks the e2e bundle too, which must render what ships", () => {
+    withBundles(
+      {
+        desktop: CLEAN,
+        ui: CLEAN,
+        e2e: { ...E2E, "assets/geist-latin-wght-normal-abc123.woff2": "" },
+      },
+      (at) => {
+        assert.deepEqual(check({ shipped: [at("desktop"), at("ui")], e2e: at("e2e") }), []);
+      },
+    );
+    withBundles(
+      { desktop: CLEAN, ui: CLEAN, e2e: { "assets/app.js": E2E["assets/app.js"] } },
+      (at) => {
+        assert.ok(check({ shipped: [at("desktop"), at("ui")], e2e: at("e2e") }).length > 0);
+      },
+    );
+  });
+});
+
+describe("the fonts' notices (ADR-0020, S110)", () => {
+  const notices = readFileSync(join(ROOT, "THIRD-PARTY-NOTICES.md"), "utf8");
+
+  for (const licence of [
+    "packages/ui/node_modules/@fontsource-variable/geist/LICENSE",
+    "packages/ui/node_modules/@fontsource/ibm-plex-mono/LICENSE",
+  ]) {
+    it(`hold ${licence} verbatim`, () => {
+      assert.ok(notices.includes(readFileSync(join(ROOT, licence), "utf8").trim()));
+    });
+  }
+});
 
 describe("check", () => {
   it("passes clean shipped bundles and an e2e bundle with its marker", () => {
@@ -52,8 +141,8 @@ describe("check", () => {
   it("names a shipped file that holds the marker or fetchInvoke's path", () => {
     withBundles(
       {
-        desktop: { "assets/app.js": `x="${MARKER}"` },
-        ui: { "assets/web.js": 'fetch("/e2e/ipc/me")' },
+        desktop: { ...FONTS, "assets/app.js": `x="${MARKER}"` },
+        ui: { ...FONTS, "assets/web.js": 'fetch("/e2e/ipc/me")' },
         e2e: E2E,
       },
       (at) => {
@@ -68,7 +157,7 @@ describe("check", () => {
   it("names a shipped file that holds the e2e build's live events hook", () => {
     withBundles(
       {
-        desktop: { "assets/app.js": 'window["__afkfleetE2ePush"]=p' },
+        desktop: { ...FONTS, "assets/app.js": 'window["__afkfleetE2ePush"]=p' },
         e2e: E2E,
       },
       (at) => {

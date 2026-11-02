@@ -85,6 +85,7 @@ Moved from `CLAUDE.md` word for word; it points here. CLAUDE.md keeps the rule: 
 | Forms | `react-hook-form` + `@hookform/resolvers` |
 | Styling | `tailwindcss`, `@tailwindcss/vite` |
 | Components | shadcn/ui (radix-nova), copied from its registry with `cn`, `class-variance-authority` and single Radix packages (`@radix-ui/react-slot`, `@radix-ui/react-label`; never the `radix-ui` umbrella) |
+| Fonts | `@fontsource-variable/geist`, `@fontsource/ibm-plex-mono` (imported in `styles.css`, never inlined; ADR-0020, U93, S111) |
 | Icons | `lucide-react` |
 | Toasts | `sonner` |
 | Drag and drop | `@dnd-kit/core`, `@dnd-kit/sortable`, `@dnd-kit/utilities` (the modes' steps, on pointer events: Tauri's `dragDropEnabled` stays on, so HTML5 drag events never fire on Windows; ADR-0020, U69) |

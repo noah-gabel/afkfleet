@@ -20,6 +20,12 @@
 // **Its limit:** a colour that reaches a key through a constant (`fill={SHADE}`) goes unseen, and
 // Tailwind's palette reset can't catch it either, since it's no class (ADR-0020, R186).
 //
+// Every corner comes from the `--radius` scale, so one line can square them all (ADR-0020, U101):
+// the theme defines only `rounded-sm`, `-md`, `-lg` and `-xl`, each a multiple of `--radius`, and
+// this refuses any other step, an arbitrary `rounded-[…]`, a bare `rounded` and a fixed corner in a
+// style. `rounded-full` (a real circle) and `rounded-none` stay fixed. **Its limit:** a text string
+// holding "rounded" as a whole word is refused too, so such a text gets reworded.
+//
 // A native `<select>` lives only in components/NativeSelect.tsx, whose one look holds the tokens
 // for the select and its options: WebView2 paints the open list from them, and a transparent
 // select in dark mode opened a light list with light text, which no sweep can see, since the list
@@ -300,6 +306,7 @@ export function scanSource(source) {
       }
     }
   }
+  found.push(...cornersOffScale(source, code, strings));
   return found.sort((a, b) => a.line - b.line);
 }
 
@@ -350,6 +357,9 @@ function tokens(body, offset) {
   }
   return { values, spans };
 }
+
+/** The corner steps the theme defines, each a multiple of `--radius` (ADR-0020, U101). */
+const RADIUS_STEPS = ["--radius-sm", "--radius-md", "--radius-lg", "--radius-xl"];
 
 /** Every problem with the stylesheet `source`, as `{ line, rule, match }`. */
 export function checkStylesheet(source) {
@@ -411,6 +421,35 @@ export function checkStylesheet(source) {
   for (const match of remainder.matchAll(property)) {
     if (!literal.test(match[1] ?? "") && isColourLiteral(match[1] ?? "")) {
       add("colour outside the token blocks", match[0], match.index);
+    }
+  }
+
+  const scale = "radius scale";
+  if (
+    !top.some(
+      (rule) => rule.prelude === "@theme" && /--radius-\*\s*:\s*initial\s*;/.test(rule.body),
+    )
+  ) {
+    add(scale, "no @theme { --radius-*: initial; } keeps Tailwind's radius steps out", 0);
+  }
+  const steps = [...tokens(inline.body, inline.start).values].filter(([name]) =>
+    name.startsWith("--radius-"),
+  );
+  for (const [name, value] of steps) {
+    if (!RADIUS_STEPS.includes(name)) {
+      add(scale, `${name} is off the scale`, inline.start);
+    } else if (!/^(?:var\(--radius\)|calc\(var\(--radius\) \* [\d.]+\))$/.test(value)) {
+      add(scale, `${name}: ${value} isn't a multiple of --radius`, inline.start);
+    }
+  }
+  for (const name of RADIUS_STEPS) {
+    if (!steps.some(([step]) => step === name)) {
+      add(scale, `${name} is missing`, inline.start);
+    }
+  }
+  for (const match of remainder.matchAll(/(?<![\w-])border(?:-[a-z]+)*-radius\s*:\s*([^;{}]+);/g)) {
+    if (!(match[1] ?? "").startsWith("var(--radius")) {
+      add(scale, match[0], match.index);
     }
   }
 
@@ -519,6 +558,59 @@ export function checkSelects(files) {
     });
   }
   return problems;
+}
+
+/** A corner utility on the `--radius` scale, or a fixed one: a real circle, or no corner. */
+const CORNER_ON_SCALE =
+  /^rounded(?:-(?:[trblse]|tl|tr|bl|br|ss|se|es|ee))?-(?:sm|md|lg|xl|full|none)$/;
+
+/** `token` without its variants or an important mark: what follows the last `:` outside `[...]`. */
+function withoutVariants(token) {
+  let depth = 0;
+  let from = 0;
+  for (let at = 0; at < token.length; at += 1) {
+    const char = token[at];
+    if (char === "[" || char === "(") {
+      depth += 1;
+    } else if (char === "]" || char === ")") {
+      depth -= 1;
+    } else if (char === ":" && depth === 0) {
+      from = at + 1;
+    }
+  }
+  return token.slice(from).replace(/^!|!$/g, "");
+}
+
+/** Whether the class `token` draws a corner off the `--radius` scale. */
+function cornerOffScale(token) {
+  const utility = withoutVariants(token);
+  return (
+    /^\[border(?:-[a-z]+)*-radius:/.test(utility) ||
+    (/^rounded(?:-|$)/.test(utility) && !CORNER_ON_SCALE.test(utility))
+  );
+}
+
+/** A style key that sets a corner, with its string in group 1 or its number in group 2. */
+const CORNER_KEY =
+  /(?<![\w-])["']?(?:borderRadius|border(?:Top|Bottom|Start|End)(?:Left|Right|Start|End)Radius|--border-radius)["']?\s*:\s*(?:["'`]([^"'`\n]*)["'`]|(\d[\w.]*))/g;
+
+/** Every corner in `source` off the `--radius` scale, as `{ line, rule, match }` (U101). */
+function cornersOffScale(source, code, strings) {
+  const found = [];
+  const rule = "corner off the scale";
+  for (const { text, index } of strings) {
+    for (const token of text.split(/\s+/)) {
+      if (cornerOffScale(token)) {
+        found.push({ line: lineOf(source, index), rule, match: token });
+      }
+    }
+  }
+  for (const match of code.matchAll(CORNER_KEY)) {
+    if (!(match[1] ?? "").startsWith("var(--radius")) {
+      found.push({ line: lineOf(source, match.index), rule, match: match[0] });
+    }
+  }
+  return found;
 }
 
 /** Whether `path`, relative and with `/`, is a shipped source this guard reads. */

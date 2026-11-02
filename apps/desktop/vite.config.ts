@@ -6,6 +6,8 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // Nothing inlined as `data:`: the CSP refuses a font that way (ADR-0020, S111).
+  build: { assetsInlineLimit: 0 },
   // Keep the Tauri CLI's output visible.
   clearScreen: false,
   server: {

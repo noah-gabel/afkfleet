@@ -207,6 +207,47 @@ describe("what's fine in a source", () => {
   }
 });
 
+describe("a corner outside the --radius scale (ADR-0020, U101)", () => {
+  for (const [name, source] of [
+    ["an arbitrary value", 'const a = "rounded-[3px]";'],
+    ["an arbitrary value over a token", 'const a = "rounded-[min(var(--radius-md),10px)]";'],
+    ["an arbitrary side", 'const a = "rounded-t-[4px]";'],
+    ["a variable's shorthand", 'const a = "rounded-(--radius-lg)";'],
+    ["a step off the scale", 'const a = "p-2 rounded-2xl";'],
+    ["a side's step off the scale", 'const a = "rounded-t-3xl";'],
+    ["a corner's step off the scale", 'const a = "rounded-tl-xs";'],
+    ["a variant's step off the scale", 'const a = "hover:data-[on=true]:rounded-4xl";'],
+    ["the bare utility", 'const a = "border rounded";'],
+    ["a template's step", "const a = `rounded-${size}`;"],
+    ["an arbitrary property", 'const a = "[border-radius:3px]";'],
+    ["an arbitrary corner property", 'const a = "[border-top-left-radius:3px]";'],
+    ["a style's literal", 'const s = { borderRadius: "4px" };'],
+    ["a style's corner", 'const s = { borderTopLeftRadius: "4px" };'],
+    ["a style's number", "const s = { borderRadius: 4 };"],
+    ["sonner's variable", 'const s = { "--border-radius": "4px" };'],
+  ]) {
+    it(`refuses ${name}`, () => {
+      assert.deepEqual(rulesOf(source), ["corner off the scale"], source);
+    });
+  }
+
+  for (const [name, source] of [
+    ["each step", 'const a = "rounded-sm rounded-md rounded-lg rounded-xl";'],
+    ["sides and corners", 'const a = "rounded-t-xl rounded-r-lg rounded-tl-sm rounded-ee-md";'],
+    ["a real circle", 'const a = "rounded-full";'],
+    ["no corner", 'const a = "rounded-t-none rounded-none";'],
+    ["a variant", 'const a = "hover:rounded-lg data-[on=true]:rounded-md";'],
+    ["a word in a sentence", 'const text = "The wait is rounded, so it never ends early.";'],
+    ["a style from the token", 'const s = { "--border-radius": "var(--radius)" };'],
+    ["a style's radius from a step", 'const s = { borderRadius: "var(--radius-md)" };'],
+    ["a variable named for it", "const rounded = Math.round(1);"],
+  ]) {
+    it(`takes ${name}`, () => {
+      assert.deepEqual(scanSource(source), [], source);
+    });
+  }
+});
+
 describe("lex", () => {
   it("finds strings, template chunks and strings inside a template's expressions", () => {
     const { strings } = lex(`const a = "one"; const b = \`two ${HOLE}f("three")} four\`;`);
@@ -267,9 +308,12 @@ describe("isScanned", () => {
 /** A stylesheet that passes, with `changes` applied to its text. */
 function stylesheet(changes = (css) => css) {
   return changes(`@import "tailwindcss" source(".");
-@theme { --color-*: initial; }
+@theme { --color-*: initial; --radius-*: initial; }
 @theme inline {
-  --radius-sm: calc(var(--radius) - 4px);
+  --radius-sm: calc(var(--radius) * 0.5);
+  --radius-md: calc(var(--radius) * 0.75);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.5);
   --color-background: var(--background);
   --color-qr-background: var(--qr-background);
 }
@@ -306,6 +350,47 @@ function cssRules(changes) {
 describe("the stylesheet", () => {
   it("takes the one above", () => {
     assert.deepEqual(checkStylesheet(stylesheet()), []);
+  });
+
+  it("refuses a theme that keeps Tailwind's radius steps", () => {
+    assert.deepEqual(
+      cssRules((css) => css.replace(" --radius-*: initial;", "")),
+      ["radius scale"],
+    );
+  });
+
+  it("refuses a step that isn't derived from --radius", () => {
+    assert.deepEqual(
+      cssRules((css) =>
+        css.replace("--radius-md: calc(var(--radius) * 0.75);", "--radius-md: 3px;"),
+      ),
+      ["radius scale"],
+    );
+  });
+
+  it("refuses a step off the scale, and a scale without a step", () => {
+    assert.deepEqual(
+      cssRules((css) => css.replace("--radius-lg: var(--radius);", "--radius-2xl: var(--radius);")),
+      ["radius scale", "radius scale"],
+    );
+  });
+
+  it("refuses a hard-coded corner in a rule", () => {
+    assert.deepEqual(
+      cssRules((css) =>
+        css.replace("@apply bg-background text-foreground;", "border-radius: 3px;"),
+      ),
+      ["radius scale"],
+    );
+  });
+
+  it("takes a corner from the scale in a rule", () => {
+    assert.deepEqual(
+      cssRules((css) =>
+        css.replace("@apply bg-background text-foreground;", "border-radius: var(--radius);"),
+      ),
+      [],
+    );
   });
 
   it("refuses a colour in a rule, outside the token blocks", () => {
@@ -376,7 +461,7 @@ describe("the stylesheet", () => {
 
   it("refuses losing the palette's reset", () => {
     assert.deepEqual(
-      cssRules((css) => css.replace("@theme { --color-*: initial; }\n", "")),
+      cssRules((css) => css.replace(" --color-*: initial;", "")),
       ["palette reset"],
     );
   });

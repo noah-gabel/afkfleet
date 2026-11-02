@@ -34,6 +34,7 @@ export function Toaster() {
       position="bottom-right"
       closeButton
       style={THEME}
+      className="font-sans"
       icons={{
         success: <CircleCheckIcon className="size-4" />,
         info: <InfoIcon className="size-4" />,
