@@ -31,6 +31,29 @@ async function atCode(loginMfa: () => Promise<void> = () => new Promise(() => {}
   return { app, field, sent };
 }
 
+/** The status region that says what the boxes left out. */
+function refusalStatus(): HTMLElement {
+  const status = document.querySelector<HTMLElement>("[data-slot=code-refusal]");
+  if (status === null) {
+    throw new Error("no refusal status");
+  }
+  expect(status.getAttribute("role")).toBe("status");
+  return status;
+}
+
+/** Counts what changes inside `status` from now on, as a screen reader would hear it. */
+function changesTo(status: HTMLElement): () => number {
+  let changes = 0;
+  const observer = new MutationObserver((records) => {
+    changes += records.length;
+  });
+  observer.observe(status, { childList: true, subtree: true, characterData: true });
+  return () => {
+    changes += observer.takeRecords().length;
+    return changes;
+  };
+}
+
 describe("the code step's boxes", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -80,10 +103,36 @@ describe("the code step's boxes", () => {
     await app.user.type(field, "12a");
 
     expect(field.value).toBe("12");
-    expect(screen.getByText(DIGITS_ONLY).getAttribute("role")).toBe("status");
+    expect(screen.getByText(DIGITS_ONLY).closest("[role=status]")).not.toBeNull();
     expect(sent()).toEqual([]);
     await app.user.type(field, "3");
     expect(screen.queryByText(DIGITS_ONLY)).toBeNull();
+  });
+
+  it("keep the refusal's status mounted before there's anything to say", async () => {
+    const { app, field } = await atCode();
+    const status = refusalStatus();
+    expect(status.textContent).toBe("");
+
+    await app.user.type(field, "a");
+
+    expect(status.isConnected).toBe(true);
+    expect(status.textContent).toBe(DIGITS_ONLY);
+    await app.user.type(field, "1");
+    expect(status.isConnected).toBe(true);
+    expect(status.textContent).toBe("");
+  });
+
+  it("say the same refusal again at a second letter", async () => {
+    const { app, field } = await atCode();
+    const status = refusalStatus();
+    await app.user.type(field, "a");
+    const changes = changesTo(status);
+
+    await app.user.type(field, "b");
+
+    expect(status.textContent).toBe(DIGITS_ONLY);
+    expect(changes()).toBeGreaterThan(0);
   });
 
   it.each([" ", "-"])("ignore %j without a word", async (typed) => {
@@ -216,6 +265,52 @@ describe("the code step's boxes", () => {
 
     await screen.findByText("Wrong code. 2 tries left.");
     expect(sent()).toHaveLength(2);
+  });
+
+  it("take the focus back after Verify's resend fails", async () => {
+    const { app, field, sent } = await atCode(async () => {
+      throw fakeApiError("unreachable");
+    });
+    await app.user.type(field, "123456");
+    await screen.findByText(/fake unreachable/);
+
+    await app.user.click(screen.getByRole("button", { name: "Verify" }));
+
+    await waitFor(() => expect(sent()).toHaveLength(2));
+    await waitFor(() => expect(document.activeElement).toBe(field));
+  });
+
+  it("take the focus back after Verify's resend is limited", async () => {
+    let calls = 0;
+    const { app, field } = await atCode(async () => {
+      calls += 1;
+      if (calls === 1) {
+        throw fakeApiError("unreachable");
+      }
+      throw limited(30);
+    });
+    await app.user.type(field, "123456");
+    await screen.findByText(/fake unreachable/);
+
+    await app.user.click(screen.getByRole("button", { name: "Verify" }));
+
+    await screen.findByText("Try again in 30 seconds.");
+    expect(screen.getByRole("button", { name: "Verify" }).hasAttribute("disabled")).toBe(true);
+    expect(document.activeElement).toBe(field);
+  });
+
+  it("take the focus back to the recovery field after Verify's send fails", async () => {
+    const { app } = await atCode(async () => {
+      throw fakeApiError("unreachable");
+    });
+    await app.user.click(screen.getByRole("button", { name: "Use a recovery code" }));
+    const recovery = await screen.findByLabelText("Recovery code");
+    await app.user.type(recovery, RECOVERY);
+
+    await app.user.click(screen.getByRole("button", { name: "Verify" }));
+
+    await screen.findByText(/fake unreachable/);
+    await waitFor(() => expect(document.activeElement).toBe(recovery));
   });
 
   it("ask for all six when Verify comes early, sending nothing", async () => {
@@ -425,6 +520,58 @@ describe("the setup step's boxes (U99)", () => {
     expect(field.value).toBe("");
     expect(screen.queryByLabelText("Recovery code")).toBeNull();
     expect(sent()).toEqual([]);
+  });
+
+  it("keep the refusal's status mounted, and say the same refusal again", async () => {
+    const { app, field } = await atSetup();
+    await screen.findByRole("img", { name: /QR code/ });
+    const status = refusalStatus();
+    expect(status.textContent).toBe("");
+
+    await app.user.type(field, "a");
+    expect(status.textContent).toBe(NOT_A_CODE);
+    const changes = changesTo(status);
+    await app.user.type(field, "b");
+
+    expect(status.textContent).toBe(NOT_A_CODE);
+    expect(changes()).toBeGreaterThan(0);
+  });
+
+  it("take the focus back after Confirm's resend fails", async () => {
+    const { app, field, sent } = await atSetup({
+      mfaConfirm: async () => {
+        throw fakeApiError("unreachable");
+      },
+    });
+    await screen.findByRole("img", { name: /QR code/ });
+    await app.user.type(field, "654321");
+    await screen.findByText(/fake unreachable/);
+
+    await app.user.click(screen.getByRole("button", { name: "Confirm" }));
+
+    await waitFor(() => expect(sent()).toHaveLength(2));
+    await waitFor(() => expect(document.activeElement).toBe(field));
+  });
+
+  it("take the focus back after Confirm's resend is limited", async () => {
+    let calls = 0;
+    const { app, field } = await atSetup({
+      mfaConfirm: async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw fakeApiError("unreachable");
+        }
+        throw limited(30);
+      },
+    });
+    await screen.findByRole("img", { name: /QR code/ });
+    await app.user.type(field, "654321");
+    await screen.findByText(/fake unreachable/);
+
+    await app.user.click(screen.getByRole("button", { name: "Confirm" }));
+
+    await screen.findByText("Try again in 30 seconds.");
+    expect(document.activeElement).toBe(field);
   });
 
   it("wait while a new key loads", async () => {

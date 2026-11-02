@@ -6,6 +6,7 @@
 import { OWNER } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
 import { enterCode, expectHome, logIn, push } from "./steps";
+import { inScheme } from "./theme";
 
 test("a column drops by its box's width, and a spanning row follows the table", async ({
   page,
@@ -17,13 +18,15 @@ test("a column drops by its box's width, and a spanning row follows the table", 
   await page.evaluate(() => {
     const box = document.createElement("div");
     box.id = "planted";
-    box.className = "@container/table";
+    // The real container's border, as components/ui/table.tsx draws it.
+    box.className = "@container/table border";
+    box.style.boxSizing = "border-box";
     const table = document.createElement("table");
     const row = table.insertRow();
     row.insertCell().textContent = "agent-main";
     const dropped = row.insertCell();
     dropped.id = "planted-dropped";
-    dropped.className = "@max-[50.625rem]/table:hidden";
+    dropped.className = "@max-[50.5rem]/table:hidden";
     dropped.textContent = "1.0";
     const span = table.insertRow().insertCell();
     span.id = "planted-span";
@@ -46,7 +49,7 @@ test("a column drops by its box's width, and a spanning row follows the table", 
 
   await setWidth("809px");
   expect(await display()).toBe("none");
-  await setWidth("811px");
+  await setWidth("810px");
   expect(await display()).toBe("table-cell");
 
   // The long text wraps inside the kept columns' width instead of pushing the table wider.
@@ -112,5 +115,54 @@ test("a toast's focus shows the one outline, none of sonner's shadows", async ({
     });
 
     expect(read, name).toEqual({ focusVisible: true, outline: "solid", shadow: "none" });
+  }
+});
+
+test("an error toast and a warning toast each hold their tint over the popover, in both themes", async ({
+  page,
+  context,
+}) => {
+  const backend = await fakeBackend(context);
+  backend.addAccount(OWNER);
+  await page.goto("/");
+  await logIn(page, OWNER);
+  await enterCode(page, backend.code(OWNER));
+  await expectHome(page, OWNER);
+  const id = backend.bot("AfkBot1").id;
+  const at = new Date().toISOString();
+  await push(page, { update: "event", event: { type: "bot_died", bot_id: id, at } });
+  await push(page, {
+    update: "event",
+    event: { type: "bot_alert", bot_id: id, at, state: "failed", reason: "crash_loop" },
+  });
+
+  for (const [type, token] of [
+    ["warning", "--warning"],
+    ["error", "--destructive"],
+  ] as const) {
+    const toast = page.locator(`[data-sonner-toast][data-type=${type}]`);
+    await expect(toast).toBeAttached();
+    for (const scheme of ["dark", "light"] as const) {
+      await inScheme(page, scheme);
+      const read = await toast.evaluate((element, tint) => {
+        const probe = document.createElement("div");
+        probe.style.background = `color-mix(in srgb, var(${tint}) 12%, var(--popover))`;
+        const plain = document.createElement("div");
+        plain.style.background = "var(--popover)";
+        document.body.append(probe, plain);
+        const seen = {
+          toast: getComputedStyle(element).backgroundColor,
+          tinted: getComputedStyle(probe).backgroundColor,
+          plain: getComputedStyle(plain).backgroundColor,
+        };
+        probe.remove();
+        plain.remove();
+        return seen;
+      }, token);
+
+      expect(read.toast, `${type} in ${scheme}`).toBe(read.tinted);
+      expect(read.toast, `${type} in ${scheme}`).not.toBe(read.plain);
+      expect(read.toast, `${type} in ${scheme}`).not.toBe("rgba(0, 0, 0, 0)");
+    }
   }
 });

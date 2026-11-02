@@ -28,10 +28,12 @@ async function stillRounded(page: Page): Promise<{ read: number; rounded: readon
         style.borderBottomLeftRadius,
         style.borderBottomRightRadius,
       ];
-      // `rounded-full` computes to an enormous length, and a native radio to 50%: real circles.
-      const circle = corners.every(
-        (corner) => corner === "50%" || Number.parseFloat(corner) >= 9999,
-      );
+      // `rounded-full` computes to an enormous length, and a native radio to 50%: a real circle
+      // only on a square box, as a pill that can read "99+" is no circle.
+      const box = element.getBoundingClientRect();
+      const circle =
+        Math.abs(box.width - box.height) <= 0.5 &&
+        corners.every((corner) => corner === "50%" || Number.parseFloat(corner) >= 9999);
       return corners.every((corner) => Number.parseFloat(corner) === 0) || circle
         ? []
         : [`<${element.tagName.toLowerCase()}> ${element.className} ${corners.join(" ")}`];
@@ -52,14 +54,19 @@ test("the check sees a rounded corner, and passes a real circle", async ({ page,
   await fakeBackend(context);
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
-  const plant = (radius: string) =>
-    page.evaluate((value) => {
-      document.querySelector("[data-planted]")?.remove();
-      const planted = document.createElement("div");
-      planted.dataset.planted = "yes";
-      planted.style.borderRadius = value;
-      document.body.append(planted);
-    }, radius);
+  const plant = (radius: string, width = "20px") =>
+    page.evaluate(
+      ([value, across]) => {
+        document.querySelector("[data-planted]")?.remove();
+        const planted = document.createElement("div");
+        planted.dataset.planted = "yes";
+        planted.style.borderRadius = value ?? "";
+        planted.style.width = across ?? "";
+        planted.style.height = "20px";
+        document.body.append(planted);
+      },
+      [radius, width],
+    );
 
   await plant("3px");
   expect((await stillRounded(page)).rounded).toHaveLength(1);
@@ -67,6 +74,9 @@ test("the check sees a rounded corner, and passes a real circle", async ({ page,
   expect((await stillRounded(page)).rounded).toHaveLength(1);
   await plant("calc(infinity * 1px)");
   expect((await stillRounded(page)).rounded).toEqual([]);
+  // A pill isn't a circle: it stays round whatever `--radius` is.
+  await plant("calc(infinity * 1px)", "40px");
+  expect((await stillRounded(page)).rounded).toHaveLength(1);
   await plant("var(--radius)");
   expect((await stillRounded(page)).rounded).toEqual([]);
   await page.evaluate(() => document.querySelector("[data-planted]")?.remove());
@@ -114,6 +124,39 @@ test("--radius: 0 squares Profile and the frame around it", async ({ page, conte
   await expect(page.getByRole("group", { name: "Theme" })).toBeVisible();
 
   await squared(page, "Profile");
+});
+
+test("--radius: 0 squares Home, a bot, Accounts and an account, the count's pill included", async ({
+  page,
+  context,
+}) => {
+  const backend = await fakeBackend(context);
+  const account = backend.addAccount(OWNER);
+  backend.share(account, MEMBER, "view");
+  backend.addAccount(MEMBER, "pending");
+  await page.goto("/");
+  await logIn(page, OWNER);
+  await enterCode(page, backend.code(OWNER));
+  await expectHome(page, OWNER);
+  const main = page.getByRole("main");
+  await expect(page.getByRole("link", { name: "Open AfkBot1" })).toBeVisible();
+  await expect(page.getByRole("link", { name: /^Accounts, / })).toBeVisible();
+  await squared(page, "Home");
+
+  await page.getByRole("link", { name: "Open AfkBot1" }).click();
+  await expect(main.getByRole("region", { name: "Settings" })).toBeVisible();
+  await squared(page, "a bot");
+
+  await page.getByRole("link", { name: /^Accounts, / }).click();
+  await expect(main.getByRole("heading", { name: "Accounts", level: 1 })).toBeVisible();
+  await squared(page, "Accounts");
+
+  await main
+    .getByRole("link", { name: /^(Open )?AfkBot1$/ })
+    .first()
+    .click();
+  await expect(main.getByRole("table", { name: "Who has access" })).toBeVisible();
+  await squared(page, "an account");
 });
 
 test("--radius: 0 squares a toast and its action", async ({ page, context }) => {

@@ -357,12 +357,40 @@ test("the check holds each focus stop's outline, and walks the whole page", asyn
     await atPlanted({ outline: "2px solid #fff", outlineOffset: "-4px", background: "#000" }),
   ).toEqual([]);
 
+  // A clipped outline fails, whatever lies beyond the clip: hit-testing can't see the cut.
+  await removePlants();
+  await page.evaluate(() => {
+    const box = document.createElement("div");
+    box.dataset.planted = "yes";
+    Object.assign(box.style, {
+      position: "fixed",
+      top: "16px",
+      left: "16px",
+      overflow: "hidden",
+      background: "#fff",
+    });
+    const button = document.createElement("button");
+    button.textContent = "Planted";
+    button.style.color = "#000";
+    button.style.background = "#fff";
+    button.style.outline = "2px solid #000";
+    button.style.outlineOffset = "2px";
+    box.append(button);
+    document.body.append(box);
+  });
+  expect((await focusProblems(page)).filter((problem) => problem.includes("Planted"))).toEqual([
+    expect.stringContaining("cut off"),
+  ]);
+
   // A stop mid-transition reads as it ends.
   await removePlants();
   await page.evaluate(() => {
     const button = document.createElement("button");
     button.dataset.planted = "yes";
     button.textContent = "Planted";
+    button.style.position = "fixed";
+    button.style.top = "16px";
+    button.style.left = "16px";
     button.style.outline = "2px solid transparent";
     button.style.transition = "outline-color 10s";
     button.addEventListener("focus", () => {

@@ -721,6 +721,7 @@ export class FakeBackend {
 
   #refusing: CommandErrorCode | null = null;
   readonly #held = new Set<string>();
+  readonly #called = new Map<string, number>();
   readonly #waiting: (() => void)[] = [];
 
   constructor() {
@@ -804,6 +805,7 @@ export class FakeBackend {
    * live events watch, which answers when it ends.
    */
   handle(command: string, args: Record<string, unknown>): Outcome | Promise<Outcome> {
+    this.#called.set(command, (this.#called.get(command) ?? 0) + 1);
     // Not the theme's, which reaches no server, nor the profile, which only the app holds.
     if (this.#refusing !== null && command !== "set_window_theme" && command !== "server_profile") {
       return refused(this.#refusing);
@@ -814,6 +816,11 @@ export class FakeBackend {
       );
     }
     return this.#answer(command, args);
+  }
+
+  /** How many times `command` reached the fake. Names only: arguments may hold a secret. */
+  timesCalled(command: string): number {
+    return this.#called.get(command) ?? 0;
   }
 
   /** Every command but the profile's and the theme's fails as `code`, until `null` (S96). */

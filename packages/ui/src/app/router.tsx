@@ -88,6 +88,8 @@ export function createAppRouter(context: RouterContext) {
     history: createMemoryHistory({ initialEntries: ["/"] }),
     defaultErrorComponent: RouteError,
     defaultNotFoundComponent: NotFound,
+    // The page itself never scrolls, so a new screen starts these at their top (ADR-0020, S123).
+    scrollToTopSelectors: ["[data-slot=content]", "[data-slot=screen]"],
   });
 }
 

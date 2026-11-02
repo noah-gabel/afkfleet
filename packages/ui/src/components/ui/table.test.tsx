@@ -49,7 +49,7 @@ describe("Table", () => {
   it("drops a marked column's head and cell at the same width, and no other", () => {
     sample();
 
-    const dropped = "@max-[50.625rem]/table:hidden";
+    const dropped = "@max-[50.5rem]/table:hidden";
     expect(screen.getByRole("columnheader", { name: "Version" }).className).toContain(dropped);
     expect(screen.getByRole("cell", { name: "1.0" }).className).toContain(dropped);
     expect(screen.getByRole("columnheader", { name: "Name" }).className).not.toContain(dropped);

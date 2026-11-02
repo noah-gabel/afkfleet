@@ -243,6 +243,13 @@ describe("the first login's 2FA setup", () => {
     await app.user.click(screen.getByLabelText("I've saved these codes"));
     await app.user.click(proceed);
     expect(await screen.findByText(NEXT_CODE)).toBeDefined();
+    // The boxes send by themselves, so it's said with them, not only above them.
+    const boxes = await screen.findByLabelText("Code");
+    expect(
+      (boxes.getAttribute("aria-describedby") ?? "")
+        .split(" ")
+        .map((id) => document.getElementById(id)?.textContent),
+    ).toContain(NEXT_CODE);
     await enterCode(app, "111222");
 
     await waitFor(() => expect(app.path()).toBe("/home"));

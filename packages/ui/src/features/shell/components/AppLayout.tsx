@@ -1,6 +1,10 @@
-// The frame of every signed-in screen (Plan.md P8.6, P11.11; ADR-0020, U91): the sidebar on the left,
-// the screen beside it, in the room the fixed sidebar leaves. The stack of banner and live hint is
-// the root's, so it keeps running across a login and a logout (rootRoute.tsx).
+// The frame of every signed-in screen (Plan.md P8.6, P11.11; ADR-0020, U91, S123): the sidebar on the
+// left, the screen beside it, in the room the fixed sidebar leaves. The stack of banner and live hint
+// is the root's, so it keeps running across a login and a logout (rootRoute.tsx).
+//
+// The column is the one thing that scrolls, on both axes, so wide content never slides under the rail
+// and the page never scrolls. It's the container the screens' layouts query. Chromium makes a scroller
+// with no focusable child a Tab stop, whose outline would otherwise lie outside the window.
 import { Outlet } from "@tanstack/react-router";
 
 import { LiveNotices } from "../../bots/components/LiveNotices";
@@ -12,8 +16,14 @@ export function AppLayout() {
     <>
       <LiveNotices />
       <Sidebar />
-      <div className="flex min-w-0 flex-1 flex-col pl-52 max-rail:pl-16">
-        <Outlet />
+      <div className="ml-52 flex min-h-0 min-w-0 flex-1 flex-col max-rail:ml-16">
+        <div
+          data-slot="content"
+          style={{ outlineOffset: -2 }}
+          className="@container/content flex min-h-0 flex-1 flex-col overflow-auto scroll-p-1"
+        >
+          <Outlet />
+        </div>
       </div>
     </>
   );
