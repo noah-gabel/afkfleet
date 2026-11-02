@@ -160,7 +160,13 @@ export function SetupStep({
           void submit(event);
         }}
       >
-        <FormField id="setup-code" label="Code" hint={CODE_HINT} error={errors.code?.message}>
+        <FormField
+          id="setup-code"
+          label="Code"
+          hint={CODE_HINT}
+          error={errors.code?.message}
+          errorRole="alert"
+        >
           {(props) => (
             <CodeBoxes
               {...props}

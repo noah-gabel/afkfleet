@@ -224,7 +224,7 @@ describe("the code step's boxes", () => {
     await app.user.type(field, "123");
     await app.user.click(screen.getByRole("button", { name: "Verify" }));
 
-    expect(await screen.findByText(ALL_SIX)).toBeDefined();
+    expect((await screen.findByRole("alert")).textContent).toBe(ALL_SIX);
     expect(sent()).toEqual([]);
     await app.user.type(field, "4");
     expect(screen.queryByText(ALL_SIX)).toBeNull();
@@ -239,7 +239,9 @@ describe("the code step's boxes", () => {
 
     await app.user.type(field, "123456");
 
-    expect(await screen.findByText("must be 6 digits or a recovery code")).toBeDefined();
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "must be 6 digits or a recovery code",
+    );
     expect(screen.getByText("3 tries left.")).toBeDefined();
   });
 
@@ -275,6 +277,42 @@ describe("the code step's boxes", () => {
 
     await app.user.type(field, "654321");
     expect(calls).toBe(2);
+  });
+
+  it("take no paste during a 429's wait: the value stays and nothing is sent", async () => {
+    const time = fakeTime();
+    let calls = 0;
+    const app = await atLogin(
+      {
+        login: async () => MFA,
+        loginMfa: async () => {
+          calls += 1;
+          throw limited(30);
+        },
+      },
+      time.advanceTimers,
+    );
+    await logIn(app);
+    const field = (await screen.findByLabelText("Code")) as HTMLInputElement;
+    await app.user.type(field, "123456");
+    await screen.findByText(/Try again in 30 s./);
+
+    await app.user.paste("654321");
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    expect(field.value).toBe("");
+    expect(calls).toBe(1);
+  });
+
+  it("take no paste while a code is on its way: the value stays and nothing is sent", async () => {
+    const { app, field, sent } = await atCode();
+    await app.user.type(field, "123456");
+    expect(sent()).toEqual(["123456"]);
+
+    await app.user.paste("654321");
+
+    expect(field.value).toBe("123456");
+    expect(sent()).toEqual(["123456"]);
   });
 
   it("swap to a text field by the link, and back, dropping what was typed", async () => {
@@ -409,12 +447,62 @@ describe("the setup step's boxes (U99)", () => {
 
     await app.user.type(field, "000000");
 
-    expect(await screen.findByText("wrong code")).toBeDefined();
+    expect((await screen.findByRole("alert")).textContent).toBe("wrong code");
     await waitFor(() => expect(field.value).toBe(""));
     await app.user.type(field, "111111");
 
     expect(sent()).toEqual(["000000", "111111"]);
     expect(calls).toBe(2);
+  });
+
+  it("ask for all six when Confirm comes early, as an alert, sending nothing", async () => {
+    const { app, field, sent } = await atSetup();
+    await screen.findByRole("img", { name: /QR code/ });
+
+    await app.user.type(field, "123");
+    await app.user.click(screen.getByRole("button", { name: "Confirm" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe(ALL_SIX);
+    expect(sent()).toEqual([]);
+  });
+
+  it("take no paste during a 429's wait: the value stays and nothing is sent", async () => {
+    const time = fakeTime();
+    let calls = 0;
+    const app = await atLogin(
+      {
+        login: async () => SETUP,
+        mfaEnroll: async () => ENROLLMENT,
+        mfaConfirm: async () => {
+          calls += 1;
+          throw limited(30);
+        },
+      },
+      time.advanceTimers,
+    );
+    await logIn(app);
+    const field = (await screen.findByLabelText("Code")) as HTMLInputElement;
+    await screen.findByRole("img", { name: /QR code/ });
+    await app.user.type(field, "123456");
+    await screen.findByText(/Try again in 30 s./);
+
+    await app.user.paste("654321");
+    await act(() => vi.advanceTimersByTimeAsync(0));
+
+    expect(field.value).toBe("");
+    expect(calls).toBe(1);
+  });
+
+  it("take no paste while a code is on its way: the value stays and nothing is sent", async () => {
+    const { app, field, sent } = await atSetup();
+    await screen.findByRole("img", { name: /QR code/ });
+    await app.user.type(field, "123456");
+    expect(sent()).toEqual(["123456"]);
+
+    await app.user.paste("654321");
+
+    expect(field.value).toBe("123456");
+    expect(sent()).toEqual(["123456"]);
   });
 
   it("keep the digits after a connection failure, Confirm resending them", async () => {

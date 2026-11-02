@@ -153,7 +153,13 @@ export function CodeStep({
             )}
           </FormField>
         ) : (
-          <FormField id="login-code" label="Code" hint={CODE_HINT} error={errors.code?.message}>
+          <FormField
+            id="login-code"
+            label="Code"
+            hint={CODE_HINT}
+            error={errors.code?.message}
+            errorRole="alert"
+          >
             {(props) => (
               <CodeBoxes
                 {...props}
