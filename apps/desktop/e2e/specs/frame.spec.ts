@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 
 import type { Page } from "@playwright/test";
 
-import { NEW_USER, OWNER } from "../fake/backend";
+import { MEMBER, NEW_USER, OWNER } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
 import { enterCode, expectHome, logIn } from "./steps";
 import { inScheme, logoParts } from "./theme";
@@ -406,4 +406,30 @@ test("no tip covers a control or takes the pointer, in either form", async ({ pa
       await expect(tip).toHaveCount(0);
     }
   }
+});
+
+test("a login typed during a slow logout waits for the login screen, not the fields behind it", async ({
+  page,
+  context,
+}) => {
+  const backend = await signedIn(page, context);
+  backend.addAccount(OWNER);
+  await nav(page)
+    .getByRole("link", { name: /^Accounts/ })
+    .click();
+  await page.getByRole("main").getByRole("link", { name: "AfkBot1", exact: true }).click();
+  // A field named as the login form's is on screen: "Share with"'s Username.
+  const shareField = page.getByRole("combobox", { name: "Username" });
+  await expect(shareField).toBeVisible();
+  backend.hold("logout");
+
+  await page.getByRole("button", { name: "Log out" }).click();
+  const typing = logIn(page, MEMBER);
+  // Whatever it does, it mustn't type into the screen that's leaving.
+  await expect(shareField).toHaveValue("");
+  backend.release();
+  await typing;
+
+  await enterCode(page, backend.code(MEMBER));
+  await expectHome(page, MEMBER);
 });

@@ -15,8 +15,12 @@ import { expect } from "../fixtures";
  */
 export const FLOW_END_MS = 15_000;
 
-/** The password step of the login form. */
+/**
+ * The password step of the login form. It waits for that form first: a screen that is leaving may
+ * hold fields of the same names, such as "Share with"'s Username, while a logout is on its way.
+ */
 export async function logIn(page: Page, username: string, password = PASSWORD): Promise<void> {
+  await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
   await page.getByLabel("Username").fill(username);
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Log in" }).click();
