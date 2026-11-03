@@ -26,5 +26,7 @@ afterEach(() => {
   assertNoInjectedStyles(document);
 });
 
-// jsdom has no layout, so no Element.scrollTo, which the router calls on the content column (S123).
+// jsdom has no layout, so no Element.scrollTo, which the router calls on the content column (S123),
+// and no Element.scrollIntoView, which a textarea calls as it takes the focus (ADR-0020, L4).
 Element.prototype.scrollTo = () => {};
+Element.prototype.scrollIntoView = () => {};

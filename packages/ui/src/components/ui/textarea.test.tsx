@@ -12,11 +12,7 @@ afterEach(() => {
 
 describe("Textarea", () => {
   it("scrolls the whole box into view when it takes the focus, and still calls onFocus", () => {
-    const scrolled = vi.fn();
-    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
-      configurable: true,
-      value: scrolled,
-    });
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
     const onFocus = vi.fn();
     render(<Textarea aria-label="Text" onFocus={onFocus} />);
 
