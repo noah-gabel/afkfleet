@@ -25,26 +25,26 @@ test("the Owner adds a server's conflict texts, edits them and deletes them", as
     .getByRole("navigation", { name: "Main" })
     .getByRole("link", { name: "Minecraft servers" })
     .click();
-  await expect(main.getByText("No server has settings yet.")).toBeVisible();
-  await main.getByRole("link", { name: "Add a server" }).click();
+  await expect(main.getByText("No servers.")).toBeVisible();
+  await main.getByRole("link", { name: "Add server" }).click();
   await page.getByLabel("Server address").fill("MC.example.com");
   await page.getByLabel("Conflict text 1").fill("You logged in\nfrom another location");
   await main.getByRole("button", { name: "Save" }).click();
   await page.getByLabel("Current password").fill(PASSWORD);
   await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByText(`Added settings for ${SERVER}.`)).toBeVisible();
+  await expect(page.getByText(`Added ${SERVER}.`)).toBeVisible();
   await expect(main.getByRole("heading", { name: SERVER, level: 1 })).toBeVisible();
   await expect(page.getByLabel("Conflict text 1")).toHaveValue(
     "You logged in\nfrom another location",
   );
 
   await page.getByRole("button", { name: "Back", exact: true }).click();
-  await expect(entry.getByText("1 conflict text")).toBeVisible();
+  await expect(entry).toContainText(/Conflict texts\s*1/);
   await entry.getByRole("link", { name: `Open ${SERVER}` }).click();
   await main.getByRole("button", { name: "Add text" }).click();
   await page.getByLabel("Conflict text 2").fill("Already connected");
   await main.getByRole("button", { name: "Save" }).click();
-  await expect(page.getByText("Saved. Bots on this server use the change at once.")).toBeVisible();
+  await expect(page.getByText("Saved. Bots on it use the change at once.")).toBeVisible();
   // The step-up still holds, and the server answers its texts in its own order.
   await expect(page.getByLabel("Current password")).toHaveCount(0);
   await expect(page.getByLabel("Conflict text 1")).toHaveValue("Already connected");
@@ -53,16 +53,16 @@ test("the Owner adds a server's conflict texts, edits them and deletes them", as
   );
 
   await page.getByRole("button", { name: "Back", exact: true }).click();
-  await expect(entry.getByText("2 conflict texts")).toBeVisible();
+  await expect(entry).toContainText(/Conflict texts\s*2/);
   await entry.getByRole("link", { name: `Open ${SERVER}` }).click();
   await main.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(
     main.getByText(
-      `Delete the settings of ${SERVER}? Its bots then treat no kick message as someone logging in.`,
+      `Delete ${SERVER}'s settings? Its bots then won't recognise any kick message as someone logging in.`,
     ),
   ).toBeVisible();
   await main.getByRole("button", { name: "Delete settings" }).click();
 
-  await expect(page.getByText(`Deleted the settings of ${SERVER}.`)).toBeVisible();
-  await expect(main.getByText("No server has settings yet.")).toBeVisible();
+  await expect(page.getByText(`Deleted ${SERVER}'s settings.`)).toBeVisible();
+  await expect(main.getByText("No servers.")).toBeVisible();
 });

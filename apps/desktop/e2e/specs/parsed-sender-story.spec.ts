@@ -44,7 +44,7 @@ test("a format read from the server's line marks its sender until the format is 
     .filter({ hasText: "[Clan] Notch : hello" });
 
   await nav.getByRole("link", { name: "Minecraft servers" }).click();
-  await main.getByRole("link", { name: "Add a server" }).click();
+  await main.getByRole("link", { name: "Add server" }).click();
   await page.getByLabel("Server address").fill("mc.example.com");
   await main
     .getByRole("group", { name: "Conflict texts" })
@@ -54,11 +54,11 @@ test("a format read from the server's line marks its sender until the format is 
   await page.getByLabel("Chat format 1").fill("[{any}] {sender} : ");
   await page.getByLabel("Try a line").fill("[Clan] Notch : hello");
   await formats.getByRole("button", { name: "Try" }).click();
-  await expect(formats.getByRole("status")).toHaveText("Format 1 reads the sender as Notch.");
+  await expect(formats.getByRole("status")).toHaveText("Format 1: sender Notch.");
   await main.getByRole("button", { name: "Save" }).click();
   await page.getByLabel("Current password").fill(PASSWORD);
   await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByText(`Added settings for ${SERVER}.`)).toBeVisible();
+  await expect(page.getByText(`Added ${SERVER}.`)).toBeVisible();
 
   await nav.getByRole("link", { name: "Home" }).click();
   await main.getByRole("link", { name: "Open AfkBot1" }).click();
@@ -70,7 +70,7 @@ test("a format read from the server's line marks its sender until the format is 
   await main.getByRole("link", { name: `Open ${SERVER}` }).click();
   await main.getByRole("button", { name: "Delete", exact: true }).click();
   await main.getByRole("button", { name: "Delete settings" }).click();
-  await expect(page.getByText(`Deleted the settings of ${SERVER}.`)).toBeVisible();
+  await expect(page.getByText(`Deleted ${SERVER}'s settings.`)).toBeVisible();
   await nav.getByRole("link", { name: "Home" }).click();
   await main.getByRole("link", { name: "Open AfkBot1" }).click();
 

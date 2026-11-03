@@ -138,8 +138,9 @@ describe("the modes' list", () => {
     expect(await screen.findByText("No modes.")).toBeDefined();
     expect(screen.queryByRole("list", { name: "Modes" })).toBeNull();
     const links = screen.getAllByRole("link", { name: "New mode" });
-    expect(links).toHaveLength(2);
-    await app.user.click(links[1] as HTMLElement);
+    expect(links).toHaveLength(1);
+    expect(links[0]?.closest("[data-slot=screen-state]")).not.toBeNull();
+    await app.user.click(links[0] as HTMLElement);
     await vi.waitFor(() => expect(app.path()).toBe("/modes/new"));
   });
 

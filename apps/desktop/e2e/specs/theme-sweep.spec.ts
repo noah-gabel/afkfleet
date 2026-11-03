@@ -988,6 +988,53 @@ test("modes: loading, failed, none, a long list, and sixteen steps in two column
   await page.setViewportSize({ width: 1280, height: 720 });
 });
 
+test("servers: loading, failed, a long list, and sixteen texts with eight formats, tried", async ({
+  page,
+  context,
+}) => {
+  const backend = await fakeBackend(context);
+  const main = page.getByRole("main");
+  await signIn(page, backend, OWNER);
+  backend.hold("server_settings");
+  await nav(page, "Minecraft servers");
+  await expect(main.getByText("Loading servers…")).toBeVisible();
+  await bothThemes(page, "servers, loading");
+  backend.release();
+  await expect(main.getByText("No servers.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Log out" }).click();
+  backend.refuse("server_settings", { status: 500, code: "internal" });
+  await signIn(page, backend, OWNER);
+  await nav(page, "Minecraft servers");
+  await expect(main.getByText(/Couldn't load servers/)).toBeVisible();
+  await bothThemes(page, "servers, failed");
+  backend.refuse("server_settings", null);
+
+  for (let n = 1; n <= 12; n += 1) {
+    backend.addServerSettings(`play-${n}.example.com`, [
+      `You logged in from another location ${n}`,
+    ]);
+  }
+  backend.addServerSettings(
+    "long.example.com",
+    Array.from({ length: 16 }, (_, n) => `You logged in from another location (${n + 1})`),
+    Array.from({ length: 8 }, (_, n) => `[Clan ${n + 1}] {sender} : `),
+  );
+  await page.getByRole("button", { name: "Log out" }).click();
+  await signIn(page, backend, OWNER);
+  await nav(page, "Minecraft servers");
+  await expect(main.getByRole("link", { name: "Open long.example.com:25565" })).toBeVisible();
+  await bothThemes(page, "servers, a long list", { small: true, smallHeight: 700 });
+  await main.getByRole("link", { name: "Open long.example.com:25565" }).click();
+  await main.getByLabel("Try a line").fill("[Clan 1] Steve : hello");
+  await main.getByRole("button", { name: "Try", exact: true }).click();
+  await expect(main.getByText("Format 1: sender Steve.")).toBeVisible();
+  await bothThemes(page, "a server, sixteen texts and eight formats, tried");
+  await page.setViewportSize({ width: 800, height: 600 });
+  await bothThemes(page, "a server, sixteen texts and eight formats, stacked", { end: "ends" });
+  await page.setViewportSize({ width: 1280, height: 720 });
+});
+
 test("servers, accounts with their grants, and the Owner's admin screens", async ({
   page,
   context,
@@ -1013,13 +1060,13 @@ test("servers, accounts with their grants, and the Owner's admin screens", async
   const main = page.getByRole("main");
 
   await nav(page, "Minecraft servers");
-  await expect(main.getByText("No server has settings yet.")).toBeVisible();
+  await expect(main.getByText("No servers.")).toBeVisible();
   await bothThemes(page, "servers, empty");
-  await main.getByRole("link", { name: "Add a server" }).click();
+  await main.getByRole("link", { name: "Add server" }).click();
   await page.getByLabel("Server address").fill("MC.example.com");
   await main.getByRole("button", { name: "Save" }).click();
   await expect(page.getByLabel("Current password")).toBeVisible();
-  await bothThemes(page, "a server's settings, the step-up", { height: 1100 });
+  await bothThemes(page, "a server's settings, the step-up");
   await page.getByLabel("Current password").fill(PASSWORD);
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(main.getByRole("heading", { name: "mc.example.com:25565", level: 1 })).toBeVisible();

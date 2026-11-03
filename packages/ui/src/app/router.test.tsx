@@ -105,7 +105,7 @@ describe("the router", () => {
     expect(await screen.findByText(NOT_FOUND)).toBeDefined();
     expect(
       screen.queryByRole("heading", {
-        name: /^(Users|Invites|Minecraft servers|Add a server|Agents|Audit log)$/,
+        name: /^(Users|Invites|Minecraft servers|Add server|Agents|Audit log)$/,
       }),
     ).toBeNull();
     expect(app.fake.calls.map((call) => call.method)).not.toContain(method);

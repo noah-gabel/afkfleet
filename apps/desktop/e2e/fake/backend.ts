@@ -1757,6 +1757,23 @@ export class FakeBackend {
     return value();
   }
 
+  /** Settings for `server`, newest, with `texts` and `formats`: for the long lists and editors (L4). */
+  addServerSettings(
+    server: string,
+    texts: readonly string[],
+    formats: readonly string[] = [],
+  ): string {
+    const settings: Settings = {
+      id: id(this.#next()),
+      server: keyOf(server),
+      texts: [...texts],
+      formats: [...formats],
+      version: 1,
+    };
+    this.#settings = [settings, ...this.#settings];
+    return settings.id;
+  }
+
   /** No mode at all, built-in ones included: for the list's empty state (L4). */
   clearModes(): void {
     this.#modes = [];

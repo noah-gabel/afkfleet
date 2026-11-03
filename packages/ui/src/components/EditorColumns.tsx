@@ -9,7 +9,9 @@
 // the same parts by grid lines, so nothing moves in the document.
 //
 // The form wraps the box, the sections, the notes and the bar, but not the password prompt, which
-// is a form of its own: it's `display: contents`, so its parts are the grid's.
+// is a form of its own: it's `display: contents`, so its parts are the grid's. Whatever Tab
+// scrolls to in the sections and the notes stops a bar's height above the column's foot, so the
+// bar never covers the focus (WCAG 2.4.11).
 import { cn } from "cn";
 import type { FormEventHandler, ReactNode } from "react";
 
@@ -49,13 +51,13 @@ export function EditorColumns({ form, box, sections, notes, actions, prompt, apa
       </div>
       <div
         data-slot="editor-sections"
-        className="relative flex min-w-0 flex-col gap-3 @min-[53rem]/content:col-start-2 @min-[53rem]/content:row-span-5 @min-[53rem]/content:row-start-1 @min-[53rem]/content:-m-1 @min-[53rem]/content:min-h-0 @min-[53rem]/content:overflow-y-auto @min-[53rem]/content:scroll-p-1 @min-[53rem]/content:p-1"
+        className="relative flex min-w-0 flex-col gap-3 [&_*]:scroll-mb-16 @min-[53rem]/content:col-start-2 @min-[53rem]/content:row-span-5 @min-[53rem]/content:row-start-1 @min-[53rem]/content:-m-1 @min-[53rem]/content:min-h-0 @min-[53rem]/content:overflow-y-auto @min-[53rem]/content:scroll-p-1 @min-[53rem]/content:p-1"
       >
         {sections}
       </div>
       <div
         data-slot="editor-notes"
-        className="flex min-w-0 flex-col gap-2 empty:hidden @min-[53rem]/content:col-start-1 @min-[53rem]/content:row-start-3 @min-[53rem]/content:mb-3"
+        className="flex min-w-0 flex-col gap-2 empty:hidden [&_*]:scroll-mb-16 @min-[53rem]/content:col-start-1 @min-[53rem]/content:row-start-3 @min-[53rem]/content:mb-3"
       >
         {notes}
       </div>
