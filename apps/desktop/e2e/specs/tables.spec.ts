@@ -289,3 +289,77 @@ test("a short agent name stays whole beside an expired agent's hint, at every wi
 
   expect(broken.slice(0, 6)).toEqual([]);
 });
+
+test("each table shows its columns at a few widths, dropping them in U122's order", async ({
+  page,
+  context,
+}) => {
+  const backend = await fakeBackend(context);
+  backend.share(backend.addAccount(OWNER), MEMBER, "control");
+  backend.share(backend.addAccount(MEMBER), NEW_USER, "view");
+  backend.addInvite(OWNER);
+  backend.addAgent("agent-main");
+  await atScreen(page, backend, "Users");
+  const heads = async (name: string, widths: readonly number[]) => {
+    const shown: Record<number, readonly string[]> = {};
+    for (const width of widths) {
+      shown[width] = (await at(page, name, width)).shown;
+    }
+    return shown;
+  };
+  const nav = (name: string) =>
+    page.getByRole("navigation", { name: "Main" }).getByRole("link", { name }).click();
+  const actions = "Actions";
+
+  // Users: Created, then Last seen, then 2FA.
+  await expect(page.getByRole("table", { name: "Users" })).toBeVisible();
+  expect(await heads("Users", [1800, 1280, 1100, 800])).toEqual({
+    1800: ["Username", "Role", "2FA", "Status", "Last seen", "Created", actions],
+    1280: ["Username", "Role", "2FA", "Status", "Last seen", actions],
+    1100: ["Username", "Role", "2FA", "Status", actions],
+    800: ["Username", "Role", "Status", actions],
+  });
+
+  // The review's two tables: When, then Given by; stacked at 800 px, each holds both again.
+  await page
+    .getByRole("row", { name: new RegExp(MEMBER) })
+    .getByRole("link", { name: /Review grants/ })
+    .click();
+  await page.getByRole("button", { name: /Show who has access/ }).click();
+  const shared =
+    (await page.getByRole("table", { name: /Who has access to/ }).getAttribute("aria-label")) ?? "";
+  expect(await heads("Grants they hold", [1800, 1500, 1280, 800])).toEqual({
+    1800: ["Account", "Owner", "Access", "Given by", "When", actions],
+    1500: ["Account", "Owner", "Access", "Given by", actions],
+    1280: ["Account", "Owner", "Access", actions],
+    800: ["Account", "Owner", "Access", "Given by", "When", actions],
+  });
+  expect(await heads(shared, [1800, 1500, 1280, 800])).toEqual({
+    1800: ["User", "Access", "Given by", "When", actions],
+    1500: ["User", "Access", "Given by", actions],
+    1280: ["User", "Access", actions],
+    800: ["User", "Access", "Given by", "When", actions],
+  });
+
+  // Invites: Created, then Created by, then Used by.
+  await nav("Invites");
+  await expect(page.getByRole("table", { name: "Invites" })).toBeVisible();
+  expect(await heads("Invites", [1800, 1280, 1100, 800])).toEqual({
+    1800: ["Role", "State", "Created by", "Created", "Expires", "Used by", actions],
+    1280: ["Role", "State", "Created by", "Expires", "Used by", actions],
+    1100: ["Role", "State", "Expires", "Used by", actions],
+    800: ["Role", "State", "Expires", actions],
+  });
+
+  // Agents: Enrolled, then Certificate until, then Version, then Can run (U91).
+  await nav("Agents");
+  await expect(page.getByRole("table", { name: "Agents" })).toBeVisible();
+  const all = ["Name", "Status", "Bots", "Can run", "Version", "Last seen"];
+  expect(await heads("Agents", [1800, 1380, 1280, 1100, 800])).toEqual({
+    1800: [...all, "Certificate until", "Enrolled", actions],
+    1380: [...all, "Certificate until", actions],
+    1280: [...all, actions],
+    1100: ["Name", "Status", "Bots", "Can run", "Last seen", actions],
+    800: ["Name", "Status", "Bots", "Last seen", actions],
+  });
+});

@@ -603,6 +603,60 @@ describe("the shots", () => {
     assert.equal(read("packages/ui/vite.config.ts").includes("root:"), false);
   });
 
+  it("are compared exactly, once, from one fixed rendering, and refused anywhere else", () => {
+    const config = read("apps/desktop/playwright.shots.config.ts");
+    assert.match(
+      config,
+      /^const refused = refusal\(process\.platform, process\.env\);\nif \(refused !== undefined\) \{\n {2}throw new Error\(refused\);\n\}$/m,
+    );
+    assert.match(config, /^ {2}expect: \{ toHaveScreenshot: COMPARE \},$/m);
+    assert.match(config, /^ {2}retries: 0,$/m);
+    assert.match(config, /^ {2}updateSnapshots: "none",$/m);
+    // R234: software rasterization in one pass, in sRGB, with no subpixel text.
+    const flags = /args: \[([^\]]*)\]/.exec(config)?.[1] ?? "";
+    assert.deepEqual(
+      [...flags.matchAll(/"([^"]+)"/g)].map((flag) => flag[1]),
+      [
+        "--disable-gpu",
+        "--disable-gpu-rasterization",
+        "--disable-partial-raster",
+        "--force-color-profile=srgb",
+        "--disable-lcd-text",
+      ],
+    );
+    // One set of baselines for every machine: no platform's or project's own.
+    const templates = [...config.matchAll(/"([^"]*\{arg\}[^"]*)"/g)].map((found) => found[1]);
+    assert.deepEqual(templates, [
+      "../../target/design/{testFileName}/{arg}{ext}",
+      "{testDir}/../baselines/{testFileName}/{arg}{ext}",
+    ]);
+    assert.doesNotMatch(config, /\{platform\}|\{projectName\}/);
+  });
+
+  it("take one argument in the shoot helper, never a style, a style path or a mask", () => {
+    const shoot = read("apps/desktop/e2e/specs/shoot.ts");
+    const calls = shoot.split("toHaveScreenshot(").slice(1);
+    assert.ok(calls.length > 0);
+    for (const call of calls) {
+      let depth = 0;
+      let commas = 0;
+      for (const character of call) {
+        if ("([{".includes(character)) {
+          depth += 1;
+        } else if (")]}".includes(character)) {
+          if (depth === 0) {
+            break;
+          }
+          depth -= 1;
+        } else if (character === "," && depth === 0) {
+          commas += 1;
+        }
+      }
+      assert.equal(commas, 0, `toHaveScreenshot(${call.slice(0, 40)}…`);
+    }
+    assert.doesNotMatch(shoot, /\bstylePath\b|\bmask\b|\bstyle\s*:/);
+  });
+
   it("are taken only by the shoot helper, and nothing installs a browser", () => {
     const specs = path.join(ROOT, "apps", "desktop", "e2e");
     for (const entry of readdirSync(specs, { recursive: true, withFileTypes: true })) {
