@@ -6,6 +6,9 @@
 //   whoever releases vouches that its host and its bots are stopped (S49). Both need a step-up,
 //   which the row asks for when the server wants it (useStepUpAction).
 // - A token to add an agent comes only from the server's host (U76), so nothing here creates one.
+// - An enabled agent whose certificate ends within 14 days says so under its status, which takes the
+//   warning tone, as "Certificate until" drops in a small window (the user's choice, PR #92's
+//   review); the time is read again each minute.
 // - In a small window the table drops Enrolled, then Certificate until, then Version, then Can run
 //   (U91, U122), at widths that never show a column, hide it and show it again (R228). A name
 //   keeps 12 characters of width, or the expired hint's column takes it and a name as short as
@@ -36,6 +39,7 @@ import {
   TableSpanRow,
 } from "../../../components/ui/table";
 import type { AgentResponse } from "../../../generated/AgentResponse";
+import { useNow } from "../../../hooks/useNow";
 import { formatTime } from "../../../lib/time";
 import {
   AGENTS_HEADING,
@@ -45,6 +49,7 @@ import {
   agentsFailed,
   auditOf,
   botsWait,
+  certificateWarning,
   DISABLE,
   DISABLE_FOR_GOOD,
   disabled,
@@ -93,6 +98,7 @@ export function AgentsScreen() {
   const queryClient = useQueryClient();
   const { data: actor } = useMe();
   const agents = useAgents();
+  const now = useNow(() => 60_000);
   const refetch = () => void queryClient.invalidateQueries({ queryKey: AGENTS_KEY });
   const writes = useStepUpAction({ onRefused: refetch });
   const disable = useMutation({
@@ -161,6 +167,10 @@ export function AgentsScreen() {
                   : agentActions(agent, actor.role);
               const pending = asking?.id === agent.id ? asking.change : null;
               const failure = writes.failure?.key === agent.id ? writes.failure.message : undefined;
+              const ending =
+                agent.enabled && agent.status !== "expired" && agent.not_after !== undefined
+                  ? certificateWarning(agent.not_after, now)
+                  : undefined;
               return (
                 <Fragment key={agent.id}>
                   <TableRow>
@@ -168,12 +178,17 @@ export function AgentsScreen() {
                       <span className="inline-block min-w-[12ch]">{agent.name}</span>
                     </TableCell>
                     <TableCell>
-                      <StatusLine tone={agentStatusTone(agent.status)}>
+                      <StatusLine
+                        tone={ending === undefined ? agentStatusTone(agent.status) : "warning"}
+                      >
                         {agentStatusLabel(agent.status)}
                       </StatusLine>
                       {agent.status === "expired" ? (
                         <span className="block text-xs text-muted-foreground">{EXPIRED_HINT}</span>
                       ) : null}
+                      {ending === undefined ? null : (
+                        <span className="block text-xs text-muted-foreground">{ending}</span>
+                      )}
                       {!agent.enabled && agent.bots > 0 ? (
                         <span className="block text-xs text-muted-foreground">
                           {botsWait(agent.bots)}

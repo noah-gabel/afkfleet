@@ -93,3 +93,30 @@ export function releaseQuestion(name: string, bots: number): string {
 export function released(name: string): string {
   return `${name}'s bots released.`;
 }
+
+/** How many days ahead an agent's certificate end is warned of (the user's choice, PR #92's review). */
+export const CERTIFICATE_WARNING_DAYS = 14;
+
+/** The day `at` falls on here, as a count of days, so a daylight-saving change moves no day. */
+function localDay(at: number): number {
+  const date = new Date(at);
+  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / 86_400_000;
+}
+
+/**
+ * The warning on an enabled agent whose certificate ends within 14 calendar days of `now`, here,
+ * or none: none once it has ended, which the server shows as Expired. "Certificate until" drops in a
+ * small window, so this is where the end shows (the user's words, PR #92's review).
+ */
+export function certificateWarning(notAfter: string, now: number): string | undefined {
+  const end = Date.parse(notAfter);
+  if (Number.isNaN(end) || end <= now) {
+    return undefined;
+  }
+  const days = localDay(end) - localDay(now);
+  if (days > CERTIFICATE_WARNING_DAYS) {
+    return undefined;
+  }
+  const when = days === 0 ? "today" : days === 1 ? "tomorrow" : `in ${days} days`;
+  return `Expires ${when}. Enroll a new agent before then.`;
+}

@@ -109,6 +109,44 @@ describe("the agents' screen", () => {
     expect(await tone("agent-1", "Disabled")).toContain("text-destructive");
   });
 
+  it("warns on an enabled agent's certificate within 14 days, in the warning tone, and not after", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 10, 3, 12, 0));
+    try {
+      const inDays = (days: number) => new Date(2026, 10, 3 + days, 18, 0).toISOString();
+      await atAgents([
+        agent(5, { status: "online", not_after: inDays(3) }),
+        agent(4, { status: "offline", not_after: inDays(15) }),
+        agent(3, { status: "offline", not_after: inDays(0) }),
+        agent(2, { status: "expired", not_after: inDays(-1) }),
+        agent(1, { status: "disabled", enabled: false, not_after: inDays(3) }),
+      ]);
+      const tone = async (name: string, word: string) =>
+        (await row(name)).getByText(word).closest("[data-slot=status-line]")?.className;
+
+      expect(
+        (await row("agent-5")).getByText("Expires in 3 days. Enroll a new agent before then."),
+      ).toBeDefined();
+      expect(await tone("agent-5", "Online")).toContain("text-warning");
+      expect((await row("agent-4")).queryByText(/^Expires/)).toBeNull();
+      expect(await tone("agent-4", "Offline")).toContain("text-muted-foreground");
+      expect(
+        (await row("agent-3")).getByText("Expires today. Enroll a new agent before then."),
+      ).toBeDefined();
+      expect(await tone("agent-3", "Offline")).toContain("text-warning");
+      expect((await row("agent-2")).queryByText(/^Expires/)).toBeNull();
+      expect(
+        (await row("agent-2")).getByText(
+          "Certificate expired. It can't connect; enroll a new agent.",
+        ),
+      ).toBeDefined();
+      expect((await row("agent-1")).queryByText(/^Expires/)).toBeNull();
+      expect(await tone("agent-1", "Disabled")).toContain("text-destructive");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("names the two commands of an enrollment in mono", async () => {
     await atAgents([agent(1)]);
 

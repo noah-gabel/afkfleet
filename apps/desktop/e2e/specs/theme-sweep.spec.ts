@@ -1246,6 +1246,20 @@ test("agents: loading, none, failed, and a long list", async ({ page, context })
   await bothThemes(page, "agents, a long list", { height: 2100, small: true, smallHeight: 3500 });
 });
 
+test("agents: a certificate ending soon", async ({ page, context }) => {
+  const backend = await fakeBackend(context);
+  // The page's clock: the shots' fixed one, or the real one here.
+  const now = shooting() ? Date.parse(NOW) : Date.now();
+  backend.addAgent("agent-late", { status: "expired" });
+  backend.addAgent("agent-soon", { not_after: new Date(now + 3 * 86_400_000).toISOString() });
+  backend.addAgent("agent-main");
+  await signIn(page, backend, OWNER);
+  await nav(page, "Agents");
+  const main = page.getByRole("main");
+  await expect(main.getByText("Expires in 3 days. Enroll a new agent before then.")).toBeVisible();
+  await bothThemes(page, "agents, a certificate ending soon", { small: true });
+});
+
 test("the audit log: loading, nothing, failed, without names, narrowed, and a long list", async ({
   page,
   context,
