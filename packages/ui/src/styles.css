@@ -195,6 +195,19 @@
   input::-ms-clear {
     display: none;
   }
+  /* The hand over every enabled control that acts on a click, so the whole app agrees: Tailwind
+     v4's preflight gives buttons none, and a card's Start showed the arrow inside a card that
+     showed the hand (ADR-0020, U114). A disabled control, or a label around one, keeps the arrow. */
+  :is(
+    button,
+    [role="button"],
+    select,
+    summary,
+    input:is([type="checkbox"], [type="radio"]),
+    label:has(> input:is([type="checkbox"], [type="radio"]))
+  ):not(:disabled, [aria-disabled="true"], :has(> input:disabled)) {
+    cursor: pointer;
+  }
 }
 
 /*
