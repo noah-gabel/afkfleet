@@ -3,9 +3,9 @@
 // scrolling inside itself so Save stays in view; stacked, Save and Cancel in a bar at the column's
 // foot that never lies over the last step once it's scrolled to; and the Tab order the order on the
 // screen. The scrollbars show, as WebView2 shows them.
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 
-import { type FakeBackend, OWNER } from "../fake/backend";
+import { type FakeBackend, OWNER, PASSWORD } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
 import { enterCode, expectHome, logIn } from "./steps";
 import { frameHolds } from "./theme";
@@ -173,4 +173,56 @@ test("a locked mode has the same columns and no bar", async ({ page, context }) 
   expect((await parts(page)).bar).toBeUndefined();
   await page.setViewportSize({ width: 1280, height: 720 });
   await expect.poll(async () => (await parts(page)).beside).toBe(true);
+});
+
+/** Where `target` is: whole inside the content column, and clear of the stacked bar. */
+const where = (target: Locator) =>
+  target.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const column = document.querySelector("[data-slot=content]")?.getBoundingClientRect();
+    const bar = document.querySelector("[data-slot=editor-actions]")?.getBoundingClientRect();
+    return {
+      inColumn:
+        column !== undefined && box.top >= column.top - 1 && box.bottom <= column.bottom + 1,
+      underBar: bar !== undefined && box.bottom > bar.top + 1 && box.top < bar.bottom - 1,
+    };
+  });
+
+test("stacked, Save's password prompt takes the focus in view, and a conflict shows where you are", async ({
+  page,
+  context,
+}) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  const backend = await atLongMode(page, context);
+  const main = page.getByRole("main");
+  const save = main.getByRole("button", { name: "Save", exact: true });
+  const respawn = main.getByRole("group", { name: "After it respawns", exact: true });
+  await respawn.getByRole("button", { name: "Add step" }).click();
+  const step = respawn.getByRole("group", { name: "Step 1", exact: true });
+  await step.getByLabel("What it does").selectOption({ label: "Send chat or a command" });
+  await step.getByLabel("Message").fill("/warp home");
+  const toTop = () =>
+    page.locator("[data-slot=content]").evaluate((column) => {
+      column.scrollTop = 0;
+    });
+
+  await toTop();
+  await save.click();
+  const password = page.getByLabel("Current password");
+  await expect(password).toBeFocused();
+  expect(await where(password)).toEqual({ inColumn: true, underBar: false });
+
+  await password.fill(PASSWORD);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(main.getByText("Sends a command off the allowlist.")).toBeVisible();
+  // The toast slides in from below the window: it must be gone before the frame is checked.
+  await expect(page.locator("[data-sonner-toast]")).toHaveCount(0, { timeout: 15_000 });
+  backend.changeMode("Long", { name: "Elsewhere" });
+  await main.getByLabel("Name").fill("Mine");
+  await toTop();
+  await save.click();
+  const conflict = main.getByText(/^This mode changed since you opened it/);
+  await expect(conflict).toBeVisible();
+  expect(await where(conflict)).toEqual({ inColumn: true, underBar: false });
+  await frameHolds(page, "the editor stacked, a conflict");
 });

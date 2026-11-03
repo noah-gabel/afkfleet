@@ -1035,6 +1035,82 @@ test("servers: loading, failed, a long list, and sixteen texts with eight format
   await page.setViewportSize({ width: 1280, height: 720 });
 });
 
+test("stacked editors: Save's step-up and a conflict, where you are", async ({ page, context }) => {
+  const backend = await fakeBackend(context);
+  backend.addMode(
+    OWNER,
+    "Long",
+    Array.from({ length: 16 }, () => ({
+      action: { type: "jump" as const },
+      schedule: { type: "at_start" as const },
+      probability: 100,
+    })),
+  );
+  backend.addServerSettings(
+    "long.example.com",
+    Array.from({ length: 16 }, (_, n) => `You logged in from another location (${n + 1})`),
+    Array.from({ length: 8 }, (_, n) => `[Clan ${n + 1}] {sender} : `),
+  );
+  await signIn(page, backend, OWNER);
+  await page.setViewportSize({ width: 800, height: 600 });
+  const main = page.getByRole("main");
+  const save = main.getByRole("button", { name: "Save", exact: true });
+  const password = page.getByLabel("Current password");
+  const toTop = () =>
+    page.locator("[data-slot=content]").evaluate((column) => {
+      column.scrollTop = 0;
+    });
+  const noToasts = () =>
+    expect(page.locator("[data-sonner-toast]")).toHaveCount(0, { timeout: 15_000 });
+
+  await nav(page, "Modes");
+  await main.getByRole("link", { name: "Open Long" }).click();
+  const respawn = main.getByRole("group", { name: "After it respawns", exact: true });
+  await respawn.getByRole("button", { name: "Add step" }).click();
+  const step = respawn.getByRole("group", { name: "Step 1", exact: true });
+  await step.getByLabel("What it does").selectOption({ label: "Send chat or a command" });
+  await step.getByLabel("Message").fill("/warp home");
+  await toTop();
+  await save.click();
+  await expect(password).toBeFocused();
+  await bothThemes(page, "a mode, stacked, the step-up", { end: "ends" });
+  await password.fill(PASSWORD);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(main.getByText("Sends a command off the allowlist.")).toBeVisible();
+  await noToasts();
+  backend.changeMode("Long", { name: "Elsewhere" });
+  await main.getByLabel("Name").fill("Mine");
+  await toTop();
+  await save.click();
+  await expect(main.getByText(/^This mode changed since you opened it/)).toBeVisible();
+  await bothThemes(page, "a mode, stacked, a conflict", { end: "ends" });
+
+  // A new session, as the mode's step-up still holds for 5 minutes in this one.
+  await page.getByRole("button", { name: "Log out" }).click();
+  await signIn(page, backend, OWNER);
+  await nav(page, "Minecraft servers");
+  await main.getByRole("link", { name: "Open long.example.com:25565" }).click();
+  await expect(
+    main.getByRole("heading", { name: "long.example.com:25565", level: 1 }),
+  ).toBeVisible();
+  await main.getByLabel("Conflict text 1", { exact: true }).fill("You logged in from elsewhere");
+  await toTop();
+  await save.click();
+  await expect(password).toBeFocused();
+  await bothThemes(page, "a server, stacked, the step-up", { end: "ends" });
+  await password.fill(PASSWORD);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByText("Saved. Bots on it use the change at once.")).toBeVisible();
+  await noToasts();
+  backend.changeServerSettings("long.example.com");
+  await main.getByLabel("Conflict text 2", { exact: true }).fill("Logged in elsewhere");
+  await toTop();
+  await save.click();
+  await expect(main.getByText(/^These settings changed since you opened them/)).toBeVisible();
+  await bothThemes(page, "a server, stacked, changed settings", { end: "ends" });
+  await page.setViewportSize({ width: 1280, height: 720 });
+});
+
 test("users and the grants review: loading, failed, and long lists", async ({ page, context }) => {
   const backend = await fakeBackend(context);
   const main = page.getByRole("main");

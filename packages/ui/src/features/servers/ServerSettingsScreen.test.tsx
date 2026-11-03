@@ -994,3 +994,53 @@ describe("a Minecraft server's chat formats and Try a line (H8)", () => {
     expect(shown()).toBeNull();
   });
 });
+
+describe("what Save brings, where a stacked editor shows it (PR #92's review)", () => {
+  it("puts the focus in Confirm it's you's password field", async () => {
+    const { app } = await atEditor(ROW.id, { rows: [ROW], stamped: false });
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+
+    await app.user.click(screen.getByRole("button", { name: "Save" }));
+
+    const field = await screen.findByLabelText("Current password");
+    await vi.waitFor(() => expect(document.activeElement).toBe(field));
+  });
+
+  it.each([
+    ["the changed settings", false, null, CHANGED],
+    ["the limit", true, refusal(409, "conflict"), /^Server limit reached/],
+    ["a refusal", false, refusal(403, "forbidden"), /^refused: forbidden/],
+    ["a wait", false, refusal(429, "rate_limited", { retry_after_secs: 30 }), /rate_limited/],
+  ])("brings %s into view as it comes", async (_kind, isNew, error, text) => {
+    const refuse = async () => {
+      if (error !== null) {
+        throw error;
+      }
+      return ROW;
+    };
+    const { app, state } = await atEditor(isNew ? "new" : ROW.id, {
+      rows: [ROW],
+      handlers: error === null ? {} : { createServerSettings: refuse, updateServerSettings: refuse },
+    });
+    if (isNew) {
+      await screen.findByRole("heading", { name: "Add server", level: 1 });
+      await app.user.type(screen.getByLabelText("Server address"), "new.example.com");
+    } else {
+      await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+    }
+    if (error === null) {
+      state.rows = [settings(1, "mc.example.com:25565", [["Someone else's"]], 2)];
+    }
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+
+    await app.user.click(screen.getByRole("button", { name: "Save" }));
+
+    const notice = await screen.findByText(text);
+    expect(
+      scrolled.mock.contexts.some(
+        (element) => element instanceof Element && element.contains(notice),
+      ),
+    ).toBe(true);
+    scrolled.mockRestore();
+  });
+});

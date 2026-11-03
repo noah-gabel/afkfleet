@@ -1031,3 +1031,59 @@ describe("a mode that isn't there", () => {
     expect(alert.textContent).toMatch(/^Couldn't load modes: refused: internal/);
   });
 });
+
+describe("what Save brings, where a stacked editor shows it (PR #92's review)", () => {
+  const ROW = mode(1, { steps: [shownStep({ type: "jump" })] });
+
+  it("puts the focus in Confirm it's you's password field", async () => {
+    const { app } = await atMode(ROW.id, {
+      rows: [ROW],
+      handlers: {
+        updateMode: async () => {
+          throw refusal(403, "mode_needs_step_up");
+        },
+      },
+    });
+    await screen.findByRole("heading", { name: "Mode 1", level: 1 });
+    await fill(app, screen.getByLabelText("Name"), "Renamed");
+
+    await app.user.click(saveButton());
+
+    const field = await screen.findByLabelText("Current password");
+    await vi.waitFor(() => expect(document.activeElement).toBe(field));
+  });
+
+  const CHANGED = "This mode changed since you opened it. Load it again to see the change.";
+
+  it.each([
+    ["a conflict", false, refusal(409, "mode_changed", { message: CHANGED }), CHANGED],
+    ["the limit", true, refusal(409, "conflict"), /^Mode limit reached/],
+    ["a refusal", false, refusal(403, "forbidden"), /^refused: forbidden/],
+    ["a wait", false, refusal(429, "rate_limited", { retry_after_secs: 30 }), /rate_limited/],
+  ])("brings %s into view as it comes", async (_kind, isNew, error, text) => {
+    const { app } = await atMode(isNew ? "new" : ROW.id, {
+      rows: [ROW],
+      handlers: {
+        createMode: async () => {
+          throw error;
+        },
+        updateMode: async () => {
+          throw error;
+        },
+      },
+    });
+    await screen.findByRole("heading", { name: isNew ? "New mode" : "Mode 1", level: 1 });
+    await fill(app, screen.getByLabelText("Name"), "Renamed");
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+
+    await app.user.click(saveButton());
+
+    const notice = await screen.findByText(text);
+    expect(
+      scrolled.mock.contexts.some(
+        (element) => element instanceof Element && element.contains(notice),
+      ),
+    ).toBe(true);
+    scrolled.mockRestore();
+  });
+});

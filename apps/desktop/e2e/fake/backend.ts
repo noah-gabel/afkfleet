@@ -1796,6 +1796,15 @@ export class FakeBackend {
     return settings.id;
   }
 
+  /** `server`'s settings changed by another device: the next edit at its old version is stale. */
+  changeServerSettings(server: string): void {
+    const settings = this.#settings.find((one) => one.server === keyOf(server));
+    if (settings === undefined) {
+      throw new Error(`no settings for ${server}`);
+    }
+    settings.version += 1;
+  }
+
   /** No mode at all, built-in ones included: for the list's empty state (L4). */
   clearModes(): void {
     this.#modes = [];

@@ -18,6 +18,7 @@ import { Input } from "../../../components/ui/input";
 import type { CommandError } from "../../../generated/CommandError";
 import { useAlive } from "../../../hooks/useStepGuard";
 import { fieldErrorsOf } from "../../../lib/formErrors";
+import { inView } from "../../../lib/inView";
 import { usePreviewChatFormats } from "../hooks/usePreviewChatFormats";
 import { formatReads, NO_FORMAT_FITS, TRY, TRY_LINE, TRY_LINE_PLACEHOLDER } from "../texts";
 
@@ -31,11 +32,6 @@ interface Answered {
   readonly failed?: string;
   /** A refusal at the line. */
   readonly lineError?: string;
-}
-
-/** Scrolls a new answer into its column's view; one function, so React calls it only on mount. */
-function inView(element: HTMLElement | null): void {
-  element?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
 /** Whether `asked` is still what's on the screen. */

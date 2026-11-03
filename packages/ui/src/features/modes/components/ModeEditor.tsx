@@ -46,6 +46,7 @@ import type { ModeResponse } from "../../../generated/ModeResponse";
 import { useRetryWait } from "../../../hooks/useRetryWait";
 import { useAlive } from "../../../hooks/useStepGuard";
 import { fieldErrorsOf, showFieldErrors } from "../../../lib/formErrors";
+import { focusFirstField, inView } from "../../../lib/inView";
 import { isStepUpRequired } from "../../../lib/stepUp";
 import { StepUpPrompt } from "../../admin/components/StepUpPrompt";
 import { useStepUpAction } from "../../admin/hooks/useStepUpAction";
@@ -404,13 +405,13 @@ export function ModeEditor({
       notes={
         <>
           {formError === undefined ? null : (
-            <p role="alert" className="text-sm whitespace-pre-line text-destructive">
+            <p ref={inView} role="alert" className="text-sm whitespace-pre-line text-destructive">
               {formError}
             </p>
           )}
           {conflict === null || gone ? null : (
             // One live region: the Alert's own.
-            <Alert>
+            <Alert ref={inView}>
               <AlertDescription className="flex flex-col gap-2 text-foreground">
                 <p>{conflict.text}</p>
                 {conflict.kind === "others" ? <p>{IN_USE_BY_OTHERS}</p> : null}
@@ -431,12 +432,16 @@ export function ModeEditor({
             </Alert>
           )}
           {gone ? (
-            <div className="flex flex-col gap-2">
+            <div ref={inView} className="flex flex-col gap-2">
               <p role="alert">{LEFT_THE_LIST}</p>
               {keepAsCopy}
             </div>
           ) : null}
-          <RetryWaitMessage wait={wait} />
+          {wait.waiting === null && !wait.ended ? null : (
+            <div ref={inView}>
+              <RetryWaitMessage wait={wait} />
+            </div>
+          )}
         </>
       }
       actions={
@@ -462,16 +467,18 @@ export function ModeEditor({
       prompt={
         <>
           {writes.prompt === SAVE_KEY ? (
-            <StepUpPrompt
-              id="step-up-save"
-              text={SAVE_STEP_UP}
-              pending={writes.running !== null}
-              onConfirm={writes.confirm}
-              onCancel={writes.cancel}
-            />
+            <div ref={focusFirstField}>
+              <StepUpPrompt
+                id="step-up-save"
+                text={SAVE_STEP_UP}
+                pending={writes.running !== null}
+                onConfirm={writes.confirm}
+                onCancel={writes.cancel}
+              />
+            </div>
           ) : null}
           {writes.failure?.key === SAVE_KEY ? (
-            <p role="alert" className="text-sm text-destructive">
+            <p ref={inView} role="alert" className="text-sm text-destructive">
               {writes.failure.message}
             </p>
           ) : null}

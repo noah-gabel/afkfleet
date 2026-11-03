@@ -2,9 +2,9 @@
 // columns, the texts and the formats scrolling on their own beside the address with Save in view,
 // and stacked, Save and Cancel in a bar at the column's foot. The scrollbars show, as WebView2
 // shows them.
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 
-import { OWNER } from "../fake/backend";
+import { type FakeBackend, OWNER, PASSWORD } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
 import { enterCode, expectHome, logIn } from "./steps";
 import { frameHolds } from "./theme";
@@ -12,7 +12,10 @@ import { frameHolds } from "./theme";
 test.use({ launchOptions: { ignoreDefaultArgs: ["--hide-scrollbars"] } });
 
 /** The Owner on a server's settings holding sixteen texts and eight formats. */
-async function atLongSettings(page: Page, context: Parameters<typeof fakeBackend>[0]) {
+async function atLongSettings(
+  page: Page,
+  context: Parameters<typeof fakeBackend>[0],
+): Promise<FakeBackend> {
   const backend = await fakeBackend(context);
   backend.addServerSettings(
     "long.example.com",
@@ -31,6 +34,7 @@ async function atLongSettings(page: Page, context: Parameters<typeof fakeBackend
   await expect(
     page.getByRole("heading", { name: "long.example.com:25565", level: 1 }),
   ).toBeVisible();
+  return backend;
 }
 
 /** Whether the parts sit side by side, and what scrolls. */
@@ -85,4 +89,51 @@ test("stacked, Save and Cancel stay at the column's foot", async ({ page, contex
     ratio: 1,
   });
   await frameHolds(page, "a server's settings stacked");
+});
+
+/** Where `target` is: whole inside the content column, and clear of the stacked bar. */
+const where = (target: Locator) =>
+  target.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const column = document.querySelector("[data-slot=content]")?.getBoundingClientRect();
+    const bar = document.querySelector("[data-slot=editor-actions]")?.getBoundingClientRect();
+    return {
+      inColumn:
+        column !== undefined && box.top >= column.top - 1 && box.bottom <= column.bottom + 1,
+      underBar: bar !== undefined && box.bottom > bar.top + 1 && box.top < bar.bottom - 1,
+    };
+  });
+
+test("stacked, Save's password prompt takes the focus in view, and changed settings show where you are", async ({
+  page,
+  context,
+}) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  const backend = await atLongSettings(page, context);
+  const main = page.getByRole("main");
+  const save = main.getByRole("button", { name: "Save", exact: true });
+  const toTop = () =>
+    page.locator("[data-slot=content]").evaluate((column) => {
+      column.scrollTop = 0;
+    });
+
+  await save.click();
+  const password = page.getByLabel("Current password");
+  await expect(password).toBeFocused();
+  expect(await where(password)).toEqual({ inColumn: true, underBar: false });
+
+  await password.fill(PASSWORD);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByText("Saved. Bots on it use the change at once.")).toBeVisible();
+  // The toast slides in from below the window: it must be gone before the frame is checked.
+  await expect(page.locator("[data-sonner-toast]")).toHaveCount(0, { timeout: 15_000 });
+  backend.changeServerSettings("long.example.com");
+  // An unchanged save is no change at all: something must differ for the version to matter.
+  await main.getByLabel("Conflict text 1", { exact: true }).fill("You logged in from elsewhere");
+  await toTop();
+  await save.click();
+  const changed = main.getByText(/^These settings changed since you opened them/);
+  await expect(changed).toBeVisible();
+  expect(await where(changed)).toEqual({ inColumn: true, underBar: false });
+  await frameHolds(page, "a server's settings stacked, changed");
 });
