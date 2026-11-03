@@ -39,6 +39,13 @@ import {
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (file) => readFileSync(path.join(ROOT, file), "utf8");
 const PIN = "mcr.microsoft.com/playwright";
+
+/** Where a fake docker's build writes its ID: failing, never writing elsewhere, without one. */
+function iidfileOf(args) {
+  const at = args.indexOf("--iidfile");
+  assert.ok(at >= 0 && at + 1 < args.length, `a build without --iidfile: ${args.join(" ")}`);
+  return args[at + 1];
+}
 const dockerfile = read(DOCKERFILE);
 const ignore = read(`${DOCKERFILE}.dockerignore`);
 const workflow = read(".github/workflows/shots.yml");
@@ -529,7 +536,7 @@ describe("what the container leaves", () => {
     try {
       const docker = (args) => {
         if (args[0] === "build") {
-          writeFileSync(args[args.indexOf("--iidfile") + 1], `sha256:${"a".repeat(64)}`);
+          writeFileSync(iidfileOf(args), `sha256:${"a".repeat(64)}`);
         }
         if (args[0] === "run") {
           plant(root, `${BASELINES}/theme-sweep.spec.ts/login-dark.png`);
@@ -577,7 +584,7 @@ describe("the image it runs", () => {
     try {
       const docker = (args) => {
         if (args[0] === "build") {
-          writeFileSync(args[args.indexOf("--iidfile") + 1], `${id}\n`);
+          writeFileSync(iidfileOf(args), `${id}\n`);
         }
         if (args[0] === "run") {
           runs.push(args);
@@ -601,7 +608,7 @@ describe("the image it runs", () => {
     try {
       const docker = (args) => {
         if (args[0] === "build") {
-          writeFileSync(args[args.indexOf("--iidfile") + 1], "afkfleet-shots:local");
+          writeFileSync(iidfileOf(args), "afkfleet-shots:local");
         }
         ran ||= args[0] === "run";
         return 0;
