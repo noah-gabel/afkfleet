@@ -130,27 +130,75 @@ for (const [count, scrolls] of [
   });
 }
 
-test("the grants review's two tables, stacked and then side by side from 912 px (U124)", async ({
-  page,
-  context,
-}) => {
-  const backend = await fakeBackend(context);
-  for (let n = 1; n <= 6; n += 1) {
-    backend.share(backend.addAccount(OWNER), MEMBER, "control");
-  }
-  backend.share(backend.addAccount(MEMBER), NEW_USER, "view");
-  await atScreen(page, backend, "Users");
-  await page
-    .getByRole("row", { name: new RegExp(MEMBER) })
-    .getByRole("link", { name: /Review grants/ })
-    .click();
-  await page.getByRole("button", { name: /Show who has access/ }).click();
-  const shared = page.getByRole("table", { name: /Who has access to/ });
-  const name = (await shared.getAttribute("aria-label")) ?? "";
+/** At `width`: whether the review's two sections sit side by side, and the column's scrollbar. */
+async function review(page: Page, width: number) {
+  await page.setViewportSize({ width, height: 800 });
+  return page.evaluate(
+    () =>
+      new Promise<{ beside: boolean; scrollbar: number }>((done) => {
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            const [held, shared] = document.querySelectorAll("[data-slot=review-sections] > *");
+            const column = document.querySelector("[data-slot=content]") as HTMLElement | null;
+            done({
+              beside:
+                held !== undefined &&
+                shared !== undefined &&
+                shared.getBoundingClientRect().left >= held.getBoundingClientRect().right,
+              scrollbar: column === null ? 0 : column.offsetWidth - column.clientWidth,
+            });
+          }),
+        );
+      }),
+  );
+}
 
-  expect(await acrossWidths(page, "Grants they hold", [912])).toEqual([]);
-  expect(await acrossWidths(page, name, [912])).toEqual([]);
-});
+for (const [count, scrolls] of [
+  [6, "with no scrollbar"],
+  [30, "with the column's scrollbar"],
+] as const) {
+  test(`the grants review: side by side from one width on, both ways, and its tables, ${scrolls} (U124)`, async ({
+    page,
+    context,
+  }) => {
+    const backend = await fakeBackend(context);
+    for (let n = 1; n <= count; n += 1) {
+      backend.share(backend.addAccount(OWNER), MEMBER, "control");
+    }
+    backend.share(backend.addAccount(MEMBER), NEW_USER, "view");
+    await atScreen(page, backend, "Users");
+    await page
+      .getByRole("row", { name: new RegExp(MEMBER) })
+      .getByRole("link", { name: /Review grants/ })
+      .click();
+    await page.getByRole("button", { name: /Show who has access/ }).click();
+    const shared = page.getByRole("table", { name: /Who has access to/ });
+    const name = (await shared.getAttribute("aria-label")) ?? "";
+
+    // The form only ever goes stacked to side by side as the window widens, and back as it narrows.
+    const flips: string[] = [];
+    let scrollbar = 0;
+    for (const widening of [true, false]) {
+      let was: boolean | null = null;
+      for (const width of widening ? WIDTHS : [...WIDTHS].reverse()) {
+        const now = await review(page, width);
+        scrollbar = Math.max(scrollbar, now.scrollbar);
+        if (was !== null && now.beside !== was && now.beside !== widening) {
+          flips.push(
+            `${width}: ${now.beside ? "side by side again, narrowing" : "stacked again, widening"}`,
+          );
+        }
+        was = now.beside;
+      }
+    }
+    expect(flips.slice(0, 6)).toEqual([]);
+    expect(scrollbar > 0).toBe(count === 30);
+    // Its switch: an 830 px box, 64 px of rail beside it, and the scrollbar when there's one.
+    const switches = [894, 894 + scrollbar];
+    expect(await acrossWidths(page, "Grants they hold", switches)).toEqual([]);
+    expect(await acrossWidths(page, name, switches)).toEqual([]);
+  });
+}
 
 for (const [count, scrolls] of [
   [1, "with no scrollbar"],

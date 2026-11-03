@@ -1,8 +1,10 @@
 // The Owner's grants review of one user (Plan.md P11.9, P11.11; ADR-0018, ADR-0020, U79, U124, S50,
 // S90, R178): the grants they hold, dormant ones marked, computed by the server, beside their
 // accounts a grant shares, each account's grants read only when it's opened, since grants per
-// account have no cap, and dormant ones marked there too. Side by side on the bot screen's switch,
-// the held grants first when stacked; each table drops When, then Given by, in a small box (U122).
+// account have no cap, and dormant ones marked there too. Side by side from an 830 px box, the held
+// grants first when stacked: under the 833 px the column holds beside the wide sidebar with its
+// scrollbar, as this page scrolls in both forms, so the wide sidebar never stacks it again (PR #92's
+// review). Each table drops When, then Given by, in a small box (U122).
 // Every revoke goes through the accounts' own route, asks first, and takes a step-up when the server
 // wants one (useStepUpAction). The users' screen links here only for whom the Owner may review;
 // anyone else who got here reads the server's refusal in place of each list.
@@ -491,7 +493,7 @@ export function GrantsReviewScreen({ id }: { id: string }) {
       <h1 className="text-lg font-semibold tracking-tight break-all">{`Grants of ${who}`}</h1>
       <div
         data-slot="review-sections"
-        className="grid items-start gap-3 @min-[53rem]/content:grid-cols-2"
+        className="grid items-start gap-3 @min-[51.875rem]/content:grid-cols-2"
       >
         <HeldSection id={id} who={who} revoking={revoking} />
         <SharedSection id={id} revoking={revoking} />
