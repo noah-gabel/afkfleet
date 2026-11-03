@@ -177,6 +177,30 @@ test("Chromium reads one table, seven heads and every entry's cells in both form
   }
 });
 
+test("stacked, every entry's values start at one x, whichever labels it has", async ({
+  page,
+  context,
+}) => {
+  const backend = await fakeBackend(context);
+  entries(backend, 2);
+  backend.addAuditEntry({ action: "agent.connect", outcome: "failure" });
+  await atLog(page, backend);
+  await at(page, 800);
+
+  const starts = await page.evaluate(() => [
+    ...new Set(
+      // A labelled value: the unreadable row has no label and spans the whole entry.
+      [
+        ...document.querySelectorAll(
+          "table[aria-label='Audit log'] td:has(> [data-slot=cell-label]) > div",
+        ),
+      ].map((value) => Math.round(value.getBoundingClientRect().left)),
+    ),
+  ]);
+
+  expect(starts).toHaveLength(1);
+});
+
 test("a focused link keeps the focus as the log stacks", async ({ page, context }) => {
   const backend = await fakeBackend(context);
   entries(backend, 3);

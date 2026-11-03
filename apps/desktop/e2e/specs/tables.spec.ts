@@ -198,3 +198,46 @@ for (const [count, scrolls] of [
     expect(await acrossWidths(page, "Agents")).toEqual([]);
   });
 }
+
+test("a short agent name stays whole beside an expired agent's hint, at every width", async ({
+  page,
+  context,
+}) => {
+  const backend = await fakeBackend(context);
+  backend.addAgent("agent-main");
+  backend.addAgent("agent-old", { enabled: false, status: "disabled", bots: 2 });
+  backend.addAgent("agent-late", { status: "expired" });
+  await atScreen(page, backend, "Agents");
+  await expect(page.getByRole("table", { name: "Agents" })).toBeVisible();
+  const broken: string[] = [];
+
+  for (const width of range(800, 1800, 8)) {
+    await page.setViewportSize({ width, height: 800 });
+    const lines = await page.evaluate(
+      () =>
+        new Promise<{ name: string; lines: number }[]>((done) => {
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() =>
+              done(
+                [...document.querySelectorAll("table[aria-label=Agents] tbody tr")].map((row) => {
+                  // The name's text alone: a box around it would add a rect of its own.
+                  const name = document
+                    .createTreeWalker(row.querySelector("td") ?? row, NodeFilter.SHOW_TEXT)
+                    .nextNode();
+                  const text = document.createRange();
+                  text.selectNodeContents(name ?? row);
+                  const tops = [...text.getClientRects()].map((line) => Math.round(line.top));
+                  return { name: text.toString(), lines: new Set(tops).size };
+                }),
+              ),
+            ),
+          );
+        }),
+    );
+    broken.push(
+      ...lines.filter((one) => one.lines > 1).map((one) => `${width}: ${one.name} on ${one.lines}`),
+    );
+  }
+
+  expect(broken.slice(0, 6)).toEqual([]);
+});

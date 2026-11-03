@@ -7,7 +7,9 @@
 //   which the row asks for when the server wants it (useStepUpAction).
 // - A token to add an agent comes only from the server's host (U76), so nothing here creates one.
 // - In a small window the table drops Enrolled, then Certificate until, then Version, then Can run
-//   (U91, U122), at widths that never show a column, hide it and show it again (R228).
+//   (U91, U122), at widths that never show a column, hide it and show it again (R228). A name
+//   keeps 12 characters of width, or the expired hint's column takes it and a name as short as
+//   agent-main breaks.
 // Nothing here carries a secret but the step-up's password, which StepUpForm holds: the list is a
 // query and each change a mutation, and a success or a refusal only reads the list again, once
 // (S87, R177). A step-up isn't a refusal, so it reads nothing before the prompt.
@@ -162,7 +164,9 @@ export function AgentsScreen() {
               return (
                 <Fragment key={agent.id}>
                   <TableRow>
-                    <TableCell className="font-mono break-all">{agent.name}</TableCell>
+                    <TableCell className="font-mono break-all">
+                      <span className="inline-block min-w-[12ch]">{agent.name}</span>
+                    </TableCell>
                     <TableCell>
                       <StatusLine tone={agentStatusTone(agent.status)}>
                         {agentStatusLabel(agent.status)}

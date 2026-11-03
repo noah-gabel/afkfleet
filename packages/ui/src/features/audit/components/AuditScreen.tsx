@@ -7,8 +7,10 @@
 // rather than dropping any (U122): one <table>, which CSS turns into blocks below a 784 px box,
 // its heads only for screen readers then, and each cell a label and its value. The label is real
 // text, so the sweep measures it, and aria-hidden, as the head names the cell; a cell is never
-// hidden, so every entry keeps its seven cells in order and each its head (S132). 784 px of box is
-// under the box beside the wide sidebar, so the window's width alone decides the form (R228).
+// hidden, so every entry keeps its seven cells in order and each its head (S132). The labels'
+// column is as wide as the widest, DETAILS, with room, so values line up from entry to entry
+// whichever labels each has. 784 px of box is under the box beside the wide sidebar, so the
+// window's width alone decides the form (R228).
 //
 // Nothing here carries a secret, and the server built each entry the same for every viewer (R65):
 // reads are queries, kept in memory until the session's end empties the cache (S87).
@@ -61,7 +63,7 @@ const STACK = {
   table: "@max-[48.875rem]/table:block",
   head: "@max-[48.875rem]/table:sr-only",
   body: "@max-[48.875rem]/table:block",
-  row: "@max-[48.875rem]/table:grid @max-[48.875rem]/table:grid-cols-[max-content_minmax(0,1fr)] @max-[48.875rem]/table:gap-x-3 @max-[48.875rem]/table:py-2",
+  row: "@max-[48.875rem]/table:grid @max-[48.875rem]/table:grid-cols-[4.5rem_minmax(0,1fr)] @max-[48.875rem]/table:gap-x-3 @max-[48.875rem]/table:py-2",
   cell: "@max-[48.875rem]/table:col-span-2 @max-[48.875rem]/table:grid @max-[48.875rem]/table:grid-cols-subgrid @max-[48.875rem]/table:py-0.5",
   label:
     "hidden font-mono text-[0.6875rem] font-semibold tracking-wider text-muted-foreground uppercase @max-[48.875rem]/table:block",
