@@ -25,3 +25,7 @@ Moved from `CLAUDE.md` word for word; it points here. CLAUDE.md keeps the testin
 - HTTP:
   - **Handler tests:** use `tower::ServiceExt::oneshot`.
   - **Full-stack tests:** run `fleet-client` against an in-process server on `127.0.0.1:0`.
+
+## Screenshot baselines
+- **Reading them before an update** (the user's choice, ADR-0020, U125): a PR that adds, changes or deletes baselines lists every one in its body by row and theme. Before `just shots-update`'s result is committed, the AI reads every new or changed PNG with its diff when there are at most 20. When more change at once, it reads both themes of one row per screen plus every new or deleted one, and lists the rest in the PR as changed but not read. It reads them itself, with no subagents, and nothing is uploaded as a CI artifact (`actions/upload-artifact` isn't approved).
+- The tolerance is none: `threshold: 0`, no `maxDiffPixels` (S131). A row that differs between this PC and CI stops the work and goes to the user.
