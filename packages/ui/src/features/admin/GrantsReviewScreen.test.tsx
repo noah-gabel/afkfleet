@@ -195,12 +195,12 @@ describe("the grants review", () => {
     expect(sharedAccounts).toHaveBeenLastCalledWith(REVIEWED, accountId(4), undefined);
   });
 
-  it("puts its two sections side by side on the bot screen's switch (U124)", async () => {
+  it("puts its two sections side by side from an 830 px box (U124, PR #92's review)", async () => {
     await atReview();
     await section("Grants they hold");
 
     const both = document.querySelector("[data-slot=review-sections]");
-    expect(both?.className).toContain("@min-[53rem]/content:grid-cols-2");
+    expect(both?.className).toContain("@min-[51.875rem]/content:grid-cols-2");
     expect(both?.children).toHaveLength(2);
   });
 
