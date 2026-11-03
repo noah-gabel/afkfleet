@@ -170,3 +170,31 @@ for (const [count, scrolls] of [
     expect(await acrossWidths(page, "Invites")).toEqual([]);
   });
 }
+
+/** The agents a fleet could hold at their longest: names, versions, statuses and bots. */
+function agents(backend: FakeBackend, count: number): void {
+  const statuses = ["online", "offline", "expired", "disabled"] as const;
+  for (let n = 1; n <= count; n += 1) {
+    const status = statuses[n % statuses.length] ?? "online";
+    backend.addAgent(`agent-on-the-host-with-a-long-name-${String(n).padStart(3, "0")}`, {
+      status,
+      enabled: status !== "disabled",
+      bots: n % 3 === 0 ? 12 : 1,
+      version: "0.11.0+0123456789abcdef",
+    });
+  }
+}
+
+for (const [count, scrolls] of [
+  [2, "with no scrollbar"],
+  [30, "with the column's scrollbar"],
+] as const) {
+  test(`Agents, ${scrolls}`, async ({ page, context }) => {
+    const backend = await fakeBackend(context);
+    agents(backend, count);
+    await atScreen(page, backend, "Agents");
+    await expect(page.getByRole("table", { name: "Agents" })).toBeVisible();
+
+    expect(await acrossWidths(page, "Agents")).toEqual([]);
+  });
+}

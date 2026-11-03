@@ -1,11 +1,16 @@
 // The agents' screen's texts (Plan.md P11.9; ADR-0020's table). A status is open, so one only a
 // newer server sends shows as it was sent.
+import type { Tone } from "../../components/StatusLine";
 import type { AgentStatus } from "../../generated/AgentStatus";
 
 export const AGENTS_HEADING = "Agents";
-export const AGENTS_INTRO =
-  "To add an agent, run afkfleet-server agent create-enrollment-token on the server's host, and pipe the bundle into afkfleet-agent enroll on the agent's host.";
-export const NO_AGENTS = "No agent has enrolled yet.";
+export const NO_AGENTS = "No agents.";
+export const LOADING_AGENTS = "Loading agents…";
+/** The two commands of an enrollment, which the intro names in mono. */
+export const ENROLL_COMMANDS = {
+  token: "afkfleet-server agent create-enrollment-token",
+  enroll: "afkfleet-agent enroll",
+} as const;
 export const AGENT_COLUMNS = [
   "Name",
   "Status",
@@ -17,7 +22,7 @@ export const AGENT_COLUMNS = [
   "Enrolled",
 ] as const;
 export const NEVER_SEEN = "Never";
-export const EXPIRED_HINT = "It must enroll again before it can connect.";
+export const EXPIRED_HINT = "Certificate expired. It can't connect; enroll a new agent.";
 export const DISABLE = "Disable";
 export const DISABLE_FOR_GOOD = "Disable for good";
 export const RELEASE_BOTS = "Release bots";
@@ -25,7 +30,7 @@ export const AUDIT_LINK = "Audit";
 
 /** Why the agents couldn't be read. */
 export function agentsFailed(why: string): string {
-  return `Couldn't load the agents: ${why}`;
+  return `Couldn't load agents: ${why}`;
 }
 
 /** How `status` reads. */
@@ -36,11 +41,25 @@ export function agentStatusLabel(status: AgentStatus): string {
     case "offline":
       return "Offline";
     case "expired":
-      return "Certificate expired";
+      return "Expired";
     case "disabled":
       return "Disabled";
     default:
       return status;
+  }
+}
+
+/** What `status` means at a glance (R229): Expired a warning, Disabled final; unknown, neutral. */
+export function agentStatusTone(status: AgentStatus): Tone {
+  switch (status) {
+    case "online":
+      return "success";
+    case "expired":
+      return "warning";
+    case "disabled":
+      return "destructive";
+    default:
+      return "neutral";
   }
 }
 
@@ -51,18 +70,18 @@ export function auditOf(name: string): string {
 
 /** What asking before disabling says. */
 export function disableQuestion(name: string, bots: number): string {
-  const final = `Disabling ${name} is final: its certificates are revoked, it disconnects, and it can't come back. To use that machine again, enroll a new agent.`;
-  return bots > 0 ? `${final} Its bots stay with it until you release them.` : final;
+  const final = `Disable ${name} for good? Its certificates are revoked; it disconnects and can't return. To use that machine again, enroll a new agent.`;
+  return bots > 0 ? `${final} Its bots stay held until you release them.` : final;
 }
 
 /** The toast once it's disabled. */
 export function disabled(name: string): string {
-  return `${name} is disabled.`;
+  return `${name} disabled.`;
 }
 
 /** The line on a disabled agent that holds bots. */
 export function botsWait(bots: number): string {
-  return bots === 1 ? "1 bot waits here until released." : `${bots} bots wait here until released.`;
+  return bots === 1 ? "1 bot held until released." : `${bots} bots held until released.`;
 }
 
 /** What asking before releasing says: the operator's word. */
@@ -72,5 +91,5 @@ export function releaseQuestion(name: string, bots: number): string {
 
 /** The toast once they're released. */
 export function released(name: string): string {
-  return `${name}'s bots are released.`;
+  return `${name}'s bots released.`;
 }

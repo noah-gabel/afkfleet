@@ -1133,6 +1133,43 @@ test("invites: loading, failed, a long list, and a new invite's code", async ({
   });
 });
 
+test("agents: loading, none, failed, and a long list", async ({ page, context }) => {
+  const backend = await fakeBackend(context);
+  const main = page.getByRole("main");
+  await signIn(page, backend, OWNER);
+  backend.hold("agents");
+  await nav(page, "Agents");
+  await expect(main.getByText("Loading agents…")).toBeVisible();
+  await bothThemes(page, "agents, loading");
+  backend.release();
+  await expect(main.getByText("No agents.")).toBeVisible();
+  await bothThemes(page, "agents, none");
+
+  await page.getByRole("button", { name: "Log out" }).click();
+  backend.refuse("agents", { status: 500, code: "internal" });
+  await signIn(page, backend, OWNER);
+  await nav(page, "Agents");
+  await expect(main.getByText(/Couldn't load agents/)).toBeVisible();
+  await bothThemes(page, "agents, failed");
+  backend.refuse("agents", null);
+
+  const statuses = ["online", "offline", "expired", "disabled"] as const;
+  for (let n = 1; n <= 30; n += 1) {
+    const status = statuses[n % statuses.length] ?? "online";
+    backend.addAgent(`agent-on-the-host-with-a-long-name-${String(n).padStart(3, "0")}`, {
+      status,
+      enabled: status !== "disabled",
+      bots: n % 3 === 0 ? 12 : 1,
+      version: "0.11.0+0123456789abcdef",
+    });
+  }
+  await page.getByRole("button", { name: "Log out" }).click();
+  await signIn(page, backend, OWNER);
+  await nav(page, "Agents");
+  await expect(main.getByRole("row", { name: /long-name-030/ })).toBeVisible();
+  await bothThemes(page, "agents, a long list", { height: 2100, small: true, smallHeight: 3500 });
+});
+
 test("servers, accounts with their grants, and the Owner's admin screens", async ({
   page,
   context,
@@ -1201,7 +1238,7 @@ test("servers, accounts with their grants, and the Owner's admin screens", async
     .getByRole("row", { name: /agent-main/ })
     .getByRole("button", { name: "Disable" })
     .click();
-  await expect(main.getByText(/Disabling agent-main is final/)).toBeVisible();
+  await expect(main.getByText(/Disable agent-main for good/)).toBeVisible();
   await bothThemes(page, "agents, the question");
   await nav(page, "Audit log");
   await expect(main.getByText(/can't be read/)).toBeVisible();

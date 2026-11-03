@@ -81,12 +81,48 @@ describe("the agents' screen", () => {
     ]);
 
     const expired = await row("agent-2");
-    expect(expired.getByText("Certificate expired")).toBeDefined();
-    expect(expired.getByText("It must enroll again before it can connect.")).toBeDefined();
+    expect(expired.getByText("Expired")).toBeDefined();
+    expect(
+      expired.getByText("Certificate expired. It can't connect; enroll a new agent."),
+    ).toBeDefined();
     expect(expired.getByRole("button", { name: "Disable" })).toBeDefined();
     const disabled = await row("agent-1");
     expect(disabled.getByText("Disabled")).toBeDefined();
-    expect(disabled.queryByText("It must enroll again before it can connect.")).toBeNull();
+    expect(
+      disabled.queryByText("Certificate expired. It can't connect; enroll a new agent."),
+    ).toBeNull();
+  });
+
+  it("draws each status as a status line in its tone: Expired a warning (R229)", async () => {
+    await atAgents([
+      agent(4, { status: "online" }),
+      agent(3, { status: "offline" }),
+      agent(2, { status: "expired" }),
+      agent(1, { status: "disabled", enabled: false }),
+    ]);
+
+    const tone = async (name: string, word: string) =>
+      (await row(name)).getByText(word).closest("[data-slot=status-line]")?.className;
+    expect(await tone("agent-4", "Online")).toContain("text-success");
+    expect(await tone("agent-3", "Offline")).toContain("text-muted-foreground");
+    expect(await tone("agent-2", "Expired")).toContain("text-warning");
+    expect(await tone("agent-1", "Disabled")).toContain("text-destructive");
+  });
+
+  it("names the two commands of an enrollment in mono", async () => {
+    await atAgents([agent(1)]);
+
+    const commands = [...document.querySelectorAll("main p code")].map((code) => code.textContent);
+    expect(commands).toEqual([
+      "afkfleet-server agent create-enrollment-token",
+      "afkfleet-agent enroll",
+    ]);
+  });
+
+  it("says so while the agents load, as a status", async () => {
+    await atScreen("/admin/agents", { agents: () => new Promise(() => {}) }, { user: ADMIN });
+
+    expect((await screen.findByText("Loading agents…")).getAttribute("role")).toBe("status");
   });
 
   it("shows a status only a newer server sends as it was sent, and offers from enabled", async () => {
@@ -118,19 +154,17 @@ describe("the agents' screen", () => {
       agent(1, { status: "disabled", enabled: false, bots: 1 }),
     ]);
 
-    expect((await row("agent-2")).getByText("2 bots wait here until released.")).toBeDefined();
-    expect((await row("agent-1")).getByText("1 bot waits here until released.")).toBeDefined();
+    expect((await row("agent-2")).getByText("2 bots held until released.")).toBeDefined();
+    expect((await row("agent-1")).getByText("1 bot held until released.")).toBeDefined();
   });
 
   it("says how an agent is added, and offers no way to create a token (U76)", async () => {
     const app = await atAgents([]);
 
-    expect(await screen.findByText("No agent has enrolled yet.")).toBeDefined();
-    expect(
-      screen.getByText(
-        "To add an agent, run afkfleet-server agent create-enrollment-token on the server's host, and pipe the bundle into afkfleet-agent enroll on the agent's host.",
-      ),
-    ).toBeDefined();
+    expect(await screen.findByText("No agents.")).toBeDefined();
+    expect([...document.querySelectorAll("main p")].map((line) => line.textContent)).toContain(
+      "To add one, run afkfleet-server agent create-enrollment-token on the server's host and pipe the bundle into afkfleet-agent enroll on the agent's host.",
+    );
     const main = within(screen.getByRole("main"));
     expect(main.queryByRole("button")).toBeNull();
     expect(app.fake.calls.map((call) => call.method)).toContain("agents");
@@ -144,9 +178,9 @@ describe("the agents' screen", () => {
     });
 
     expect((await screen.findByRole("alert")).textContent).toContain(
-      "Couldn't load the agents: Something went wrong.",
+      "Couldn't load agents: Something went wrong.",
     );
-    expect(screen.queryByText("No agent has enrolled yet.")).toBeNull();
+    expect(screen.queryByText("No agents.")).toBeNull();
   });
 
   it("pages with Show more", async () => {
@@ -215,7 +249,7 @@ describe("the agents' screen", () => {
 
       expect(
         screen.getByText(
-          "Disabling agent-1 is final: its certificates are revoked, it disconnects, and it can't come back. To use that machine again, enroll a new agent.",
+          "Disable agent-1 for good? Its certificates are revoked; it disconnects and can't return. To use that machine again, enroll a new agent.",
         ),
       ).toBeDefined();
       await app.user.click(screen.getByRole("button", { name: "Cancel" }));
@@ -230,7 +264,7 @@ describe("the agents' screen", () => {
 
       expect(
         screen.getByText(
-          "Disabling agent-1 is final: its certificates are revoked, it disconnects, and it can't come back. To use that machine again, enroll a new agent. Its bots stay with it until you release them.",
+          "Disable agent-1 for good? Its certificates are revoked; it disconnects and can't return. To use that machine again, enroll a new agent. Its bots stay held until you release them.",
         ),
       ).toBeDefined();
     });
@@ -243,7 +277,7 @@ describe("the agents' screen", () => {
       await app.user.type(await screen.findByLabelText("Current password"), PASSWORD);
       await app.user.click(screen.getByRole("button", { name: "Continue" }));
 
-      expect(await screen.findByText("agent-1 is disabled.")).toBeDefined();
+      expect(await screen.findByText("agent-1 disabled.")).toBeDefined();
       expect(disableAgent).toHaveBeenCalledTimes(2);
       await waitFor(async () => expect((await row("agent-1")).getByText("Disabled")).toBeDefined());
     });
@@ -335,7 +369,7 @@ describe("the agents' screen", () => {
       await app.user.type(await screen.findByLabelText("Current password"), PASSWORD);
       await app.user.click(screen.getByRole("button", { name: "Continue" }));
 
-      expect(await screen.findByText("agent-1's bots are released.")).toBeDefined();
+      expect(await screen.findByText("agent-1's bots released.")).toBeDefined();
       await waitFor(async () =>
         expect((await row("agent-1")).queryByRole("button", { name: "Release bots" })).toBeNull(),
       );

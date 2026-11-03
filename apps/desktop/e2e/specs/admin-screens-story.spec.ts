@@ -37,12 +37,12 @@ test("the Owner disables an agent, releases its bots and reads it in the audit l
   await expect(main.getByText(/create-enrollment-token/)).toBeVisible();
 
   await row.getByRole("button", { name: "Disable" }).click();
-  await expect(main.getByText(/Disabling agent-throwaway is final/)).toBeVisible();
+  await expect(main.getByText(/Disable agent-throwaway for good/)).toBeVisible();
   await main.getByRole("button", { name: "Disable for good" }).click();
   await page.getByLabel("Current password").fill(PASSWORD);
   await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByText("agent-throwaway is disabled.")).toBeVisible();
-  await expect(row.getByText("2 bots wait here until released.")).toBeVisible();
+  await expect(page.getByText("agent-throwaway disabled.")).toBeVisible();
+  await expect(row.getByText("2 bots held until released.")).toBeVisible();
 
   await row.getByRole("button", { name: "Release bots" }).click();
   await expect(main.getByText(/you are vouching for that/)).toBeVisible();
@@ -53,7 +53,7 @@ test("the Owner disables an agent, releases its bots and reads it in the audit l
       name: "Release bots",
     })
     .click();
-  await expect(page.getByText("agent-throwaway's bots are released.")).toBeVisible();
+  await expect(page.getByText("agent-throwaway's bots released.")).toBeVisible();
   await expect(row.getByRole("button", { name: "Release bots" })).toBeHidden();
 
   await row.getByRole("link", { name: "Audit of agent-throwaway" }).click();
