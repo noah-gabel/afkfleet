@@ -860,6 +860,39 @@ describe("a Minecraft server's chat formats and Try a line (H8)", () => {
     expect(screen.queryByText("must be at most 1024 characters")).toBeNull();
   });
 
+  it("brings an answer and a refusal's text into view, as Try can sit at its column's foot (L4)", async () => {
+    const answers: (() => Promise<{ sender?: string; format?: number }>)[] = [
+      async () => ({ sender: "Notch", format: 0 }),
+      async () => {
+        throw refusal(403, "forbidden");
+      },
+    ];
+    const { app } = await atEditor(WITH_FORMATS.id, {
+      rows: [WITH_FORMATS],
+      handlers: {
+        previewChatFormats: () => {
+          const next = answers.shift();
+          if (next === undefined) {
+            throw new Error("tried a third time");
+          }
+          return next();
+        },
+      },
+    });
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+    await fill(app, screen.getByLabelText("Try a line"), "[Clan] Notch : hello");
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+
+    await app.user.click(screen.getByRole("button", { name: "Try" }));
+    const said = await screen.findByText("Format 1: sender Notch.");
+    await app.user.click(screen.getByRole("button", { name: "Try" }));
+    const failed = await screen.findByText(/^refused: forbidden \(request /);
+
+    expect(scrolled.mock.contexts).toEqual([said, failed]);
+    expect(scrolled).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
+    scrolled.mockRestore();
+  });
+
   it("marks no field when a refusal comes after a Remove changed the formats", async () => {
     const three = settings(1, "mc.example.com:25565", [["Already connected"]], 1, [
       "<{sender}> ",

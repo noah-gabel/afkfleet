@@ -5,7 +5,9 @@
 // never shows against changed input. A refusal at `chat_formats[i]` shows at that format
 // (through the editor), one at `line` under the box, and anything else as its text there.
 // Try stays usable while "Confirm it's you" is up, since it changes nothing. It sits inside
-// the editor's form, so Enter in the line tries rather than saving.
+// the editor's form, so Enter in the line tries rather than saving. The answer, or a refusal's
+// text, scrolls into view as it comes: Try often sits at its column's foot, the answer below it
+// (ADR-0020, L4).
 import { useRef, useState } from "react";
 
 import { toApiError } from "../../../api/ApiError";
@@ -29,6 +31,11 @@ interface Answered {
   readonly failed?: string;
   /** A refusal at the line. */
   readonly lineError?: string;
+}
+
+/** Scrolls a new answer into its column's view; one function, so React calls it only on mount. */
+function inView(element: HTMLElement | null): void {
+  element?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
 /** Whether `asked` is still what's on the screen. */
@@ -134,12 +141,12 @@ export function TryLine({
         {TRY}
       </Button>
       {shown?.said === undefined ? null : (
-        <p role="status" className="text-sm">
+        <p ref={inView} role="status" className="text-sm">
           {shown.said}
         </p>
       )}
       {shown?.failed === undefined ? null : (
-        <p role="alert" className="text-sm text-destructive">
+        <p ref={inView} role="alert" className="text-sm text-destructive">
           {shown.failed}
         </p>
       )}
