@@ -38,7 +38,7 @@ pub const CA_PEM_MAX_BYTES: usize = 65_536;
 
 /// What went wrong with a command. The app's Rust side and its UI ship
 /// together, so the UI knows every code; the server's code, which can grow,
-/// is in [`ApiErrorDetails::code`].
+/// is in `ApiErrorDetails::code`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandErrorCode {
@@ -160,7 +160,7 @@ impl CommandErrorCode {
 pub struct CommandError {
     /// What went wrong.
     pub code: CommandErrorCode,
-    /// The code's fixed sentence ([`CommandErrorCode::message`]).
+    /// The code's fixed sentence (`CommandErrorCode::message`).
     #[ts(type = "string")]
     pub message: BoundedText<MESSAGE_MAX_CHARS>,
     /// The server's refusal; only for `api`.
@@ -207,7 +207,7 @@ impl CommandError {
 }
 
 /// The server's refusal: its error envelope, with the status and the wait it
-/// asks for. Code that branches on [`ApiErrorDetails::code`] keeps a default
+/// asks for. Code that branches on `ApiErrorDetails::code` keeps a default
 /// branch that shows the message and the request ID, since a newer server
 /// may send a code this version doesn't know (ADR-0015).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

@@ -171,7 +171,9 @@ test("Chromium reads one table, seven heads and every entry's cells in both form
       `at ${width}`,
     ).toEqual([0, 1, 7, 7, 7]);
     expect(
-      nodes.filter((node) => role(node) === "link" && named(node).startsWith("Only agent ")),
+      nodes.filter(
+        (node) => role(node) === "link" && named(node).startsWith("Only this target: agent "),
+      ),
       `at ${width}`,
     ).toHaveLength(3);
   }
@@ -206,7 +208,7 @@ test("a focused link keeps the focus as the log stacks", async ({ page, context 
   entries(backend, 3);
   await page.setViewportSize({ width: 1280, height: 800 });
   await atLog(page, backend);
-  const link = page.getByRole("link", { name: /^Only agent / }).first();
+  const link = page.getByRole("link", { name: /^Only this target: agent / }).first();
   await link.focus();
 
   await at(page, 800);

@@ -46,7 +46,7 @@ pub const CHAT_MESSAGE_MAX_UNITS: usize = ChatMessage::MAX_LEN;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Validate, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChatSendRequest {
-    /// The line, one line of at most [`CHAT_MESSAGE_MAX_UNITS`] UTF-16 code
+    /// The line, one line of at most `CHAT_MESSAGE_MAX_UNITS` UTF-16 code
     /// units once trimmed, without control characters, `§` or text-direction
     /// marks. A line starting with `/` is a command.
     #[garde(custom(valid_message))]
@@ -59,7 +59,7 @@ pub struct ChatSendRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Validate, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChatCommandRequest {
-    /// The command: a line as [`ChatSendRequest::message`] takes it, which
+    /// The command: a line as `ChatSendRequest::message` takes it, which
     /// starts with `/` once trimmed.
     #[garde(custom(valid_command))]
     #[schema(schema_with = BoundedText::<CHAT_MESSAGE_MAX_UNITS>::schema)]

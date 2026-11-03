@@ -29,8 +29,9 @@ pub enum ShownState {
     /// Its agent has no live stream: stale, expired, disabled, or the server
     /// just started.
     Unknown {
-        /// The agent's status, which says what to do: wait, enroll it
-        /// again, or release its bots.
+        /// The agent's status, which says what to do: wait while it's
+        /// offline, or release its bots once it's expired or disabled, as
+        /// neither comes back (enrolling mints a new agent).
         agent: AgentStatus,
         /// When the server last heard from the agent.
         agent_last_seen: Option<DateTime<Utc>>,

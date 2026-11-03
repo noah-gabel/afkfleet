@@ -115,8 +115,9 @@ pub enum AgentStatus {
     Online,
     /// Enabled, with a valid certificate, and no live stream.
     Offline,
-    /// Enabled, but no unrevoked certificate is valid: it can't connect
-    /// until it enrolls again.
+    /// Enabled, but no unrevoked certificate is valid: it can't connect any
+    /// more. Enrolling its host again mints a new agent, so this one's bots
+    /// wait for a release; renewing a certificate waits for P13.6.
     Expired,
     /// Disabled: every certificate it had is revoked.
     Disabled,
