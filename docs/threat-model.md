@@ -76,7 +76,7 @@ To be written per boundary (STRIDE: spoofing, tampering, repudiation, informatio
 *Expanded in P7 (ADR-0006, ADR-0010, ADR-0016).*
 
 **What crosses the boundary.** Every request to the HTTP API, through Caddy's TLS:
-- **From the client:** usernames, passwords, invite codes and 2FA codes in request bodies; access, mfa and setup tokens as `Authorization: Bearer`; refresh tokens in a body; IDs in paths and page cursors in query strings.
+- **From the client:** usernames, passwords, invite codes and 2FA codes in request bodies; access, mfa and setup tokens as `Authorization: Bearer`; refresh tokens in a body; IDs in paths and page cursors in query strings, and two values no proxy log may keep: the live events `ticket` and the `q` that "Share with" sends to `/accounts/{id}/grant-candidates` as a user types (Plan.md P12.2's notes).
 - **To the client:** an mfa or setup token after the password step, the session's tokens after the code step or a refresh, an invite's code once, recovery codes once, and profiles, sessions, users and invites as lists.
 - **The client's address:** the socket peer, or behind a proxy listed in `[http] trusted_proxies` the right-most untrusted `X-Forwarded-For` address. It keys the per-IP limits and is recorded in the audit log.
 

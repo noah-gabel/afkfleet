@@ -4360,6 +4360,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P12.2, from Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): a managed agent in `compose.yaml` lists its Docker network in `[control_plane] private_targets` only if its bots dial a server on it, with that network's subnet pinned in compose: Docker also hands out 192.168.0.0/16 (U15). **Exit 5** means the server refused the agent for good, so `restart: on-failure` would restart it into the same refusal: P12.2 sets its policy (a restart limit, say), and the runbook says what to do.
 
   > Note (P12.2, from Phase 11, group D1) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S28): **Caddy must never log the live events socket's query string.** `GET /api/v1/events?ticket=…` carries a ticket: single use, 30 s, and only with its session's bearer token, but still a secret. Caddy writes no access log unless a `log` directive asks for one; if P12.2 adds one, its `query` filter deletes `ticket` from `request>uri`, and P12.7's smoke test checks the log holds none.
+
+  > Note (P12.2, from Phase 11, group L3, PR #90's review) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U110, S127): **the same goes for `q` on `GET /api/v1/accounts/*/grant-candidates`.** It's what a user typed into "Share with", sent as they type it, so a password pasted into the wrong field would be in it. A `log` directive's `query` filter deletes `q` on that route as it deletes `ticket`.
 - [ ] **P12.3** 🔴 Backups:
   - a scheduled `VACUUM INTO` with retention, plus a `backup` CLI
   - a restore runbook
@@ -4436,6 +4438,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P12.7, from Phase 7, group A, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): the smoke test creates the Owner with `docker compose run -T … user create-owner --username … --password-stdin`, since CI has no terminal for the prompt.
 
   > Note (P12.7, from Phase 7, group C, the user's note) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): the smoke test checks that a request through Caddy reaches the server with the client's real address (`[http] trusted_proxies` honored), so a missing or wrong `trusted_proxies` can't put every client into Caddy's one bucket unnoticed.
+
+  > Note (P12.7, from Phase 11, group L3, PR #90's review) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S28, S127): when Caddy writes an access log, the smoke test opens the live events socket and asks `grant-candidates` for a match, then checks the log holds neither the `ticket` nor the `q` it sent (P12.2's notes).
 
 **DoD:**
 - A fresh VPS gets to a running system by following only the runbook.
