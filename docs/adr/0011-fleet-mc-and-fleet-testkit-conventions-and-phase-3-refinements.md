@@ -306,7 +306,7 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
 
 ### Slow tests (P3.7, P3.8)
 - **Local servers only.** They use testcontainers with `itzg/minecraft-server`, offline and online mode, bound to localhost. The image and `VERSION` are the ones pinned in `deploy/compose.dev.yaml`, and a fast test asserts that the two pins match.
-- **The online-mode container** (`ONLINE_MODE` and `ENFORCE_SECURE_PROFILE` on) contacts Mojang's session server, as the spike did. The automated tests use a garbage token or an offline account, never real credentials.
+- **The online-mode container** (`ONLINE_MODE` and `ENFORCE_SECURE_PROFILE` on) contacts Mojang's session server, as the spike did. The automated tests use a garbage token or an offline account, never real credentials. *Confirmed by [ADR-0020](0020-bot-operations-and-phase-11-refinements.md), S133, after two Mojang-side failures in Phase 11:* the online scenario stays on Mojang, as azalea-auth 0.16.0 hard-codes the join URL; a red run from Mojang's side is reported, never counted as passed.
 - **Few scenario tests.** nextest runs every test in its own process, so tests can't share a container, and every container downloads the server jar. So there are a few scenario tests, each owning one container and running several steps, serialized by a nextest test group.
 - **Fault containment.** A panic injected into one session's ECS ends that session as `Disconnected(SessionCrashed)`. A second session from the same pool keeps ticking, sends chat and performs an action.
 - **P3.8 leak test:**

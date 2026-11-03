@@ -2,6 +2,15 @@
 //! (Plan.md P3.7; ADR-0008 §9, ADR-0011). Neither uses real credentials: a
 //! garbage token, then an offline account. azalea's whole login path runs
 //! under the log capture, which must never see the token.
+//!
+//! It depends on Mojang's session server on purpose (ADR-0020, S133): only it
+//! shows that Mojang's real answer to a bad token maps to `AuthRejected` and
+//! that azalea's real HTTPS path never logs the token. azalea-auth 0.16.0
+//! posts to a hard-coded `sessionserver.mojang.com` through its own client, so
+//! a local fake would need a trusted certificate for Mojang's host. When
+//! Mojang answers unexpectedly, or the container says `authservers_down`,
+//! the run is reported with that class and run again later; it never counts
+//! as passed.
 
 use core::time::Duration;
 use std::time::Instant;
