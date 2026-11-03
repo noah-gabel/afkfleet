@@ -8,7 +8,7 @@ import type { InviteState } from "../../generated/InviteState";
 import type { MeResponse } from "../../generated/MeResponse";
 import type { UserRole } from "../../generated/UserRole";
 import { formatTime, formatTimeWithZone } from "../../lib/time";
-import { me } from "../../test/fixtures";
+import { deferred, me } from "../../test/fixtures";
 import { atScreen } from "../../test/signedIn";
 import { cacheText, PASSWORD, refusal } from "../../test/signIn";
 import { CODE_COPIED, INVITATION_COPIED, INVITE_CAP } from "./components/InvitesScreen";
@@ -282,6 +282,42 @@ describe("the invites screen", () => {
     await create(app);
 
     expect(await screen.findByText(INVITE_CAP)).toBeDefined();
+  });
+
+  it("keeps Cancel waiting while a create runs (PR #92's review)", async () => {
+    const answer = deferred<CreatedInviteResponse>();
+    const app = await atInvites({ handlers: { createInvite: () => answer.promise } });
+
+    await create(app);
+    const cancel = screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement;
+    await waitFor(() => expect(cancel.disabled).toBe(true));
+    await act(async () => answer.resolve(CREATED));
+
+    expect(await screen.findByText(CODE)).toBeDefined();
+  });
+
+  it("drops an earlier failure when Cancel closes the box (PR #92's review)", async () => {
+    const app = await atInvites({
+      handlers: {
+        createInvite: async () => {
+          throw refusal(409, "conflict");
+        },
+      },
+    });
+    await create(app);
+    await screen.findByText(INVITE_CAP);
+
+    await app.user.click(screen.getByRole("button", { name: "Cancel" }));
+    await openBox(app);
+
+    expect(screen.queryByText(INVITE_CAP)).toBeNull();
+  });
+
+  it("names the new invite's role with its article: an Admin, a Member (PR #92's review)", async () => {
+    const app = await atInvites();
+    await create(app, "Admin");
+
+    expect(await screen.findByText("New invite for an Admin")).toBeDefined();
   });
 
   it("shows more invites on request", async () => {

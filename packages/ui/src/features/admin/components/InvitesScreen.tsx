@@ -125,6 +125,7 @@ export function InvitesScreen() {
 
   function close(): void {
     writes.cancel();
+    writes.forget(CREATE);
     setCreated(null);
     setOpen(false);
   }
@@ -192,7 +193,12 @@ export function InvitesScreen() {
                 <Button type="button" disabled={busy} onClick={create}>
                   Create invite
                 </Button>
-                <Button type="button" variant="outline" onClick={close}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={writes.running === CREATE}
+                  onClick={close}
+                >
                   Cancel
                 </Button>
               </div>
@@ -360,7 +366,9 @@ function CreatedInvite({
   });
   return (
     <div className="flex flex-col gap-2 text-sm">
-      <p className="font-semibold">{`New invite for a ${roleLabel(created.invite.role)}`}</p>
+      <p className="font-semibold">
+        {`New invite for ${created.invite.role === "admin" ? "an" : "a"} ${roleLabel(created.invite.role)}`}
+      </p>
       <p>Send this code to your invitee. Shown only now; the server keeps only its hash.</p>
       <code className="rounded-md bg-muted p-2 font-mono text-sm select-all">{created.code}</code>
       <p>{`Works once, until ${formatTimeWithZone(created.invite.expires_at)}.`}</p>

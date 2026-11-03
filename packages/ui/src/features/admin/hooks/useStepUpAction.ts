@@ -101,10 +101,16 @@ export function useStepUpAction(
     setPrompt(null);
   }
 
+  /** Drops write `key`'s failure, as its form closes; another write's stays. */
+  function forget(key: string): void {
+    setFailure((shown) => (shown?.key === key ? null : shown));
+  }
+
   return {
     attempt,
     confirm,
     cancel,
+    forget,
     /** The key of the write that waits for the password. */
     prompt: prompt?.key ?? null,
     /** The key of the write in flight. */
