@@ -175,109 +175,115 @@ export function StepCard({
   const cut = step.cutCommand !== null && step.message.trim() === step.cutCommand;
 
   return (
-    <fieldset className="flex flex-col gap-3 rounded-md border border-input p-4">
-      <legend id={legendId} className="px-1 text-sm font-medium">
-        {stepLabel(index + 1)}
-      </legend>
-      {/* Beside the legend, not in it: the group's name is its legend, for a screen reader. */}
-      {handle}
-      {choice(
-        "kind",
-        WHAT_IT_DOES,
-        ACTION_KINDS.map((kind) => ({ value: kind, text: ACTION_TEXT[kind] })),
-      )}
-      {step.kind === "look" ? (
-        <>
-          {number("yaw", YAW_FIELD)}
-          {number("pitch", PITCH_FIELD)}
-        </>
-      ) : null}
-      {step.kind === "rotate_random" ? (
-        <>
-          {number("maxYaw", MAX_YAW_FIELD)}
-          {number("maxPitch", MAX_PITCH_FIELD)}
-        </>
-      ) : null}
-      {step.kind === "sneak" ? choice("on", SNEAK_FIELD, onChoices(SNEAK_START, SNEAK_STOP)) : null}
-      {step.kind === "hold_use" ? choice("on", HOLD_FIELD, onChoices(HOLD_START, HOLD_STOP)) : null}
-      {step.kind === "select_hotbar_slot"
-        ? choice(
-            "slot",
-            SLOT_FIELD,
-            SLOT_KEYS.map((key) => ({ value: key, text: key })),
-          )
-        : null}
-      {step.kind === "send_chat" ? (
-        <FormField
-          id={`${baseId}-message`}
-          label={MESSAGE_FIELD}
-          error={errorOf("message")}
-          {...(cut ? { hint: view.copying ? MARK_CUT_IN_COPY : MARK_CUT } : {})}
-        >
-          {(control) => (
-            <Input
-              {...control}
-              autoComplete="off"
-              readOnly={view.readOnly || view.locked}
-              {...form.register(pathOf("message"))}
-            />
-          )}
-        </FormField>
-      ) : null}
-      {section === "repeating" ? (
-        <>
-          {time("every", "everyUnit", EVERY_FIELD)}
-          {time("jitter", "jitterUnit", JITTER_FIELD)}
-        </>
-      ) : null}
-      {number("chance", CHANCE_FIELD)}
-      {view.readOnly ? null : (
-        <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className={EDGE}
-            disabled={view.locked}
-            aria-disabled={index === 0 ? true : undefined}
-            aria-describedby={legendId}
-            onClick={() => {
-              if (index > 0) {
-                onMove(index, index - 1);
-              }
-            }}
+    <div className="relative rounded-md border bg-background p-3">
+      <fieldset className="flex min-w-0 flex-col gap-3">
+        <legend id={legendId} className="mb-1 text-sm font-semibold">
+          {stepLabel(index + 1)}
+        </legend>
+        {/* Beside the legend, not in it: the group's name is its legend, for a screen reader. */}
+        {handle}
+        {choice(
+          "kind",
+          WHAT_IT_DOES,
+          ACTION_KINDS.map((kind) => ({ value: kind, text: ACTION_TEXT[kind] })),
+        )}
+        {step.kind === "look" ? (
+          <>
+            {number("yaw", YAW_FIELD)}
+            {number("pitch", PITCH_FIELD)}
+          </>
+        ) : null}
+        {step.kind === "rotate_random" ? (
+          <>
+            {number("maxYaw", MAX_YAW_FIELD)}
+            {number("maxPitch", MAX_PITCH_FIELD)}
+          </>
+        ) : null}
+        {step.kind === "sneak"
+          ? choice("on", SNEAK_FIELD, onChoices(SNEAK_START, SNEAK_STOP))
+          : null}
+        {step.kind === "hold_use"
+          ? choice("on", HOLD_FIELD, onChoices(HOLD_START, HOLD_STOP))
+          : null}
+        {step.kind === "select_hotbar_slot"
+          ? choice(
+              "slot",
+              SLOT_FIELD,
+              SLOT_KEYS.map((key) => ({ value: key, text: key })),
+            )
+          : null}
+        {step.kind === "send_chat" ? (
+          <FormField
+            id={`${baseId}-message`}
+            label={MESSAGE_FIELD}
+            error={errorOf("message")}
+            {...(cut ? { hint: view.copying ? MARK_CUT_IN_COPY : MARK_CUT } : {})}
           >
-            {MOVE_UP}
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className={EDGE}
-            disabled={view.locked}
-            aria-disabled={index === count - 1 ? true : undefined}
-            aria-describedby={legendId}
-            onClick={() => {
-              if (index < count - 1) {
-                onMove(index, index + 1);
-              }
-            }}
-          >
-            {MOVE_DOWN}
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={view.locked}
-            aria-describedby={legendId}
-            onClick={() => onRemove(index)}
-          >
-            {REMOVE}
-          </Button>
-        </div>
-      )}
-    </fieldset>
+            {(control) => (
+              <Input
+                {...control}
+                autoComplete="off"
+                readOnly={view.readOnly || view.locked}
+                {...form.register(pathOf("message"))}
+              />
+            )}
+          </FormField>
+        ) : null}
+        {section === "repeating" ? (
+          <>
+            {time("every", "everyUnit", EVERY_FIELD)}
+            {time("jitter", "jitterUnit", JITTER_FIELD)}
+          </>
+        ) : null}
+        {number("chance", CHANCE_FIELD)}
+        {view.readOnly ? null : (
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={EDGE}
+              disabled={view.locked}
+              aria-disabled={index === 0 ? true : undefined}
+              aria-describedby={legendId}
+              onClick={() => {
+                if (index > 0) {
+                  onMove(index, index - 1);
+                }
+              }}
+            >
+              {MOVE_UP}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={EDGE}
+              disabled={view.locked}
+              aria-disabled={index === count - 1 ? true : undefined}
+              aria-describedby={legendId}
+              onClick={() => {
+                if (index < count - 1) {
+                  onMove(index, index + 1);
+                }
+              }}
+            >
+              {MOVE_DOWN}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={view.locked}
+              aria-describedby={legendId}
+              onClick={() => onRemove(index)}
+            >
+              {REMOVE}
+            </Button>
+          </div>
+        )}
+      </fieldset>
+    </div>
   );
 }
 

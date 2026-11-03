@@ -2,8 +2,8 @@
 
 /**
  * `GET /accounts/{id}/grant-candidates`: the usernames that start with
- * what's typed and can be given a grant on the account, in order, at most
- * [`GRANT_CANDIDATES_MAX`] of them. Only names: never a role or an ID.
+ * what's typed and can be given a grant on the account, in order, at most 8
+ * of them. Only names: never a role or an ID.
  */
 export type GrantCandidates = { 
 /**

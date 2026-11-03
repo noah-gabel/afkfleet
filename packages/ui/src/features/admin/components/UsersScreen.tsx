@@ -10,6 +10,8 @@
 //   logs in with its password sets it up, so an Admin can disable it (ADR-0016).
 // - The Owner reviews a user's grants on a screen of its own: from the row, and offered once a
 //   role changed, staying here (ADR-0020, U79). "Audit" opens the log narrowed to the user (U81).
+// - In a small window the table drops Created, then Last seen, then 2FA (U122), at widths that
+//   never show a column, hide it and show it again as the window widens (R228).
 // Nothing here carries a secret but the step-up's password, which StepUpForm holds: the list
 // is a query and each change a mutation.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -21,8 +23,19 @@ import { toApiError } from "../../../api/ApiError";
 import { useApiClient } from "../../../api/context";
 import { describeError } from "../../../api/describeError";
 import { USERS_KEY, useMe, useUsers } from "../../../api/queries";
+import { ScreenState } from "../../../components/ScreenState";
+import { StatusLine } from "../../../components/StatusLine";
 import { Alert, AlertDescription } from "../../../components/ui/alert";
 import { Button } from "../../../components/ui/button";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+  TableSpanRow,
+} from "../../../components/ui/table";
 import type { UserPatchRequest } from "../../../generated/UserPatchRequest";
 import type { UserResponse } from "../../../generated/UserResponse";
 import { formatTime } from "../../../lib/time";
@@ -30,6 +43,19 @@ import { roleLabel } from "../../shell/nav";
 import { useStepUpAction } from "../hooks/useStepUpAction";
 import { type Actor, userActions } from "../permissions";
 import { StepUpPrompt } from "./StepUpPrompt";
+
+/** What the screen says first (U96). */
+const USERS_INTRO =
+  "2FA not set up: registered, never logged in. Whoever logs in first with its password sets it up. Disable it if your invitee doesn't finish.";
+const LOADING_USERS = "Loading users…";
+
+/** Why the users couldn't be read. */
+function usersFailed(why: string): string {
+  return `Couldn't load users: ${why}`;
+}
+
+/** The table's columns, which a row's question spans. */
+const COLUMNS = 7;
 
 /** One change a row offers. */
 type Change =
@@ -48,27 +74,27 @@ function label(change: Change): string {
 function question(change: Change, username: string): string | undefined {
   if (change.kind === "role") {
     return change.role === "admin"
-      ? `Making ${username} an Admin logs them out everywhere.`
-      : `Making ${username} a Member logs them out everywhere and revokes their pending invites.`;
+      ? `Make ${username} an Admin? Logs them out everywhere.`
+      : `Make ${username} a Member? Logs them out everywhere and revokes their pending invites.`;
   }
   return change.disabled
-    ? `Disabling ${username} logs them out everywhere and revokes their pending invites. They can't log in until they're enabled again.`
+    ? `Disable ${username}? Logs them out everywhere and revokes their pending invites. No login until enabled again.`
     : undefined;
 }
 
 /** What the toast says once it's done. */
 function doneText(change: Change, username: string): string {
   if (change.kind === "role") {
-    return `${username} is now ${change.role === "admin" ? "an Admin" : "a Member"}.`;
+    return `${username} now ${change.role === "admin" ? "an Admin" : "a Member"}.`;
   }
-  return `${username} is ${change.disabled ? "disabled" : "enabled"}.`;
+  return `${username} ${change.disabled ? "disabled" : "enabled"}.`;
 }
 
 /** What the row says once `change` made `username` an Admin or a Member (U79). */
 function reviewOffer(role: "member" | "admin", username: string): string {
   return role === "admin"
-    ? `${username} is now an Admin. Grants made before this stay.`
-    : `${username} is now a Member. Grants they hold count again.`;
+    ? `${username} now an Admin. Earlier grants stay.`
+    : `${username} now a Member. Their grants count again.`;
 }
 
 /** The changes `actor` may make to `user`, as buttons. */
@@ -131,148 +157,156 @@ export function UsersScreen() {
   }
 
   return (
-    <main className="flex flex-col gap-4 p-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Users</h1>
-      <p className="text-sm text-muted-foreground">
-        An account whose 2FA isn't set up was registered but never logged in; whoever first logs in
-        with its password sets it up. Disable it if the person you invited doesn't finish.
-      </p>
+    <main className="flex flex-1 flex-col gap-4 p-4">
+      <h1 className="text-lg font-semibold tracking-tight">Users</h1>
+      <p className="text-sm text-muted-foreground">{USERS_INTRO}</p>
       {users.isError ? (
-        <p role="alert" className="text-sm text-destructive">
-          {describeError(toApiError(users.error).error)}
-        </p>
+        <ScreenState kind="error">
+          {usersFailed(describeError(toApiError(users.error).error))}
+        </ScreenState>
       ) : null}
-      <table aria-label="Users" className="w-full text-left text-sm">
-        <thead className="text-muted-foreground">
-          <tr>
-            <th className="py-1 font-medium">Username</th>
-            <th className="py-1 font-medium">Role</th>
-            <th className="py-1 font-medium">2FA</th>
-            <th className="py-1 font-medium">Status</th>
-            <th className="py-1 font-medium">Last seen</th>
-            <th className="py-1 font-medium">Created</th>
-            <th className="py-1 font-medium">
-              <span className="sr-only">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((user) => {
-            const isSelf = user.id === actor?.id;
-            const changes = actor === undefined ? [] : changesFor(actor, user);
-            const pending = asking?.id === user.id ? asking.change : null;
-            const failure = writes.failure?.key === user.id ? writes.failure.message : undefined;
-            const offered = offer?.id === user.id ? offer.role : null;
-            const reviewable = actor !== undefined && userActions(actor, user).reviewGrants;
-            return (
-              <Fragment key={user.id}>
-                <tr className="border-t">
-                  <td className="py-2">{isSelf ? `${user.username} (you)` : user.username}</td>
-                  <td className="py-2">{roleLabel(user.role)}</td>
-                  <td className="py-2">{user.mfa_enrolled ? "Set up" : "Not set up"}</td>
-                  <td className="py-2">{user.disabled ? "Disabled" : "Active"}</td>
-                  <td className="py-2">
-                    {user.last_seen_at === undefined ? "Never" : formatTime(user.last_seen_at)}
-                  </td>
-                  <td className="py-2">{formatTime(user.created_at)}</td>
-                  <td className="py-2">
-                    <div className="flex justify-end gap-2">
-                      <Button asChild size="sm" variant="outline">
-                        <Link
-                          to="/admin/audit"
-                          search={{ kind: "user", id: user.id }}
-                          aria-label={`Audit of ${user.username}`}
-                        >
-                          Audit
-                        </Link>
-                      </Button>
-                      {reviewable ? (
-                        <Button asChild size="sm" variant="outline">
+      {users.isPending ? <ScreenState kind="loading">{LOADING_USERS}</ScreenState> : null}
+      {rows.length === 0 ? null : (
+        <Table aria-label="Users">
+          <TableHeader>
+            <TableRow>
+              <TableHead>Username</TableHead>
+              <TableHead>Role</TableHead>
+              <TableHead drop="under-790">2FA</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead drop="under-960">Last seen</TableHead>
+              <TableHead drop="under-1100">Created</TableHead>
+              <TableHead>
+                <span className="sr-only">Actions</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((user) => {
+              const isSelf = user.id === actor?.id;
+              const changes = actor === undefined ? [] : changesFor(actor, user);
+              const pending = asking?.id === user.id ? asking.change : null;
+              const failure = writes.failure?.key === user.id ? writes.failure.message : undefined;
+              const offered = offer?.id === user.id ? offer.role : null;
+              const reviewable = actor !== undefined && userActions(actor, user).reviewGrants;
+              return (
+                <Fragment key={user.id}>
+                  <TableRow>
+                    <TableCell className="font-mono break-all">
+                      {isSelf ? `${user.username} (you)` : user.username}
+                    </TableCell>
+                    <TableCell>{roleLabel(user.role)}</TableCell>
+                    <TableCell drop="under-790">
+                      {user.mfa_enrolled ? "Set up" : "Not set up"}
+                    </TableCell>
+                    <TableCell>
+                      <StatusLine tone={user.disabled ? "warning" : "neutral"}>
+                        {user.disabled ? "Disabled" : "Active"}
+                      </StatusLine>
+                    </TableCell>
+                    <TableCell drop="under-960">
+                      {user.last_seen_at === undefined ? "Never" : formatTime(user.last_seen_at)}
+                    </TableCell>
+                    <TableCell drop="under-1100">{formatTime(user.created_at)}</TableCell>
+                    <TableCell>
+                      <div className="flex flex-wrap justify-end gap-1">
+                        <Button asChild size="sm" variant="ghost">
                           <Link
-                            to="/admin/users/$id/grants"
-                            params={{ id: user.id }}
-                            aria-label={`Review grants of ${user.username}`}
+                            to="/admin/audit"
+                            search={{ kind: "user", id: user.id }}
+                            aria-label={`Audit of ${user.username}`}
                           >
-                            Review grants
+                            Audit
                           </Link>
                         </Button>
-                      ) : null}
-                      {changes.map((change) => (
-                        <Button
-                          key={label(change)}
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          disabled={busy}
-                          onClick={() => choose(user, change)}
-                        >
-                          {label(change)}
-                        </Button>
-                      ))}
-                    </div>
-                  </td>
-                </tr>
-                {pending === null &&
-                writes.prompt !== user.id &&
-                failure === undefined &&
-                offered === null ? null : (
-                  <tr>
-                    <td colSpan={7} className="pb-3">
-                      {pending === null ? null : (
-                        <Alert>
-                          <AlertDescription className="flex flex-col gap-2 text-foreground">
-                            <p>{question(pending, user.username)}</p>
-                            <div className="flex gap-2">
-                              <Button
-                                type="button"
-                                variant="destructive"
-                                disabled={busy}
-                                onClick={() => run(user, pending)}
-                              >
-                                {label(pending)}
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                onClick={() => setAsking(null)}
-                              >
-                                Cancel
-                              </Button>
-                            </div>
-                          </AlertDescription>
-                        </Alert>
-                      )}
-                      {writes.prompt === user.id ? (
-                        <StepUpPrompt
-                          id={`step-up-${user.id}`}
-                          pending={writes.running !== null}
-                          onConfirm={writes.confirm}
-                          onCancel={writes.cancel}
-                        />
-                      ) : null}
-                      {failure === undefined ? null : (
-                        <p role="alert" className="text-sm text-destructive">
-                          {failure}
-                        </p>
-                      )}
-                      {offered === null ? null : (
-                        <p className="flex flex-wrap items-center gap-2 text-sm">
-                          <span>{reviewOffer(offered, user.username)}</span>
-                          <Button asChild size="sm" variant="link" className="h-auto p-0">
-                            <Link to="/admin/users/$id/grants" params={{ id: user.id }}>
+                        {reviewable ? (
+                          <Button asChild size="sm" variant="ghost">
+                            <Link
+                              to="/admin/users/$id/grants"
+                              params={{ id: user.id }}
+                              aria-label={`Review grants of ${user.username}`}
+                            >
                               Review grants
                             </Link>
                           </Button>
-                        </p>
-                      )}
-                    </td>
-                  </tr>
-                )}
-              </Fragment>
-            );
-          })}
-        </tbody>
-      </table>
+                        ) : null}
+                        {changes.map((change) => (
+                          <Button
+                            key={label(change)}
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            disabled={busy}
+                            onClick={() => choose(user, change)}
+                          >
+                            {label(change)}
+                          </Button>
+                        ))}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                  {pending === null &&
+                  writes.prompt !== user.id &&
+                  failure === undefined &&
+                  offered === null ? null : (
+                    <TableSpanRow span={COLUMNS} className="pb-3">
+                      <div className="flex flex-col gap-2">
+                        {pending === null ? null : (
+                          <Alert>
+                            <AlertDescription className="flex flex-col gap-2 text-foreground">
+                              <p>{question(pending, user.username)}</p>
+                              <div className="flex gap-2">
+                                <Button
+                                  type="button"
+                                  variant="destructive"
+                                  disabled={busy}
+                                  onClick={() => run(user, pending)}
+                                >
+                                  {label(pending)}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  onClick={() => setAsking(null)}
+                                >
+                                  Cancel
+                                </Button>
+                              </div>
+                            </AlertDescription>
+                          </Alert>
+                        )}
+                        {writes.prompt === user.id ? (
+                          <StepUpPrompt
+                            id={`step-up-${user.id}`}
+                            pending={writes.running !== null}
+                            onConfirm={writes.confirm}
+                            onCancel={writes.cancel}
+                          />
+                        ) : null}
+                        {failure === undefined ? null : (
+                          <p role="alert" className="text-sm text-destructive">
+                            {failure}
+                          </p>
+                        )}
+                        {offered === null ? null : (
+                          <p className="flex flex-wrap items-center gap-2 text-sm">
+                            <span>{reviewOffer(offered, user.username)}</span>
+                            <Button asChild size="sm" variant="link" className="h-auto p-0">
+                              <Link to="/admin/users/$id/grants" params={{ id: user.id }}>
+                                Review grants
+                              </Link>
+                            </Button>
+                          </p>
+                        )}
+                      </div>
+                    </TableSpanRow>
+                  )}
+                </Fragment>
+              );
+            })}
+          </TableBody>
+        </Table>
+      )}
       {users.hasNextPage ? (
         <Button
           type="button"

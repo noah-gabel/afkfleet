@@ -11,8 +11,9 @@
 //!   `username` ([`UNGRANTABLE`]), and the route spends its own per-user
 //!   limit, so names can't be probed fast (ADR-0018, group E).
 //! - **Suggesting** who to share with needs Manage too, no step-up, and spends
-//!   its own per-user limit (ADR-0020, U110, S127): at most 8 usernames that
-//!   start with what's typed and could be given a grant.
+//!   its own per-user limit (ADR-0020, U110, S127): at most
+//!   [`GRANT_CANDIDATES_MAX`](crate::ports::grants::GRANT_CANDIDATES_MAX)
+//!   usernames that start with what's typed and could be given a grant.
 //! - **Changing** and **revoking** go by the grantee's ID.
 //! - **Leaving** is the grantee's own: any level, without implicit Manage
 //!   (`LeaveAccount`; ADR-0020, S51). The path's `me` names no one else, so

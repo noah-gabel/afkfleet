@@ -8,12 +8,14 @@
 import type { Page } from "@playwright/test";
 
 import { type FakeBackend, MEMBER, NEW_USER, OWNER, PASSWORD } from "../fake/backend";
-import { expect, fakeBackend, test } from "../fixtures";
+import { expect, fakeBackend, shooting, test } from "../fixtures";
+import { NOW } from "../shots";
 import { enterCode, expectHome, logIn, push } from "./steps";
 import {
   AA,
   bothThemes,
   focusProblems,
+  frameHolds,
   inScheme,
   measured,
   selectsInTokens,
@@ -38,6 +40,7 @@ test("the check itself reports what it should, at the numbers it should", async 
   page,
   context,
 }) => {
+  test.skip(shooting(), "the check's own tests measure; they make no baseline");
   await fakeBackend(context);
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
@@ -101,6 +104,7 @@ test("the check holds AA: normal and large text, placeholders, and every form a 
   page,
   context,
 }) => {
+  test.skip(shooting(), "the check's own tests measure; they make no baseline");
   await fakeBackend(context);
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
@@ -179,6 +183,7 @@ test("the check reads a marked control's focus from its cells, not an outline", 
   page,
   context,
 }) => {
+  test.skip(shooting(), "the check's own tests measure; they make no baseline");
   await fakeBackend(context);
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
@@ -295,6 +300,7 @@ test("the check holds each focus stop's outline, and walks the whole page", asyn
   page,
   context,
 }) => {
+  test.skip(shooting(), "the check's own tests measure; they make no baseline");
   await fakeBackend(context);
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
@@ -480,6 +486,7 @@ test("the check holds each focus stop's outline, and walks the whole page", asyn
 });
 
 test("every native select holds the theme's tokens, its options too", async ({ page, context }) => {
+  test.skip(shooting(), "the check's own tests measure; they make no baseline");
   const backend = await fakeBackend(context);
   const account = backend.addAccount(OWNER);
   backend.share(account, MEMBER, "view");
@@ -593,11 +600,11 @@ test("Home, its bots in every status, and a bot's screen", async ({ page, contex
   const main = page.getByRole("main");
 
   await expect(page.getByRole("link", { name: "Open AfkBot1" })).toBeVisible();
-  await bothThemes(page, "Home, every status");
+  await bothThemes(page, "Home, every status", { small: true });
 
   const id = backend.bot("AfkBot1").id;
   backend.addChat("AfkBot1", {
-    at: new Date().toISOString(),
+    at: NOW,
     direction: "in",
     kind: "system",
     text: "Hello from the server",
@@ -613,30 +620,32 @@ test("Home, its bots in every status, and a bot's screen", async ({ page, contex
 
   await push(page, {
     update: "event",
-    event: { type: "bot_died", bot_id: id, at: new Date().toISOString() },
+    event: { type: "bot_died", bot_id: id, at: NOW },
   });
   await expect(main.getByRole("region", { name: "Timeline" }).getByText("Died")).toBeVisible();
   const toast = page.getByText("AfkBot1 died.");
   await toast.hover();
-  await bothThemes(page, "a bot, its timeline and a toast");
+  await bothThemes(page, "a bot, its timeline and a toast", { toasts: 1, keepPointer: true });
   await expect(toast).toBeVisible();
 
   await page.getByRole("link", { name: "Home", exact: true }).first().click();
   await expect(page.getByRole("link", { name: "Open AfkBot1" })).toBeVisible();
+  // The died toast goes first, so the row below shows its error toast alone (S131).
+  await expect(page.locator("[data-sonner-toast]")).toHaveCount(0, { timeout: 10_000 });
 
   await push(page, {
     update: "event",
     event: {
       type: "bot_alert",
       bot_id: backend.bot("AfkBot3").id,
-      at: new Date().toISOString(),
+      at: NOW,
       state: "failed",
       reason: "crash_loop",
     },
   });
   const failed = page.locator("[data-sonner-toast][data-type=error]");
   await failed.hover();
-  await bothThemes(page, "Home, its notice and an error toast");
+  await bothThemes(page, "Home, its notice and an error toast", { toasts: 1, keepPointer: true });
   await expect(failed).toBeVisible();
 });
 
@@ -647,7 +656,7 @@ test("a bot's console in every look, and its screen stacked and loading", async 
   const backend = await fakeBackend(context);
   backend.addAccount(OWNER);
   backend.addAccount(OWNER);
-  const at = new Date().toISOString();
+  const at = NOW;
   const line = {
     at,
     direction: "in",
@@ -691,7 +700,7 @@ test("a bot's console in every look, and its screen stacked and loading", async 
 
   await page.setViewportSize({ width: 800, height: 600 });
   await expect(chat.getByText("The server said something")).toBeAttached();
-  await bothThemes(page, "a bot's screen, stacked");
+  await bothThemes(page, "a bot's screen, stacked", { end: "all" });
   await page.setViewportSize({ width: 1280, height: 720 });
 
   // A bot this sign-in hasn't read yet, its read held.
@@ -710,7 +719,7 @@ test("a bot waiting for its agent, as the Owner and as a Member", async ({ page,
   backend.share(account, MEMBER, "control");
   backend.setBot("AfkBot1", {
     desiredState: "stopped",
-    status: { kind: "unknown", state: "online", agent_last_seen_at: new Date().toISOString() },
+    status: { kind: "unknown", state: "online", agent_last_seen_at: NOW },
     agent: { id: "01900000-0000-7000-8000-000000000301", name: "agent-main", status: "offline" },
   });
   await signIn(page, backend, OWNER);
@@ -778,13 +787,15 @@ test("an account's screen: a row's question, the step-up, and below Manage", asy
     "aria-selected",
     "true",
   );
-  await textsInBothThemes(page, "Share with, its list open and an option active");
+  await textsInBothThemes(page, "Share with, its list open and an option active", {
+    keepFocus: true,
+  });
   await page.keyboard.press("Escape");
   await shareField.fill("");
   await table.getByRole("button", { name: `Revoke ${MEMBER}'s access` }).click();
   await table.getByRole("button", { name: "Revoke", exact: true }).click();
   await expect(main.getByLabel("Current password")).toBeVisible();
-  await bothThemes(page, "an account, a row's step-up");
+  await bothThemes(page, "an account, a row's step-up", { height: 800 });
 
   await page.getByRole("button", { name: "Log out" }).click();
   await logIn(page, MEMBER);
@@ -860,11 +871,13 @@ test("the bot screen and the empty lists of someone with nothing yet", async ({
   await expect(main.getByRole("heading", { name: "Accounts", level: 1 })).toBeVisible();
   const tile = main.getByRole("link", { name: "Offline account" });
   await expect(tile).toBeVisible();
-  await bothThemes(page, "accounts, empty, the tiles");
+  await bothThemes(page, "accounts, empty, the tiles", { small: true });
   await tile.hover();
-  await textsInBothThemes(page, "accounts, empty, a tile hovered");
+  await textsInBothThemes(page, "accounts, empty, a tile hovered", { keepPointer: true });
   await main.getByRole("link", { name: "Microsoft account" }).hover();
-  await textsInBothThemes(page, "accounts, empty, the main tile hovered");
+  await textsInBothThemes(page, "accounts, empty, the main tile hovered", {
+    keepPointer: true,
+  });
   await page.mouse.move(0, 0);
 
   await tile.click();
@@ -882,7 +895,7 @@ test("the bot screen and the empty lists of someone with nothing yet", async ({
   await bothThemes(page, "a link's code");
   await nav(page, "Profile");
   await expect(page.getByRole("group", { name: "Theme" })).toBeVisible();
-  await bothThemes(page, "profile");
+  await bothThemes(page, "profile", { height: 1100 });
 });
 
 test("modes: the list, the editor, a conflict, and a locked one", async ({ page, context }) => {
@@ -893,13 +906,13 @@ test("modes: the list, the editor, a conflict, and a locked one", async ({ page,
 
   await nav(page, "Modes");
   await expect(main.getByRole("link", { name: "New mode" })).toBeVisible();
-  await bothThemes(page, "modes");
+  await bothThemes(page, "modes", { small: true });
 
   await main.getByRole("link", { name: "New mode" }).click();
   await main.getByLabel("Name").fill("Fishing");
   const joining = main.getByRole("group", { name: "When it joins", exact: true });
   await joining.getByRole("button", { name: "Add step" }).click();
-  await bothThemes(page, "the mode editor");
+  await bothThemes(page, "the mode editor", { small: true, smallHeight: 1000 });
   await joining
     .getByRole("group", { name: "Step 1", exact: true })
     .getByLabel("What it does")
@@ -921,6 +934,409 @@ test("modes: the list, the editor, a conflict, and a locked one", async ({ page,
   await main.getByRole("link", { name: "Open warp" }).click();
   await expect(main.getByRole("button", { name: "Make a copy" })).toBeVisible();
   await bothThemes(page, "a locked mode, its command cut");
+});
+
+test("modes: loading, failed, none, a long list, and sixteen steps in two columns and stacked", async ({
+  page,
+  context,
+}) => {
+  const backend = await fakeBackend(context);
+  const main = page.getByRole("main");
+  backend.clearModes();
+  // Home reads the modes too, so the read is held from the sign-in on.
+  backend.hold("modes");
+  await signIn(page, backend, MEMBER);
+  await nav(page, "Modes");
+  await expect(main.getByText("Loading modes…")).toBeVisible();
+  await bothThemes(page, "modes, loading");
+  backend.release();
+  await expect(main.getByText("No modes.")).toBeVisible();
+  await bothThemes(page, "modes, none");
+
+  await page.getByRole("button", { name: "Log out" }).click();
+  backend.refuse("modes", { status: 500, code: "internal" });
+  await signIn(page, backend, MEMBER);
+  await nav(page, "Modes");
+  await expect(main.getByText(/Couldn't load modes/)).toBeVisible();
+  await bothThemes(page, "modes, failed");
+  backend.refuse("modes", null);
+
+  for (let n = 1; n <= 24; n += 1) {
+    backend.addMode(MEMBER, `Mode with a longer name ${n}`);
+  }
+  backend.addMode(
+    MEMBER,
+    "Sixteen steps",
+    Array.from({ length: 16 }, (_, n) => ({
+      action: { type: "send_chat" as const, message: `hello ${n}` },
+      schedule:
+        n < 6
+          ? { type: "at_start" as const }
+          : { type: "every" as const, interval_ms: 60_000, jitter_ms: 0 },
+      probability: 100,
+    })),
+  );
+  await page.getByRole("button", { name: "Log out" }).click();
+  await signIn(page, backend, MEMBER);
+  await nav(page, "Modes");
+  await expect(main.getByRole("link", { name: "Open Mode with a longer name 24" })).toBeVisible();
+  await bothThemes(page, "modes, a long list", { height: 1200, small: true, smallHeight: 2000 });
+  await main.getByRole("link", { name: "Open Sixteen steps" }).click();
+  await expect(main.getByRole("heading", { name: "Sixteen steps", level: 1 })).toBeVisible();
+  await bothThemes(page, "a mode, sixteen steps");
+  await page.setViewportSize({ width: 800, height: 600 });
+  await bothThemes(page, "a mode, sixteen steps, stacked", { end: "ends" });
+  await page.setViewportSize({ width: 1280, height: 720 });
+});
+
+test("servers: loading, failed, a long list, and sixteen texts with eight formats, tried", async ({
+  page,
+  context,
+}) => {
+  const backend = await fakeBackend(context);
+  const main = page.getByRole("main");
+  await signIn(page, backend, OWNER);
+  backend.hold("server_settings");
+  await nav(page, "Minecraft servers");
+  await expect(main.getByText("Loading servers…")).toBeVisible();
+  await bothThemes(page, "servers, loading");
+  backend.release();
+  await expect(main.getByText("No servers.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Log out" }).click();
+  backend.refuse("server_settings", { status: 500, code: "internal" });
+  await signIn(page, backend, OWNER);
+  await nav(page, "Minecraft servers");
+  await expect(main.getByText(/Couldn't load servers/)).toBeVisible();
+  await bothThemes(page, "servers, failed");
+  backend.refuse("server_settings", null);
+
+  for (let n = 1; n <= 12; n += 1) {
+    backend.addServerSettings(`play-${n}.example.com`, [
+      `You logged in from another location ${n}`,
+    ]);
+  }
+  backend.addServerSettings(
+    "long.example.com",
+    Array.from({ length: 16 }, (_, n) => `You logged in from another location (${n + 1})`),
+    Array.from({ length: 8 }, (_, n) => `[Clan ${n + 1}] {sender} : `),
+  );
+  await page.getByRole("button", { name: "Log out" }).click();
+  await signIn(page, backend, OWNER);
+  await nav(page, "Minecraft servers");
+  await expect(main.getByRole("link", { name: "Open long.example.com:25565" })).toBeVisible();
+  await bothThemes(page, "servers, a long list", { small: true, smallHeight: 700 });
+  await main.getByRole("link", { name: "Open long.example.com:25565" }).click();
+  await main.getByLabel("Try a line").fill("[Clan 1] Steve : hello");
+  await main.getByRole("button", { name: "Try", exact: true }).click();
+  await expect(main.getByText("Format 1: sender Steve.")).toBeVisible();
+  await bothThemes(page, "a server, sixteen texts and eight formats, tried");
+  await page.setViewportSize({ width: 800, height: 600 });
+  await bothThemes(page, "a server, sixteen texts and eight formats, stacked", { end: "ends" });
+  await page.setViewportSize({ width: 1280, height: 720 });
+});
+
+test("stacked editors: Save's step-up and a conflict, where you are", async ({ page, context }) => {
+  const backend = await fakeBackend(context);
+  backend.addMode(
+    OWNER,
+    "Long",
+    Array.from({ length: 16 }, () => ({
+      action: { type: "jump" as const },
+      schedule: { type: "at_start" as const },
+      probability: 100,
+    })),
+  );
+  backend.addServerSettings(
+    "long.example.com",
+    Array.from({ length: 16 }, (_, n) => `You logged in from another location (${n + 1})`),
+    Array.from({ length: 8 }, (_, n) => `[Clan ${n + 1}] {sender} : `),
+  );
+  await signIn(page, backend, OWNER);
+  await page.setViewportSize({ width: 800, height: 600 });
+  const main = page.getByRole("main");
+  const save = main.getByRole("button", { name: "Save", exact: true });
+  const password = page.getByLabel("Current password");
+  const toTop = () =>
+    page.locator("[data-slot=content]").evaluate((column) => {
+      column.scrollTop = 0;
+    });
+  const noToasts = () =>
+    expect(page.locator("[data-sonner-toast]")).toHaveCount(0, { timeout: 15_000 });
+
+  await nav(page, "Modes");
+  await main.getByRole("link", { name: "Open Long" }).click();
+  const respawn = main.getByRole("group", { name: "After it respawns", exact: true });
+  await respawn.getByRole("button", { name: "Add step" }).click();
+  const step = respawn.getByRole("group", { name: "Step 1", exact: true });
+  await step.getByLabel("What it does").selectOption({ label: "Send chat or a command" });
+  await step.getByLabel("Message").fill("/warp home");
+  await toTop();
+  await save.click();
+  await expect(password).toBeFocused();
+  await bothThemes(page, "a mode, stacked, the step-up", { end: "ends" });
+  await password.fill(PASSWORD);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(main.getByText("Sends a command off the allowlist.")).toBeVisible();
+  await noToasts();
+  backend.changeMode("Long", { name: "Elsewhere" });
+  await main.getByLabel("Name").fill("Mine");
+  await toTop();
+  await save.click();
+  await expect(main.getByText(/^This mode changed since you opened it/)).toBeVisible();
+  await bothThemes(page, "a mode, stacked, a conflict", { end: "ends" });
+
+  // A new session, as the mode's step-up still holds for 5 minutes in this one.
+  await page.getByRole("button", { name: "Log out" }).click();
+  await signIn(page, backend, OWNER);
+  await nav(page, "Minecraft servers");
+  await main.getByRole("link", { name: "Open long.example.com:25565" }).click();
+  await expect(
+    main.getByRole("heading", { name: "long.example.com:25565", level: 1 }),
+  ).toBeVisible();
+  await main.getByLabel("Conflict text 1", { exact: true }).fill("You logged in from elsewhere");
+  await toTop();
+  await save.click();
+  await expect(password).toBeFocused();
+  await bothThemes(page, "a server, stacked, the step-up", { end: "ends" });
+  await password.fill(PASSWORD);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByText("Saved. Bots on it use the change at once.")).toBeVisible();
+  await noToasts();
+  backend.changeServerSettings("long.example.com");
+  await main.getByLabel("Conflict text 2", { exact: true }).fill("Logged in elsewhere");
+  await toTop();
+  await save.click();
+  await expect(main.getByText(/^These settings changed since you opened them/)).toBeVisible();
+  await bothThemes(page, "a server, stacked, changed settings", { end: "ends" });
+  await page.setViewportSize({ width: 1280, height: 720 });
+});
+
+test("users and the grants review: loading, failed, and long lists", async ({ page, context }) => {
+  const backend = await fakeBackend(context);
+  const main = page.getByRole("main");
+  await signIn(page, backend, OWNER);
+  backend.hold("users");
+  await nav(page, "Users");
+  await expect(main.getByText("Loading users…")).toBeVisible();
+  await bothThemes(page, "users, loading");
+  backend.release();
+  await expect(main.getByRole("table", { name: "Users" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Log out" }).click();
+  backend.refuse("users", { status: 500, code: "internal" });
+  await signIn(page, backend, OWNER);
+  await nav(page, "Users");
+  await expect(main.getByText(/Couldn't load users/)).toBeVisible();
+  await bothThemes(page, "users, failed");
+  backend.refuse("users", null);
+
+  for (let n = 1; n <= 30; n += 1) {
+    backend.addMember(`longusername_with_32_characte${String(n).padStart(3, "0")}`, {
+      disabled: n % 3 === 0,
+    });
+  }
+  for (let n = 1; n <= 20; n += 1) {
+    backend.share(backend.addAccount(OWNER), MEMBER, "control");
+  }
+  const theirs = backend.addAccount(MEMBER);
+  for (let n = 1; n <= 20; n += 1) {
+    backend.share(theirs, `longusername_with_32_characte${String(n).padStart(3, "0")}`, "view");
+  }
+  await page.getByRole("button", { name: "Log out" }).click();
+  await signIn(page, backend, OWNER);
+  await nav(page, "Users");
+  await expect(main.getByRole("row", { name: /longusername_with_32_characte030/ })).toBeVisible();
+  await bothThemes(page, "users, a long list", { height: 1600, small: true, smallHeight: 3000 });
+
+  backend.hold("user_grants");
+  backend.hold("shared_accounts");
+  await main
+    .getByRole("row", { name: new RegExp(MEMBER) })
+    .getByRole("link", { name: /Review grants/ })
+    .click();
+  await expect(main.getByText("Loading grants…")).toBeVisible();
+  await bothThemes(page, "the grants review, loading");
+  backend.release();
+  await expect(main.getByRole("table", { name: "Grants they hold" })).toBeVisible();
+  await main.getByRole("button", { name: /Show who has access/ }).click();
+  await expect(main.getByRole("table", { name: /Who has access to/ })).toBeVisible();
+  await bothThemes(page, "the grants review, long lists", {
+    height: 1100,
+    small: true,
+    smallHeight: 3000,
+  });
+});
+
+test("invites: loading, failed, a long list, and a new invite's code", async ({
+  page,
+  context,
+}) => {
+  const backend = await fakeBackend(context);
+  const main = page.getByRole("main");
+  await signIn(page, backend, OWNER);
+  backend.hold("invites");
+  await nav(page, "Invites");
+  await expect(main.getByText("Loading invites…")).toBeVisible();
+  await bothThemes(page, "invites, loading");
+  backend.release();
+  await expect(main.getByRole("table", { name: "Invites" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Log out" }).click();
+  backend.refuse("invites", { status: 500, code: "internal" });
+  await signIn(page, backend, OWNER);
+  await nav(page, "Invites");
+  await expect(main.getByText(/Couldn't load invites/)).toBeVisible();
+  await bothThemes(page, "invites, failed");
+  backend.refuse("invites", null);
+
+  // Eighteen more beside the fake's one, under the cap of 20 pending.
+  await main.getByRole("button", { name: "New invite" }).click();
+  await main.getByRole("button", { name: "Create invite" }).click();
+  await page.getByLabel("Current password").fill(PASSWORD);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(main.getByRole("button", { name: "Done" })).toBeVisible();
+  for (let n = 2; n <= 18; n += 1) {
+    await main.getByRole("button", { name: "Done" }).click();
+    await main.getByRole("button", { name: "New invite" }).click();
+    await main.getByRole("button", { name: "Create invite" }).click();
+    await expect(main.getByRole("button", { name: "Done" })).toBeVisible();
+  }
+  await expect(main.getByText(/Shown only now/)).toBeVisible();
+  await bothThemes(page, "invites, a long list and a new invite's code", {
+    height: 1200,
+    small: true,
+    smallHeight: 2000,
+  });
+});
+
+test("agents: loading, none, failed, and a long list", async ({ page, context }) => {
+  const backend = await fakeBackend(context);
+  const main = page.getByRole("main");
+  await signIn(page, backend, OWNER);
+  backend.hold("agents");
+  await nav(page, "Agents");
+  await expect(main.getByText("Loading agents…")).toBeVisible();
+  await bothThemes(page, "agents, loading");
+  backend.release();
+  await expect(main.getByText("No agents.")).toBeVisible();
+  await bothThemes(page, "agents, none");
+
+  await page.getByRole("button", { name: "Log out" }).click();
+  backend.refuse("agents", { status: 500, code: "internal" });
+  await signIn(page, backend, OWNER);
+  await nav(page, "Agents");
+  await expect(main.getByText(/Couldn't load agents/)).toBeVisible();
+  await bothThemes(page, "agents, failed");
+  backend.refuse("agents", null);
+
+  const statuses = ["online", "offline", "expired", "disabled"] as const;
+  for (let n = 1; n <= 30; n += 1) {
+    const status = statuses[n % statuses.length] ?? "online";
+    backend.addAgent(`agent-on-the-host-with-a-long-name-${String(n).padStart(3, "0")}`, {
+      status,
+      enabled: status !== "disabled",
+      bots: n % 3 === 0 ? 12 : 1,
+      version: "0.11.0+0123456789abcdef",
+    });
+  }
+  await page.getByRole("button", { name: "Log out" }).click();
+  await signIn(page, backend, OWNER);
+  await nav(page, "Agents");
+  await expect(main.getByRole("row", { name: /long-name-030/ })).toBeVisible();
+  await bothThemes(page, "agents, a long list", { height: 2100, small: true, smallHeight: 3500 });
+});
+
+test("agents: a certificate ending soon", async ({ page, context }) => {
+  const backend = await fakeBackend(context);
+  // The page's clock: the shots' fixed one, or the real one here.
+  const now = shooting() ? Date.parse(NOW) : Date.now();
+  backend.addAgent("agent-late", { status: "expired" });
+  backend.addAgent("agent-soon", { not_after: new Date(now + 3 * 86_400_000).toISOString() });
+  backend.addAgent("agent-main");
+  await signIn(page, backend, OWNER);
+  await nav(page, "Agents");
+  const main = page.getByRole("main");
+  await expect(main.getByText("Expires in 3 days. Enroll a new agent before then.")).toBeVisible();
+  await bothThemes(page, "agents, a certificate ending soon", { small: true });
+});
+
+test("the audit log: loading, nothing, failed, without names, narrowed, and a long list", async ({
+  page,
+  context,
+}) => {
+  const backend = await fakeBackend(context);
+  const main = page.getByRole("main");
+  await signIn(page, backend, OWNER);
+  backend.hold("audit");
+  await nav(page, "Audit log");
+  await expect(main.getByText("Loading audit log…")).toBeVisible();
+  await bothThemes(page, "the audit log, loading");
+  backend.release();
+  await expect(main.getByText("Nothing recorded.")).toBeVisible();
+  await bothThemes(page, "the audit log, nothing recorded");
+
+  await page.getByRole("button", { name: "Log out" }).click();
+  backend.refuse("audit", { status: 500, code: "internal" });
+  await signIn(page, backend, OWNER);
+  await nav(page, "Audit log");
+  await expect(main.getByText(/Couldn't load audit log/)).toBeVisible();
+  await bothThemes(page, "the audit log, failed");
+  backend.refuse("audit", null);
+
+  const member = backend.userId(MEMBER);
+  for (const action of ["user.set_role", "user.set_disabled", "user.change_password"] as const) {
+    backend.addAuditEntry({
+      action,
+      actor: backend.userId(OWNER),
+      target: { kind: "user", id: member },
+      metadata: [{ key: "user_id", text: member }],
+    });
+  }
+  backend.addAgent("agent-without-entries");
+  await page.getByRole("button", { name: "Log out" }).click();
+  backend.refuse("users", { status: 500, code: "internal" });
+  await signIn(page, backend, OWNER);
+  await nav(page, "Audit log");
+  await expect(main.getByText("Names unavailable. Users show by ID.")).toBeVisible();
+  await bothThemes(page, "the audit log, names unavailable");
+  backend.refuse("users", null);
+
+  await page.getByRole("button", { name: "Log out" }).click();
+  await signIn(page, backend, OWNER);
+  await nav(page, "Agents");
+  await main.getByRole("link", { name: "Audit of agent-without-entries" }).click();
+  await expect(main.getByText("Nothing for this target.")).toBeVisible();
+  await bothThemes(page, "the audit log, nothing for this target");
+  await nav(page, "Users");
+  await main.getByRole("link", { name: `Audit of ${MEMBER}` }).click();
+  await expect(main.getByText(/What happened to this user/)).toBeVisible();
+  await bothThemes(page, "the audit log, on a user", { small: true, smallHeight: 900 });
+
+  for (let n = 1; n <= 60; n += 1) {
+    backend.addAuditEntry({
+      action: n % 2 === 0 ? "agent.connect" : "security.agent_identity_conflict",
+      outcome: n % 3 === 0 ? "failure" : "success",
+      ip: "2001:db8:ffff:ffff:ffff:ffff:ffff:fffe",
+      target: {
+        kind: "agent",
+        id: `01900000-0000-7000-8000-0000000003${String(n).padStart(2, "0")}`,
+      },
+      metadata: [
+        { key: "reason", text: "name_mismatch" },
+        { key: "agent_name", text: "agent-on-the-host-with-a-long-name-and-more-001" },
+        { key: "certificate_serial", text: "7f3a9c0e5b2d4f6a8c1e3b5d7f9a0c2e4b6d8f0a" },
+      ],
+    });
+  }
+  backend.addUnreadableEntry();
+  await nav(page, "Audit log");
+  await expect(main.getByRole("button", { name: "Show more" })).toBeVisible();
+  await bothThemes(page, "the audit log, a long list", { end: "ends" });
+  await page.setViewportSize({ width: 800, height: 600 });
+  await expect(main.getByRole("table", { name: "Audit log" })).toHaveCSS("display", "block");
+  await bothThemes(page, "the audit log, a long list, stacked", { end: "ends" });
+  await page.setViewportSize({ width: 1280, height: 720 });
 });
 
 test("servers, accounts with their grants, and the Owner's admin screens", async ({
@@ -948,9 +1364,9 @@ test("servers, accounts with their grants, and the Owner's admin screens", async
   const main = page.getByRole("main");
 
   await nav(page, "Minecraft servers");
-  await expect(main.getByText("No server has settings yet.")).toBeVisible();
+  await expect(main.getByText("No servers.")).toBeVisible();
   await bothThemes(page, "servers, empty");
-  await main.getByRole("link", { name: "Add a server" }).click();
+  await main.getByRole("link", { name: "Add server" }).click();
   await page.getByLabel("Server address").fill("MC.example.com");
   await main.getByRole("button", { name: "Save" }).click();
   await expect(page.getByLabel("Current password")).toBeVisible();
@@ -960,42 +1376,42 @@ test("servers, accounts with their grants, and the Owner's admin screens", async
   await expect(main.getByRole("heading", { name: "mc.example.com:25565", level: 1 })).toBeVisible();
   await nav(page, "Minecraft servers");
   await expect(main.getByRole("listitem").filter({ hasText: "mc.example.com" })).toBeVisible();
-  await bothThemes(page, "servers");
+  await bothThemes(page, "servers", { small: true });
 
   await nav(page, "Accounts");
   const accountLink = main.getByRole("link", { name: "AfkBot1", exact: true });
   await expect(accountLink).toBeVisible();
-  await bothThemes(page, "accounts");
+  await bothThemes(page, "accounts", { small: true });
   await accountLink.click();
   await expect(main.getByRole("table", { name: "Who has access" })).toBeVisible();
-  await bothThemes(page, "an account and who has access");
+  await bothThemes(page, "an account and who has access", { small: true, smallHeight: 800 });
 
   await nav(page, "Users");
   await expect(main.getByRole("row", { name: new RegExp(MEMBER) })).toBeVisible();
-  await bothThemes(page, "users");
+  await bothThemes(page, "users", { small: true });
   await main
     .getByRole("row", { name: new RegExp(MEMBER) })
     .getByRole("link", { name: /Review grants/ })
     .click();
   await main.getByRole("button", { name: /Show who has access/ }).click();
   await expect(main.getByRole("table", { name: /Who has access to/ })).toBeVisible();
-  await bothThemes(page, "the grants review");
+  await bothThemes(page, "the grants review", { small: true });
 
   await nav(page, "Invites");
   await expect(main.getByRole("heading", { name: "Invites", level: 1 })).toBeVisible();
-  await bothThemes(page, "invites");
+  await bothThemes(page, "invites", { small: true });
   await nav(page, "Agents");
   await expect(main.getByRole("row", { name: /agent-main/ })).toBeVisible();
-  await bothThemes(page, "agents");
+  await bothThemes(page, "agents", { small: true });
   await main
     .getByRole("row", { name: /agent-main/ })
     .getByRole("button", { name: "Disable" })
     .click();
-  await expect(main.getByText(/Disabling agent-main is final/)).toBeVisible();
+  await expect(main.getByText(/Disable agent-main for good/)).toBeVisible();
   await bothThemes(page, "agents, the question");
   await nav(page, "Audit log");
-  await expect(main.getByText(/can't be read/)).toBeVisible();
-  await bothThemes(page, "the audit log, an unreadable row");
+  await expect(main.getByText(/unreadable\./)).toBeVisible();
+  await bothThemes(page, "the audit log, an unreadable row", { small: true });
 });
 
 test("the banner, the start screen, loading and the error panel", async ({ page, context }) => {
@@ -1023,7 +1439,7 @@ test("the banner, the start screen, loading and the error panel", async ({ page,
   await logOut.hover();
   await expect(page.locator("[data-slot=tooltip]")).toBeVisible();
   // A Tab moves the focus, which closes a tip, so this row holds its texts only.
-  await textsInBothThemes(page, "the collapsed sidebar, a tooltip open");
+  await textsInBothThemes(page, "the collapsed sidebar, a tooltip open", { skip: true });
   await page.mouse.move(600, 600);
   await expect(page.locator("[data-slot=tooltip]")).toHaveCount(0);
   await bothThemes(page, "the collapsed sidebar");
@@ -1058,5 +1474,6 @@ test("the banner, the start screen, loading and the error panel", async ({ page,
     await page.goto("/?panel=error");
     await expect(page.getByRole("heading", { name: /App error/ })).toBeVisible();
     await measured(page, "the error panel", scheme);
+    await frameHolds(page, `the error panel, ${scheme}`);
   }
 });

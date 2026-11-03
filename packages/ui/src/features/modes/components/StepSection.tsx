@@ -80,7 +80,7 @@ function DraggableStep({ id, index, place }: { id: string; index: number; place:
           <button
             ref={setActivatorNodeRef}
             type="button"
-            className="cursor-grab touch-none self-start rounded-sm text-muted-foreground disabled:cursor-default"
+            className="absolute top-2.5 right-2.5 cursor-grab touch-none rounded-sm p-0.5 text-muted-foreground disabled:cursor-default"
             {...attributes}
             {...listeners}
             aria-label={dragStep(index + 1)}
@@ -140,56 +140,58 @@ export function StepSection({
     onRemove: steps.remove,
   };
   return (
-    <fieldset className="flex flex-col gap-4" aria-describedby={hintId}>
-      <legend className="mb-2 text-lg font-semibold">{text.heading}</legend>
-      <p id={hintId} className="text-sm text-muted-foreground">
-        {text.hint}
-      </p>
-      {view.readOnly ? (
-        steps.fields.map((field, index) => (
-          <StepCard
-            key={field.id}
-            form={form}
-            section={section}
-            index={index}
-            count={steps.fields.length}
-            view={view}
-            onMove={move}
-            onRemove={steps.remove}
-          />
-        ))
-      ) : (
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          accessibility={{
-            announcements: dragAnnouncements(ids),
-            screenReaderInstructions: { draggable: DRAG_INSTRUCTIONS },
-          }}
-          onDragEnd={dropped}
-        >
-          <SortableContext items={ids} strategy={verticalListSortingStrategy}>
-            {steps.fields.map((field, index) => (
-              <DraggableStep key={field.id} id={field.id} index={index} place={place} />
-            ))}
-          </SortableContext>
-        </DndContext>
-      )}
-      <UnknownSteps count={unknown} />
-      {view.readOnly ? null : (
-        <div className="flex flex-wrap items-center gap-3">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={view.locked || full}
-            onClick={() => steps.append(newStep())}
+    <div className="rounded-lg border bg-card p-3">
+      <fieldset className="flex min-w-0 flex-col gap-3" aria-describedby={hintId}>
+        <legend className="mb-1 text-base font-semibold">{text.heading}</legend>
+        <p id={hintId} className="text-sm text-muted-foreground">
+          {text.hint}
+        </p>
+        {view.readOnly ? (
+          steps.fields.map((field, index) => (
+            <StepCard
+              key={field.id}
+              form={form}
+              section={section}
+              index={index}
+              count={steps.fields.length}
+              view={view}
+              onMove={move}
+              onRemove={steps.remove}
+            />
+          ))
+        ) : (
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            accessibility={{
+              announcements: dragAnnouncements(ids),
+              screenReaderInstructions: { draggable: DRAG_INSTRUCTIONS },
+            }}
+            onDragEnd={dropped}
           >
-            {ADD_STEP}
-          </Button>
-          {full ? <span className="text-sm text-muted-foreground">{AT_MOST_STEPS}</span> : null}
-        </div>
-      )}
-    </fieldset>
+            <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+              {steps.fields.map((field, index) => (
+                <DraggableStep key={field.id} id={field.id} index={index} place={place} />
+              ))}
+            </SortableContext>
+          </DndContext>
+        )}
+        <UnknownSteps count={unknown} />
+        {view.readOnly ? null : (
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={view.locked || full}
+              onClick={() => steps.append(newStep())}
+            >
+              {ADD_STEP}
+            </Button>
+            {full ? <span className="text-sm text-muted-foreground">{AT_MOST_STEPS}</span> : null}
+          </div>
+        )}
+      </fieldset>
+    </div>
   );
 }

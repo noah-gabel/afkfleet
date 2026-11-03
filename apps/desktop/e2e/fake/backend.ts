@@ -727,9 +727,13 @@ export class FakeBackend {
   readonly #held = new Set<string>();
   readonly #called = new Map<string, number>();
   readonly #refuseNext = new Map<string, Outcome>();
+  readonly #refusingCommand = new Map<string, Outcome>();
   readonly #waiting: (() => void)[] = [];
+  /** The time a state's `since` and a sent line's `at` take: fixed in the screenshots (S131). */
+  readonly #now: () => Date;
 
-  constructor() {
+  constructor(options: { readonly now?: () => Date } = {}) {
+    this.#now = options.now ?? (() => new Date());
     this.#addUser(OWNER, "owner", true);
     this.#addUser(NEW_USER, "member", false);
     this.#addUser(MEMBER, "member", true);
@@ -816,6 +820,10 @@ export class FakeBackend {
       this.#refuseNext.delete(command);
       return refusal;
     }
+    const lasting = this.#refusingCommand.get(command);
+    if (lasting !== undefined) {
+      return lasting;
+    }
     // Not the theme's, which reaches no server, nor the profile, which only the app holds.
     if (this.#refusing !== null && command !== "set_window_theme" && command !== "server_profile") {
       return refused(this.#refusing);
@@ -843,6 +851,21 @@ export class FakeBackend {
             },
           },
     );
+  }
+
+  /**
+   * Every `command` answers `status` and `code` until `refuse(command, null)`: for a screen's failed
+   * state, which a read on mount would otherwise retry past (L4).
+   */
+  refuse(
+    command: string,
+    refusal: { readonly status: number; readonly code: ErrorCode } | null,
+  ): void {
+    if (refusal === null) {
+      this.#refusingCommand.delete(command);
+    } else {
+      this.#refusingCommand.set(command, api(refusal.status, refusal.code));
+    }
   }
 
   /** How many times `command` reached the fake. Names only: arguments may hold a secret. */
@@ -1047,6 +1070,28 @@ export class FakeBackend {
   /** A new Admin `username` with 2FA, and their ID. */
   addAdmin(username: string): string {
     return this.#addUser(username, "admin", true).id;
+  }
+
+  /** An invite `creator` made, used by `user` if given, else pending: for the long lists (L4). */
+  addInvite(creator: string, user?: string): string {
+    const response: InviteResponse = {
+      id: id(this.#next()),
+      role: "member",
+      state: user === undefined ? "pending" : "used",
+      created_by: { id: this.#user(creator).id, username: creator },
+      created_at: "2026-10-13T08:00:00.000Z",
+      expires_at: "2026-10-16T08:00:00.000Z",
+      ...(user === undefined ? {} : { used_by: { id: this.#user(user).id, username: user } }),
+    };
+    this.#invites.push({ code: this.#newCode(), response });
+    return response.id;
+  }
+
+  /** A Member named `username`, never logged in and disabled if asked: for the long lists (L4). */
+  addMember(username: string, options: { readonly disabled?: boolean } = {}): string {
+    const user = this.#addUser(username, "member", false);
+    user.disabled = options.disabled === true;
+    return user.id;
   }
 
   /** The ID of the user named `username`. */
@@ -1734,6 +1779,56 @@ export class FakeBackend {
     return value();
   }
 
+  /** Settings for `server`, newest, with `texts` and `formats`: for the long lists and editors (L4). */
+  addServerSettings(
+    server: string,
+    texts: readonly string[],
+    formats: readonly string[] = [],
+  ): string {
+    const settings: Settings = {
+      id: id(this.#next()),
+      server: keyOf(server),
+      texts: [...texts],
+      formats: [...formats],
+      version: 1,
+    };
+    this.#settings = [settings, ...this.#settings];
+    return settings.id;
+  }
+
+  /** `server`'s settings changed by another device: the next edit at its old version is stale. */
+  changeServerSettings(server: string): void {
+    const settings = this.#settings.find((one) => one.server === keyOf(server));
+    if (settings === undefined) {
+      throw new Error(`no settings for ${server}`);
+    }
+    settings.version += 1;
+  }
+
+  /** No mode at all, built-in ones included: for the list's empty state (L4). */
+  clearModes(): void {
+    this.#modes = [];
+  }
+
+  /** A private mode of `owner`'s, newest, with `steps`: for the long lists and editors (L4). */
+  addMode(owner: string, name: string, steps: readonly ModeStepRequest[] = []): string {
+    const id = `01b00000-0000-7000-8000-${String(this.#next()).padStart(12, "0")}`;
+    this.#modes = [
+      {
+        id,
+        name,
+        visibility: "private",
+        ownerId: this.#user(owner).id,
+        version: 1,
+        created_at: MODE_TIME,
+        updated_at: MODE_TIME,
+        steps: [...steps],
+      },
+      ...this.#modes,
+    ];
+    return id;
+  }
+
   /** Mode `name` changed by another device (R166): the next edit at its old version is stale. */
   changeMode(name: string, change: { readonly name?: string }): void {
     const mode = this.#modes.find((one) => one.name === name);
@@ -1829,7 +1924,7 @@ export class FakeBackend {
     } else if (bot.serverAddress === undefined) {
       bot.status = { kind: "unplaced", why: "no_server", ...resting };
     } else {
-      bot.status = { kind: "awaiting_report", since: new Date().toISOString() };
+      bot.status = { kind: "awaiting_report", since: this.#now().toISOString() };
     }
   }
 
@@ -1892,7 +1987,7 @@ export class FakeBackend {
     }
     const kept: ChatLine = {
       id: this.#nextLine(),
-      at: new Date().toISOString(),
+      at: this.#now().toISOString(),
       direction: "out",
       kind: "user",
       text: line,

@@ -5,7 +5,9 @@
 // never shows against changed input. A refusal at `chat_formats[i]` shows at that format
 // (through the editor), one at `line` under the box, and anything else as its text there.
 // Try stays usable while "Confirm it's you" is up, since it changes nothing. It sits inside
-// the editor's form, so Enter in the line tries rather than saving.
+// the editor's form, so Enter in the line tries rather than saving. The answer, or a refusal's
+// text, scrolls into view as it comes: Try often sits at its column's foot, the answer below it
+// (ADR-0020, L4).
 import { useRef, useState } from "react";
 
 import { toApiError } from "../../../api/ApiError";
@@ -16,6 +18,7 @@ import { Input } from "../../../components/ui/input";
 import type { CommandError } from "../../../generated/CommandError";
 import { useAlive } from "../../../hooks/useStepGuard";
 import { fieldErrorsOf } from "../../../lib/formErrors";
+import { inView } from "../../../lib/inView";
 import { usePreviewChatFormats } from "../hooks/usePreviewChatFormats";
 import { formatReads, NO_FORMAT_FITS, TRY, TRY_LINE, TRY_LINE_PLACEHOLDER } from "../texts";
 
@@ -134,12 +137,12 @@ export function TryLine({
         {TRY}
       </Button>
       {shown?.said === undefined ? null : (
-        <p role="status" className="text-sm">
+        <p ref={inView} role="status" className="text-sm">
           {shown.said}
         </p>
       )}
       {shown?.failed === undefined ? null : (
-        <p role="alert" className="text-sm text-destructive">
+        <p ref={inView} role="alert" className="text-sm text-destructive">
           {shown.failed}
         </p>
       )}

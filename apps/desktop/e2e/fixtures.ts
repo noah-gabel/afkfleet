@@ -8,15 +8,23 @@
 //   and there must have been no violation, no console error and no uncaught error. The page
 //   is served with the release CSP (e2e/csp.ts), so a library that injects a style or
 //   evaluates code fails here, as it would in the app.
+// - In the screenshots' project, the page's clock and the fake's are fixed at `NOW`, so no shot
+//   depends on when it ran (ADR-0020, S131).
 import { defineNetworkFixture } from "@msw/playwright";
 import { type BrowserContext, test as base, expect } from "@playwright/test";
 
 import { FakeBackend } from "./fake/backend";
 import { handlers } from "./fake/handlers";
+import { NOW, SHOTS_PROJECT } from "./shots";
+
+/** Whether this test runs in the screenshots' project, which shoots rather than measures. */
+export function shooting(): boolean {
+  return base.info().project.name === SHOTS_PROJECT;
+}
 
 /** A fresh fake backend that answers the commands of `context`'s pages. */
 export async function fakeBackend(context: BrowserContext): Promise<FakeBackend> {
-  const backend = new FakeBackend();
+  const backend = new FakeBackend(shooting() ? { now: () => new Date(NOW) } : {});
   const network = defineNetworkFixture({
     context,
     handlers: handlers(backend),
@@ -45,6 +53,10 @@ export const test = base.extend<{ guards: undefined }>({
         }
       });
       page.on("pageerror", (error) => errors.push(error.message));
+      if (shooting()) {
+        // Before the guards freeze `Object.prototype`, which the clock's own script runs beside.
+        await page.clock.setFixedTime(new Date(NOW));
+      }
       await page.addInitScript(() => {
         const seen: string[] = [];
         Object.defineProperty(window, "__cspViolations", { value: seen });

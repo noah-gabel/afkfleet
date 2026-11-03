@@ -455,6 +455,19 @@ e2e:
     node scripts/e2e-bundle-guard.mjs
     pnpm --filter @afkfleet/desktop exec playwright test
 
+# The screenshot baselines (ADR-0020, U97, U125, S130): the theme sweep's rows in Playwright's
+# pinned Linux image, built from deploy/docker/shots.Dockerfile with no network, so this PC and
+# CI make the same pixels. Outside `check` and `ci`, as `test-slow` is; the Screenshots workflow
+# runs it (U118). A failed shot leaves its expected, actual and diff images in target/shots/results/.
+# Compare the screenshot baselines in Playwright's pinned Linux image (needs Docker).
+shots:
+    node scripts/shots.mjs compare
+
+# Write the screenshot baselines that changed or are missing (needs Docker); read each changed PNG
+# before committing it (.claude/rules/testing.md).
+shots-update:
+    node scripts/shots.mjs update
+
 # --- Building blocks of `check` and `ci` (CI runs them as separate jobs) ---
 
 # Check Rust formatting.

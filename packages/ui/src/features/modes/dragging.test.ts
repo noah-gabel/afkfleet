@@ -17,8 +17,8 @@ describe("dragAnnouncements", () => {
   it("says where it goes, over a step or dropped", () => {
     const arguments_ = { active: active("c"), over: over("a") };
 
-    expect(said.onDragOver(arguments_)).toBe("Step 3 moved to position 1 of 3.");
-    expect(said.onDragEnd(arguments_)).toBe("Step 3 moved to position 1 of 3.");
+    expect(said.onDragOver(arguments_)).toBe("Step 3 moved to 1 of 3.");
+    expect(said.onDragEnd(arguments_)).toBe("Step 3 moved to 1 of 3.");
   });
 
   it("says the pick-up, not a move, while it's over itself", () => {

@@ -1,6 +1,6 @@
+import { Facts } from "../../../components/Facts";
 import type { ModeResponse } from "../../../generated/ModeResponse";
-import { MARK_UNLISTED, UNKNOWN_STEP } from "../texts";
-import { modeFacts } from "./ModesScreen";
+import { FACT, MARK_UNLISTED, UNKNOWN_STEP, whoseText } from "../texts";
 
 /** One line for each of `count` steps this version doesn't know (R160). */
 export function UnknownSteps({ count }: { count: number }) {
@@ -12,11 +12,17 @@ export function UnknownSteps({ count }: { count: number }) {
   ));
 }
 
-/** Whose `mode` is, who sees it, its steps, and its mark. */
+/** Whose `mode` is and how many steps it holds, and its mark; its fields say the rest. */
 export function ModeSummary({ mode }: { mode: ModeResponse }) {
   return (
     <div className="flex flex-col gap-1">
-      <p className="text-sm text-muted-foreground">{modeFacts(mode)}</p>
+      <Facts
+        facts={[
+          { term: FACT.owner, value: whoseText(mode.ownership, mode.owner) },
+          { term: FACT.steps, value: String(mode.steps.length) },
+        ]}
+        place="screen"
+      />
       {mode.unlisted_command ? <p className="text-sm">{MARK_UNLISTED}</p> : null}
     </div>
   );

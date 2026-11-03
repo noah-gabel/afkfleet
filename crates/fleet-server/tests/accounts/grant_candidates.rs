@@ -313,6 +313,28 @@ async fn a_grant_on_another_account_doesnt_leave_them_out(
     assert_eq!(names(&ask(&setup, &owner, id, "user").await), ["user2"]);
 }
 
+/// The roles come from the account's owner, never the caller's: a Member who
+/// manages an Admin's account is offered another Admin, who has no implicit
+/// Manage on it (PR #90's review).
+#[sqlx::test(migrations = false)]
+async fn a_member_managing_an_admins_account_is_offered_another_admin(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = HttpSetup::new(options).await;
+    let admin = setup.person(1, Role::Admin).await;
+    let manager = setup.person(2, Role::Member).await;
+    setup.add_user(3, Role::Admin).await;
+    let id = setup.add_account(admin.id, 4, None).await;
+    setup
+        .add_grant(id, manager.id, GrantLevel::Manage, admin.id)
+        .await;
+
+    let seen = ask(&setup, &manager, id, "user").await;
+
+    assert_eq!(names(&seen), ["user3"]);
+}
+
 /// Whether the SQL's leaving out agrees with fleet-core's `implicit_manage` for
 /// a user of `candidate`'s role on an account `owner`'s role owns: an exhaustive
 /// pin, since the query copies its rule.

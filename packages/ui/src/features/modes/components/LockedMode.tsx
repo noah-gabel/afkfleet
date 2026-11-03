@@ -6,6 +6,7 @@
 import { useId, useState } from "react";
 import { useForm } from "react-hook-form";
 
+import { EditorColumns } from "../../../components/EditorColumns";
 import { FormField } from "../../../components/FormField";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
@@ -59,50 +60,59 @@ export function LockedMode({
   const unknown = unknownSteps(mode);
   const elsewhere = unknown.filter((section) => section === null).length;
   return (
-    <main className="flex max-w-3xl flex-col gap-6 p-6">
-      <h1 className="text-2xl font-semibold tracking-tight">{mode.name}</h1>
-      <ModeSummary mode={mode} />
-      {isKnownMode(mode) ? null : <p className="text-sm">{UNKNOWN_MODE}</p>}
-      {note === undefined ? null : <p role="alert">{note}</p>}
-      <div className="flex flex-col gap-6">
-        <FormField id={`${formId}-name`} label={NAME_FIELD} error={undefined}>
-          {(control) => <Input {...control} readOnly value={mode.name} />}
-        </FormField>
-        <FormField id={`${formId}-visibility`} label={VISIBILITY_FIELD} error={undefined}>
-          {(control) => <Input {...control} readOnly value={visibilityText(mode.visibility)} />}
-        </FormField>
-        {SECTIONS.map((section) => (
-          <StepSection
-            key={section}
-            form={form}
-            section={section}
-            view={READ_ONLY}
-            full={false}
-            unknown={unknown.filter((one) => one === section).length}
-            announce={silent}
-          />
-        ))}
-        {elsewhere === 0 ? null : (
-          <fieldset className="flex flex-col gap-2">
-            <legend className="mb-2 text-lg font-semibold">{OTHER_STEPS}</legend>
-            <UnknownSteps count={elsewhere} />
-          </fieldset>
-        )}
-      </div>
-      {gone ? <p role="alert">{MODE_GONE}</p> : null}
-      {isKnownMode(mode) ? (
-        <Button
-          type="button"
-          variant="outline"
-          className="self-start"
-          onClick={() => onCopy(copyValues(mode))}
-        >
-          {MAKE_A_COPY}
-        </Button>
-      ) : null}
-      {mode.deletable && !gone ? (
-        <DeleteMode mode={mode} writes={writes} onGone={() => setGone(true)} />
-      ) : null}
-    </main>
+    <EditorColumns
+      box={
+        <>
+          <h1 className="text-lg font-semibold tracking-tight break-words">{mode.name}</h1>
+          <ModeSummary mode={mode} />
+          {isKnownMode(mode) ? null : <p className="text-sm">{UNKNOWN_MODE}</p>}
+          {note === undefined ? null : <p role="alert">{note}</p>}
+          <FormField id={`${formId}-name`} label={NAME_FIELD} error={undefined}>
+            {(control) => <Input {...control} readOnly value={mode.name} />}
+          </FormField>
+          <FormField id={`${formId}-visibility`} label={VISIBILITY_FIELD} error={undefined}>
+            {(control) => <Input {...control} readOnly value={visibilityText(mode.visibility)} />}
+          </FormField>
+        </>
+      }
+      sections={
+        <>
+          {SECTIONS.map((section) => (
+            <StepSection
+              key={section}
+              form={form}
+              section={section}
+              view={READ_ONLY}
+              full={false}
+              unknown={unknown.filter((one) => one === section).length}
+              announce={silent}
+            />
+          ))}
+          {elsewhere === 0 ? null : (
+            <div className="rounded-lg border bg-card p-3">
+              <fieldset className="flex min-w-0 flex-col gap-2">
+                <legend className="mb-2 text-base font-semibold">{OTHER_STEPS}</legend>
+                <UnknownSteps count={elsewhere} />
+              </fieldset>
+            </div>
+          )}
+        </>
+      }
+      notes={gone ? <p role="alert">{MODE_GONE}</p> : null}
+      apart={
+        <>
+          {isKnownMode(mode) ? (
+            <Button type="button" variant="outline" onClick={() => onCopy(copyValues(mode))}>
+              {MAKE_A_COPY}
+            </Button>
+          ) : null}
+          {mode.deletable && !gone ? (
+            <div className="w-full border-t pt-3">
+              <DeleteMode mode={mode} writes={writes} onGone={() => setGone(true)} />
+            </div>
+          ) : null}
+        </>
+      }
+    />
   );
 }

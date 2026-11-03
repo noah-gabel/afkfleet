@@ -6,22 +6,23 @@ import type { AuditOutcomeName } from "../../generated/AuditOutcomeName";
 import type { AuditTargetKind } from "../../generated/AuditTargetKind";
 
 export const AUDIT_HEADING = "Audit log";
-export const AUDIT_INTRO = "Everything the server recorded, newest first.";
-export const AUDIT_EMPTY = "Nothing recorded yet.";
-export const FILTER_EMPTY = "Nothing recorded for this target.";
+export const AUDIT_INTRO = "Everything recorded, newest first.";
+export const AUDIT_EMPTY = "Nothing recorded.";
+export const LOADING_AUDIT = "Loading audit log…";
+export const FILTER_EMPTY = "Nothing for this target.";
 export const SHOW_MORE = "Show more";
 export const LOAD_AGAIN = "Load again";
 export const ONLY_THIS_TARGET = "Only this target";
 export const SHOW_EVERYTHING = "Show everything";
-export const FILTER_ON_USER = "This shows what happened to this user, not everything they did.";
-export const NAMES_FAILED = "Names couldn't be loaded, so users show by ID.";
+export const FILTER_ON_USER = "What happened to this user, not everything they did.";
+export const NAMES_FAILED = "Names unavailable. Users show by ID.";
 export const THE_SERVER = "The server";
 export const NO_USER = "No user";
 export const COLUMNS = ["When", "Who", "What", "On", "Result", "From", "Details"] as const;
 
 /** Why the log couldn't be read. */
 export function auditFailed(why: string): string {
-  return `Couldn't load the audit log: ${why}`;
+  return `Couldn't load audit log: ${why}`;
 }
 
 /** What the line above a filtered list says, before the target's name or ID. */
@@ -36,7 +37,7 @@ export function onlyTarget(kind: AuditTargetKind, who: string): string {
 
 /** A row the server couldn't read back (ADR-0020, S52). */
 export function unreadableEntry(id: number): string {
-  return `Entry ${id} can't be read. The server's log says why.`;
+  return `Entry ${id} unreadable. The server's log says why.`;
 }
 
 /** Every action's word; `tsc` refuses a new action without one. */

@@ -18,7 +18,7 @@ import type { Page } from "@playwright/test";
 import { type FakeBackend, MEMBER, OWNER } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
 import { enterCode, expectHome, logIn } from "./steps";
-import { inScheme } from "./theme";
+import { frameAtTheEnd, inScheme } from "./theme";
 
 test.use({ launchOptions: { ignoreDefaultArgs: ["--hide-scrollbars"] } });
 
@@ -207,59 +207,6 @@ for (const [width, height] of [
     });
   }
 }
-
-/**
- * The frame after every scroller went to its end: whether the page's own boxes scroll, where Back's
- * row is, and every element that ends below the window outside a scroller that holds it, found up
- * its containing blocks (an absolute element skips the boxes that aren't positioned).
- */
-const frameAtTheEnd = (page: Page) =>
-  page.evaluate(() => {
-    const scrolls = (element: Element | null | undefined) =>
-      element !== null && element !== undefined && element.scrollHeight > element.clientHeight;
-    const content = document.querySelector("[data-slot=content]");
-    const back = () => document.querySelector("[data-slot=back-row]")?.getBoundingClientRect().top;
-    const backBefore = back();
-    const own = {
-      html: scrolls(document.documentElement),
-      body: scrolls(document.body),
-      root: scrolls(document.getElementById("root")),
-      screen: scrolls(document.querySelector("[data-slot=screen]")),
-      outer: scrolls(content?.parentElement),
-    };
-    for (const element of [document.documentElement, ...document.body.querySelectorAll("*")]) {
-      element.scrollTop = element.scrollHeight;
-    }
-    const containing = (element: Element): Element | null => {
-      const position = getComputedStyle(element).position;
-      if (position === "fixed") {
-        return null;
-      }
-      let up = element.parentElement;
-      if (position === "absolute") {
-        while (up !== null && getComputedStyle(up).position === "static") {
-          up = up.parentElement;
-        }
-      }
-      return up;
-    };
-    const held = (element: Element) => {
-      for (let up = containing(element); up !== null; up = containing(up)) {
-        if (getComputedStyle(up).overflowY !== "visible") {
-          return up.getBoundingClientRect().bottom <= innerHeight + 1;
-        }
-      }
-      return false;
-    };
-    const escaped: string[] = [];
-    for (const element of document.body.querySelectorAll("*")) {
-      const box = element.getBoundingClientRect();
-      if ((box.width > 0 || box.height > 0) && box.bottom > innerHeight + 1 && !held(element)) {
-        escaped.push(`${element.tagName.toLowerCase()} "${element.textContent?.slice(0, 30)}"`);
-      }
-    }
-    return { own, backBefore, backAfter: back(), escaped: escaped.slice(0, 5) };
-  });
 
 for (const [width, height] of [
   [1318, 720],

@@ -1,5 +1,5 @@
 // The Minecraft servers' list (Plan.md P11.9; ADR-0020, U57, R136): every page read, 10 at a
-// time, each entry with its count and its link, "Add a server", and the empty, loading and
+// time, each entry with its count and its link, "Add server", and the empty, loading and
 // failed states.
 import { screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -11,6 +11,16 @@ import { atScreen } from "../../test/signedIn";
 import { refusal } from "../../test/signIn";
 
 const ADMIN = me("admin", "afkadmin");
+
+/** The labelled facts on a card: each label and its value. */
+function facts(card: HTMLElement): Record<string, string | null | undefined> {
+  return Object.fromEntries(
+    [...card.querySelectorAll("dt")].map((term) => [
+      term.textContent,
+      term.nextElementSibling?.textContent,
+    ]),
+  );
+}
 
 describe("the Minecraft servers' list", () => {
   it("lists each server's settings with its count, each opening its own screen", async () => {
@@ -32,21 +42,20 @@ describe("the Minecraft servers' list", () => {
     expect(
       await screen.findByRole("heading", { name: "Minecraft servers", level: 1 }),
     ).toBeDefined();
-    expect(
-      screen.getByText("Settings here apply to every bot on that server, whoever's bot it is."),
-    ).toBeDefined();
+    expect(screen.getByText("Apply to every bot on that server, whoever owns it.")).toBeDefined();
     const items = within(screen.getByRole("list", { name: "Minecraft servers" })).getAllByRole(
       "listitem",
     );
     expect(items).toHaveLength(4);
     const [formatsOnly, both, first, second] = items;
-    // Only the parts a row has (the user's change at H7's plan review).
-    expect(within(formatsOnly as HTMLElement).getByText("2 chat formats")).toBeDefined();
-    expect(within(both as HTMLElement).getByText("1 conflict text · 2 chat formats")).toBeDefined();
+    // Only the parts a row has (the user's change at H7's plan review), each labelled (U119).
+    expect(facts(formatsOnly as HTMLElement)).toEqual({ "Chat formats": "2" });
+    expect(facts(both as HTMLElement)).toEqual({ "Conflict texts": "1", "Chat formats": "2" });
     expect(within(first as HTMLElement).getByText("play.example.com:25566")).toBeDefined();
-    expect(within(first as HTMLElement).getByText("3 conflict texts")).toBeDefined();
+    expect(facts(first as HTMLElement)).toEqual({ "Conflict texts": "3" });
     expect(within(second as HTMLElement).getByText("mc.example.com:25565")).toBeDefined();
-    expect(within(second as HTMLElement).getByText("1 conflict text")).toBeDefined();
+    expect(facts(second as HTMLElement)).toEqual({ "Conflict texts": "1" });
+    expect(screen.getByRole("list", { name: "Minecraft servers" }).className).toContain("grid");
     await app.user.click(screen.getByRole("link", { name: "Open mc.example.com:25565" }));
     await vi.waitFor(() => expect(app.path()).toBe(`/admin/servers/${settingsId(1)}`));
   });
@@ -73,15 +82,18 @@ describe("the Minecraft servers' list", () => {
     ]);
   });
 
-  it("says when no server has settings, and Add a server opens a new one", async () => {
+  it("says when no server has settings, and Add server opens a new one", async () => {
     const app = await atScreen(
       "/admin/servers",
       { serverSettings: async () => ({ items: [] }) },
       { user: ADMIN },
     );
 
-    expect(await screen.findByText("No server has settings yet.")).toBeDefined();
-    await app.user.click(screen.getByRole("link", { name: "Add a server" }));
+    expect(await screen.findByText("No servers.")).toBeDefined();
+    const links = screen.getAllByRole("link", { name: "Add server" });
+    expect(links).toHaveLength(1);
+    expect(links[0]?.closest("[data-slot=screen-state]")).not.toBeNull();
+    await app.user.click(links[0] as HTMLElement);
     await vi.waitFor(() => expect(app.path()).toBe("/admin/servers/new"));
   });
 
@@ -89,10 +101,11 @@ describe("the Minecraft servers' list", () => {
     const answer = deferred<ServerSettingsPage>();
     await atScreen("/admin/servers", { serverSettings: () => answer.promise }, { user: ADMIN });
 
-    expect(await screen.findByText("Loading servers…")).toBeDefined();
+    expect((await screen.findByText("Loading servers…")).getAttribute("role")).toBe("status");
+    expect(screen.queryByRole("link", { name: "Add server" })).toBeNull();
   });
 
-  it("says why when the servers couldn't be read", async () => {
+  it("says why when the servers couldn't be read, and keeps Add server (PR #92's review)", async () => {
     await atScreen(
       "/admin/servers",
       {
@@ -104,6 +117,7 @@ describe("the Minecraft servers' list", () => {
     );
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toMatch(/^Couldn't load the servers: refused: internal/);
+    expect(alert.textContent).toMatch(/^Couldn't load servers: refused: internal/);
+    expect(screen.getByRole("link", { name: "Add server" })).toBeDefined();
   });
 });

@@ -23,9 +23,11 @@ import { CHAT_FORMATS_MAX, CONFLICT_TEXTS_MAX } from "../../../api/limits";
 import { SERVER_SETTINGS_KEY, useMe, useServerSettings } from "../../../api/queries";
 import { chatFormat, conflictText, serverAddress } from "../../../api/schemas";
 import { z } from "../../../api/zod";
+import { EditorColumns } from "../../../components/EditorColumns";
 import { FieldMessage } from "../../../components/FieldMessage";
 import { FormField } from "../../../components/FormField";
 import { RetryWaitMessage } from "../../../components/RetryWaitMessage";
+import { ScreenState } from "../../../components/ScreenState";
 import { Alert, AlertDescription } from "../../../components/ui/alert";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
@@ -35,6 +37,7 @@ import type { ServerSettingsResponse } from "../../../generated/ServerSettingsRe
 import { useRetryWait } from "../../../hooks/useRetryWait";
 import { useAlive } from "../../../hooks/useStepGuard";
 import { showFieldErrors } from "../../../lib/formErrors";
+import { focusFirstField, inView } from "../../../lib/inView";
 import { isStepUpRequired } from "../../../lib/stepUp";
 import { StepUpPrompt } from "../../admin/components/StepUpPrompt";
 import { useStepUpAction } from "../../admin/hooks/useStepUpAction";
@@ -57,7 +60,7 @@ import {
   FORMATS_HEADING,
   FORMATS_HINT,
   LOAD_AGAIN,
-  LOADING_SERVERS,
+  LOADING_SERVER,
   REMOVE,
   SAVE,
   SAVED,
@@ -110,17 +113,15 @@ function Existing({ id, configure }: { id: string; configure: boolean }) {
   const failure = query.error === null ? null : toApiError(query.error).error;
   if (failure !== null && query.data === undefined) {
     return (
-      <main className="flex max-w-3xl flex-col gap-4 p-6">
-        <p role="alert" className="text-sm text-destructive">
-          {serversFailed(describeError(failure))}
-        </p>
+      <main className="flex max-w-3xl flex-col gap-4 p-4">
+        <ScreenState kind="error">{serversFailed(describeError(failure))}</ScreenState>
       </main>
     );
   }
   if (query.data === undefined) {
     return (
-      <main className="p-6">
-        <p className="text-sm text-muted-foreground">{LOADING_SERVERS}</p>
+      <main className="flex max-w-3xl flex-col gap-4 p-4">
+        <ScreenState kind="loading">{LOADING_SERVER}</ScreenState>
       </main>
     );
   }
@@ -131,8 +132,8 @@ function Existing({ id, configure }: { id: string; configure: boolean }) {
 /** Settings that aren't there: never were, or went while their screen was open. */
 function Gone() {
   return (
-    <main className="flex max-w-3xl flex-col gap-4 p-6">
-      <p role="alert">{SETTINGS_GONE}</p>
+    <main className="flex max-w-3xl flex-col gap-4 p-4">
+      <ScreenState kind="error">{SETTINGS_GONE}</ScreenState>
     </main>
   );
 }
@@ -336,177 +337,206 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
   const formatsFull = formats.fields.length >= CHAT_FORMATS_MAX;
   const formatsError = errors.formats?.message ?? errors.formats?.root?.message;
   return (
-    <main className="flex max-w-3xl flex-col gap-6 p-6">
-      <h1 className="text-2xl font-semibold tracking-tight">{row?.server ?? ADD_SERVER}</h1>
-      <form className="flex flex-col gap-6" noValidate onSubmit={(event) => void submit(event)}>
-        <FormField
-          id={`${formId}-server`}
-          label={SERVER_FIELD}
-          hint={SERVER_HINT}
-          error={errors.server?.message}
-        >
-          {(control) => (
-            <Input
-              {...control}
-              autoComplete="off"
-              readOnly={readOnly}
-              {...form.register("server")}
-            />
-          )}
-        </FormField>
-        <fieldset
-          className="flex flex-col gap-4"
-          aria-describedby={
-            listError === undefined
-              ? `${formId}-texts-hint`
-              : `${formId}-texts-hint ${formId}-texts-error`
-          }
-        >
-          <legend className="mb-2 text-lg font-semibold">{TEXTS_HEADING}</legend>
-          <p id={`${formId}-texts-hint`} className="text-sm text-muted-foreground">
-            {TEXTS_HINT}
-          </p>
-          {texts.fields.map((field, index) => (
-            <div key={field.id} className="flex flex-col gap-2">
-              <FormField
-                id={`${formId}-text-${field.id}`}
-                label={conflictTextLabel(index + 1)}
-                error={errors.texts?.[index]?.text?.message}
-              >
-                {(control) => (
-                  <Textarea
-                    {...control}
-                    readOnly={readOnly}
-                    {...form.register(`texts.${index}.text`)}
-                  />
-                )}
-              </FormField>
-              {configure ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="self-start"
-                  disabled={locked}
-                  aria-describedby={`${formId}-text-${field.id}-label`}
-                  onClick={() => texts.remove(index)}
-                >
-                  {REMOVE}
-                </Button>
-              ) : null}
-            </div>
-          ))}
-          <FieldMessage id={`${formId}-texts-error`} message={listError} />
-          {configure ? (
-            <div className="flex flex-wrap items-center gap-3">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={locked || full}
-                onClick={() => texts.append({ text: "" })}
-              >
-                {ADD_TEXT}
-              </Button>
-              {full ? <span className="text-sm text-muted-foreground">{AT_MOST_TEXTS}</span> : null}
-            </div>
-          ) : null}
-        </fieldset>
-        <fieldset
-          className="flex flex-col gap-4"
-          aria-describedby={
-            formatsError === undefined
-              ? `${formId}-formats-hint`
-              : `${formId}-formats-hint ${formId}-formats-error`
-          }
-        >
-          <legend className="mb-2 text-lg font-semibold">{FORMATS_HEADING}</legend>
-          <p id={`${formId}-formats-hint`} className="text-sm text-muted-foreground">
-            {FORMATS_HINT}
-          </p>
-          {formats.fields.map((field, index) => (
-            <div key={field.id} className="flex flex-col gap-2">
-              <FormField
-                id={`${formId}-format-${field.id}`}
-                label={chatFormatLabel(index + 1)}
-                error={errors.formats?.[index]?.format?.message}
-              >
-                {(control) => (
-                  <Input
-                    {...control}
-                    autoComplete="off"
-                    readOnly={readOnly}
-                    {...form.register(`formats.${index}.format`)}
-                  />
-                )}
-              </FormField>
-              {configure ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="self-start"
-                  disabled={locked}
-                  aria-describedby={`${formId}-format-${field.id}-label`}
-                  onClick={() => formats.remove(index)}
-                >
-                  {REMOVE}
-                </Button>
-              ) : null}
-            </div>
-          ))}
-          <FieldMessage id={`${formId}-formats-error`} message={formatsError} />
-          {configure ? (
-            <div className="flex flex-wrap items-center gap-3">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={locked || formatsFull}
-                onClick={() => formats.append({ format: "" })}
-              >
-                {ADD_FORMAT}
-              </Button>
-              {formatsFull ? (
-                <span className="text-sm text-muted-foreground">{AT_MOST_FORMATS}</span>
-              ) : null}
-            </div>
-          ) : null}
-          {configure ? (
-            <TryLine
-              id={`${formId}-try`}
-              formats={shownFormats.map((entry) => entry.format)}
-              clearFormatErrors={() => form.clearErrors("formats")}
-              showFormatErrors={(error) =>
-                showFieldErrors(form.setError, error, formatPaths(form.getValues("formats").length))
+    <EditorColumns
+      form={{ id: formId, onSubmit: (event) => void submit(event) }}
+      box={
+        <>
+          <h1 className="font-mono text-lg font-semibold tracking-tight break-all">
+            {row?.server ?? ADD_SERVER}
+          </h1>
+          <FormField
+            id={`${formId}-server`}
+            label={SERVER_FIELD}
+            hint={SERVER_HINT}
+            error={errors.server?.message}
+          >
+            {(control) => (
+              <Input
+                {...control}
+                autoComplete="off"
+                readOnly={readOnly}
+                {...form.register("server")}
+              />
+            )}
+          </FormField>
+        </>
+      }
+      sections={
+        <>
+          <div className="rounded-lg border bg-card p-3">
+            <fieldset
+              className="flex min-w-0 flex-col gap-3"
+              aria-describedby={
+                listError === undefined
+                  ? `${formId}-texts-hint`
+                  : `${formId}-texts-hint ${formId}-texts-error`
               }
-            />
-          ) : null}
-        </fieldset>
-        {formError === undefined ? null : (
-          <p role="alert" className="text-sm text-destructive">
-            {formError}
-          </p>
-        )}
-        {stale === null ? null : (
-          // One live region: the Alert's own.
-          <Alert>
-            <AlertDescription className="flex flex-col gap-2 text-foreground">
-              <p>{stale}</p>
-              {reloadFailed === null ? null : <p className="text-destructive">{reloadFailed}</p>}
-              <Button
-                type="button"
-                variant="outline"
-                className="self-start"
-                onClick={() => void loadAgain()}
-              >
-                {LOAD_AGAIN}
-              </Button>
-            </AlertDescription>
-          </Alert>
-        )}
-        <RetryWaitMessage wait={wait} />
-        <div className="flex gap-2">
+            >
+              <legend className="mb-1 text-base font-semibold">{TEXTS_HEADING}</legend>
+              <p id={`${formId}-texts-hint`} className="text-sm text-muted-foreground">
+                {TEXTS_HINT}
+              </p>
+              {texts.fields.map((field, index) => (
+                <div key={field.id} className="flex flex-col gap-2">
+                  <FormField
+                    id={`${formId}-text-${field.id}`}
+                    label={conflictTextLabel(index + 1)}
+                    error={errors.texts?.[index]?.text?.message}
+                  >
+                    {(control) => (
+                      <Textarea
+                        {...control}
+                        readOnly={readOnly}
+                        {...form.register(`texts.${index}.text`)}
+                      />
+                    )}
+                  </FormField>
+                  {configure ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="self-start"
+                      disabled={locked}
+                      aria-describedby={`${formId}-text-${field.id}-label`}
+                      onClick={() => texts.remove(index)}
+                    >
+                      {REMOVE}
+                    </Button>
+                  ) : null}
+                </div>
+              ))}
+              <FieldMessage id={`${formId}-texts-error`} message={listError} />
+              {configure ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={locked || full}
+                    onClick={() => texts.append({ text: "" })}
+                  >
+                    {ADD_TEXT}
+                  </Button>
+                  {full ? (
+                    <span className="text-sm text-muted-foreground">{AT_MOST_TEXTS}</span>
+                  ) : null}
+                </div>
+              ) : null}
+            </fieldset>
+          </div>
+          <div className="rounded-lg border bg-card p-3">
+            <fieldset
+              className="flex min-w-0 flex-col gap-3"
+              aria-describedby={
+                formatsError === undefined
+                  ? `${formId}-formats-hint`
+                  : `${formId}-formats-hint ${formId}-formats-error`
+              }
+            >
+              <legend className="mb-1 text-base font-semibold">{FORMATS_HEADING}</legend>
+              <p id={`${formId}-formats-hint`} className="text-sm text-muted-foreground">
+                {FORMATS_HINT}
+              </p>
+              {formats.fields.map((field, index) => (
+                <div key={field.id} className="flex flex-col gap-2">
+                  <FormField
+                    id={`${formId}-format-${field.id}`}
+                    label={chatFormatLabel(index + 1)}
+                    error={errors.formats?.[index]?.format?.message}
+                  >
+                    {(control) => (
+                      <Input
+                        {...control}
+                        autoComplete="off"
+                        readOnly={readOnly}
+                        {...form.register(`formats.${index}.format`)}
+                      />
+                    )}
+                  </FormField>
+                  {configure ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="self-start"
+                      disabled={locked}
+                      aria-describedby={`${formId}-format-${field.id}-label`}
+                      onClick={() => formats.remove(index)}
+                    >
+                      {REMOVE}
+                    </Button>
+                  ) : null}
+                </div>
+              ))}
+              <FieldMessage id={`${formId}-formats-error`} message={formatsError} />
+              {configure ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={locked || formatsFull}
+                    onClick={() => formats.append({ format: "" })}
+                  >
+                    {ADD_FORMAT}
+                  </Button>
+                  {formatsFull ? (
+                    <span className="text-sm text-muted-foreground">{AT_MOST_FORMATS}</span>
+                  ) : null}
+                </div>
+              ) : null}
+              {configure ? (
+                <TryLine
+                  id={`${formId}-try`}
+                  formats={shownFormats.map((entry) => entry.format)}
+                  clearFormatErrors={() => form.clearErrors("formats")}
+                  showFormatErrors={(error) =>
+                    showFieldErrors(
+                      form.setError,
+                      error,
+                      formatPaths(form.getValues("formats").length),
+                    )
+                  }
+                />
+              ) : null}
+            </fieldset>
+          </div>
+        </>
+      }
+      notes={
+        <>
+          {formError === undefined ? null : (
+            <p ref={inView} role="alert" className="text-sm text-destructive">
+              {formError}
+            </p>
+          )}
+          {stale === null ? null : (
+            // One live region: the Alert's own.
+            <Alert ref={inView}>
+              <AlertDescription className="flex flex-col gap-2 text-foreground">
+                <p>{stale}</p>
+                {reloadFailed === null ? null : <p className="text-destructive">{reloadFailed}</p>}
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="self-start"
+                  onClick={() => void loadAgain()}
+                >
+                  {LOAD_AGAIN}
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+          {wait.waiting === null && !wait.ended ? null : (
+            <div ref={inView}>
+              <RetryWaitMessage wait={wait} />
+            </div>
+          )}
+        </>
+      }
+      actions={
+        <>
           {configure ? (
             <Button type="submit" disabled={locked || wait.waiting !== null}>
               {SAVE}
@@ -523,33 +553,43 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
           >
             {CANCEL}
           </Button>
-        </div>
-      </form>
-      {/* Outside the form: "Confirm it's you" is a form of its own. */}
-      {writes.prompt === SAVE_KEY ? (
-        <StepUpPrompt
-          id="step-up-save"
-          pending={writes.running !== null}
-          onConfirm={writes.confirm}
-          onCancel={writes.cancel}
-        />
-      ) : null}
-      {writes.failure?.key === SAVE_KEY ? (
-        <p role="alert" className="text-sm text-destructive">
-          {writes.failure.message}
-        </p>
-      ) : null}
-      {row !== undefined && configure ? (
-        <DeleteAction
-          row={row}
-          writes={writes}
-          onGone={() => {
-            setGone(true);
-            reread();
-          }}
-        />
-      ) : null}
-    </main>
+        </>
+      }
+      prompt={
+        <>
+          {writes.prompt === SAVE_KEY ? (
+            <div ref={focusFirstField}>
+              <StepUpPrompt
+                id="step-up-save"
+                pending={writes.running !== null}
+                onConfirm={writes.confirm}
+                onCancel={writes.cancel}
+              />
+            </div>
+          ) : null}
+          {writes.failure?.key === SAVE_KEY ? (
+            <p ref={inView} role="alert" className="text-sm text-destructive">
+              {writes.failure.message}
+            </p>
+          ) : null}
+        </>
+      }
+      apart={
+        row !== undefined && configure ? (
+          // Set apart as the mode editor's Delete is (U121).
+          <div className="w-full border-t pt-3">
+            <DeleteAction
+              row={row}
+              writes={writes}
+              onGone={() => {
+                setGone(true);
+                reread();
+              }}
+            />
+          </div>
+        ) : undefined
+      }
+    />
   );
 }
 

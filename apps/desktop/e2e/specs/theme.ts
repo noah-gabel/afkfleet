@@ -1,4 +1,5 @@
-// What the theme's specs do on a page (Plan.md P11.10; ADR-0020, S96).
+// What the theme's specs do on a page (Plan.md P11.10; ADR-0020, S96). A sweep row measures in Edge
+// and, in the screenshots' project, is its own baseline instead (U125, R226).
 import type { Page } from "@playwright/test";
 
 import {
@@ -10,7 +11,11 @@ import {
   type TabStep,
   type Walked,
 } from "../contrast";
-import { expect } from "../fixtures";
+import { expect, shooting } from "../fixtures";
+import { inScheme, type Scheme } from "./scheme";
+import { type ShotOptions, shoot } from "./shoot";
+
+export { inScheme, type Scheme } from "./scheme";
 
 /** WCAG AA, which every text holds in both themes (ADR-0020, S97, S108). */
 export const AA: Floors = { normal: 4.5, large: 3 };
@@ -54,26 +59,6 @@ export function logoParts(page: Page): Promise<readonly LogoPart[]> {
   return asked<readonly LogoPart[]>(page, { kind: "logo" });
 }
 
-/** What a theme is called in the media query and in `<html>`'s class. */
-export type Scheme = "light" | "dark";
-
-/** Waits until Windows' setting says `scheme` and `<html>` follows it, animations finished. */
-export async function inScheme(page: Page, scheme: Scheme): Promise<void> {
-  await page.emulateMedia({ colorScheme: scheme });
-  await expect(page.locator("html")).toHaveClass(new RegExp(`\\b${scheme}\\b`));
-  await page.evaluate(() =>
-    Promise.all(
-      document.getAnimations().flatMap((animation) => {
-        if (animation.effect?.getComputedTiming().endTime === Number.POSITIVE_INFINITY) {
-          return [];
-        }
-        animation.finish();
-        return [animation.finished];
-      }),
-    ),
-  );
-}
-
 /**
  * Holds what's on the page to AA in the theme it's in, its texts and each focus stop, naming `row`
  * when it fails.
@@ -89,14 +74,27 @@ export async function measured(page: Page, row: string, scheme: Scheme): Promise
   expect(colorScheme, `${row} in ${scheme}`).toBe(scheme);
 }
 
-/** Only the texts on the page, in both themes: for a row a Tab would change, as it should. */
-export async function textsInBothThemes(page: Page, row: string): Promise<void> {
+/**
+ * Only the texts on the page, in both themes: for a row a Tab would change, as it should; then the
+ * frame (R225). In the
+ * screenshots' project, the row's baselines instead, as `shot` asks.
+ */
+export async function textsInBothThemes(
+  page: Page,
+  row: string,
+  shot: ShotOptions = {},
+): Promise<void> {
+  if (shooting()) {
+    await shoot(page, row, shot);
+    return;
+  }
   for (const scheme of ["dark", "light"] as const) {
     await inScheme(page, scheme);
     const found = await walked(page, AA);
     expect(found.walked, `${row} in ${scheme}: nothing was measured`).toBeGreaterThan(0);
     expect(found.low, `${row} in ${scheme}`).toEqual([]);
   }
+  await frameHolds(page, row);
 }
 
 /**
@@ -129,10 +127,118 @@ export async function selectsInTokens(page: Page, row: string, scheme: Scheme): 
   return found.length;
 }
 
-/** What's on the page, in both themes, flipped in place. */
-export async function bothThemes(page: Page, row: string): Promise<void> {
+/**
+ * What's on the page, in both themes, flipped in place, then the frame (R225, R227): after every
+ * scroller went to its end, the page never scrolls and Back stays. In the screenshots' project, the row's
+ * baselines instead, as `shot` asks.
+ */
+export async function bothThemes(page: Page, row: string, shot: ShotOptions = {}): Promise<void> {
+  if (shooting()) {
+    await shoot(page, row, shot);
+    return;
+  }
   for (const scheme of ["dark", "light"] as const) {
     await inScheme(page, scheme);
     await measured(page, row, scheme);
   }
+  await frameHolds(page, row);
+}
+
+/** What the frame does after every scroller on the screen went to its end. */
+export interface Frame {
+  /** Whether each of the page's own boxes scrolls: never `html`, `body` or `#root`. */
+  readonly own: {
+    readonly html: boolean;
+    readonly body: boolean;
+    readonly root: boolean;
+    readonly screen: boolean;
+    readonly outer: boolean;
+  };
+  /** Whether a signed-in frame is showing, whose screen and outer column never scroll. */
+  readonly signedIn: boolean;
+  /** Where Back's row was before and after. */
+  readonly backBefore: number | undefined;
+  readonly backAfter: number | undefined;
+  /** What ends below the window outside a scroller that holds it, up to five. */
+  readonly escaped: readonly string[];
+}
+
+/**
+ * The frame after every scroller went to its end (ADR-0020, R225): whether the page's own boxes
+ * scroll, where Back's row is, and every element that ends below the window outside a scroller that
+ * holds it, found up its containing blocks (an absolute element skips the boxes that aren't
+ * positioned). Every scroller then goes back where it was.
+ */
+export const frameAtTheEnd = (page: Page): Promise<Frame> =>
+  page.evaluate(() => {
+    const scrolls = (element: Element | null | undefined) =>
+      element !== null && element !== undefined && element.scrollHeight > element.clientHeight;
+    const content = document.querySelector("[data-slot=content]");
+    const back = () => document.querySelector("[data-slot=back-row]")?.getBoundingClientRect().top;
+    const backBefore = back();
+    const own = {
+      html: scrolls(document.documentElement),
+      body: scrolls(document.body),
+      root: scrolls(document.getElementById("root")),
+      screen: scrolls(document.querySelector("[data-slot=screen]")),
+      outer: scrolls(content?.parentElement),
+    };
+    const every = [document.documentElement, ...document.body.querySelectorAll("*")];
+    const were = every.map((element) => element.scrollTop);
+    for (const element of every) {
+      element.scrollTop = element.scrollHeight;
+    }
+    const containing = (element: Element): Element | null => {
+      const position = getComputedStyle(element).position;
+      if (position === "fixed") {
+        return null;
+      }
+      let up = element.parentElement;
+      if (position === "absolute") {
+        while (up !== null && getComputedStyle(up).position === "static") {
+          up = up.parentElement;
+        }
+      }
+      return up;
+    };
+    const held = (element: Element) => {
+      for (let up = containing(element); up !== null; up = containing(up)) {
+        if (getComputedStyle(up).overflowY !== "visible") {
+          return up.getBoundingClientRect().bottom <= innerHeight + 1;
+        }
+      }
+      return false;
+    };
+    const escaped: string[] = [];
+    for (const element of document.body.querySelectorAll("*")) {
+      const box = element.getBoundingClientRect();
+      if ((box.width > 0 || box.height > 0) && box.bottom > innerHeight + 1 && !held(element)) {
+        escaped.push(`${element.tagName.toLowerCase()} "${element.textContent?.slice(0, 30)}"`);
+      }
+    }
+    const backAfter = back();
+    every.forEach((element, at) => {
+      element.scrollTop = were[at] ?? 0;
+    });
+    return { own, signedIn: content !== null, backBefore, backAfter, escaped: escaped.slice(0, 5) };
+  });
+
+/**
+ * R225's lesson for `row`: after every scroller went to its end, the page never scrolls, nor a
+ * signed-in frame's screen and outer column, Back's row stays where it was, and nothing escapes its
+ * scrollers.
+ */
+export async function frameHolds(page: Page, row: string): Promise<void> {
+  const frame = await frameAtTheEnd(page);
+  const { html, body, root, screen, outer } = frame.own;
+  expect({ html, body, root }, `${row}: the page scrolls`).toEqual({
+    html: false,
+    body: false,
+    root: false,
+  });
+  if (frame.signedIn) {
+    expect({ screen, outer }, `${row}: the frame scrolls`).toEqual({ screen: false, outer: false });
+  }
+  expect(frame.backAfter, `${row}: Back's row moved`).toBe(frame.backBefore);
+  expect(frame.escaped, `${row}: escaped its scrollers`).toEqual([]);
 }

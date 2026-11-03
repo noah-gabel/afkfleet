@@ -138,7 +138,7 @@ describe("a Minecraft server's settings", () => {
   it("adds a server after Confirm it's you, then opens its own screen (U61)", async () => {
     const { app } = await atEditor("new", { stamped: false });
 
-    expect(await screen.findByRole("heading", { name: "Add a server", level: 1 })).toBeDefined();
+    expect(await screen.findByRole("heading", { name: "Add server", level: 1 })).toBeDefined();
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
     await app.user.type(screen.getByLabelText("Server address"), "MC.example.com");
     await app.user.type(text(1), "Two{Enter}lines");
@@ -146,7 +146,7 @@ describe("a Minecraft server's settings", () => {
     await app.user.type(await screen.findByLabelText("Current password"), PASSWORD);
     await app.user.click(screen.getByRole("button", { name: "Continue" }));
 
-    expect(await screen.findByText("Added settings for mc.example.com:25565.")).toBeDefined();
+    expect(await screen.findByText("Added mc.example.com:25565.")).toBeDefined();
     await vi.waitFor(() => expect(app.path()).toBe(`/admin/servers/${settingsId(9)}`));
     expect(
       await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 }),
@@ -169,9 +169,7 @@ describe("a Minecraft server's settings", () => {
     await app.user.click(screen.getByRole("button", { name: "Add text" }));
     await app.user.type(text(3), "Three");
     await app.user.click(screen.getByRole("button", { name: "Save" }));
-    expect(
-      await screen.findByText("Saved. Bots on this server use the change at once."),
-    ).toBeDefined();
+    expect(await screen.findByText("Saved. Bots on it use the change at once.")).toBeDefined();
     await app.user.click(screen.getByRole("button", { name: "Save" }));
     await vi.waitFor(() => expect(calls(app, "updateServerSettings")).toHaveLength(2));
 
@@ -223,22 +221,46 @@ describe("a Minecraft server's settings", () => {
 
     await app.user.click(screen.getByRole("button", { name: "Save" }));
 
-    expect(await screen.findByText("These settings don't exist any more.")).toBeDefined();
+    expect(await screen.findByText("Server settings not found.")).toBeDefined();
     expect(screen.getByRole("button", { name: "Back" })).toBeDefined();
   });
 
   it("says the settings don't exist when the list doesn't hold them", async () => {
     await atEditor(settingsId(5), { rows: [ROW] });
 
-    expect(await screen.findByText("These settings don't exist any more.")).toBeDefined();
+    expect(await screen.findByText("Server settings not found.")).toBeDefined();
     expect(screen.queryByLabelText("Server address")).toBeNull();
   });
 
-  it("says so while the servers load", async () => {
+  it("says so while the servers load, as a status", async () => {
     const answer = deferred<ServerSettingsPage>();
     await atEditor(ROW.id, { handlers: { serverSettings: () => answer.promise } });
 
-    expect(await screen.findByText("Loading servers…")).toBeDefined();
+    expect((await screen.findByText("Loading server…")).getAttribute("role")).toBe("status");
+  });
+
+  it("puts the address, then the texts and formats, then Save and Cancel, then Delete (U121)", async () => {
+    await atEditor(ROW.id, { rows: [ROW] });
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+    const precedes = (first: Element, second: Element) =>
+      (first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+
+    const address = screen.getByLabelText("Server address");
+    const texts = screen.getByRole("group", { name: "Conflict texts" });
+    const formats = screen.getByRole("group", { name: "Chat formats" });
+    const actions = document.querySelector("[data-slot=editor-actions]") as HTMLElement;
+    const apart = document.querySelector("[data-slot=editor-apart]") as HTMLElement;
+    const save = within(actions).getByRole("button", { name: "Save" });
+    within(actions).getByRole("button", { name: "Cancel" });
+    const remove = within(apart).getByRole("button", { name: "Delete" });
+
+    expect([
+      precedes(address, texts),
+      precedes(texts, formats),
+      precedes(formats, save),
+      precedes(save, remove),
+    ]).toEqual([true, true, true, true]);
+    expect(document.querySelector("[data-slot=editor-sections]")?.contains(formats)).toBe(true);
   });
 
   it("says when the fleet holds the most servers' settings", async () => {
@@ -249,16 +271,14 @@ describe("a Minecraft server's settings", () => {
         },
       },
     });
-    await screen.findByRole("heading", { name: "Add a server", level: 1 });
+    await screen.findByRole("heading", { name: "Add server", level: 1 });
 
     await app.user.type(screen.getByLabelText("Server address"), "mc.example.com");
     await app.user.type(text(1), "One");
     await app.user.click(screen.getByRole("button", { name: "Save" }));
 
     expect(
-      await screen.findByText(
-        "There are settings for 100 servers, the most there can be. Delete a server's settings to add another.",
-      ),
+      await screen.findByText("Server limit reached (100). Delete one to add another."),
     ).toBeDefined();
     expect(app.path()).toBe("/admin/servers/new");
   });
@@ -374,16 +394,16 @@ describe("a Minecraft server's settings", () => {
     await app.user.click(screen.getByRole("button", { name: "Delete" }));
     expect(
       screen.getByText(
-        "Delete the settings of mc.example.com:25565? Its bots then treat no kick message as someone logging in.",
+        "Delete mc.example.com:25565's settings? Its bots then won't recognise any kick message as someone logging in.",
       ),
     ).toBeDefined();
     await app.user.click(screen.getByRole("button", { name: "Delete settings" }));
     await app.user.type(await screen.findByLabelText("Current password"), PASSWORD);
     await app.user.click(screen.getByRole("button", { name: "Continue" }));
 
-    expect(await screen.findByText("Deleted the settings of mc.example.com:25565.")).toBeDefined();
+    expect(await screen.findByText("Deleted mc.example.com:25565's settings.")).toBeDefined();
     await vi.waitFor(() => expect(app.path()).toBe("/admin/servers"));
-    expect(await screen.findByText("No server has settings yet.")).toBeDefined();
+    expect(await screen.findByText("No servers.")).toBeDefined();
     expect(calls(app, "deleteServerSettings")).toEqual([[ROW.id], [ROW.id]]);
   });
 
@@ -392,12 +412,12 @@ describe("a Minecraft server's settings", () => {
     await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
 
     await app.user.click(screen.getByRole("button", { name: "Delete" }));
-    const question = screen.getByText(/^Delete the settings of/).closest("div");
+    const question = screen.getByText(/^Delete mc\.example\.com:25565's settings\?/).closest("div");
     await app.user.click(
       within(question?.parentElement as HTMLElement).getByRole("button", { name: "Cancel" }),
     );
 
-    expect(screen.queryByText(/^Delete the settings of/)).toBeNull();
+    expect(screen.queryByText(/^Delete mc\.example\.com:25565's settings\?/)).toBeNull();
     expect(calls(app, "deleteServerSettings")).toEqual([]);
   });
 
@@ -440,7 +460,7 @@ describe("a Minecraft server's settings, PR #80's review", () => {
     failing = true;
     await app.user.click(screen.getByRole("button", { name: "Load again" }));
 
-    const failed = await screen.findByText(/^Couldn't load the servers: /);
+    const failed = await screen.findByText(/^Couldn't load servers: /);
     expect(screen.getByText(CHANGED)).toBeDefined();
     expect(failed.closest('[role="alert"]')).toBe(
       screen.getByText(CHANGED).closest('[role="alert"]'),
@@ -487,9 +507,7 @@ describe("a Minecraft server's settings, PR #80's review", () => {
     await app.user.type(text(1), " later");
     await app.user.type(screen.getByLabelText("Current password"), PASSWORD);
     await app.user.click(screen.getByRole("button", { name: "Continue" }));
-    expect(
-      await screen.findByText("Saved. Bots on this server use the change at once."),
-    ).toBeDefined();
+    expect(await screen.findByText("Saved. Bots on it use the change at once.")).toBeDefined();
 
     const shown = {
       version: 1,
@@ -635,7 +653,7 @@ describe("a Minecraft server's settings with chat formats (H7)", () => {
 
   it("adds a server with no chat formats", async () => {
     const { app } = await atEditor("new");
-    await screen.findByRole("heading", { name: "Add a server", level: 1 });
+    await screen.findByRole("heading", { name: "Add server", level: 1 });
 
     await app.user.type(screen.getByLabelText("Server address"), "mc.example.com");
     await app.user.type(text(1), "One");
@@ -675,7 +693,7 @@ describe("a Minecraft server's chat formats and Try a line (H8)", () => {
 
     expect([format(1).value, format(2).value]).toEqual(FORMATS);
     expect(section().getAttribute("aria-describedby")).toContain(
-      within(section()).getByText(/^Some servers send players' chat as server text/).id,
+      within(section()).getByText(/^Some servers send chat as server text/).id,
     );
     await fill(app, format(2), "<{sender}> ");
     await app.user.click(screen.getByRole("button", { name: "Save" }));
@@ -696,7 +714,7 @@ describe("a Minecraft server's chat formats and Try a line (H8)", () => {
 
   it("adds formats up to 8, then says so, and Remove, described by its label, takes one out", async () => {
     const { app } = await atEditor("new");
-    await screen.findByRole("heading", { name: "Add a server", level: 1 });
+    await screen.findByRole("heading", { name: "Add server", level: 1 });
     const add = () => within(section()).getByRole("button", { name: "Add format" });
 
     for (let n = 0; n < 8; n += 1) {
@@ -764,7 +782,7 @@ describe("a Minecraft server's chat formats and Try a line (H8)", () => {
     await fill(app, screen.getByLabelText("Try a line"), "[Clan] Notch : hello");
     await app.user.click(screen.getByRole("button", { name: "Try" }));
 
-    expect(await screen.findByText("Format 1 reads the sender as Notch.")).toBeDefined();
+    expect(await screen.findByText("Format 1: sender Notch.")).toBeDefined();
     expect(calls(app, "previewChatFormats")).toEqual([
       [{ chat_formats: FORMATS, line: "[Clan] Notch : hello" }],
     ]);
@@ -785,13 +803,13 @@ describe("a Minecraft server's chat formats and Try a line (H8)", () => {
     await fill(app, format(1), "<{sender}> ");
     await fill(app, line, "Notch : hello");
     await app.user.click(screen.getByRole("button", { name: "Try" }));
-    expect(
-      (await screen.findByText("Format 2 reads the sender as Notch.")).getAttribute("role"),
-    ).toBe("status");
+    expect((await screen.findByText("Format 2: sender Notch.")).getAttribute("role")).toBe(
+      "status",
+    );
     await fill(app, line, "Server restarting soon");
     await app.user.keyboard("{Enter}");
 
-    expect(await screen.findByText("No format fits this line.")).toBeDefined();
+    expect(await screen.findByText("No format fits.")).toBeDefined();
     expect(calls(app, "previewChatFormats")).toEqual([
       [{ chat_formats: ["<{sender}> ", "{sender} : "], line: "Notch : hello" }],
       [{ chat_formats: ["<{sender}> ", "{sender} : "], line: "Server restarting soon" }],
@@ -840,6 +858,39 @@ describe("a Minecraft server's chat formats and Try a line (H8)", () => {
 
     expect(await screen.findByText(/^refused: forbidden \(request /)).toBeDefined();
     expect(screen.queryByText("must be at most 1024 characters")).toBeNull();
+  });
+
+  it("brings an answer and a refusal's text into view, as Try can sit at its column's foot (L4)", async () => {
+    const answers: (() => Promise<{ sender?: string; format?: number }>)[] = [
+      async () => ({ sender: "Notch", format: 0 }),
+      async () => {
+        throw refusal(403, "forbidden");
+      },
+    ];
+    const { app } = await atEditor(WITH_FORMATS.id, {
+      rows: [WITH_FORMATS],
+      handlers: {
+        previewChatFormats: () => {
+          const next = answers.shift();
+          if (next === undefined) {
+            throw new Error("tried a third time");
+          }
+          return next();
+        },
+      },
+    });
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+    await fill(app, screen.getByLabelText("Try a line"), "[Clan] Notch : hello");
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+
+    await app.user.click(screen.getByRole("button", { name: "Try" }));
+    const said = await screen.findByText("Format 1: sender Notch.");
+    await app.user.click(screen.getByRole("button", { name: "Try" }));
+    const failed = await screen.findByText(/^refused: forbidden \(request /);
+
+    expect(scrolled.mock.contexts).toEqual([said, failed]);
+    expect(scrolled).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
+    scrolled.mockRestore();
   });
 
   it("marks no field when a refusal comes after a Remove changed the formats", async () => {
@@ -925,15 +976,15 @@ describe("a Minecraft server's chat formats and Try a line (H8)", () => {
     await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
     const line = screen.getByLabelText("Try a line");
     const tryIt = () => app.user.click(screen.getByRole("button", { name: "Try" }));
-    const shown = () => screen.queryByText("Format 1 reads the sender as Notch.");
+    const shown = () => screen.queryByText("Format 1: sender Notch.");
 
     await fill(app, line, "[Clan] Notch : hello");
     await tryIt();
-    expect(await screen.findByText("Format 1 reads the sender as Notch.")).toBeDefined();
+    expect(await screen.findByText("Format 1: sender Notch.")).toBeDefined();
     await app.user.type(line, "!");
     expect(shown()).toBeNull();
     await tryIt();
-    expect(await screen.findByText("Format 1 reads the sender as Notch.")).toBeDefined();
+    expect(await screen.findByText("Format 1: sender Notch.")).toBeDefined();
     await app.user.type(format(1), "x");
     expect(shown()).toBeNull();
     await tryIt();
@@ -941,5 +992,56 @@ describe("a Minecraft server's chat formats and Try a line (H8)", () => {
     await act(async () => late.resolve({ sender: "Notch", format: 0 }));
 
     expect(shown()).toBeNull();
+  });
+});
+
+describe("what Save brings, where a stacked editor shows it (PR #92's review)", () => {
+  it("puts the focus in Confirm it's you's password field", async () => {
+    const { app } = await atEditor(ROW.id, { rows: [ROW], stamped: false });
+    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+
+    await app.user.click(screen.getByRole("button", { name: "Save" }));
+
+    const field = await screen.findByLabelText("Current password");
+    await vi.waitFor(() => expect(document.activeElement).toBe(field));
+  });
+
+  it.each([
+    ["the changed settings", false, null, CHANGED],
+    ["the limit", true, refusal(409, "conflict"), /^Server limit reached/],
+    ["a refusal", false, refusal(403, "forbidden"), /^refused: forbidden/],
+    ["a wait", false, refusal(429, "rate_limited", { retry_after_secs: 30 }), /rate_limited/],
+  ])("brings %s into view as it comes", async (_kind, isNew, error, text) => {
+    const refuse = async () => {
+      if (error !== null) {
+        throw error;
+      }
+      return ROW;
+    };
+    const { app, state } = await atEditor(isNew ? "new" : ROW.id, {
+      rows: [ROW],
+      handlers:
+        error === null ? {} : { createServerSettings: refuse, updateServerSettings: refuse },
+    });
+    if (isNew) {
+      await screen.findByRole("heading", { name: "Add server", level: 1 });
+      await app.user.type(screen.getByLabelText("Server address"), "new.example.com");
+    } else {
+      await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
+    }
+    if (error === null) {
+      state.rows = [settings(1, "mc.example.com:25565", [["Someone else's"]], 2)];
+    }
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+
+    await app.user.click(screen.getByRole("button", { name: "Save" }));
+
+    const notice = await screen.findByText(text);
+    expect(
+      scrolled.mock.contexts.some(
+        (element) => element instanceof Element && element.contains(notice),
+      ),
+    ).toBe(true);
+    scrolled.mockRestore();
   });
 });

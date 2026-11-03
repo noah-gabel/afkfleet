@@ -107,6 +107,14 @@ describe("an account's screen", () => {
     vi.useRealTimers();
   });
 
+  it("says who has access is loading, not the account it already shows", async () => {
+    await accountScreen({ handlers: { accountGrants: () => new Promise(() => {}) } });
+
+    const access = screen.getByRole("region", { name: "Who has access" });
+    expect(within(access).getByText("Loading access…")).toBeDefined();
+    expect(screen.queryByText("Loading account…")).toBeNull();
+  });
+
   it("shows the account's facts as the viewer may see them", async () => {
     await accountScreen({ account: account(1, { owner: { id: BOB_ID, username: "bob" } }) });
 

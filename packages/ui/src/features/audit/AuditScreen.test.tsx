@@ -47,7 +47,7 @@ describe("the audit log's screen", () => {
     }));
 
     expect(await screen.findByRole("heading", { name: "Audit log", level: 1 })).toBeDefined();
-    expect(screen.getByText("Everything the server recorded, newest first.")).toBeDefined();
+    expect(screen.getByText("Everything recorded, newest first.")).toBeDefined();
     const [row] = await waitFor(() => {
       const found = rows();
       expect(found).toHaveLength(1);
@@ -63,6 +63,61 @@ describe("the audit log's screen", () => {
     expect(inRow.getByText("192.0.2.10")).toBeDefined();
     expect(inRow.getByText("disabled: yes")).toBeDefined();
     expect(inRow.getByText("sessions revoked: 2")).toBeDefined();
+  });
+
+  it("labels each cell for the stacked form, hidden from screen readers, the heads in order (S132)", async () => {
+    await auditScreen(async () => ({
+      items: [
+        entry(5, {
+          actor: USER,
+          ip: "192.0.2.10",
+          action: "user.set_disabled",
+          target: { kind: "bot", id: BOT },
+          metadata: [flag("disabled", true)],
+        }),
+      ],
+      unreadable: [],
+    }));
+    const [row] = await waitFor(() => {
+      const found = rows();
+      expect(found).toHaveLength(1);
+      return found;
+    });
+    const table = screen.getByRole("table", { name: "Audit log" });
+
+    expect(
+      within(table)
+        .getAllByRole("columnheader")
+        .map((head) => head.textContent),
+    ).toEqual(["When", "Who", "What", "On", "Result", "From", "Details"]);
+    const labels = [...(row as HTMLElement).querySelectorAll("[data-slot=cell-label]")];
+    expect(labels.map((label) => [label.textContent, label.getAttribute("aria-hidden")])).toEqual(
+      ["When", "Who", "What", "On", "Result", "From", "Details"].map((word) => [word, "true"]),
+    );
+    expect(within(row as HTMLElement).getByRole("cell", { name: "192.0.2.10" })).toBeDefined();
+    expect(table.className).toContain("@max-[48.875rem]/table:block");
+  });
+
+  it("leaves out an empty value's label, its cell staying, so the cells keep their heads", async () => {
+    await auditScreen(async () => ({
+      items: [entry(5, { action: "auth.login" })],
+      unreadable: [],
+    }));
+    const [row] = await waitFor(() => {
+      const found = rows();
+      expect(found).toHaveLength(1);
+      return found;
+    });
+
+    expect(within(row as HTMLElement).getAllByRole("cell")).toHaveLength(7);
+    const labels = [...(row as HTMLElement).querySelectorAll("[data-slot=cell-label]")];
+    expect(labels.map((label) => label.textContent)).not.toContain("From");
+  });
+
+  it("says so while the log loads, as a status", async () => {
+    await auditScreen(() => new Promise(() => {}));
+
+    expect((await screen.findByText("Loading audit log…")).getAttribute("role")).toBe("status");
   });
 
   it("shows retention.purge as the server's own, with its counts, and never as a name", async () => {
@@ -136,12 +191,12 @@ describe("the audit log's screen", () => {
       unreadable: [8],
     }));
 
-    await screen.findByText("Entry 8 can't be read. The server's log says why.");
+    await screen.findByText("Entry 8 unreadable. The server's log says why.");
     const shown = rows();
     expect(shown).toHaveLength(3);
     const [, unreadable] = shown;
     expect(within(unreadable as HTMLElement).getAllByRole("cell")).toHaveLength(1);
-    expect(unreadable?.textContent).toBe("Entry 8 can't be read. The server's log says why.");
+    expect(unreadable?.textContent).toBe("Entry 8 unreadable. The server's log says why.");
   });
 
   it("names a user by their list, with the whole ID on hover and for screen readers (U80)", async () => {
@@ -188,9 +243,9 @@ describe("the audit log's screen", () => {
 
     const row = await screen.findByRole("row", { name: /Bot started/ });
     expect(within(row).getByText(USER)).toBeDefined();
-    expect(screen.queryByText("Names couldn't be loaded, so users show by ID.")).toBeNull();
+    expect(screen.queryByText("Names unavailable. Users show by ID.")).toBeNull();
     await act(async () => users.reject(refusal(500, "internal_error")));
-    expect(await screen.findByText("Names couldn't be loaded, so users show by ID.")).toBeDefined();
+    expect(await screen.findByText("Names unavailable. Users show by ID.")).toBeDefined();
     expect(within(row).getByText(USER)).toBeDefined();
   });
 
@@ -239,17 +294,17 @@ describe("the audit log's screen", () => {
         return { items: [listedUser(USER, "afkbot1")] };
       },
     );
-    expect(await screen.findByText("Names couldn't be loaded, so users show by ID.")).toBeDefined();
+    expect(await screen.findByText("Names unavailable. Users show by ID.")).toBeDefined();
 
     await app.user.click(screen.getByRole("button", { name: "Load again" }));
 
     expect(await screen.findByText("afkbot1")).toBeDefined();
-    expect(screen.queryByText("Names couldn't be loaded, so users show by ID.")).toBeNull();
+    expect(screen.queryByText("Names unavailable. Users show by ID.")).toBeNull();
   });
 
   it("says when the log is empty, and when it couldn't be read", async () => {
     await auditScreen(async () => ({ items: [], unreadable: [] }));
-    expect(await screen.findByText("Nothing recorded yet.")).toBeDefined();
+    expect(await screen.findByText("Nothing recorded.")).toBeDefined();
   });
 
   it("shows why a read failed, with its request ID, and keeps nothing it doesn't have", async () => {
@@ -258,8 +313,8 @@ describe("the audit log's screen", () => {
     });
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("Couldn't load the audit log: Something went wrong.");
-    expect(screen.queryByText("Nothing recorded yet.")).toBeNull();
+    expect(alert.textContent).toContain("Couldn't load audit log: Something went wrong.");
+    expect(screen.queryByText("Nothing recorded.")).toBeNull();
   });
 
   describe("the filter by target", () => {
@@ -290,9 +345,7 @@ describe("the audit log's screen", () => {
       await waitFor(() => expect(rows()).toHaveLength(1));
       expect(audit).toHaveBeenLastCalledWith(undefined, undefined, "bot", BOT);
       expect(screen.queryByRole("link", { name: `Only bot ${BOT}` })).toBeNull();
-      expect(
-        screen.queryByText("This shows what happened to this user, not everything they did."),
-      ).toBeNull();
+      expect(screen.queryByText("What happened to this user, not everything they did.")).toBeNull();
 
       await app.user.click(screen.getByRole("link", { name: "Show everything" }));
 
@@ -310,7 +363,7 @@ describe("the audit log's screen", () => {
       expect(within(line).getByText("afkbot1").getAttribute("title")).toBe(USER);
       expect(within(line).getByText(`(${USER})`).className).toContain("sr-only");
       expect(
-        screen.getByText("This shows what happened to this user, not everything they did."),
+        screen.getByText("What happened to this user, not everything they did."),
       ).toBeDefined();
     });
 
@@ -324,8 +377,8 @@ describe("the audit log's screen", () => {
         }),
       );
 
-      expect(await screen.findByText("Nothing recorded for this target.")).toBeDefined();
-      expect(screen.queryByText("Nothing recorded yet.")).toBeNull();
+      expect(await screen.findByText("Nothing for this target.")).toBeDefined();
+      expect(screen.queryByText("Nothing recorded.")).toBeNull();
     });
 
     it("reads a search that's half given or malformed as the full log (R175)", async () => {

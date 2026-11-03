@@ -17,6 +17,16 @@ const STEP = {
   probability: 100,
 } as const;
 
+/** The labelled facts on a card: each label and its value. */
+function facts(card: HTMLElement): Record<string, string | null | undefined> {
+  return Object.fromEntries(
+    [...card.querySelectorAll("dt")].map((term) => [
+      term.textContent,
+      term.nextElementSibling?.textContent,
+    ]),
+  );
+}
+
 describe("the modes' list", () => {
   it("shows every mode in the API's order, with whose it is, who sees it and its steps", async () => {
     await atScreen("/modes", {
@@ -37,12 +47,23 @@ describe("the modes' list", () => {
     const list = await screen.findByRole("list", { name: "Modes" });
     const [yours, theirs, builtIn] = within(list).getAllByRole("listitem") as HTMLElement[];
 
-    expect(within(yours as HTMLElement).getByText("Yours · Private · 2 steps")).toBeDefined();
-    expect(
-      within(theirs as HTMLElement).getByText("Someone else's · Shared · 1 step"),
-    ).toBeDefined();
-    expect(within(builtIn as HTMLElement).getByText("Built in · Shared · No steps")).toBeDefined();
-    expect(screen.getByText("A mode is what a bot does while it's online.")).toBeDefined();
+    expect(facts(yours as HTMLElement)).toEqual({
+      Owner: "Yours",
+      Visibility: "Private",
+      Steps: "2",
+    });
+    expect(facts(theirs as HTMLElement)).toEqual({
+      Owner: "Someone else's",
+      Visibility: "Shared",
+      Steps: "1",
+    });
+    expect(facts(builtIn as HTMLElement)).toEqual({
+      Owner: "Built in",
+      Visibility: "Shared",
+      Steps: "0",
+    });
+    expect(screen.getByText("What a bot does while online.")).toBeDefined();
+    expect(list.className).toContain("grid");
   });
 
   it("names the owner only where the server sent one", async () => {
@@ -57,7 +78,8 @@ describe("the modes' list", () => {
       }),
     });
 
-    expect(await screen.findByText("afkadmin · Private · No steps")).toBeDefined();
+    const card = (await screen.findByRole("link", { name: "Open Mode 1" })).closest("li");
+    expect(facts(card as HTMLElement).Owner).toBe("afkadmin");
   });
 
   it("marks a mode that sends a command off the allowlist, outside its name", async () => {
@@ -69,8 +91,7 @@ describe("the modes' list", () => {
 
     const list = await screen.findByRole("list", { name: "Modes" });
     const [warp, plain] = within(list).getAllByRole("listitem") as HTMLElement[];
-    const mark =
-      "Sends a command off the allowlist: only someone who manages a bot can choose this mode.";
+    const mark = "Sends a command off the allowlist. Needs Manage to choose.";
 
     expect(within(warp as HTMLElement).getByText(mark)).toBeDefined();
     expect(within(plain as HTMLElement).queryByText(mark)).toBeNull();
@@ -107,10 +128,23 @@ describe("the modes' list", () => {
     const answer = deferred<ModePage>();
     await atScreen("/modes", { modes: () => answer.promise });
 
-    expect(await screen.findByText("Loading modes…")).toBeDefined();
+    expect((await screen.findByText("Loading modes…")).getAttribute("role")).toBe("status");
+    expect(screen.queryByRole("link", { name: "New mode" })).toBeNull();
   });
 
-  it("says why when the modes couldn't be read", async () => {
+  it("says there are none, with the way to a new one", async () => {
+    const app = await atScreen("/modes", { modes: async () => ({ items: [] }) });
+
+    expect(await screen.findByText("No modes.")).toBeDefined();
+    expect(screen.queryByRole("list", { name: "Modes" })).toBeNull();
+    const links = screen.getAllByRole("link", { name: "New mode" });
+    expect(links).toHaveLength(1);
+    expect(links[0]?.closest("[data-slot=screen-state]")).not.toBeNull();
+    await app.user.click(links[0] as HTMLElement);
+    await vi.waitFor(() => expect(app.path()).toBe("/modes/new"));
+  });
+
+  it("says why when the modes couldn't be read, and keeps New mode (PR #92's review)", async () => {
     await atScreen("/modes", {
       modes: async () => {
         throw refusal(500, "internal");
@@ -119,6 +153,7 @@ describe("the modes' list", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toMatch(/^Couldn't load modes: refused: internal/);
+    expect(screen.getByRole("link", { name: "New mode" })).toBeDefined();
   });
 
   it("is in the nav for a Member, right after Home", async () => {

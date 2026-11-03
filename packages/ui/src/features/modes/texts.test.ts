@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ModeOwnership } from "../../generated/ModeOwnership";
 import type { ModeVisibility } from "../../generated/ModeVisibility";
-import { CAP_REACHED, copyName, stepCount, visibilityText, whoseText } from "./texts";
+import { CAP_REACHED, copyName, visibilityText, whoseText } from "./texts";
 
 describe("whoseText", () => {
   const OWNER = { id: "01900000-0000-7000-8000-000000000001", username: "afkadmin" };
@@ -33,16 +33,6 @@ describe("visibilityText", () => {
   });
 });
 
-describe("stepCount", () => {
-  it.each([
-    [0, "No steps"],
-    [1, "1 step"],
-    [2, "2 steps"],
-  ])("reads %i as %s", (count, text) => {
-    expect(stepCount(count)).toBe(text);
-  });
-});
-
 describe("copyName", () => {
   it("adds the suffix", () => {
     expect(copyName("afk")).toBe("afk copy");
@@ -61,8 +51,6 @@ describe("copyName", () => {
 
 describe("the cap's text", () => {
   it("names S19's limit", () => {
-    expect(CAP_REACHED).toBe(
-      "You already have 50 modes, the most you can have. Delete one to add another.",
-    );
+    expect(CAP_REACHED).toBe("Mode limit reached (50). Delete one to add another.");
   });
 });

@@ -6,18 +6,19 @@ import { CHAT_FORMATS_MAX, CONFLICT_TEXTS_MAX, SERVER_SETTINGS_MAX } from "../..
 /** The nav entry's and the list's heading. */
 export const SERVERS_HEADING = "Minecraft servers";
 /** What the list says first. */
-export const SERVERS_INTRO =
-  "Settings here apply to every bot on that server, whoever's bot it is.";
+export const SERVERS_INTRO = "Apply to every bot on that server, whoever owns it.";
 /** The list's way to a new entry, and the new entry's heading. */
-export const ADD_SERVER = "Add a server";
+export const ADD_SERVER = "Add server";
 /** The list without an entry. */
-export const NO_SERVERS = "No server has settings yet.";
-/** The list, or an entry, while the servers load. */
+export const NO_SERVERS = "No servers.";
+/** The list while the servers load. */
 export const LOADING_SERVERS = "Loading servers…";
+/** An entry's screen while the servers load. */
+export const LOADING_SERVER = "Loading server…";
 
 /** The list, or an entry, when the servers couldn't be read. */
 export function serversFailed(why: string): string {
-  return `Couldn't load the servers: ${why}`;
+  return `Couldn't load servers: ${why}`;
 }
 
 /** An entry's link, for screen readers. */
@@ -25,29 +26,19 @@ export function openServer(server: string): string {
   return `Open ${server}`;
 }
 
-/** How many conflict texts an entry holds. */
-export function conflictTextCount(count: number): string {
-  return count === 1 ? "1 conflict text" : `${count} conflict texts`;
-}
-
-/** How many chat formats an entry holds. */
-export function chatFormatCount(count: number): string {
-  return count === 1 ? "1 chat format" : `${count} chat formats`;
-}
-
 /**
- * What an entry holds, only the parts it has (the user's change at H7's plan review): its
- * texts, its formats, or both joined by " · ". A row always holds one of them.
+ * An entry's labelled facts (U119), only the parts it has (the user's change at H7's plan review):
+ * its texts, its formats, or both. A row always holds one of them.
  */
-export function settingsCount(texts: number, formats: number): string {
-  const parts = [];
+export function settingsFacts(texts: number, formats: number): { term: string; value: string }[] {
+  const facts = [];
   if (texts > 0 || formats === 0) {
-    parts.push(conflictTextCount(texts));
+    facts.push({ term: TEXTS_HEADING, value: String(texts) });
   }
   if (formats > 0) {
-    parts.push(chatFormatCount(formats));
+    facts.push({ term: FORMATS_HEADING, value: String(formats) });
   }
-  return parts.join(" · ");
+  return facts;
 }
 
 /** The editor's field and section. */
@@ -70,7 +61,7 @@ export const AT_MOST_TEXTS = `At most ${CONFLICT_TEXTS_MAX} texts.`;
 export const FORMATS_HEADING = "Chat formats";
 /** What a format does and how to write one (ADR-0020's table, H7). */
 export const FORMATS_HINT =
-  "Some servers send players' chat as server text, like \"[Clan] Name : hello\". A format finds the player's name in such a line, for display only. Write the line's start as the server sends it, with {sender} where the name is and {any} for a part that changes, such as a clan tag. The first format that fits names the line.";
+  'Some servers send chat as server text, like "[Clan] Name : hello". A format finds the name in such a line, for display only. Write the line\'s start as sent: {sender} for the name, {any} for a part that changes, like a clan tag. The first that fits names the line.';
 
 /** The label of format `n`, counted from 1. */
 export function chatFormatLabel(n: number): string {
@@ -87,36 +78,36 @@ export const TRY = "Try";
 
 /** The preview's answer: format `n`, counted from 1, read `name`. */
 export function formatReads(n: number, name: string): string {
-  return `Format ${n} reads the sender as ${name}.`;
+  return `Format ${n}: sender ${name}.`;
 }
 
-export const NO_FORMAT_FITS = "No format fits this line.";
+export const NO_FORMAT_FITS = "No format fits.";
 export const SAVE = "Save";
 export const CANCEL = "Cancel";
 export const DELETE = "Delete";
 /** An entry that isn't there: never was, or went while its screen was open. */
-export const SETTINGS_GONE = "These settings don't exist any more.";
+export const SETTINGS_GONE = "Server settings not found.";
 /** After a 409 `server_settings_changed`, next to the server's own text. */
 export const LOAD_AGAIN = "Load again";
 /** A create's 409 `conflict`: the fleet holds the most servers' settings. */
-export const CAP_REACHED = `There are settings for ${SERVER_SETTINGS_MAX} servers, the most there can be. Delete a server's settings to add another.`;
+export const CAP_REACHED = `Server limit reached (${SERVER_SETTINGS_MAX}). Delete one to add another.`;
 
 /** The toast after a create. */
 export function added(server: string): string {
-  return `Added settings for ${server}.`;
+  return `Added ${server}.`;
 }
 
 /** The toast after a save. */
-export const SAVED = "Saved. Bots on this server use the change at once.";
+export const SAVED = "Saved. Bots on it use the change at once.";
 
 /** What Delete asks first. */
 export function deleteQuestion(server: string): string {
-  return `Delete the settings of ${server}? Its bots then treat no kick message as someone logging in.`;
+  return `Delete ${server}'s settings? Its bots then won't recognise any kick message as someone logging in.`;
 }
 
 export const DELETE_SETTINGS = "Delete settings";
 
 /** The toast after a delete. */
 export function deleted(server: string): string {
-  return `Deleted the settings of ${server}.`;
+  return `Deleted ${server}'s settings.`;
 }

@@ -5,16 +5,21 @@
 //!   middleware stack, before the timeout, the body or the router, so a 404
 //!   scan and the health checks count too. The layer resolves the client's
 //!   address once ([`client_ip`]) and puts it into the request as
-//!   [`ClientIp`].
+//!   [`ClientIp`] ([`RateLimits::check_ip`]).
 //! - **A route spends its class's limit** ([`RateClass`]): the login routes
 //!   share one per-IP bucket, refresh and register have their own, and
 //!   `Standard` spends nothing more. It's a route layer, so a
-//!   404 or 405 spends no class token.
+//!   404 or 405 spends no class token ([`RateLimits::check_class`]).
 //! - **Every authed request spends its user's limit,** in `AuthUser`, right
 //!   after authentication ([`RateLimits::check_user`]).
 //! - **Creating a grant by a username spends its own per-user limit** too,
 //!   in its handler after the step-up check, since each one tries a name
 //!   ([`RateLimits::check_grant_by_name`]; ADR-0018, group E).
+//! - **Reading the suggestions behind "Share with" spends its own per-user
+//!   limit,** one bucket across all of the user's accounts, in its handler
+//!   after `authorize()` and the pending check, since a walk of the names
+//!   costs one read per character ([`RateLimits::check_grant_candidates`];
+//!   ADR-0020, S127).
 //! - **An `Enroll` call on the gRPC port spends its client's own per-IP
 //!   limit,** in that port's interceptor before the request is read
 //!   ([`RateLimits::check_enroll`]; ADR-0019, S14).

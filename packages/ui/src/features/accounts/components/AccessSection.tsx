@@ -48,7 +48,7 @@ import {
   accessLabel,
   alreadyHasAccess,
   alreadyManages,
-  LOADING_ACCOUNT,
+  LOADING_ACCESS,
   NOBODY_ELSE,
   nowHas,
   PENDING_NOT_SHARED,
@@ -81,7 +81,7 @@ export function AccessSection({
       {grants.error === null ? null : (
         <ScreenState kind="error">{describeError(toApiError(grants.error).error)}</ScreenState>
       )}
-      {grants.isPending ? <ScreenState kind="loading">{LOADING_ACCOUNT}</ScreenState> : null}
+      {grants.isPending ? <ScreenState kind="loading">{LOADING_ACCESS}</ScreenState> : null}
       {grants.isSuccess && rows.length === 0 ? (
         <ScreenState kind="empty">{NOBODY_ELSE}</ScreenState>
       ) : null}

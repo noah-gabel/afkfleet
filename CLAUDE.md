@@ -37,7 +37,7 @@ Where things are:
    5. Everything green.
 
    Tasks marked 🔴 in `Plan.md` are strictly test-first. Unmarked tasks (scaffolding, config, wiring) are verified by `just check`, CI or the task's demo, but any logic they add still gets tests.
-5. **Check.** Run `just check`. Also run `just test-slow` if you touched `fleet-mc`, Docker files or anything container-based.
+5. **Check.** Run `just check`. Also run `just test-slow` if you touched `fleet-mc`, Docker files or anything container-based, and `just shots` if you touched `packages/`, `apps/desktop/` or the screenshots' own files (the user's choice, ADR-0020, U125).
 6. **Record.**
    - Tick the box in `Plan.md`.
    - Note any deviation under the task as `> Note (P4.3): …`.
@@ -243,7 +243,7 @@ The frontend's rules (structure, data and state, safety, quality, and every plac
 - **Dev machine:** Windows 11, already set up by the user.
   - **Your shell tool is Git Bash.** Claude Code's PowerShell tool is turned off in the user's settings. Write POSIX shell commands.
   - The `justfile` runs recipes with **PowerShell 7** (`pwsh`) on Windows and `sh` on Linux.
-  - Docker Desktop (WSL 2 backend) runs the Minecraft test server and the compose stack. It must be running for `just mc-up` and `just test-slow`; if Docker isn't reachable, ask the user to start it.
+  - Docker Desktop (WSL 2 backend) runs the Minecraft test server and the compose stack. It must be running for `just mc-up`, `just test-slow` and `just shots`; if Docker isn't reachable, ask the user to start it.
 - **Toolchain:** `rust-toolchain.toml` pins a **dated nightly**, and rustup installs it automatically.
   - Change it only in a deliberate Minecraft-version bump.
   - That bump changes nightly, azalea and the test server's `VERSION` together, as in `docs/runbook.md`.

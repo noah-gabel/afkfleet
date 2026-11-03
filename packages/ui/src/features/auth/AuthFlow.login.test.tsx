@@ -261,6 +261,25 @@ describe("the first login's 2FA setup", () => {
     expect(app.fake.calls.find((call) => call.method === "mfaConfirm")?.args).toEqual(["654321"]);
   });
 
+  it("drops the next-code text on a swap to a recovery code, which it doesn't apply to", async () => {
+    const app = await atLogin(setupHandlers());
+    await logIn(app);
+    await enterCode(app, "654 321");
+    await app.user.click(await screen.findByLabelText("I've saved these codes"));
+    await app.user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByText(NEXT_CODE)).toBeDefined();
+
+    await app.user.click(screen.getByRole("button", { name: "Use a recovery code" }));
+
+    const field = await screen.findByLabelText("Recovery code");
+    expect(screen.queryByText(NEXT_CODE)).toBeNull();
+    expect(
+      (field.getAttribute("aria-describedby") ?? "")
+        .split(" ")
+        .map((id) => document.getElementById(id)?.textContent),
+    ).not.toContain(NEXT_CODE);
+  });
+
   it("holds no password, TOTP secret or recovery code in the cache after a finished flow", async () => {
     const app = await atLogin(setupHandlers());
     await logIn(app);

@@ -39,6 +39,7 @@ use fleet_server::infra::crypto::totp::TotpRs;
 use fleet_server::infra::crypto::vault::{VaultKeys, XChaChaVault};
 use fleet_server::infra::qr::SvgQr;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
+use fleet_server::ports::grants::GRANT_CANDIDATES_MAX;
 use fleet_testkit::system::{ManualClock, SeededRandom};
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -499,6 +500,34 @@ async fn the_document_names_its_license_and_version_but_no_contact_or_server(
     );
     assert!(document["info"].get("contact").is_none());
     assert!(document.get("servers").is_none());
+}
+
+/// The suggestions' cap as the document states it is the query's (ADR-0020,
+/// S128): ts-rs and utoipa copy doc text word for word, so the docs spell the
+/// number out, and this keeps both texts equal to the one constant.
+#[sqlx::test(migrations = false)]
+async fn the_suggestions_cap_the_document_states_is_the_querys(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let document = document(options).await;
+
+    let schema = document["components"]["schemas"]["GrantCandidates"]["description"]
+        .as_str()
+        .unwrap()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let answer = &document["paths"]["/api/v1/accounts/{id}/grant-candidates"]["get"]["responses"]["200"]
+        ["description"];
+    assert!(
+        schema.contains(&format!("at most {GRANT_CANDIDATES_MAX} of them")),
+        "{schema}"
+    );
+    assert_eq!(
+        answer.as_str(),
+        Some(format!("At most {GRANT_CANDIDATES_MAX} usernames, in order.").as_str())
+    );
 }
 
 /// The link flows, which these tests never start (P9.4): a service over

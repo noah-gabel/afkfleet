@@ -5,7 +5,8 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiClient } from "../../api/ApiClient";
-import { account, accountId } from "../../test/accounts";
+import { GRANT_CANDIDATES_KEY } from "../../api/queries";
+import { account, accountId, BOB_ID, grant } from "../../test/accounts";
 import { fakeTime } from "../../test/renderApp";
 import { atAccount } from "../../test/signedIn";
 import { refusal } from "../../test/signIn";
@@ -52,7 +53,7 @@ const reads = (app: Awaited<ReturnType<typeof atShare>>["app"]) =>
 
 /** The cached suggestions' queries. */
 const candidateQueries = (app: Awaited<ReturnType<typeof atShare>>["app"]) =>
-  app.runtime.queryClient.getQueryCache().findAll({ queryKey: ["accounts", "grant-candidates"] });
+  app.runtime.queryClient.getQueryCache().findAll({ queryKey: GRANT_CANDIDATES_KEY });
 
 describe("the Share with field", () => {
   it("is a combobox that says it suggests, closed until something's typed", async () => {
@@ -168,6 +169,26 @@ describe("the Share with field", () => {
 
     await waitFor(() => expect(createGrant).toHaveBeenCalledTimes(1));
     expect(createGrant.mock.calls.at(0)?.at(1)).toMatchObject({ username: "bob" });
+  });
+
+  it("reads no suggestions again when Enter shares, while the account's grants are read again", async () => {
+    const createGrant = vi.fn(async () => grant("view", { id: BOB_ID, username: "bob" }));
+    const { app, field } = await atShare({ createGrant });
+    await app.user.type(field, "bob");
+    await list();
+    const bob = () => candidateQueries(app).find((query) => query.queryKey.at(-1) === "bob");
+    expect(bob()?.isActive()).toBe(true);
+    const grantReads = () => app.fake.calls.filter((call) => call.method === "accountGrants");
+    const before = grantReads().length;
+
+    await app.user.keyboard("{Enter}");
+
+    await waitFor(() => expect(createGrant).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(grantReads().length).toBeGreaterThan(before));
+    // Only once the pause after the reset is over does the old query leave the cache, long after
+    // any read the refresh would have started.
+    await waitFor(() => expect(bob()).toBeUndefined());
+    expect(reads(app).map((call) => call.args[1])).toEqual(["bob"]);
   });
 
   it("shows no list when nothing matches", async () => {

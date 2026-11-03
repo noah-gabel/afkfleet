@@ -1,0 +1,35 @@
+# The screenshot image's build context is the repository root (deploy/docker/shots.Dockerfile),
+# and BuildKit reads this file in place of the root .dockerignore. This is an allowlist: only the
+# frontend's manifests, configs and sources get in, so nothing secret (secrets/, target/, .env
+# files, keys, databases) can enter the context, even a file added later (ADR-0020, S130).
+*
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!patches/
+!tsconfig.base.json
+!packages/ui/package.json
+!packages/ui/tsconfig.json
+!packages/ui/src/
+!apps/desktop/package.json
+!apps/desktop/tsconfig.json
+!apps/desktop/tsconfig.e2e.json
+!apps/desktop/vite.e2e.config.ts
+!apps/desktop/playwright.shots.config.ts
+!apps/desktop/src/
+!apps/desktop/e2e/
+!apps/desktop/src-tauri/tauri.conf.json
+
+# Mounted when the shots run, never built in; and whatever a build or an install left.
+apps/desktop/e2e/baselines
+**/node_modules
+**/dist
+**/dist-e2e
+**/test-results
+
+# .gitignore's secret patterns again, at any depth: the last matching rule wins.
+**/.env*
+**/*.pem
+**/*.key
+**/secrets
+**/*.db*
