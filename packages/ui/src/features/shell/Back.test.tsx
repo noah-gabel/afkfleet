@@ -259,6 +259,51 @@ describe("a screen left because what it showed is gone", () => {
     expect(app.path()).toBe("/modes");
   });
 
+  it("doesn't move another screen when a Refuse answers after the user went elsewhere", async () => {
+    const refuse = deferred<void>();
+    const pending = account(1, {
+      status: "pending",
+      owner: { id: "01900000-0000-7000-8000-000000000999", username: "bob" },
+    });
+    const app = await atAccount(
+      ID,
+      {
+        account: async () => pending,
+        accountsAwaitingApproval: async () => ({ items: [pending] }),
+        refuseAccount: () => refuse.promise,
+      },
+      { user: me("owner", "owner") },
+    );
+    await app.user.click(await screen.findByRole("button", { name: "Refuse AfkBot1" }));
+    await app.user.click(screen.getByRole("button", { name: "Refuse" }));
+    await act(() => app.runtime.router.navigate({ to: "/modes" }));
+    await within(screen.getByRole("main")).findByRole("link", { name: "New mode" });
+
+    await act(async () => {
+      refuse.resolve();
+      await refuse.promise;
+    });
+
+    expect(app.path()).toBe("/modes");
+  });
+
+  it("doesn't move another screen when an offline account's add answers after the user went elsewhere", async () => {
+    const create = deferred<ReturnType<typeof account>>();
+    const app = await atScreen("/accounts", { createOfflineAccount: () => create.promise });
+    await act(() => app.runtime.router.navigate({ to: "/accounts/offline" }));
+    await app.user.type(await screen.findByLabelText("Minecraft name"), "AfkBot1");
+    await app.user.click(screen.getByRole("button", { name: "Add" }));
+    await act(() => app.runtime.router.navigate({ to: "/modes" }));
+    await within(screen.getByRole("main")).findByRole("link", { name: "New mode" });
+
+    await act(async () => {
+      create.resolve(account(1));
+      await create.promise;
+    });
+
+    expect(app.path()).toBe("/modes");
+  });
+
   it("shows the screen's own not-found state when Back lands on something gone meanwhile", async () => {
     const seen = seenBelowManage(1, "view");
     let there = true;

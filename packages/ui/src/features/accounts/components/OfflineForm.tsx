@@ -1,8 +1,9 @@
 // Adding an offline account (Plan.md P9.7, P9.8, P11.11; S6 in ADR-0018's group F; ADR-0020, U107):
 // for servers in offline mode, while the server allows them, on a screen of its own in the same card
 // as the Microsoft link's. The app can't know that switch, so the screen is always there, and the
-// server's 404 says it's off. Leaving it replaces its entry, so Back doesn't reopen it. A name is no
-// secret, so this is a plain mutation.
+// server's 404 says it's off. Leaving it replaces its entry, so Back doesn't reopen it, and an add that
+// answers after the screen was left moves no other screen (S126). A name is no secret, so this is a
+// plain mutation.
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -49,7 +50,6 @@ export function OfflineScreen() {
     onSuccess: (account) => {
       toast.success(added(account.name));
       void queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY });
-      void navigate({ to: "/accounts", replace: true });
     },
     onError: (rejection) => {
       const error = toApiError(rejection).error;
@@ -65,7 +65,10 @@ export function OfflineScreen() {
 
   const submit = form.handleSubmit((values) => {
     setFormError(undefined);
-    create.mutate(values.name);
+    // The call's own onSuccess runs only while this screen is still shown (TanStack Query).
+    create.mutate(values.name, {
+      onSuccess: () => void navigate({ to: "/accounts", replace: true }),
+    });
   });
 
   return (
