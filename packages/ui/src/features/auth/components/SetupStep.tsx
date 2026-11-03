@@ -6,7 +6,8 @@
 // loads, the old one is hidden and the step waits. The QR code is shown only through `<img src>`, and
 // only when it's the SVG data URI the server sends: the CSP allows any `data:` image. The secret
 // lives only in the flow's state for this step. The profile's authenticator replacement shows the
-// same step with its own texts.
+// same step with its own texts. However a confirm fails, the focus goes back to the boxes, as Confirm
+// is disabled while it runs and may stay so through a wait.
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRef, useState } from "react";
 import { useController, useForm } from "react-hook-form";
@@ -23,6 +24,7 @@ import { endsIn, useDeadline } from "../hooks/useDeadline";
 import { ALL_SIX, CODE_HINT, type CodeValues, codeForm, withoutSpaces } from "../schemas";
 import { AuthCard, FormError } from "./AuthCard";
 import { CODE_DIGITS, CodeBoxes } from "./CodeBoxes";
+import { CodeRefusal, useRefusal } from "./CodeRefusal";
 
 /** The only QR code the app shows: an SVG data URI. */
 const QR_PREFIX = "data:image/svg+xml;base64,";
@@ -76,7 +78,7 @@ export function SetupStep({
   });
   const { field: code } = useController({ name: "code", control: form.control });
   const [formError, setFormError] = useState<string>();
-  const [refused, setRefused] = useState<string>();
+  const [refused, setRefused] = useRefusal();
   const wait = useRetryWait();
   const errors = form.formState.errors;
   const enrollment = step.loading ? undefined : step.enrollment;
@@ -97,6 +99,7 @@ export function SetupStep({
       await onConfirm(withoutSpaces(values.code));
     } catch (rejection) {
       const error = toApiError(rejection).error;
+      control.current?.focus();
       if (wait.start(error)) {
         form.setValue("code", "");
         return;
@@ -185,11 +188,7 @@ export function SetupStep({
             />
           )}
         </FormField>
-        {refused === undefined ? null : (
-          <p role="status" className="text-sm">
-            {refused}
-          </p>
-        )}
+        <CodeRefusal refusal={refused} />
         <FormError message={formError} />
         <RetryWaitMessage wait={wait} />
         <div className="flex gap-2">

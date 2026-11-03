@@ -10,7 +10,7 @@
 //! end.
 
 use fleet_core::id::{AccountId, LinkFlowId, UserId};
-use fleet_core::value::McUsername;
+use fleet_core::value::{McUsername, UsernamePrefix};
 use fleet_core::{account, authz};
 use garde::Validate;
 use serde::{Deserialize, Serialize};
@@ -444,6 +444,36 @@ pub struct CreateGrantRequest {
     #[garde(skip)]
     pub level: GrantLevel,
 }
+
+/// `?q=`: what's typed so far of a username (ADR-0020, U110, S127). It may be
+/// a password in the wrong field, so it's a [`SecretText`], which `Debug` never
+/// shows. A parameter that isn't this one, or one given twice, is refused.
+#[derive(Debug, Serialize, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct GrantCandidatesQuery {
+    /// The start of a username, in any case.
+    #[garde(custom(valid_username_prefix))]
+    pub q: SecretText<USERNAME_MAX_CHARS>,
+}
+
+/// The garde rule of `?q=`: it could start a username.
+fn valid_username_prefix<C>(q: &SecretText<USERNAME_MAX_CHARS>, _context: &C) -> garde::Result {
+    UsernamePrefix::try_from(q.expose())
+        .map(drop)
+        .map_err(|_| garde::Error::new("must be the start of a username"))
+}
+
+/// `GET /accounts/{id}/grant-candidates`: the usernames that start with
+/// what's typed and can be given a grant on the account, in order, at most
+/// [`GRANT_CANDIDATES_MAX`] of them. Only names: never a role or an ID.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct GrantCandidates {
+    /// The usernames.
+    pub usernames: Vec<String>,
+}
+
+/// At most this many names answer `GET /accounts/{id}/grant-candidates`.
+pub const GRANT_CANDIDATES_MAX: usize = 8;
 
 /// `PUT /accounts/{id}/grants/{user}`: change the user's grant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Validate, TS, ToSchema)]

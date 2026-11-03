@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { BotResponse } from "../../generated/BotResponse";
 import type { BotStatus } from "../../generated/BotStatus";
 import { bot } from "../../test/live";
-import { controlsFor } from "./controls";
+import { cardControl, controlsFor } from "./controls";
 
 /** A bot whose status is `status`, wanted `desired`. */
 function withStatus(status: BotStatus, desired: BotResponse["desired_state"]) {
@@ -48,4 +48,24 @@ describe("which controls a bot's state offers (U38, R94, R103)", () => {
       expect(controlsFor(withStatus(status, desired))).toEqual(controls);
     },
   );
+});
+
+describe("what a bot's card offers (U88)", () => {
+  it.each([
+    [{ kind: "reported", state: "online" }, "running", "stop"],
+    [{ kind: "reported", state: "backoff" }, "running", "stop"],
+    [{ kind: "reported", state: "stopping" }, "running", "stop"],
+    [{ kind: "reported", state: "stopped" }, "stopped", "start"],
+    [{ kind: "awaiting_report" }, "running", "stop"],
+    [{ kind: "unknown", state: "online" }, "running", "stop"],
+    [{ kind: "unknown", state: "online" }, "stopped", "start"],
+    [{ kind: "unknown", state: "paused", reason: "banned" }, "running", "stop"],
+    [{ kind: "reported", state: "paused", reason: "banned" }, "running", "stop"],
+    [{ kind: "reported", state: "failed", reason: "crash_loop" }, "running", "stop"],
+    [{ kind: "unplaced", why: "no_server" }, "running", "stop"],
+    [{ kind: "unplaced", state: "paused", reason: "banned" }, "stopped", null],
+    [{ kind: "unplaced", state: "failed", reason: "crash_loop" }, "stopped", null],
+  ] as const)("%j, wanted %s: %s", (status, desired, offered) => {
+    expect(cardControl(withStatus(status as BotStatus, desired))).toBe(offered);
+  });
 });

@@ -18,8 +18,8 @@ use std::sync::Arc;
 
 use fleet_api_types::accounts::{
     AccountPage, AccountResponse, ChangeGrantRequest, CreateGrantRequest,
-    CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
-    HeldGrantPage, LinkFlowResponse, LinkStartedResponse,
+    CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantCandidates, GrantPage,
+    GrantResponse, HeldGrantPage, LinkFlowResponse, LinkStartedResponse,
 };
 use fleet_api_types::agents::{AgentPage, AgentResponse};
 use fleet_api_types::audit::{AuditPage, AuditPageQuery};
@@ -566,6 +566,21 @@ impl<S: SessionStore> Client<S> {
         query: &PageQuery<UserId>,
     ) -> Result<GrantPage, ClientError> {
         self.core.account_grants(id, query).await
+    }
+
+    /// `GET /accounts/{id}/grant-candidates?q=`: at most 8 usernames that start
+    /// with `q` and could be given a grant on the account.
+    ///
+    /// # Errors
+    /// The server's 403 (below Manage), 404, 409 (a pending account), 422 (a
+    /// `q` that can't start a username) or 429, as
+    /// [`ClientError::Api`]; the session's and the transport's errors.
+    pub async fn grant_candidates(
+        &self,
+        id: AccountId,
+        q: &str,
+    ) -> Result<GrantCandidates, ClientError> {
+        self.core.grant_candidates(id, q).await
     }
 
     /// `POST /accounts/{id}/grants`: gives a user access by their exact

@@ -111,7 +111,7 @@ describe("an account's screen", () => {
     await accountScreen({ account: account(1, { owner: { id: BOB_ID, username: "bob" } }) });
 
     expect(fact("Type")).toBe("Microsoft");
-    expect(fact("Status")).toBe("Active");
+    expect(screen.getByText("Active").closest("[data-slot=status-line]")).not.toBeNull();
     expect(fact("Your access")).toBe("Manage");
     expect(fact("Linked by")).toBe("bob");
     expect(fact("Linked on")).toBe(formatTime("2026-10-15T10:00:00.000Z"));
@@ -135,8 +135,8 @@ describe("an account's screen", () => {
     });
 
     expect(await screen.findByText(NOT_FOUND)).toBeDefined();
-    await app.user.click(screen.getByRole("link", { name: "Back to accounts" }));
-    expect(app.path()).toBe("/accounts");
+    await app.user.click(screen.getByRole("button", { name: "Back" }));
+    await waitFor(() => expect(app.path()).toBe("/home"));
   });
 
   it("says so when the account goes while its screen is open and its read answers 404", async () => {
@@ -273,7 +273,7 @@ describe("an account's screen", () => {
       await app.user.type(password, "placeholder password");
       await app.user.click(screen.getByRole("button", { name: "Continue" }));
 
-      expect(await screen.findByText("AfkBot1 is shared with bob.")).toBeDefined();
+      expect(await screen.findByText("AfkBot1 shared with bob.")).toBeDefined();
       expect(called(app, "createGrant").map((call) => call.args)).toEqual([
         [ID, { username: "bob", level: "control" }],
         [ID, { username: "bob", level: "control" }],
@@ -337,9 +337,7 @@ describe("an account's screen", () => {
       await app.user.type(await screen.findByLabelText("Username"), "bob");
       await app.user.click(screen.getByRole("button", { name: "Share" }));
 
-      expect(
-        await screen.findByText("You've tried too many names for now.", { exact: false }),
-      ).toBeDefined();
+      expect(await screen.findByText("Too many names for now.", { exact: false })).toBeDefined();
       await expectWait(app, time, { button: "Share", method: "createGrant" });
     });
 
@@ -506,7 +504,7 @@ describe("an account's screen", () => {
       await app.user.click(screen.getByRole("button", { name: "Leave" }));
       await app.user.click(screen.getByRole("button", { name: "Leave account" }));
 
-      expect(await screen.findByText("You no longer have access to AfkBot1.")).toBeDefined();
+      expect(await screen.findByText("No access to AfkBot1 any more.")).toBeDefined();
       await vi.waitFor(() => expect(app.path()).toBe("/accounts"));
     });
 

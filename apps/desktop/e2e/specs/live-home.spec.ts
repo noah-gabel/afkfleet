@@ -47,7 +47,7 @@ test("a bot's card and its screen follow its frames, and a removed bot leaves Ho
   await push(page, frame(backend, "AfkBot1"));
   await expect(badge).toHaveText("Stopping");
 
-  await main.getByRole("link", { name: "Home" }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(card.getByText("Stopping")).toBeVisible();
   const id = backend.bot("AfkBot1").id;
   backend.removeAccount("AfkBot1");

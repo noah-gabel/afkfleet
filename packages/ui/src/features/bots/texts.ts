@@ -23,20 +23,20 @@ import { formatClock, formatClockSeconds, formatDate, sameDay } from "../../lib/
 /** Home's heading. */
 export const BOTS_HEADING = "Bots";
 /** Home without a bot, and its one next step. */
-export const NO_BOTS = "No bots yet. Every Minecraft account you link gets one.";
+export const NO_BOTS = "No bots.";
 export const LINK_AN_ACCOUNT = "Link an account";
 /** Home while the bots load. */
 export const LOADING_BOTS = "Loading bots…";
+/** A bot's screen while it loads. */
+export const LOADING_BOT = "Loading bot…";
 /** A bot's screen when its read answers 404. */
-export const BOT_NOT_FOUND = "This bot doesn't exist, or you can't see it.";
+export const BOT_NOT_FOUND = "Bot not found or not available to you.";
 /** A bot's mode the viewer can't see: another user's private mode (S68). */
-export const HIDDEN_MODE = "A mode you can't see";
+export const HIDDEN_MODE = "Hidden mode";
 /** A mode's name while the modes load. */
 export const MODE_LOADING = "…";
 /** A mode's name when the modes couldn't be read. */
-export const MODE_FAILED = "Couldn't load the mode";
-/** The link back from a bot's screen. */
-export const BACK_HOME = "Home";
+export const MODE_FAILED = "Couldn't load mode";
 
 /** The facts' labels, on the cards and on a bot's screen. */
 export const LABEL = {
@@ -49,13 +49,15 @@ export const LABEL = {
   lastDisconnect: "Last disconnect",
   agent: "Agent",
   notRunning: "Not running",
+  waitingAgent: "Waiting for agent",
+  waitingRelease: "Waiting for release",
   paused: "Paused",
   failed: "Failed",
 } as const;
 
 /** Home when the bots couldn't be read. */
 export function botsFailed(why: string): string {
-  return `Couldn't load the bots: ${why}`;
+  return `Couldn't load bots: ${why}`;
 }
 
 /** A card's link, named for a screen reader. */
@@ -66,8 +68,8 @@ export function openBot(name: string): string {
 /** When an unreachable agent was last seen: at a time today, on a date before today. */
 export function agentLastSeen(iso: string, now: number): string {
   return sameDay(iso, now)
-    ? `Its agent was last seen at ${formatClock(iso)}.`
-    : `Its agent was last seen on ${formatDate(iso)} at ${formatClock(iso)}.`;
+    ? `Agent last seen at ${formatClock(iso)}.`
+    : `Agent last seen on ${formatDate(iso)} at ${formatClock(iso)}.`;
 }
 
 /** A bot's state as its status line shows it. */
@@ -137,17 +139,17 @@ export function stateReasonText(reason: BotStateReason): string {
     case "not_whitelisted":
       return "Not on this server's whitelist";
     case "wrong_version":
-      return "This server runs another Minecraft version";
+      return "Server runs another Minecraft version";
     case "account_banned":
-      return "Its Minecraft account is banned";
+      return "Minecraft account banned";
     case "multiplayer_disabled":
-      return "Multiplayer is turned off for its account";
+      return "Multiplayer off for its account";
     case "auth":
-      return "Microsoft refused its sign-in: link the account again";
+      return "Microsoft refused sign-in: link the account again";
     case "session_denied":
-      return "Its session was refused: link the account again, then Reset";
+      return "Session refused: link the account again, then Reset";
     case "crash_loop":
-      return "It kept crashing";
+      return "Crash loop";
     default:
       return String(reason);
   }
@@ -159,17 +161,17 @@ export function unplacedText(why: UnplacedReason): string {
     case "no_server":
       return "No server set";
     case "owner_disabled":
-      return "Its owner's login is disabled";
+      return "Owner's login disabled";
     case "pending":
-      return "Its account waits for approval";
+      return "Account waits for approval";
     case "reauth_required":
-      return "Its account must be linked again";
+      return "Account must be linked again";
     case "refused":
-      return "Its account's link was refused";
+      return "Account link refused";
     case "offline_not_allowed":
-      return "This server doesn't allow offline accounts";
+      return "Offline accounts not allowed";
     case "awaiting_agent":
-      return "Waiting for an agent with room";
+      return "No agent with room yet";
     case "stopped":
       return "Stopped";
     default:
@@ -191,6 +193,35 @@ export function notRunningText(status: BotStatus): string | null {
     : null;
 }
 
+/**
+ * Why a bot tied to an agent that can't be reached waits, as a fact (S125). It's chosen by what the
+ * server sent: `agent` reaches only Admins and the Owner, so a Member learns nothing about the agent's
+ * health. An agent that's disabled or expired can't return: enrolling mints a new agent, so its bots
+ * wait for a release. A bot with a last known state keeps running on an unreachable agent, so this
+ * never says it doesn't run.
+ */
+export function waitingText(agent: AgentStatus | undefined): {
+  readonly term: string;
+  readonly value: string;
+} {
+  switch (agent) {
+    case undefined:
+      return { term: LABEL.waitingAgent, value: TIED_ASK_ADMIN };
+    case "expired":
+      return { term: LABEL.waitingRelease, value: "Agent certificate expired." };
+    case "disabled":
+      return { term: LABEL.waitingRelease, value: "Agent disabled." };
+    default:
+      return { term: LABEL.waitingAgent, value: "Tied until it returns or is released." };
+  }
+}
+
+/** A Member's reason to turn to an admin, who alone sees the agents (S125). */
+const TIED_ASK_ADMIN = "Tied until it returns or an admin releases it.";
+
+/** The way to the agents, for whoever the server names a bot's agent to (S125). */
+export const AGENTS_LINK = "Agents";
+
 /** How a bot's last session ended. */
 export function disconnectText(last: LastDisconnect): string {
   switch (last.kind) {
@@ -204,7 +235,7 @@ export function disconnectText(last: LastDisconnect): string {
     case "connect_failed":
       return connectFailedText(last.connect_failure);
     case "auth_rejected":
-      return "The server refused its sign-in";
+      return "Server refused sign-in";
     case "account_restricted":
       return last.restriction === undefined
         ? "Account restricted"
@@ -212,13 +243,13 @@ export function disconnectText(last: LastDisconnect): string {
     case "session_server_failed":
       return sessionServerText(last.session_server_failure);
     case "session_crashed":
-      return "Its session crashed";
+      return "Session crashed";
     case "watchdog_timeout":
-      return "It stopped responding";
+      return "Stopped responding";
     case "liveness_timeout":
-      return "The server stopped answering";
+      return "Server stopped answering";
     case "respawn_failed":
-      return "It couldn't respawn after dying";
+      return "Couldn't respawn";
     default:
       return String(last.kind);
   }
@@ -230,7 +261,7 @@ function connectFailedText(failure: ConnectFailure | undefined): string {
     case undefined:
       return "Couldn't connect";
     case "blocked":
-      return "Blocked: its agent refuses this address. Ask whoever runs the agent to allow it.";
+      return "Blocked by its agent. Ask whoever runs it to allow this address.";
     case "refused":
       return "Couldn't connect: connection refused";
     case "timed_out":
@@ -258,21 +289,21 @@ function restrictionText(restriction: AccountRestriction): string {
   }
 }
 
-/** How Minecraft's session server failed. */
+/** How Minecraft session server failed. */
 function sessionServerText(failure: SessionServerFailure | undefined): string {
   switch (failure) {
     case "unreachable":
-      return "Minecraft's session server was unreachable";
+      return "Minecraft session server unreachable";
     case "rate_limited":
-      return "Minecraft's session server rate-limited it";
+      return "Minecraft session server rate-limited";
     case "timed_out":
-      return "Minecraft's session server timed out";
+      return "Minecraft session server timed out";
     case "unexpected":
-      return "Minecraft's session server answered unexpectedly";
+      return "Minecraft session server unexpected answer";
     case undefined:
-      return "Minecraft's session server failed";
+      return "Minecraft session server failed";
     default:
-      return `Minecraft's session server failed (${String(failure)})`;
+      return `Minecraft session server failed (${String(failure)})`;
   }
 }
 
@@ -310,17 +341,23 @@ export const CONTROL = {
   resume: "Resume",
   reset: "Reset",
 } as const;
+/** A card's button, as a screen reader names it among the others (U88, S124). */
+export function cardControlName(control: string, name: string): string {
+  return `${control} ${name}`;
+}
+/** After a start or a stop that its bot's agent can't be told of yet (S125). */
+export const SAVED_NOTE = "Saved. Agent unreachable, so nothing changes yet.";
 /** After a call its bot's agent was sent (S73). */
-export const SENT_NOTE = "Sent. The state changes when its agent reports back.";
+export const SENT_NOTE = "Sent. Waiting for its agent.";
 /** Where the controls would be, for a viewer whose level allows none (U38). */
-export const VIEW_ONLY = "You can view this bot but not control it.";
+export const VIEW_ONLY = "View only.";
 
 /** Settings (U40, U41, S68, S69). */
 export const SETTINGS = {
   heading: "Settings",
   mode: "Mode",
   switching: "Switching…",
-  modeForbidden: "Only someone who manages this bot can choose that mode.",
+  modeForbidden: "That mode needs Manage.",
   server: "Server",
   change: "Change",
   set: "Set",
@@ -334,7 +371,7 @@ export const SETTINGS = {
 /** The timeline (U46). */
 export const TIMELINE = {
   heading: "Timeline",
-  note: "Since you signed in, while the app is open.",
+  note: "Since sign-in, while the app is open.",
   empty: "Nothing yet.",
 } as const;
 /** The chat console and its send box (U43–U45, S7, S9, S70; H3's texts). */
@@ -342,14 +379,14 @@ export const CHAT = {
   heading: "Chat",
   older: "Show older",
   noOlder: "No older lines.",
-  empty: "No chat yet.",
+  empty: "No chat.",
   loading: "Loading chat…",
   server: "Server",
   you: "You",
   aUser: "a user",
   modeTag: "mode",
   /** The `title` and screen-reader label of a name a chat format read (U55). */
-  parsedMark: "Read from the server's text by a chat format. Minecraft doesn't check this name.",
+  parsedMark: "Read by a chat format. Minecraft doesn't check this name.",
   argumentsHidden: "(arguments hidden)",
   cutShort: "(cut short)",
   pending: "pending",
@@ -358,12 +395,12 @@ export const CHAT = {
   placeholder: "Message or /command",
   send: "Send",
   sending: "Sending…",
-  commandStepUp: "Enter your password to send this command. It counts for 5 minutes.",
+  commandStepUp: "Enter your password to send this command. Counts for 5 minutes.",
 } as const;
 
 /** The chat's history that couldn't be read. */
 export function chatFailed(why: string): string {
-  return `Couldn't load the chat: ${why}`;
+  return `Couldn't load chat: ${why}`;
 }
 
 /** An older page of the chat that couldn't be read. */
@@ -401,7 +438,7 @@ export function entryText(entry: Entry, modeNamed: (id: string) => string): stri
     case "alert":
       return `${entry.state === "failed" ? "Failed" : "Paused"}: ${stateReasonText(entry.reason)}`;
     case "mode":
-      return `Mode: ${modeNamed(entry.from)} → ${modeNamed(entry.to)}`;
+      return `Mode: ${modeNamed(entry.from)} to ${modeNamed(entry.to)}`;
     case "desired":
       return entry.desired === "stopped" ? "Stop requested" : "Start requested";
     default: {
@@ -413,7 +450,14 @@ export function entryText(entry: Entry, modeNamed: (id: string) => string): stri
 
 /** A gap's text: how long live updates were down. */
 export function gapText(downMs: number): string {
-  return `Live updates were down for ${formatDuration(downMs)}; some events may be missing.`;
+  return `Live updates down for ${formatDuration(downMs)}. Events may be missing.`;
+}
+
+/** A reason inside a sentence: its first letter lowered, but for a name (R213). */
+function inLine(reason: string): string {
+  return /^(?:Microsoft|Minecraft|Xbox)/.test(reason)
+    ? reason
+    : `${reason.charAt(0).toLowerCase()}${reason.slice(1)}`;
 }
 
 /** A notice's toast, as the event happens. */
@@ -430,13 +474,13 @@ export function noticeLine(notice: Notice): string {
         ? `${name} died at ${formatClock(notice.at)}.`
         : `${name} died ${notice.count} times, last at ${formatClock(notice.at)}.`;
     case "paused":
-      return `${name} was paused: ${stateReasonText(notice.reason)}.`;
+      return `${name} paused: ${inLine(stateReasonText(notice.reason))}.`;
     case "failed":
-      return `${name} failed: ${stateReasonText(notice.reason)}.`;
+      return `${name} failed: ${inLine(stateReasonText(notice.reason))}.`;
     case "blocked":
-      return `${name} can't connect: its agent refuses this server's address.`;
+      return `${name} blocked: its agent refuses this address.`;
     case "respawn":
-      return `${name} couldn't respawn and left the server. It reconnects by itself.`;
+      return `${name} couldn't respawn and left. Reconnects by itself.`;
     default: {
       const unknown: never = notice;
       return String(unknown);

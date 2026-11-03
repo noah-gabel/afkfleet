@@ -102,6 +102,7 @@ pub fn configure<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
             commands::accounts::refuse_account,
             commands::links::relink_account,
             commands::grants::account_grants,
+            commands::grants::grant_candidates,
             commands::grants::create_grant,
             commands::grants::change_grant,
             commands::grants::revoke_grant,

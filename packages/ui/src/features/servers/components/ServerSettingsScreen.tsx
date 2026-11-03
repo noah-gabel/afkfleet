@@ -11,7 +11,7 @@
 // loses edits.
 import { zodResolver } from "@hookform/resolvers/zod";
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { useId, useState } from "react";
 import { type Path, useFieldArray, useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
@@ -63,7 +63,6 @@ import {
   SAVED,
   SERVER_FIELD,
   SERVER_HINT,
-  SERVERS_HEADING,
   SETTINGS_GONE,
   serversFailed,
   TEXTS_HEADING,
@@ -115,7 +114,6 @@ function Existing({ id, configure }: { id: string; configure: boolean }) {
         <p role="alert" className="text-sm text-destructive">
           {serversFailed(describeError(failure))}
         </p>
-        <BackLink />
       </main>
     );
   }
@@ -135,17 +133,7 @@ function Gone() {
   return (
     <main className="flex max-w-3xl flex-col gap-4 p-6">
       <p role="alert">{SETTINGS_GONE}</p>
-      <BackLink />
     </main>
-  );
-}
-
-/** "Minecraft servers": back to the list. */
-function BackLink() {
-  return (
-    <Button asChild variant="link" className="self-start px-0">
-      <Link to="/admin/servers">{SERVERS_HEADING}</Link>
-    </Button>
   );
 }
 
@@ -530,7 +518,7 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
             disabled={writes.running !== null}
             onClick={() => {
               writes.cancel();
-              void navigate({ to: "/admin/servers" });
+              void navigate({ to: "/admin/servers", replace: true });
             }}
           >
             {CANCEL}
@@ -561,7 +549,6 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
           }}
         />
       ) : null}
-      <BackLink />
     </main>
   );
 }
@@ -609,7 +596,7 @@ function DeleteAction({
         }
         if (alive.current) {
           toast.success(deleted(row.server));
-          await navigate({ to: "/admin/servers" });
+          await navigate({ to: "/admin/servers", replace: true });
         }
         queryClient.setQueryData<ServerSettingsResponse[]>(SERVER_SETTINGS_KEY, (rows) =>
           rows?.filter((one) => one.id !== row.id),

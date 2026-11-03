@@ -7,6 +7,7 @@ import { appRoute } from "../shell/routes";
 import { AccountScreen } from "./components/AccountScreen";
 import { AccountsScreen } from "./components/AccountsScreen";
 import { LinkScreen } from "./components/LinkScreen";
+import { OfflineScreen } from "./components/OfflineForm";
 
 /** `/accounts`. */
 export const accountsRoute = createRoute({
@@ -20,6 +21,13 @@ export const linkRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "accounts/link",
   component: () => <LinkScreen />,
+});
+
+/** `/accounts/offline`: adding an offline account. */
+export const offlineRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "accounts/offline",
+  component: OfflineScreen,
 });
 
 /** `/accounts/$id`: one account. */

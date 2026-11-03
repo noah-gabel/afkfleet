@@ -29,6 +29,7 @@ import type { CreateInviteRequest } from "@afkfleet/ui/generated/CreateInviteReq
 import type { CreateModeRequest } from "@afkfleet/ui/generated/CreateModeRequest";
 import type { CreateOfflineAccountRequest } from "@afkfleet/ui/generated/CreateOfflineAccountRequest";
 import type { CreateServerSettingsRequest } from "@afkfleet/ui/generated/CreateServerSettingsRequest";
+import type { GrantCandidates } from "@afkfleet/ui/generated/GrantCandidates";
 import type { GrantPage } from "@afkfleet/ui/generated/GrantPage";
 import type { GrantResponse } from "@afkfleet/ui/generated/GrantResponse";
 import type { HeldGrantPage } from "@afkfleet/ui/generated/HeldGrantPage";
@@ -350,6 +351,10 @@ export class TauriApiClient implements ApiClient {
 
   accountGrants(id: string, before?: string, limit?: number): Promise<GrantPage> {
     return this.#call("account_grants", { id, before, limit });
+  }
+
+  grantCandidates(id: string, q: string): Promise<GrantCandidates> {
+    return this.#call("grant_candidates", { id, q });
   }
 
   createGrant(id: string, request: CreateGrantRequest): Promise<GrantResponse> {

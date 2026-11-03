@@ -16,8 +16,9 @@ use core::time::Duration;
 
 use fleet_api_types::accounts::{
     AccountPage, AccountResponse, ChangeGrantRequest, CreateGrantRequest,
-    CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
-    HeldGrantPage, LinkFlowResponse, LinkStartedResponse,
+    CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantCandidates,
+    GrantCandidatesQuery, GrantPage, GrantResponse, HeldGrantPage, LinkFlowResponse,
+    LinkStartedResponse,
 };
 use fleet_api_types::agents::{AgentPage, AgentResponse};
 use fleet_api_types::app::{
@@ -463,6 +464,30 @@ impl<F: StoreFactory> AppState<F> {
         let conn = self.conn.read().await;
         conn.client()?
             .account_grants(id, &query)
+            .await
+            .map_err(error::client)
+    }
+
+    /// The `grant_candidates` command: who could be given a grant, by what's
+    /// typed so far of their username (ADR-0020, U110, S127).
+    ///
+    /// # Errors
+    /// `invalid_input` for what can't start a username, `no_server`,
+    /// `no_session`, or `api` 403, 404, 409 or 429.
+    pub async fn grant_candidates(
+        &self,
+        id: AccountId,
+        q: String,
+    ) -> Result<GrantCandidates, CommandError> {
+        // A plain `q` over IPC, but what was typed may be a password in the wrong
+        // field: from here on it's a secret text, which no `Debug` shows.
+        let query = GrantCandidatesQuery {
+            q: SecretText::new(q),
+        };
+        validate(&query)?;
+        let conn = self.conn.read().await;
+        conn.client()?
+            .grant_candidates(id, query.q.expose())
             .await
             .map_err(error::client)
     }

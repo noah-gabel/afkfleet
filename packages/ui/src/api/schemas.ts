@@ -62,6 +62,14 @@ export const username = z
     USERNAME_RULE,
   );
 
+/** What may start a username: the server's `UsernamePrefix` rule (ADR-0020, S127). */
+export const usernamePrefix = z
+  .string()
+  .refine(
+    (text) => chars(text) <= USERNAME_MAX_CHARS && /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(text),
+    "must be the start of a username",
+  );
+
 /** A password at login or step-up: only capped, so no rule leaks what a password is like. */
 export const password = z
   .string()

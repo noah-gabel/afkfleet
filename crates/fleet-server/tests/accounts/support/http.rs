@@ -242,12 +242,17 @@ impl Server {
 
     /// Adds `user<n>` with `role`.
     pub(crate) async fn add_user(&self, n: u8, role: Role) -> UserId {
+        self.add_user_named(n, &format!("user{n}"), role).await
+    }
+
+    /// Adds a user named `name`, whose ID comes from `n`, with `role`.
+    pub(crate) async fn add_user_named(&self, n: u8, name: &str, role: Role) -> UserId {
         let id = UserId::new_v7(at(T0), [n; 10]).unwrap();
         let mut tx = self.db.write().await.unwrap();
         tx.users()
             .insert(&NewUser {
                 id,
-                username: Username::try_from(format!("user{n}").as_str()).unwrap(),
+                username: Username::try_from(name).unwrap(),
                 password_hash: PasswordHash::new(SecretString::from(PHC)).unwrap(),
                 role,
                 created_at: at(T0),

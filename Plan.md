@@ -3852,7 +3852,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >   | K | `p11/p11.10-dark-mode` | P11.10, with PR #86's follow-ups and U83 first |
 >   | L1 | `p11/p11.11-design-pass` | PR #87's follow-ups, the brief, the design direction and the plan of the rest of L (U86–U97) |
 >   | L2 | `p11/p11.11-design-foundation` | P11.11: tokens, fonts, the frame, shared parts, branding, AA enforced, the sign-in screens and Profile |
->   | L3 | `p11/p11.11-design-screens` | P11.11: Home with its card's button, a bot's detail, Accounts |
+>   | L3 | `p11/p11.11-design-screens` | P11.11: Home with its card's button, a bot's detail, Accounts, the universal Back, "Share with" suggestions |
 >   | L4 | `p11/p11.11-design-admin` | P11.11: Modes, Minecraft servers, the admin screens, the screenshot baselines (ticked here) |
 >   | M | `p11/p11-wrap-up` | The threat model, the README, the DoD's 24-hour run |
 >
@@ -4288,6 +4288,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P11.11, group L2) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U98–U104, S99–S122, R192–R203): **the foundation is built.** U92's palette, Geist and IBM Plex Mono bundled, the sidebar with no header, the shared parts, Orbit at 14 Windows sizes, the sign-in screens with six boxes that send when full, in setup too (U99), and Profile. **WCAG AA is enforced:** the sweep holds text at 4.5:1 (3:1 for large) and tabs through each row, holding each focus outline at 3:1, with no list of known failures. Every corner comes from `--radius` (U101). The check exe has its own path, `target/app-check/afkfleet-check.exe`, the only file the AI launches (S99). Beyond the task: `THIRD-PARTY-NOTICES.md` for the fonts' licence (S110). L3 and L4 restyle the rest, and L4 ticks this task. *From PR #89's hands-on (the user's):* a tooltip only on an icon-only control, taking no pointer and closing on leaving it (U102); the code boxes show their focus in their cells, which the sweep reads (U103); the app's logo has no tile, drawn from tokens, and the Windows icon keeps it (U104).
 
+  > Note (P11.11, group L3) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U105–U113, S123–S127, R204–R219): **Home, a bot's detail and Accounts are built.** Home's cards hold U88's Start or Stop button above their stretched link; a bot's screen has its two columns, stacking under about 800 px of content, and the console in its own tokens; a bot tied to an agent that can't be reached says why it waits, on the card and the screen; Accounts is a grid of cards that open the account, with choice tiles when empty, and an account's screen has two columns, its access list on `ui/table`. The root is the window's height and the content column the one scroller (S123), and the sidebar collapses under 1056 px (U113). Beyond the task, the user's additions at the plan review: **a universal Back control** in the frame, with the side-button and Alt+Left (U111, U112), and **suggestions behind "Share with"** (U110, S127): a new route, `GET /accounts/{id}/grant-candidates`, a new limit, `grant_candidates_per_user_per_hour`, a new value, `UsernamePrefix`, and a 68th grant, replacing ADR-0018's S6 for the picking. Any Member with an account can now list enabled users' names, as `docs/threat-model.md` says. About 7,000 lines, past L1's 5,300, as the user chose. L4 ticks this task.
+
 **DoD:**
 - Pressing Start in the app brings a bot with a real Microsoft account Online on a real server (moved from Phase 10, the user's choice, U1 in ADR-0019).
 - The user's real fleet runs for 24 h, managed from the app. Every event shows up live, and the logs contain no unhandled errors.
@@ -4358,6 +4360,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P12.2, from Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): a managed agent in `compose.yaml` lists its Docker network in `[control_plane] private_targets` only if its bots dial a server on it, with that network's subnet pinned in compose: Docker also hands out 192.168.0.0/16 (U15). **Exit 5** means the server refused the agent for good, so `restart: on-failure` would restart it into the same refusal: P12.2 sets its policy (a restart limit, say), and the runbook says what to do.
 
   > Note (P12.2, from Phase 11, group D1) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S28): **Caddy must never log the live events socket's query string.** `GET /api/v1/events?ticket=…` carries a ticket: single use, 30 s, and only with its session's bearer token, but still a secret. Caddy writes no access log unless a `log` directive asks for one; if P12.2 adds one, its `query` filter deletes `ticket` from `request>uri`, and P12.7's smoke test checks the log holds none.
+
+  > Note (P12.2, from Phase 11, group L3, PR #90's review) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U110, S127): **the same goes for `q` on `GET /api/v1/accounts/*/grant-candidates`.** It's what a user typed into "Share with", sent as they type it, so a password pasted into the wrong field would be in it. A `log` directive's `query` filter deletes `q` on that route as it deletes `ticket`.
 - [ ] **P12.3** 🔴 Backups:
   - a scheduled `VACUUM INTO` with retention, plus a `backup` CLI
   - a restore runbook
@@ -4434,6 +4438,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P12.7, from Phase 7, group A, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): the smoke test creates the Owner with `docker compose run -T … user create-owner --username … --password-stdin`, since CI has no terminal for the prompt.
 
   > Note (P12.7, from Phase 7, group C, the user's note) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): the smoke test checks that a request through Caddy reaches the server with the client's real address (`[http] trusted_proxies` honored), so a missing or wrong `trusted_proxies` can't put every client into Caddy's one bucket unnoticed.
+
+  > Note (P12.7, from Phase 11, group L3, PR #90's review) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S28, S127): when Caddy writes an access log, the smoke test opens the live events socket and asks `grant-candidates` for a match, then checks the log holds neither the `ticket` nor the `q` it sent (P12.2's notes).
 
 **DoD:**
 - A fresh VPS gets to a running system by following only the runbook.

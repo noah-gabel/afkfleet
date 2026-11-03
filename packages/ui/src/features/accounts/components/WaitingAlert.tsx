@@ -64,7 +64,7 @@ export function WaitingBadge({ count }: { count: number }) {
   return (
     <span
       aria-hidden="true"
-      className="ml-auto rounded-full bg-primary px-1.5 py-0.5 text-xs font-semibold text-primary-foreground max-rail:absolute max-rail:-top-1 max-rail:-right-1"
+      className="ml-auto rounded-lg bg-primary px-1.5 py-0.5 text-xs font-semibold text-primary-foreground max-rail:absolute max-rail:-top-1 max-rail:-right-1"
     >
       {badgeNumber(count)}
     </span>

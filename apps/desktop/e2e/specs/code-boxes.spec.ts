@@ -63,7 +63,6 @@ test("a pasted recovery code swaps to the field, filled, and sends nothing", asy
   context,
 }) => {
   const { backend } = await atCode(page, context);
-  const before = backend.code(OWNER);
 
   await paste(page, "abcd-efgh-ijkl-mnop-qrst");
 
@@ -71,7 +70,24 @@ test("a pasted recovery code swaps to the field, filled, and sends nothing", asy
   await expect(recovery).toHaveValue("abcd-efgh-ijkl-mnop-qrst");
   await expect(recovery).toBeFocused();
   await expect(page.getByText("3 tries left.")).toBeVisible();
-  expect(backend.code(OWNER)).toBe(before);
+  expect(backend.timesCalled("login_mfa")).toBe(0);
+});
+
+test("a failed resend takes the focus back to the boxes, not a disabled Verify", async ({
+  page,
+  context,
+}) => {
+  const { backend, boxes } = await atCode(page, context);
+  backend.refuseAll("unreachable");
+  await page.keyboard.type("123456");
+  const verify = page.getByRole("button", { name: "Verify" });
+  await expect(verify).toBeEnabled();
+  await expect(boxes).toHaveValue("123456");
+
+  await verify.click();
+
+  await expect(boxes).toBeFocused();
+  await expect(boxes).toHaveValue("123456");
 });
 
 test("the digits sit on their cells, and six don't scroll the field", async ({ page, context }) => {

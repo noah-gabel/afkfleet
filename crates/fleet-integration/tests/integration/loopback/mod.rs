@@ -16,6 +16,7 @@ mod on_respawn;
 mod outage;
 mod server_restart;
 mod silent_connection;
+mod waiting_agent;
 
 /// The `reason` an audit entry records, such as a stream end's.
 pub(crate) fn reason(record: &AuditRecord) -> Option<String> {

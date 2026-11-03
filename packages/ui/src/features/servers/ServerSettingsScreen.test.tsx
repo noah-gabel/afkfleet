@@ -114,11 +114,6 @@ function text(n: number): HTMLTextAreaElement {
   return screen.getByLabelText(`Conflict text ${n}`) as HTMLTextAreaElement;
 }
 
-/** The screen's own content, without the navigation. */
-function main(): HTMLElement {
-  return screen.getByRole("main");
-}
-
 const ROW = settings(1, "mc.example.com:25565", [
   ["Already connected"],
   ["You logged in", "from another location"],
@@ -229,7 +224,7 @@ describe("a Minecraft server's settings", () => {
     await app.user.click(screen.getByRole("button", { name: "Save" }));
 
     expect(await screen.findByText("These settings don't exist any more.")).toBeDefined();
-    expect(within(main()).getByRole("link", { name: "Minecraft servers" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Back" })).toBeDefined();
   });
 
   it("says the settings don't exist when the list doesn't hold them", async () => {

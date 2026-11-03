@@ -225,6 +225,18 @@ describe("a corner outside the --radius scale (ADR-0020, U101)", () => {
     ["a style's corner", 'const s = { borderTopLeftRadius: "4px" };'],
     ["a style's number", "const s = { borderRadius: 4 };"],
     ["sonner's variable", 'const s = { "--border-radius": "4px" };'],
+    ["a style's ternary", 'const s = { borderRadius: on ? "4px" : "0" };'],
+    ["one literal in a ternary", 'const s = { borderRadius: on ? "var(--radius)" : "0" };'],
+    ["a ternary's numbers", "const s = { borderRadius: on ? 4 : 0 };"],
+    ["a ternary on sonner's variable", 'const s = { "--border-radius": on ? "4px" : "0" };'],
+    ["a template's unit", `const s = { borderRadius: \`${HOLE}size}px\` };`],
+    ["a subtree's token", 'const a = "[--radius:4px]";'],
+    ["a subtree's token behind a variant", 'const a = "hover:[--radius:4px]";'],
+    ["a subtree's step", 'const a = "[--radius-lg:4px]";'],
+    ["sonner's variable in a class", 'const a = "[--border-radius:8px]";'],
+    ["the token in a style", 'const s = { "--radius": "4px" };'],
+    ["the token from a step in a style", 'const s = { "--radius": "var(--radius-md)" };'],
+    ["a step in a style", 'const s = { "--radius-lg": "4px" };'],
   ]) {
     it(`refuses ${name}`, () => {
       assert.deepEqual(rulesOf(source), ["corner off the scale"], source);
@@ -240,6 +252,14 @@ describe("a corner outside the --radius scale (ADR-0020, U101)", () => {
     ["a word in a sentence", 'const text = "The wait is rounded, so it never ends early.";'],
     ["a style from the token", 'const s = { "--border-radius": "var(--radius)" };'],
     ["a style's radius from a step", 'const s = { borderRadius: "var(--radius-md)" };'],
+    [
+      "a ternary between steps",
+      'const s = { borderRadius: on ? "var(--radius)" : "var(--radius-md)" };',
+    ],
+    [
+      "a comparison in a ternary",
+      'const s = { borderRadius: on === "4px" ? "var(--radius)" : "var(--radius-md)" };',
+    ],
     ["a variable named for it", "const rounded = Math.round(1);"],
   ]) {
     it(`takes ${name}`, () => {
@@ -381,6 +401,58 @@ describe("the stylesheet", () => {
         css.replace("@apply bg-background text-foreground;", "border-radius: 3px;"),
       ),
       ["radius scale"],
+    );
+  });
+
+  it("refuses a corner off the scale through @apply", () => {
+    assert.deepEqual(
+      cssRules((css) =>
+        css.replace("@apply bg-background text-foreground;", "@apply bg-background rounded-[3px];"),
+      ),
+      ["radius scale"],
+    );
+  });
+
+  it("takes a corner on the scale through @apply", () => {
+    assert.deepEqual(
+      cssRules((css) =>
+        css.replace("@apply bg-background text-foreground;", "@apply bg-background rounded-lg;"),
+      ),
+      [],
+    );
+  });
+
+  it("refuses sonner's variable hard-coded in a rule", () => {
+    assert.deepEqual(
+      cssRules((css) =>
+        css.replace("@apply bg-background text-foreground;", "--border-radius: 8px;"),
+      ),
+      ["radius scale"],
+    );
+  });
+
+  it("refuses sonner's variable hard-coded among the tokens", () => {
+    assert.deepEqual(
+      cssRules((css) =>
+        css.replace("--radius: 0.625rem;", "--radius: 0.625rem;\n  --border-radius: 8px;"),
+      ),
+      ["radius scale"],
+    );
+  });
+
+  it("refuses --radius set anywhere but :root", () => {
+    assert.deepEqual(
+      cssRules((css) => css.replace("@apply bg-background text-foreground;", "--radius: 0;")),
+      ["radius scale"],
+    );
+  });
+
+  it("takes a variable that reads the scale", () => {
+    assert.deepEqual(
+      cssRules((css) =>
+        css.replace("@apply bg-background text-foreground;", "--border-radius: var(--radius);"),
+      ),
+      [],
     );
   });
 

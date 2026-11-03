@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use fleet_core::authz::{GrantLevel, Role, UserRef};
 use fleet_core::id::{AccountId, UserId};
-use fleet_core::value::{McUsername, Username};
+use fleet_core::value::{McUsername, Username, UsernamePrefix};
 
 use super::page::Page;
 use super::store::StoreError;
@@ -63,6 +63,21 @@ pub struct HeldGrant {
     pub granted_by_name: Username,
 }
 
+/// Someone who could be given a grant on an account, as the suggestions behind
+/// "Share with" read them (ADR-0020, S127).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrantCandidate {
+    /// Who.
+    pub id: UserId,
+    /// Their username.
+    pub username: Username,
+    /// Their current role, to check the query's reading of implicit Manage.
+    pub role: Role,
+}
+
+/// At most this many candidates are read.
+pub const GRANT_CANDIDATES_MAX: u8 = 8;
+
 /// Why a grant couldn't be inserted.
 #[derive(Debug, thiserror::Error)]
 pub enum InsertGrantError {
@@ -99,6 +114,22 @@ pub trait GrantReads: Send + Sync + fmt::Debug {
         user: UserId,
         page: Page<AccountId>,
     ) -> Result<Vec<HeldGrant>, StoreError>;
+
+    /// Up to [`GRANT_CANDIDATES_MAX`] enabled users whose names start with
+    /// `prefix`, in order, who could be given a grant on `account`, which
+    /// `owner` owns: not `caller`, `owner`, anyone holding a grant on it, or
+    /// anyone with implicit Manage on it. The caller asks `authorize()` first.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`] for a row that
+    /// doesn't read back.
+    async fn candidates(
+        &self,
+        account: AccountId,
+        owner: UserRef,
+        caller: UserId,
+        prefix: &UsernamePrefix,
+    ) -> Result<Vec<GrantCandidate>, StoreError>;
 }
 
 /// Reading and writing grants inside a [`super::store::WriteTx`].

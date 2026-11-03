@@ -78,8 +78,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use fleet_api_types::accounts::{
     AccountPage, AccountResponse, ChangeGrantRequest, CreateGrantRequest,
-    CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
-    HeldGrantPage, LinkFlowResponse, LinkStartedResponse,
+    CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantCandidates, GrantPage,
+    GrantResponse, HeldGrantPage, LinkFlowResponse, LinkStartedResponse,
 };
 use fleet_api_types::agents::{AgentPage, AgentResponse};
 use fleet_api_types::audit::{AuditPage, AuditPageQuery};
@@ -736,6 +736,20 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         let url = with_page(
             self.server.api(&["accounts", &id.to_string(), "grants"]),
             query,
+        );
+        let answer = self.authed(Method::GET, url, None).await?;
+        expect_json(answer, 200)
+    }
+
+    pub(crate) async fn grant_candidates(
+        self: &Arc<Self>,
+        id: AccountId,
+        q: &str,
+    ) -> Result<GrantCandidates, ClientError> {
+        let url = with_typed(
+            self.server
+                .api(&["accounts", &id.to_string(), "grant-candidates"]),
+            q,
         );
         let answer = self.authed(Method::GET, url, None).await?;
         expect_json(answer, 200)
@@ -1451,6 +1465,12 @@ fn with_page<I: ToString>(mut url: Url, query: &PageQuery<I>) -> Url {
             pairs.append_pair("limit", &limit.to_string());
         }
     }
+    url
+}
+
+/// `url` with `?q=`: what's typed so far of a username, encoded.
+fn with_typed(mut url: Url, q: &str) -> Url {
+    url.query_pairs_mut().append_pair("q", q);
     url
 }
 
@@ -3014,6 +3034,28 @@ mod tests {
             core.transport.seen(),
             [sent(&leave, None), sent(&leave, None)]
         );
+    }
+
+    #[tokio::test]
+    async fn the_suggestions_read_their_route_and_answer() {
+        let core = signed_in().await;
+        let answer = GrantCandidates {
+            usernames: vec!["carol".to_owned()],
+        };
+        let route = format!("GET /api/v1/accounts/{ACCOUNT}/grant-candidates");
+        core.transport.on(&route, Ok(dto(200, &answer)));
+
+        let read = core.grant_candidates(id(ACCOUNT), "c").await.unwrap();
+
+        assert_eq!(read, answer);
+        assert!(core.transport.routes().contains(&route));
+    }
+
+    #[test]
+    fn what_was_typed_goes_encoded_in_the_query() {
+        let url = Url::parse("https://example.com/api/v1/x").unwrap();
+
+        assert_eq!(with_typed(url, "c&a b").query(), Some("q=c%26a+b"));
     }
 
     #[tokio::test]

@@ -11,7 +11,7 @@
 //     /server
 //     /modes /modes/new /modes/$id   the modes the user may see, a new one, one
 //     /accounts      the Microsoft accounts the user may see
-//       /accounts/link /accounts/$id /accounts/$id/link-again
+//       /accounts/link /accounts/offline /accounts/$id /accounts/$id/link-again
 //     /profile       the user's own account, sessions and warnings
 //       /profile/password /profile/2fa   one route per flow, beside the overview
 //     /admin         Admins and the Owner only; anyone else gets "not found"
@@ -26,6 +26,7 @@ import {
   accountsRoute,
   linkAgainRoute,
   linkRoute,
+  offlineRoute,
 } from "../features/accounts/routes";
 import {
   adminRoute,
@@ -61,6 +62,7 @@ const routeTree = rootRoute.addChildren([
     modeRoute,
     accountsRoute,
     linkRoute,
+    offlineRoute,
     accountRoute,
     linkAgainRoute,
     serverRoute,
@@ -88,6 +90,8 @@ export function createAppRouter(context: RouterContext) {
     history: createMemoryHistory({ initialEntries: ["/"] }),
     defaultErrorComponent: RouteError,
     defaultNotFoundComponent: NotFound,
+    // The page itself never scrolls, so a new screen starts these at their top (ADR-0020, S123).
+    scrollToTopSelectors: ["[data-slot=content]", "[data-slot=screen]"],
   });
 }
 

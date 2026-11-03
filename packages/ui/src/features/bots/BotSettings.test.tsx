@@ -151,9 +151,7 @@ describe("a bot's Settings: the mode", () => {
 
     await app.user.selectOptions(select, FARM.id);
 
-    expect(
-      await screen.findByText("Only someone who manages this bot can choose that mode."),
-    ).toBeDefined();
+    expect(await screen.findByText("That mode needs Manage.")).toBeDefined();
     expect([calls(app, "bot"), calls(app, "modes")]).toEqual([
       (before[0] ?? 0) + 1,
       (before[1] ?? 0) + 1,
@@ -194,7 +192,7 @@ describe("a bot's Settings: the mode", () => {
 
     await app.user.selectOptions(await selector(), FARM.id);
 
-    expect(await screen.findByText("This bot doesn't exist, or you can't see it.")).toBeDefined();
+    expect(await screen.findByText("Bot not found or not available to you.")).toBeDefined();
     expect(reads).toBe(2);
   });
 });

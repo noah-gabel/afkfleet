@@ -5,7 +5,7 @@ import { StepUpForm } from "../../../components/StepUpForm";
 import { Alert, AlertDescription, AlertTitle } from "../../../components/ui/alert";
 
 /** What the prompt asks by default: a change's password. */
-const MAKE_THIS_CHANGE = "Enter your password to make this change. It counts for 5 minutes.";
+const MAKE_THIS_CHANGE = "Enter your password to make this change. Counts for 5 minutes.";
 
 /**
  * The password prompt of the write `id` names, asking `text` (a change's, by default).

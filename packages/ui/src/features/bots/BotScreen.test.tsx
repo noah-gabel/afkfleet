@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiClient } from "../../api/ApiClient";
@@ -158,7 +158,7 @@ describe("a bot's screen", () => {
     );
 
     expect(screen.getByText("Agent offline")).toBeDefined();
-    expect(screen.getByText(`Its agent was last seen at ${formatClock(SINCE)}.`)).toBeDefined();
+    expect(screen.getByText(`Agent last seen at ${formatClock(SINCE)}.`)).toBeDefined();
   });
 
   it("says on which day its agent was last seen before today", async () => {
@@ -171,7 +171,7 @@ describe("a bot's screen", () => {
     );
 
     expect(
-      screen.getByText(`Its agent was last seen on ${formatDate(seen)} at ${formatClock(seen)}.`),
+      screen.getByText(`Agent last seen on ${formatDate(seen)} at ${formatClock(seen)}.`),
     ).toBeDefined();
   });
 
@@ -195,7 +195,7 @@ describe("a bot's screen", () => {
       },
     });
 
-    expect(await screen.findByText("Couldn't load the mode")).toBeDefined();
+    expect(await screen.findByText("Couldn't load mode")).toBeDefined();
   });
 
   it("shows its agent when the server sends it, as it does to Admins and the Owner", async () => {
@@ -239,8 +239,8 @@ describe("a bot's screen", () => {
     });
 
     expect(await screen.findByText(BOT_NOT_FOUND)).toBeDefined();
-    await app.user.click(within(screen.getByRole("main")).getByRole("link", { name: "Home" }));
-    expect(app.path()).toBe("/home");
+    await app.user.click(screen.getByRole("button", { name: "Back" }));
+    await waitFor(() => expect(app.path()).toBe("/home"));
   });
 
   it("says so when the bot goes while its screen is open", async () => {
@@ -260,5 +260,75 @@ describe("a bot's screen", () => {
     watch.latest().push(event({ type: "bot_removed", bot_id: ID }));
 
     expect(await screen.findByText(BOT_NOT_FOUND)).toBeDefined();
+  });
+});
+
+describe("the way to a waiting bot's agent (S125)", () => {
+  const waiting = (changes: Parameters<typeof bot>[1] = {}) =>
+    bot(1, {
+      desired_state: "stopped",
+      status: { kind: "unknown", state: "online", since: SINCE, agent_last_seen_at: SINCE },
+      ...changes,
+    });
+  const AGENT = {
+    id: "01900000-0000-7000-8000-000000000301",
+    name: "agent-main",
+    status: "offline" as const,
+  };
+
+  it("is offered when the server names the agent", async () => {
+    await botScreen(waiting({ agent: AGENT }));
+
+    const link = within(screen.getByRole("main")).getByRole("link", { name: "Agents" });
+    expect(link.getAttribute("href")).toBe("/admin/agents");
+  });
+
+  it.each(["offline", "disabled", "expired"] as const)(
+    "is offered for an agent %s, as the bot's read names it",
+    async (status) => {
+      await botScreen(waiting({ agent: { ...AGENT, status } }));
+
+      expect(within(screen.getByRole("main")).getByRole("link", { name: "Agents" })).toBeDefined();
+    },
+  );
+
+  it.each(["offline", "disabled", "expired"] as const)(
+    "appears when the bot's frame says its agent went %s (U116)",
+    async (status) => {
+      const watch = fakeWatch();
+      await botScreen(
+        bot(1, {
+          agent: { ...AGENT, status: "online" },
+          desired_state: "running",
+          status: { kind: "reported", state: "online", since: SINCE },
+        }),
+        { watchEvents: watch.handler },
+      );
+
+      watch.latest().push(botFrame(waiting({ agent: { ...AGENT, status } })));
+
+      expect(
+        await within(screen.getByRole("main")).findByRole("link", { name: "Agents" }),
+      ).toBeDefined();
+    },
+  );
+
+  it("isn't offered to a Member, whom the server doesn't tell", async () => {
+    await botScreen(waiting());
+
+    expect(within(screen.getByRole("main")).queryByRole("link", { name: "Agents" })).toBeNull();
+    expect(screen.getByText("Tied until it returns or an admin releases it.")).toBeDefined();
+  });
+
+  it("isn't offered while the bot's agent answers", async () => {
+    await botScreen(
+      bot(1, {
+        agent: { ...AGENT, status: "online" },
+        desired_state: "running",
+        status: { kind: "reported", state: "online", since: SINCE },
+      }),
+    );
+
+    expect(within(screen.getByRole("main")).queryByRole("link", { name: "Agents" })).toBeNull();
   });
 });

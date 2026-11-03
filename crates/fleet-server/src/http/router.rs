@@ -37,6 +37,7 @@
 //! | `POST /api/v1/accounts/{id}/refuse` | user + step-up (above the owner) | refuses a pending link, deleting it |
 //! | `POST /api/v1/accounts/{id}/relink` | user (Manage) | starts a link flow that links the account again |
 //! | `GET /api/v1/accounts/{id}/grants` | user (Manage) | one page of the account's grants |
+//! | `GET /api/v1/accounts/{id}/grant-candidates` | user (Manage) | at most 8 usernames that start with `q` and could be given a grant |
 //! | `POST /api/v1/accounts/{id}/grants` | user + step-up (Manage) | shares the account with a user named in the body |
 //! | `PUT /api/v1/accounts/{id}/grants/{user}` | user + step-up (Manage) | changes a grant |
 //! | `DELETE /api/v1/accounts/{id}/grants/{user}` | user + step-up (Manage) | revokes a grant |
@@ -269,6 +270,7 @@ pub fn api_routes(routes: Routes) -> Routes {
         .step_up_route(RateClass::Standard, routes!(accounts::refuse))
         .authed_route(RateClass::Standard, routes!(accounts::relink))
         .authed_route(RateClass::Standard, routes!(grants::list))
+        .authed_route(RateClass::Standard, routes!(grants::candidates))
         .step_up_route(RateClass::Standard, routes!(grants::create))
         .step_up_route(RateClass::Standard, routes!(grants::change))
         .step_up_route(RateClass::Standard, routes!(grants::revoke))

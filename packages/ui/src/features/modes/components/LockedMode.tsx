@@ -29,7 +29,7 @@ import {
   visibilityText,
 } from "../texts";
 import { DeleteMode } from "./DeleteMode";
-import { BackLink, ModeSummary, UnknownSteps } from "./ModeParts";
+import { ModeSummary, UnknownSteps } from "./ModeParts";
 import type { StepView } from "./StepCard";
 import { StepSection } from "./StepSection";
 
@@ -103,7 +103,6 @@ export function LockedMode({
       {mode.deletable && !gone ? (
         <DeleteMode mode={mode} writes={writes} onGone={() => setGone(true)} />
       ) : null}
-      <BackLink />
     </main>
   );
 }

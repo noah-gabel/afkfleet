@@ -1,19 +1,23 @@
-// The bots on Home (Plan.md P11.9; ADR-0020, U35, U37): a roomy grid of cards, newest
-// first, a page at a time with "Show more"; one clear next step when there are none. Each
-// card shows the bot's name and its state badge, then its facts, labelled, small and muted,
-// with no buttons: the whole card opens the bot's screen. The cards follow the live events
-// through their queries (S60), and the uptimes count on (R93).
+// The bots on Home (Plan.md P11.9, P11.11; ADR-0020, U35, U37, U88, U91): a grid of cards, newest
+// first, a page at a time with "Show more"; one clear next step when there are none. Each card shows
+// the bot's name in mono, its Start or Stop button at the top right where the viewer may use it, its
+// status line, then its facts, labelled, small and muted. The rest of the card opens the bot's screen.
+// The cards follow the live events through their queries (S60), and the uptimes count on (R93).
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
 import { toApiError } from "../../../api/ApiError";
 import { describeError } from "../../../api/describeError";
 import { useBots, useModes } from "../../../api/queries";
+import { Facts } from "../../../components/Facts";
+import { CARD_GRID, CARD_NAME, LINKED_CARD, STRETCHED_LINK } from "../../../components/linkedCard";
+import { ScreenState } from "../../../components/ScreenState";
 import { Button } from "../../../components/ui/button";
-import { Card, CardContent, CardHeader } from "../../../components/ui/card";
+import { Card } from "../../../components/ui/card";
 import type { BotResponse } from "../../../generated/BotResponse";
 import { useNow } from "../../../hooks/useNow";
 import { botFacts, type Modes, modesOf, uptimeNextChange } from "../facts";
+import { useBotControl } from "../hooks/useBotControl";
 import {
   BOTS_HEADING,
   botsFailed,
@@ -22,7 +26,8 @@ import {
   NO_BOTS,
   openBot,
 } from "../texts";
-import { BotState, Facts } from "./BotParts";
+import { BotCardAnswer, BotCardButton } from "./BotCardControl";
+import { BotState } from "./BotParts";
 
 /** Home's bots. */
 export function BotGrid() {
@@ -33,8 +38,8 @@ export function BotGrid() {
   const now = useNow((at) => Math.min(...items.map((bot) => uptimeNextChange(bot, at))));
   const known = modesOf(modes);
   return (
-    <section className="flex flex-col gap-4">
-      <h1 className="text-2xl font-semibold tracking-tight">{BOTS_HEADING}</h1>
+    <section className="flex flex-col gap-3">
+      <h1 className="text-lg font-semibold tracking-tight">{BOTS_HEADING}</h1>
       <Body
         query={bots}
         items={items}
@@ -56,27 +61,31 @@ function Body({
 }) {
   if (query.error !== null && query.data === undefined) {
     return (
-      <p role="alert" className="text-sm text-destructive">
+      <ScreenState kind="error">
         {botsFailed(describeError(toApiError(query.error).error))}
-      </p>
+      </ScreenState>
     );
   }
   if (query.data === undefined) {
-    return <p className="text-sm text-muted-foreground">{LOADING_BOTS}</p>;
+    return <ScreenState kind="loading">{LOADING_BOTS}</ScreenState>;
   }
   if (items.length === 0) {
     return (
-      <div className="flex flex-col items-start gap-3">
-        <p>{NO_BOTS}</p>
-        <Button asChild>
-          <Link to="/accounts/link">{LINK_AN_ACCOUNT}</Link>
-        </Button>
-      </div>
+      <ScreenState
+        kind="empty"
+        action={
+          <Button asChild>
+            <Link to="/accounts/link">{LINK_AN_ACCOUNT}</Link>
+          </Button>
+        }
+      >
+        {NO_BOTS}
+      </ScreenState>
     );
   }
   return (
     <>
-      <ul className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(18rem,1fr))]">
+      <ul className={CARD_GRID}>
         {items.map((bot) => (
           <li key={bot.id}>{render(bot)}</li>
         ))}
@@ -87,11 +96,12 @@ function Body({
         </p>
       ) : null}
       {query.hasNextPage ? (
+        // Asking for a page while the list is read again would cancel that read (TanStack's default).
         <Button
           type="button"
           variant="outline"
           className="self-start"
-          disabled={query.isFetchingNextPage}
+          disabled={query.isFetching}
           onClick={() => {
             void query.fetchNextPage();
           }}
@@ -103,27 +113,28 @@ function Body({
   );
 }
 
-/** One bot's card: the whole card is its link (U35). */
+/** One bot's card: the whole of it is its link, but for its button (U35, U88). */
 function BotCard({ bot, modes, now }: { bot: BotResponse; modes: Modes; now: number }) {
   const name = bot.account.name;
+  const control = useBotControl(bot, { onCard: true });
   return (
-    <Card className="relative h-full gap-3 py-4 transition-colors hover:bg-muted/40">
-      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-semibold">
+    <Card className={LINKED_CARD}>
+      <div className="flex min-h-7 items-center justify-between gap-2">
+        <h2 className={CARD_NAME}>
           <Link
             to="/bots/$id"
             params={{ id: bot.id }}
             aria-label={openBot(name)}
-            className="after:absolute after:inset-0 after:content-['']"
+            className={STRETCHED_LINK}
           >
             {name}
           </Link>
         </h2>
-        <BotState bot={bot} />
-      </CardHeader>
-      <CardContent>
-        <Facts facts={botFacts(bot, modes, now, "card")} place="card" />
-      </CardContent>
+        <BotCardButton bot={bot} control={control} />
+      </div>
+      <BotCardAnswer bot={bot} control={control} />
+      <BotState bot={bot} />
+      <Facts facts={botFacts(bot, modes, now, "card")} place="card" />
     </Card>
   );
 }

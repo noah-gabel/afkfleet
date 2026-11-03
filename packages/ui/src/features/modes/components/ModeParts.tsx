@@ -1,10 +1,5 @@
-// What a mode's editor and its locked view share (Plan.md P11.9; ADR-0020, S14, S68): the way
-// back, and the line and mark under the heading.
-import { Link } from "@tanstack/react-router";
-
-import { Button } from "../../../components/ui/button";
 import type { ModeResponse } from "../../../generated/ModeResponse";
-import { MARK_UNLISTED, MODES_HEADING, UNKNOWN_STEP } from "../texts";
+import { MARK_UNLISTED, UNKNOWN_STEP } from "../texts";
 import { modeFacts } from "./ModesScreen";
 
 /** One line for each of `count` steps this version doesn't know (R160). */
@@ -15,15 +10,6 @@ export function UnknownSteps({ count }: { count: number }) {
       {UNKNOWN_STEP}
     </p>
   ));
-}
-
-/** "Modes": back to the list. */
-export function BackLink() {
-  return (
-    <Button asChild variant="link" className="self-start px-0">
-      <Link to="/modes">{MODES_HEADING}</Link>
-    </Button>
-  );
 }
 
 /** Whose `mode` is, who sees it, its steps, and its mark. */

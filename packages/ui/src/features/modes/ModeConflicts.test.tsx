@@ -106,7 +106,7 @@ describe("409 mode_changed (U64, S18)", () => {
 
     await app.user.click(screen.getByRole("button", { name: "Load again" }));
 
-    const failed = await screen.findByText(/^Couldn't load the modes: refused: internal/);
+    const failed = await screen.findByText(/^Couldn't load modes: refused: internal/);
     expect(failed.closest('[role="alert"]')).toBe(
       screen.getByText(CHANGED).closest('[role="alert"]'),
     );
@@ -375,7 +375,7 @@ describe("the form while its row changes (S83)", () => {
     );
     await screenSawIt();
 
-    expect(screen.queryByText(/^Couldn't load the modes/)).toBeNull();
+    expect(screen.queryByText(/^Couldn't load modes/)).toBeNull();
     expect(screen.queryByText(LEFT)).toBeNull();
     expect(nameField().value).toBe("Mine");
   });

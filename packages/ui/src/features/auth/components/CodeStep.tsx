@@ -7,7 +7,8 @@
 // After a wrong code the boxes clear and keep the focus. After a connection failure no try was spent
 // and the code may still be good, so it stays, and Verify or Enter sends it again. A 429 clears them,
 // as a stale resend could spend a try, and locks them until its wait ends, when nothing is sent by
-// itself. The code lives only in this form's one value.
+// itself. The code lives only in this form's one value. However a send fails, the focus goes back to
+// the control, as Verify is disabled while it runs and may stay so through a wait.
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useController, useForm } from "react-hook-form";
@@ -25,6 +26,7 @@ import { endsIn, useDeadline } from "../hooks/useDeadline";
 import { ALL_SIX, CODE_HINT, type CodeValues, codeForm, withoutSpaces } from "../schemas";
 import { AuthCard, FormError } from "./AuthCard";
 import { CODE_DIGITS, CodeBoxes } from "./CodeBoxes";
+import { CodeRefusal, useRefusal } from "./CodeRefusal";
 
 /** The code step. `onSubmit` throws what the form should show. */
 export function CodeStep({
@@ -48,7 +50,7 @@ export function CodeStep({
   const { field: code } = useController({ name: "code", control: form.control });
   const [recovery, setRecovery] = useState(false);
   const [formError, setFormError] = useState<string>();
-  const [refused, setRefused] = useState<string>();
+  const [refused, setRefused] = useRefusal();
   const wait = useRetryWait();
   const errors = form.formState.errors;
   const locked = pending || form.formState.isSubmitting || wait.waiting !== null;
@@ -84,6 +86,7 @@ export function CodeStep({
       await onSubmit(withoutSpaces(values.code));
     } catch (rejection) {
       const error = toApiError(rejection).error;
+      control.current?.focus();
       if (wait.start(error)) {
         if (!recovery) {
           form.setValue("code", "");
@@ -106,16 +109,16 @@ export function CodeStep({
   };
 
   return (
-    <AuthCard
-      brand
-      title="Two-factor code"
-      intro={step.next ? NEXT_CODE : undefined}
-      autoFocusHeading={false}
-    >
+    <AuthCard brand title="Two-factor code" autoFocusHeading={false}>
       <p className="text-sm text-muted-foreground">{endsIn(step.expiresIn)}</p>
       {lastMinute ? (
         <p role="status" className="text-sm font-semibold">
           Ends in under a minute.
+        </p>
+      ) : null}
+      {step.next && !recovery ? (
+        <p id="login-code-next" className="text-sm text-muted-foreground">
+          {NEXT_CODE}
         </p>
       ) : null}
       <form
@@ -163,7 +166,11 @@ export function CodeStep({
             {(props) => (
               <CodeBoxes
                 {...props}
-                aria-describedby={[props["aria-describedby"], "login-code-tries"]
+                aria-describedby={[
+                  step.next ? "login-code-next" : undefined,
+                  props["aria-describedby"],
+                  "login-code-tries",
+                ]
                   .filter((id) => id !== undefined)
                   .join(" ")}
                 value={code.value}
@@ -183,11 +190,7 @@ export function CodeStep({
             )}
           </FormField>
         )}
-        {refused === undefined ? null : (
-          <p role="status" className="text-sm">
-            {refused}
-          </p>
-        )}
+        <CodeRefusal refusal={refused} />
         {step.message === undefined ? (
           <p id="login-code-tries" className="text-sm text-muted-foreground">
             {triesLeft(step.triesLeft)}

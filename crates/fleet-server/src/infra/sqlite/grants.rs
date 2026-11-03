@@ -7,12 +7,14 @@
 use chrono::{DateTime, Utc};
 use fleet_core::authz::{GrantLevel, Role, UserRef};
 use fleet_core::id::{AccountId, UserId};
-use fleet_core::value::{McUsername, Username};
+use fleet_core::value::{McUsername, Username, UsernamePrefix};
 use sqlx::{SqliteConnection, SqlitePool};
 
 use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::{store_error, unique_violation};
-use crate::ports::grants::{AccountGrant, HeldGrant, InsertGrantError, ListedGrant};
+use crate::ports::grants::{
+    AccountGrant, GRANT_CANDIDATES_MAX, GrantCandidate, HeldGrant, InsertGrantError, ListedGrant,
+};
 use crate::ports::page::Page;
 use crate::ports::store::StoreError;
 
@@ -109,6 +111,80 @@ fn held_from_row(row: HeldRow) -> Result<HeldGrant, StoreError> {
                 rowid: row.granter_rowid,
             }
         })?,
+    })
+}
+
+/// A row of the suggestions: a user who could be given a grant.
+struct CandidateRow {
+    rowid: i64,
+    id: String,
+    username: String,
+    role: String,
+}
+
+/// The enabled users whose names start with `prefix` who could be given a grant
+/// on `account`, in order, at most [`GRANT_CANDIDATES_MAX`]. A range, not `LIKE`,
+/// so `_` means only itself, and the index on the name does the work. The roles
+/// copy `authz::implicit_manage`, as `accounts::list_visible` does for its rule,
+/// and the service checks every row against it.
+pub(super) async fn candidates(
+    pool: &SqlitePool,
+    account: AccountId,
+    owner: UserRef,
+    caller: UserId,
+    prefix: &UsernamePrefix,
+) -> Result<Vec<GrantCandidate>, StoreError> {
+    let account = id_text(account);
+    let owner_id = id_text(owner.id);
+    let owner_role = owner.role.as_str();
+    let caller = id_text(caller);
+    let from = prefix.as_str();
+    let until = prefix.upper_bound();
+    let limit = i64::from(GRANT_CANDIDATES_MAX);
+    sqlx::query_as!(
+        CandidateRow,
+        r#"SELECT users.rowid AS "rowid!: i64", users.id AS "id!",
+                  users.username AS "username!", users.role AS "role!"
+           FROM users
+           WHERE users.username >= ? AND users.username < ?
+             AND users.disabled = 0
+             AND users.id <> ? AND users.id <> ?
+             AND users.role <> 'owner'
+             AND NOT (users.role = 'admin' AND ? = 'member')
+             AND NOT EXISTS (
+                 SELECT 1 FROM account_grants
+                 WHERE account_grants.account_id = ? AND account_grants.user_id = users.id
+             )
+           ORDER BY users.username
+           LIMIT ?"#,
+        from,
+        until,
+        caller,
+        owner_id,
+        owner_role,
+        account,
+        limit
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(store_error)?
+    .iter()
+    .map(candidate_from_row)
+    .collect()
+}
+
+/// A candidate as read back; a value that doesn't read is
+/// [`StoreError::Corrupt`], naming its row.
+fn candidate_from_row(row: &CandidateRow) -> Result<GrantCandidate, StoreError> {
+    let corrupt = |column| StoreError::Corrupt {
+        table: "users",
+        column,
+        rowid: row.rowid,
+    };
+    Ok(GrantCandidate {
+        id: parse_id(&row.id).ok_or_else(|| corrupt("id"))?,
+        username: Username::try_from(row.username.as_str()).map_err(|_| corrupt("username"))?,
+        role: row.role.parse::<Role>().map_err(|_| corrupt("role"))?,
     })
 }
 

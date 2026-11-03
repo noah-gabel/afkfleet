@@ -1,9 +1,12 @@
-// Adding an offline account (Plan.md P9.7, P9.8, S6 in ADR-0018's group F): for servers in
-// offline mode, while the server allows them. The app can't know that switch, so the form
-// stays behind its own button, and the server's 404 says it's off. A name is no secret, so
-// this is a plain mutation.
+// Adding an offline account (Plan.md P9.7, P9.8, P11.11; S6 in ADR-0018's group F; ADR-0020, U107):
+// for servers in offline mode, while the server allows them, on a screen of its own in the same card
+// as the Microsoft link's. The app can't know that switch, so the screen is always there, and the
+// server's 404 says it's off. Leaving it replaces its entry, so Back doesn't reopen it, and an add that
+// answers after the screen was left moves no other screen (S126). A name is no secret, so this is a
+// plain mutation.
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
@@ -18,29 +21,25 @@ import { FormField } from "../../../components/FormField";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import { showFieldErrors } from "../../../lib/formErrors";
-import { added, OFFLINE_CONFLICT, OFFLINE_HINT, OFFLINE_OFF } from "../texts";
+import { AuthCard } from "../../auth/components/AuthCard";
+import {
+  added,
+  OFFLINE_CONFLICT,
+  OFFLINE_HINT,
+  OFFLINE_OFF,
+  OFFLINE_TITLE,
+  TILE_OFFLINE,
+} from "../texts";
 
 const offlineForm = z.object({ name: mcName });
 
 type OfflineValues = z.infer<typeof offlineForm>;
 
-/** The button, and the form it opens. */
-export function OfflineSection() {
-  const [open, setOpen] = useState(false);
-  if (!open) {
-    return (
-      <Button type="button" variant="outline" className="self-start" onClick={() => setOpen(true)}>
-        Add an offline account
-      </Button>
-    );
-  }
-  return <OfflineForm onDone={() => setOpen(false)} />;
-}
-
-/** The form; `onDone` closes it. */
-function OfflineForm({ onDone }: { onDone: () => void }) {
+/** `/accounts/offline`. */
+export function OfflineScreen() {
   const api = useApiClient();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const form = useForm<OfflineValues>({
     resolver: zodResolver(offlineForm),
     defaultValues: { name: "" },
@@ -51,7 +50,6 @@ function OfflineForm({ onDone }: { onDone: () => void }) {
     onSuccess: (account) => {
       toast.success(added(account.name));
       void queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY });
-      onDone();
     },
     onError: (rejection) => {
       const error = toApiError(rejection).error;
@@ -67,14 +65,14 @@ function OfflineForm({ onDone }: { onDone: () => void }) {
 
   const submit = form.handleSubmit((values) => {
     setFormError(undefined);
-    create.mutate(values.name);
+    // The call's own onSuccess runs only while this screen is still shown (TanStack Query).
+    create.mutate(values.name, {
+      onSuccess: () => void navigate({ to: "/accounts", replace: true }),
+    });
   });
 
   return (
-    <section aria-labelledby="offline-heading" className="flex flex-col gap-3">
-      <h2 id="offline-heading" className="text-lg font-semibold">
-        Offline account (test servers only)
-      </h2>
+    <AuthCard title={OFFLINE_TITLE} intro={TILE_OFFLINE.line}>
       <form className="flex flex-col gap-4" noValidate onSubmit={(event) => void submit(event)}>
         <FormField
           id="offline-name"
@@ -89,15 +87,17 @@ function OfflineForm({ onDone }: { onDone: () => void }) {
             {formError}
           </p>
         )}
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button type="submit" disabled={create.isPending}>
             Add
           </Button>
-          <Button type="button" variant="outline" onClick={onDone}>
-            Cancel
+          <Button asChild variant="outline">
+            <Link to="/accounts" replace>
+              Back to accounts
+            </Link>
           </Button>
         </div>
       </form>
-    </section>
+    </AuthCard>
   );
 }

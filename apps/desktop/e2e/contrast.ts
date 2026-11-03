@@ -220,6 +220,28 @@ export function probe(
       [middle.x, box.top - out],
       [middle.x, box.bottom + out],
     ];
+    // Hit-testing can't see a clipped outline, and would read what lies beyond the clip instead. The
+    // window's own edge counts as an ancestor's, since the column scrolls right up to it.
+    for (const [x, y] of sides) {
+      if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) {
+        return "outline cut off by the window";
+      }
+      // What's fixed leaves its ancestors' clips behind, as the sidebar does the screen's scroller.
+      for (
+        let node = element;
+        getComputedStyle(node).position !== "fixed" && node.parentElement !== null;
+        node = node.parentElement
+      ) {
+        const clip = node.parentElement;
+        const held = getComputedStyle(clip);
+        if (held.overflowX !== "visible" || held.overflowY !== "visible") {
+          const rect = clip.getBoundingClientRect();
+          if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+            return `outline cut off by ${nameOf(clip)}`;
+          }
+        }
+      }
+    }
     // A toast covers the outline; it isn't what the outline is drawn on. A tip takes no pointer, so
     // it's never among these.
     const FLOATING = "[data-sonner-toaster]";
@@ -386,7 +408,11 @@ export function probe(
       holder.__focusWalk = {
         returnTo: document.activeElement,
         scrolls: [...document.querySelectorAll("*")]
-          .filter((element) => element.scrollHeight > element.clientHeight)
+          .filter(
+            (element) =>
+              element.scrollHeight > element.clientHeight ||
+              element.scrollWidth > element.clientWidth,
+          )
           .map((element) => [element, element.scrollTop, element.scrollLeft] as const),
         counts: counts(),
         pending,

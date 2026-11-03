@@ -9,6 +9,7 @@ import {
   type DataTag,
   type InfiniteData,
   infiniteQueryOptions,
+  keepPreviousData,
   type QueryClient,
   type QueryKey,
   queryOptions,
@@ -38,6 +39,7 @@ import { ApiError } from "./ApiError";
 import { answered, type ChatOutcomes } from "./chatOutcomes";
 import { useApiClient } from "./context";
 import { PAGE_MAX, SERVER_SETTINGS_PAGE_MAX } from "./limits";
+import { usernamePrefix } from "./schemas";
 
 /** Why a read of every page failed when the server's pages didn't move on (R99). */
 export const PAGES_DONT_MOVE_ON = "The server sent a list this app doesn't understand.";
@@ -294,6 +296,23 @@ export function grantsQuery(api: ApiClient, id: string) {
     queryFn: ({ pageParam }) => api.accountGrants(id, pageParam),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page: GrantPage) => page.next,
+  });
+}
+
+/**
+ * Who could be given a grant on account `id`, by `q`, what's typed so far (ADR-0020, U110, S127): only
+ * while `q` could start a username, as `enabled` says, and held in the cache only while it's shown,
+ * as what's typed could be a password in the wrong field. Until the answer comes the last one stays,
+ * which the field filters by what's typed now.
+ */
+export function useGrantCandidates(id: string, q: string, enabled: boolean) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: ["accounts", "grant-candidates", id, q] as const,
+    queryFn: () => api.grantCandidates(id, q),
+    enabled: enabled && q !== "" && usernamePrefix.safeParse(q).success,
+    gcTime: 0,
+    placeholderData: keepPreviousData,
   });
 }
 

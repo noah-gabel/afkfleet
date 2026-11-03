@@ -548,6 +548,7 @@ fn rate_limits(raw: &RawRateLimits) -> Option<RateLimitConfig> {
             per_user_per_day: count(raw.link_flows_per_user_per_day)?,
         },
         grants_by_name: Rate::per_hour(count(raw.grants_by_name_per_user_per_hour)?),
+        grant_candidates: Rate::per_hour(count(raw.grant_candidates_per_user_per_hour)?),
         enroll: Rate::per_minute(count(raw.enroll_per_ip_per_min)?),
         connect: Rate::per_minute(count(raw.connect_per_cert_per_min)?),
         bot_actions: Rate::per_minute(count(raw.bot_actions_per_bot_per_min)?),

@@ -111,7 +111,7 @@ describe("the notices (U42, R109, R110)", () => {
     );
 
     expect(app.path()).toBe(`/bots/${ID}`);
-    await app.user.click(within(screen.getByRole("main")).getByRole("link", { name: "Home" }));
+    await app.user.click(screen.getByRole("button", { name: "Back" }));
     await screen.findByRole("link", { name: "Open AfkBot1" });
     expect(lines()).toEqual([]);
   });
@@ -126,7 +126,7 @@ describe("the notices (U42, R109, R110)", () => {
     await push(watch, refetch("ready"), botFrame(ONLINE), died());
 
     expect(await screen.findByText("AfkBot1 died.")).toBeDefined();
-    await app.user.click(within(screen.getByRole("main")).getByRole("link", { name: "Home" }));
+    await app.user.click(screen.getByRole("button", { name: "Back" }));
     await screen.findByRole("link", { name: "Open AfkBot1" });
     expect(lines()).toEqual([]);
   });
@@ -158,7 +158,7 @@ describe("the timeline (U46)", () => {
 
     const section = await screen.findByRole("region", { name: "Timeline" });
 
-    expect(within(section).getByText("Since you signed in, while the app is open.")).toBeDefined();
+    expect(within(section).getByText("Since sign-in, while the app is open.")).toBeDefined();
     expect(within(section).getByText("Nothing yet.")).toBeDefined();
   });
 
@@ -175,7 +175,7 @@ describe("the timeline (U46)", () => {
 
     const items = await within(section).findAllByRole("listitem");
     expect(items.map((item) => item.textContent)).toEqual([
-      `${formatClockSeconds(NOW.toISOString())}Mode: afk (built in) → farm`,
+      `${formatClockSeconds(NOW.toISOString())}Mode: afk (built in) to farm`,
       `${formatClockSeconds(AT)}Died`,
     ]);
   });
@@ -197,7 +197,7 @@ describe("the timeline (U46)", () => {
 
     const items = await within(section).findAllByRole("listitem");
     expect(items.map((item) => item.textContent)).toEqual([
-      `${formatClockSeconds(new Date(NOW.getTime() + 10_000).toISOString())}Live updates were down for 6 s; some events may be missing.`,
+      `${formatClockSeconds(new Date(NOW.getTime() + 10_000).toISOString())}Live updates down for 6 s. Events may be missing.`,
     ]);
   });
 });

@@ -357,12 +357,40 @@ test("the check holds each focus stop's outline, and walks the whole page", asyn
     await atPlanted({ outline: "2px solid #fff", outlineOffset: "-4px", background: "#000" }),
   ).toEqual([]);
 
+  // A clipped outline fails, whatever lies beyond the clip: hit-testing can't see the cut.
+  await removePlants();
+  await page.evaluate(() => {
+    const box = document.createElement("div");
+    box.dataset.planted = "yes";
+    Object.assign(box.style, {
+      position: "fixed",
+      top: "16px",
+      left: "16px",
+      overflow: "hidden",
+      background: "#fff",
+    });
+    const button = document.createElement("button");
+    button.textContent = "Planted";
+    button.style.color = "#000";
+    button.style.background = "#fff";
+    button.style.outline = "2px solid #000";
+    button.style.outlineOffset = "2px";
+    box.append(button);
+    document.body.append(box);
+  });
+  expect((await focusProblems(page)).filter((problem) => problem.includes("Planted"))).toEqual([
+    expect.stringContaining("cut off"),
+  ]);
+
   // A stop mid-transition reads as it ends.
   await removePlants();
   await page.evaluate(() => {
     const button = document.createElement("button");
     button.dataset.planted = "yes";
     button.textContent = "Planted";
+    button.style.position = "fixed";
+    button.style.top = "16px";
+    button.style.left = "16px";
     button.style.outline = "2px solid transparent";
     button.style.transition = "outline-color 10s";
     button.addEventListener("focus", () => {
@@ -468,7 +496,7 @@ test("every native select holds the theme's tokens, its options too", async ({ p
   await check("a bot's mode");
 
   await nav(page, "Accounts");
-  await main.getByRole("link", { name: "Open AfkBot1" }).click();
+  await main.getByRole("link", { name: "AfkBot1", exact: true }).click();
   await expect(main.getByLabel(`Access of ${MEMBER}`)).toBeVisible();
   await check("who has access");
 
@@ -580,7 +608,8 @@ test("Home, its bots in every status, and a bot's screen", async ({ page, contex
   await page.getByRole("link", { name: "Open AfkBot1" }).click();
   const chat = main.getByRole("region", { name: "Chat" });
   await expect(chat.getByText("Hello from the server")).toBeVisible();
-  await bothThemes(page, "a bot, its chat");
+  await expect(page.getByRole("button", { name: "Back", exact: true })).toBeVisible();
+  await bothThemes(page, "a bot, its chat, with Back");
 
   await push(page, {
     update: "event",
@@ -611,6 +640,213 @@ test("Home, its bots in every status, and a bot's screen", async ({ page, contex
   await expect(failed).toBeVisible();
 });
 
+test("a bot's console in every look, and its screen stacked and loading", async ({
+  page,
+  context,
+}) => {
+  const backend = await fakeBackend(context);
+  backend.addAccount(OWNER);
+  backend.addAccount(OWNER);
+  const at = new Date().toISOString();
+  const line = {
+    at,
+    direction: "in",
+    truncated: false,
+    arguments_hidden: false,
+    mine: false,
+  } as const;
+  backend.addChat("AfkBot1", { ...line, kind: "system", text: "The server said something" });
+  backend.addChat("AfkBot1", { ...line, kind: "chat", text: "hi", sender: { name: "Steve" } });
+  backend.addChat("AfkBot1", {
+    ...line,
+    kind: "system",
+    text: "[x] Notch : hi",
+    parsed_sender: "Notch",
+  });
+  backend.addChat("AfkBot1", { ...line, direction: "out", kind: "mode", text: "/spawn" });
+  backend.addChat("AfkBot1", { ...line, direction: "out", kind: "user", text: "mine", mine: true });
+  backend.addChat("AfkBot1", {
+    ...line,
+    direction: "out",
+    kind: "user",
+    text: "/login",
+    arguments_hidden: true,
+    truncated: true,
+  });
+  backend.setBot("AfkBot1", {
+    desiredState: "running",
+    status: { kind: "reported", state: "online" },
+  });
+  await signIn(page, backend, OWNER);
+  await page.getByRole("link", { name: "Open AfkBot1" }).click();
+  const chat = page.getByRole("main").getByRole("region", { name: "Chat" });
+  await expect(chat.getByText("The server said something")).toBeVisible();
+  await bothThemes(page, "a bot's console, every sender's look");
+
+  backend.chatOutcome = "pending";
+  await chat.getByLabel("Message or /command").fill("Still on its way");
+  await chat.getByRole("button", { name: "Send" }).click();
+  await expect(chat.getByLabel("Message or /command")).toHaveValue("");
+  await bothThemes(page, "a bot's console, a pending mark");
+
+  await page.setViewportSize({ width: 800, height: 600 });
+  await expect(chat.getByText("The server said something")).toBeAttached();
+  await bothThemes(page, "a bot's screen, stacked");
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  // A bot this sign-in hasn't read yet, its read held.
+  await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Home" }).click();
+  backend.hold("bot");
+  await page.getByRole("link", { name: "Open AfkBot2" }).click();
+  await expect(page.getByText("Loading bot…")).toBeVisible();
+  await bothThemes(page, "a bot, loading");
+  backend.release();
+  await expect(page.getByRole("heading", { name: "AfkBot2", level: 1 })).toBeVisible();
+});
+
+test("a bot waiting for its agent, as the Owner and as a Member", async ({ page, context }) => {
+  const backend = await fakeBackend(context);
+  const account = backend.addAccount(OWNER);
+  backend.share(account, MEMBER, "control");
+  backend.setBot("AfkBot1", {
+    desiredState: "stopped",
+    status: { kind: "unknown", state: "online", agent_last_seen_at: new Date().toISOString() },
+    agent: { id: "01900000-0000-7000-8000-000000000301", name: "agent-main", status: "offline" },
+  });
+  await signIn(page, backend, OWNER);
+  await expect(page.getByText("Tied until it returns or is released.")).toBeVisible();
+  await bothThemes(page, "Home, a bot waiting for its agent");
+
+  await page.getByRole("link", { name: "Open AfkBot1" }).click();
+  const main = page.getByRole("main");
+  await expect(main.getByText("Waiting for agent")).toBeVisible();
+  await expect(main.getByRole("link", { name: "Agents" })).toBeVisible();
+  await bothThemes(page, "a bot waiting for its agent, with the way to the agents");
+
+  await main.getByRole("button", { name: "Start" }).click();
+  await expect(main.getByText("Saved. Agent unreachable, so nothing changes yet.")).toBeVisible();
+  await bothThemes(page, "a bot waiting for its agent, saved");
+
+  backend.setBot("AfkBot1", {
+    agent: { id: "01900000-0000-7000-8000-000000000301", name: "agent-main", status: "disabled" },
+  });
+  await page.reload();
+  await expect(page.getByText("Agent disabled.")).toBeVisible();
+  await bothThemes(page, "Home, a bot waiting for a release");
+
+  await page.getByRole("button", { name: "Log out" }).click();
+  await logIn(page, MEMBER);
+  await enterCode(page, backend.code(MEMBER));
+  await expectHome(page, MEMBER);
+  await expect(page.getByText("Tied until it returns or an admin releases it.")).toBeVisible();
+  await bothThemes(page, "Home, a bot waiting, as a Member");
+  await page.getByRole("link", { name: "Open AfkBot1" }).click();
+  await expect(main.getByRole("link", { name: "Agents" })).toHaveCount(0);
+  await bothThemes(page, "a bot waiting, as a Member");
+});
+
+test("an account's screen: a row's question, the step-up, and below Manage", async ({
+  page,
+  context,
+}) => {
+  const backend = await fakeBackend(context);
+  const account = backend.addAccount(OWNER);
+  backend.share(account, MEMBER, "view");
+  backend.addAccount(OWNER, "reauth_required");
+  backend.addAccount(MEMBER, "pending");
+  await signIn(page, backend, OWNER);
+  const main = page.getByRole("main");
+  await nav(page, "Accounts");
+  await expect(main.getByRole("link", { name: "AfkBot1", exact: true })).toBeVisible();
+  await expect(main.getByText(/no longer accepts/)).toBeVisible();
+  await bothThemes(page, "accounts, a re-auth prompt and a link waiting");
+  await main.getByRole("button", { name: "Approve AfkBot3" }).click();
+  await expect(main.getByText(/Approve AfkBot3, linked by/)).toBeVisible();
+  await bothThemes(page, "accounts, a review's question");
+
+  await main.getByRole("link", { name: "AfkBot1", exact: true }).click();
+  const table = main.getByRole("table", { name: "Who has access" });
+  await table.getByRole("button", { name: `Revoke ${MEMBER}'s access` }).click();
+  await expect(table.getByRole("button", { name: "Cancel" })).toBeVisible();
+  await bothThemes(page, "an account, a row's question");
+  await table.getByRole("button", { name: "Cancel" }).click();
+  const shareField = main.getByRole("combobox", { name: "Username" });
+  await shareField.pressSequentially(NEW_USER.slice(0, 2));
+  await expect(main.getByRole("option", { name: NEW_USER })).toBeVisible();
+  await page.keyboard.press("ArrowDown");
+  await expect(main.getByRole("option", { name: NEW_USER })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await textsInBothThemes(page, "Share with, its list open and an option active");
+  await page.keyboard.press("Escape");
+  await shareField.fill("");
+  await table.getByRole("button", { name: `Revoke ${MEMBER}'s access` }).click();
+  await table.getByRole("button", { name: "Revoke", exact: true }).click();
+  await expect(main.getByLabel("Current password")).toBeVisible();
+  await bothThemes(page, "an account, a row's step-up");
+
+  await page.getByRole("button", { name: "Log out" }).click();
+  await logIn(page, MEMBER);
+  await enterCode(page, backend.code(MEMBER));
+  await expectHome(page, MEMBER);
+  await nav(page, "Accounts");
+  await main.getByRole("link", { name: "AfkBot1", exact: true }).click();
+  await expect(main.getByRole("button", { name: "Leave", exact: true })).toBeVisible();
+  await bothThemes(page, "an account below Manage");
+  await main.getByRole("button", { name: "Leave", exact: true }).click();
+  await expect(main.getByRole("button", { name: "Leave account" })).toBeVisible();
+  await bothThemes(page, "an account below Manage, the question");
+});
+
+test("accounts and an account while they load", async ({ page, context }) => {
+  const backend = await fakeBackend(context);
+  backend.addAccount(OWNER);
+  await signIn(page, backend, OWNER);
+  const main = page.getByRole("main");
+  backend.hold("accounts");
+  await nav(page, "Accounts");
+  await expect(main.getByText("Loading accounts…")).toBeVisible();
+  await bothThemes(page, "accounts, loading");
+  backend.release();
+  const link = main.getByRole("link", { name: "AfkBot1", exact: true });
+  await expect(link).toBeVisible();
+  backend.hold("account");
+  await link.click();
+  await expect(main.getByText("Loading account…")).toBeVisible();
+  await bothThemes(page, "an account, loading");
+  backend.release();
+});
+
+test("a card's Start, its refusal and its wait", async ({ page, context }) => {
+  const backend = await fakeBackend(context);
+  backend.addAccount(OWNER);
+  backend.addAccount(OWNER);
+  backend.setBot("AfkBot2", {
+    desiredState: "running",
+    status: { kind: "reported", state: "online" },
+  });
+  await signIn(page, backend, OWNER);
+  const card = (name: string) => page.locator("[data-slot=card]").filter({ hasText: name });
+  await expect(card("AfkBot1").getByRole("button", { name: "Start AfkBot1" })).toBeVisible();
+  await expect(card("AfkBot2").getByRole("button", { name: "Stop AfkBot2" })).toBeVisible();
+  await bothThemes(page, "Home, Start and Stop");
+
+  backend.refuseNext("start_bot", 409, "conflict");
+  await card("AfkBot1").getByRole("button", { name: "Start AfkBot1" }).click();
+  await expect(card("AfkBot1").getByRole("alert")).toBeVisible();
+  await bothThemes(page, "Home, a card's refusal");
+
+  backend.refuseNext("start_bot", 429, "rate_limited", 300);
+  await card("AfkBot1").getByRole("button", { name: "Start AfkBot1" }).click();
+  await expect(
+    card("AfkBot1")
+      .getByText(/Try again in/)
+      .first(),
+  ).toBeVisible();
+  await textsInBothThemes(page, "Home, a card's wait");
+});
+
 test("the bot screen and the empty lists of someone with nothing yet", async ({
   page,
   context,
@@ -622,9 +858,25 @@ test("the bot screen and the empty lists of someone with nothing yet", async ({
   await bothThemes(page, "Home, empty");
   await nav(page, "Accounts");
   await expect(main.getByRole("heading", { name: "Accounts", level: 1 })).toBeVisible();
-  await bothThemes(page, "accounts, empty");
+  const tile = main.getByRole("link", { name: "Offline account" });
+  await expect(tile).toBeVisible();
+  await bothThemes(page, "accounts, empty, the tiles");
+  await tile.hover();
+  await textsInBothThemes(page, "accounts, empty, a tile hovered");
+  await main.getByRole("link", { name: "Microsoft account" }).hover();
+  await textsInBothThemes(page, "accounts, empty, the main tile hovered");
+  await page.mouse.move(0, 0);
 
-  await page.getByRole("link", { name: "Link Microsoft account" }).click();
+  await tile.click();
+  await expect(page.getByRole("heading", { name: "Add an offline account" })).toBeVisible();
+  await bothThemes(page, "the offline screen");
+  await page.getByRole("button", { name: "Add" }).click();
+  await expect(page.locator("[aria-invalid=true]").first()).toBeVisible();
+  await bothThemes(page, "the offline screen, refused");
+  await page.getByRole("link", { name: "Back to accounts" }).click();
+  await expect(main.getByRole("link", { name: "Microsoft account" })).toBeVisible();
+
+  await page.getByRole("link", { name: "Microsoft account" }).click();
   await page.getByRole("button", { name: "Get a code" }).click();
   await expect(page.getByText("B7X4-KDLQ", { exact: true })).toBeVisible();
   await bothThemes(page, "a link's code");
@@ -711,9 +963,10 @@ test("servers, accounts with their grants, and the Owner's admin screens", async
   await bothThemes(page, "servers");
 
   await nav(page, "Accounts");
-  await expect(main.getByRole("link", { name: "Open AfkBot1" })).toBeVisible();
+  const accountLink = main.getByRole("link", { name: "AfkBot1", exact: true });
+  await expect(accountLink).toBeVisible();
   await bothThemes(page, "accounts");
-  await main.getByRole("link", { name: "Open AfkBot1" }).click();
+  await accountLink.click();
   await expect(main.getByRole("table", { name: "Who has access" })).toBeVisible();
   await bothThemes(page, "an account and who has access");
 

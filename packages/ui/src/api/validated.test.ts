@@ -63,6 +63,7 @@ function client() {
     refuseAccount: ok,
     relinkAccount: ok,
     accountGrants: ok,
+    grantCandidates: ok,
     createGrant: ok,
     changeGrant: ok,
     revokeGrant: ok,
@@ -325,14 +326,16 @@ describe("validated", () => {
     await api.refuseAccount(ID);
     await api.relinkAccount(ID);
     await api.accountGrants(ID, USER, 1);
+    await api.grantCandidates(ID, "a");
+    await api.grantCandidates(ID, "a_B.c-");
     await api.createGrant(ID, { username: "afkbot2", level: "control" });
     await api.changeGrant(ID, USER, { level: "manage" });
     await api.revokeGrant(ID, USER);
     await api.openVerificationLink();
     await api.watchEvents(() => undefined);
 
-    expect(fake.calls).toHaveLength(16);
-    expect(fake.calls[11]?.args).toEqual([ID, { username: "afkbot2", level: "control" }]);
+    expect(fake.calls).toHaveLength(18);
+    expect(fake.calls[13]?.args).toEqual([ID, { username: "afkbot2", level: "control" }]);
   });
 
   it("refuses an offline name that isn't a Minecraft name, before the call", async () => {
@@ -811,6 +814,10 @@ describe("validated", () => {
     expect(await refusedFields(api.accountsAwaitingApproval(undefined, PAGE_MAX + 1))).toEqual([
       "limit",
     ]);
+    expect(await refusedFields(api.grantCandidates("x", ""))).toEqual(["id", "q"]);
+    expect(await refusedFields(api.grantCandidates(ID, "_a"))).toEqual(["q"]);
+    expect(await refusedFields(api.grantCandidates(ID, "a b"))).toEqual(["q"]);
+    expect(await refusedFields(api.grantCandidates(ID, "a".repeat(33)))).toEqual(["q"]);
     expect(await refusedFields(api.accountGrants("x", "y", 0))).toEqual(["id", "before", "limit"]);
     expect(fake.calls).toEqual([]);
   });

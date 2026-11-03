@@ -67,7 +67,7 @@ describe("the grants review", () => {
     await atReview();
 
     expect(await screen.findByRole("heading", { name: "Grants of bob", level: 1 })).toBeDefined();
-    expect(screen.getByRole("link", { name: "Back to users" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Back" })).toBeDefined();
   });
 
   it("shows the user's ID when the names can't be read", async () => {

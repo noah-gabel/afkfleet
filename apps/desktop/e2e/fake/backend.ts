@@ -37,6 +37,7 @@ import type { AgentResponse } from "@afkfleet/ui/generated/AgentResponse";
 import type { ApiErrorDetails } from "@afkfleet/ui/generated/ApiErrorDetails";
 import type { AuditEntryResponse } from "@afkfleet/ui/generated/AuditEntryResponse";
 import type { AuditPage } from "@afkfleet/ui/generated/AuditPage";
+import type { BotAgent } from "@afkfleet/ui/generated/BotAgent";
 import type { BotCommandResponse } from "@afkfleet/ui/generated/BotCommandResponse";
 import type { BotPage } from "@afkfleet/ui/generated/BotPage";
 import type { BotResponse } from "@afkfleet/ui/generated/BotResponse";
@@ -133,6 +134,7 @@ export const COMMANDS = [
   "refuse_account",
   "relink_account",
   "account_grants",
+  "grant_candidates",
   "create_grant",
   "change_grant",
   "revoke_grant",
@@ -282,6 +284,8 @@ interface Bot {
   serverAddress?: string;
   desiredState: BotResponse["desired_state"];
   status: BotStatus;
+  /** The agent it's tied to, which the server names only to Admins and the Owner. */
+  agent?: BotAgent;
   /** Its chat, oldest first, as the server keeps it: the whole line, every field. */
   readonly chat: ChatLine[];
 }
@@ -721,6 +725,8 @@ export class FakeBackend {
 
   #refusing: CommandErrorCode | null = null;
   readonly #held = new Set<string>();
+  readonly #called = new Map<string, number>();
+  readonly #refuseNext = new Map<string, Outcome>();
   readonly #waiting: (() => void)[] = [];
 
   constructor() {
@@ -804,6 +810,12 @@ export class FakeBackend {
    * live events watch, which answers when it ends.
    */
   handle(command: string, args: Record<string, unknown>): Outcome | Promise<Outcome> {
+    this.#called.set(command, (this.#called.get(command) ?? 0) + 1);
+    const refusal = this.#refuseNext.get(command);
+    if (refusal !== undefined) {
+      this.#refuseNext.delete(command);
+      return refusal;
+    }
     // Not the theme's, which reaches no server, nor the profile, which only the app holds.
     if (this.#refusing !== null && command !== "set_window_theme" && command !== "server_profile") {
       return refused(this.#refusing);
@@ -814,6 +826,28 @@ export class FakeBackend {
       );
     }
     return this.#answer(command, args);
+  }
+
+  /** The next `command` answers `status` and `code`, with `retryAfter` seconds to wait if given. */
+  refuseNext(command: string, status: number, code: ErrorCode, retryAfter?: number): void {
+    const outcome = api(status, code) as Extract<Outcome, { ok: false }>;
+    this.#refuseNext.set(
+      command,
+      retryAfter === undefined || outcome.error.api === undefined
+        ? outcome
+        : {
+            ...outcome,
+            error: {
+              ...outcome.error,
+              api: { ...outcome.error.api, retry_after_secs: retryAfter },
+            },
+          },
+    );
+  }
+
+  /** How many times `command` reached the fake. Names only: arguments may hold a secret. */
+  timesCalled(command: string): number {
+    return this.#called.get(command) ?? 0;
   }
 
   /** Every command but the profile's and the theme's fails as `code`, until `null` (S96). */
@@ -1757,6 +1791,7 @@ export class FakeBackend {
       mode_id: bot.modeId,
       desired_state: bot.desiredState,
       status: bot.status,
+      ...(bot.agent !== undefined && user.role !== "member" ? { agent: bot.agent } : {}),
     };
   }
 
@@ -1782,6 +1817,10 @@ export class FakeBackend {
   /** `bot` wanted running or stopped: a paused or failed one keeps its state (S51). */
   #want(bot: Bot, running: boolean): void {
     bot.desiredState = running ? "running" : "stopped";
+    // Start and stop only write the wish: a bot stays tied to an agent that can't be reached (S125).
+    if (bot.status.kind === "unknown") {
+      return;
+    }
     const { state, reason } = bot.status;
     const resting =
       (state === "paused" || state === "failed") && reason !== undefined ? { state, reason } : {};
@@ -2066,6 +2105,23 @@ export class FakeBackend {
     });
   }
 
+  /** Who could be given a grant on `account`, by the start of their name: at most 8, in order. */
+  #candidates(caller: User, account: Account, q: string): string[] {
+    const start = q.toLowerCase();
+    return this.#users
+      .filter(
+        (user) =>
+          user.username.startsWith(start) &&
+          !user.disabled &&
+          user.id !== caller.id &&
+          !this.#implicitManage(user, account) &&
+          !account.grants.has(user.id),
+      )
+      .map((user) => user.username)
+      .sort()
+      .slice(0, 8);
+  }
+
   #createGrant(target: unknown, request: Record<string, unknown>): Outcome {
     return this.#steppedUp((session) =>
       this.#managed(session, target, (account) => {
@@ -2287,6 +2343,14 @@ export class FakeBackend {
             value({
               items: this.#grantsOf(account).map((grant) => this.#asSeen(session, account, grant)),
             } satisfies GrantPage),
+          ),
+        );
+      case "grant_candidates":
+        return this.#signedIn((session) =>
+          this.#managed(session, args.id, (account) =>
+            account.status === "pending"
+              ? api(409, "conflict")
+              : value({ usernames: this.#candidates(session.user, account, String(args.q)) }),
           ),
         );
       case "create_grant":

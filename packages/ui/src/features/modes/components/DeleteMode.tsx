@@ -107,7 +107,7 @@ export function DeleteMode({
         }
         if (alive.current) {
           toast.success(deleted(mode.name));
-          await navigate({ to: "/modes" });
+          await navigate({ to: "/modes", replace: true });
         }
         forgetMode(queryClient, mode.id);
       },

@@ -223,10 +223,36 @@ async fn grants_are_created_by_name_changed_listed_and_revoked() {
         .account_grants(account, None, None)
         .await
         .unwrap();
+    let granted = owner
+        .state
+        .grant_candidates(account, "bo".to_owned())
+        .await
+        .unwrap();
+    let not_a_start = owner
+        .state
+        .grant_candidates(account, "_b".to_owned())
+        .await
+        .unwrap_err();
     owner.state.revoke_grant(account, bob_id).await.unwrap();
+    let suggested = owner
+        .state
+        .grant_candidates(account, "bo".to_owned())
+        .await
+        .unwrap();
     let missing = owner.state.revoke_grant(account, bob_id).await.unwrap_err();
 
     assert_eq!(created.user.id, bob_id);
+    assert_eq!(
+        granted.usernames,
+        Vec::<String>::new(),
+        "a grantee is left out"
+    );
+    assert!(is_invalid(&not_a_start, "q"), "{not_a_start:?}");
+    assert_eq!(
+        suggested.usernames,
+        ["bob"],
+        "a suggestion once they are free"
+    );
     assert!(
         is_api(&unknown, 422, ErrorCode::ValidationFailed),
         "{unknown:?}"

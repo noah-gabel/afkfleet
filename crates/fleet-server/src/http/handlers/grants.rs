@@ -10,6 +10,9 @@
 //!   list users. Every name that can't be granted gets one 422 on
 //!   `username` ([`UNGRANTABLE`]), and the route spends its own per-user
 //!   limit, so names can't be probed fast (ADR-0018, group E).
+//! - **Suggesting** who to share with needs Manage too, no step-up, and spends
+//!   its own per-user limit (ADR-0020, U110, S127): at most 8 usernames that
+//!   start with what's typed and could be given a grant.
 //! - **Changing** and **revoking** go by the grantee's ID.
 //! - **Leaving** is the grantee's own: any level, without implicit Manage
 //!   (`LeaveAccount`; ADR-0020, S51). The path's `me` names no one else, so
@@ -23,16 +26,19 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use fleet_api_types::accounts::{
-    ChangeGrantRequest, CreateGrantRequest, GrantLevel as ApiGrantLevel, GrantPage, GrantResponse,
-    UNGRANTABLE,
+    ChangeGrantRequest, CreateGrantRequest, GrantCandidates, GrantCandidatesQuery,
+    GrantLevel as ApiGrantLevel, GrantPage, GrantResponse, UNGRANTABLE,
 };
 use fleet_api_types::{ErrorResponse, FieldError, PageQuery};
+use fleet_core::account::awaits_review;
 use fleet_core::authz::{Actor, GrantLevel, Permission, ResourceContext, authorize};
 use fleet_core::id::{AccountId, UserId};
-use fleet_core::value::Username;
+use fleet_core::value::{Username, UsernamePrefix};
 
 use super::{acting, label, page, timestamp};
-use crate::app::grants::{ChangeGrantError, CreateGrantError, LeaveGrantError, RevokeGrantError};
+use crate::app::grants::{
+    CandidatesError, ChangeGrantError, CreateGrantError, LeaveGrantError, RevokeGrantError,
+};
 use crate::http::error::ApiError;
 use crate::http::extractors::{AuthUser, SteppedUpUser, ValidJson, ValidPath, ValidQuery};
 use crate::http::rate_limit::ClientIp;
@@ -83,6 +89,63 @@ pub(crate) async fn list(
             .map(|view| grant_response(&view.listed, reviews.then_some(view.dormant)))
             .collect::<Result<_, _>>()?,
         next: listed.next,
+    }))
+}
+
+/// `GET /api/v1/accounts/{id}/grant-candidates?q=`: the usernames that start
+/// with what's typed and could be given a grant on the account.
+#[utoipa::path(
+    get,
+    path = "/api/v1/accounts/{id}/grant-candidates",
+    operation_id = "grant_candidates",
+    tag = "accounts",
+    params(
+        ("id" = String, Path, description = "The account's ID."),
+        ("q" = String, Query, description = "The start of a username, in any case."),
+    ),
+    responses(
+        (status = 200, description = "At most 8 usernames, in order.", body = GrantCandidates),
+        (status = 400, description = "A query that doesn't parse: no `q`, or another parameter.", body = ErrorResponse),
+        (status = 401, description = "No valid access token.", body = ErrorResponse),
+        (status = 403, description = "The caller may see the account but not its grants (Manage).", body = ErrorResponse),
+        (status = 404, description = "No such account, or one the caller may not see.", body = ErrorResponse),
+        (status = 409, description = "The account is pending, and takes no grant until it's approved.", body = ErrorResponse),
+        (status = 422, description = "A `q` that can't start a username.", body = ErrorResponse),
+        (status = 429, description = "Too many requests, or too many of these in the last hour.", body = ErrorResponse,
+            headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
+        (status = "default", description = "Any other answer the server gives, in the error envelope.", body = ErrorResponse),
+    ),
+)]
+pub(crate) async fn candidates(
+    user: AuthUser,
+    State(state): State<AppState>,
+    ValidPath(id): ValidPath<AccountId>,
+    ValidQuery(query): ValidQuery<GrantCandidatesQuery>,
+) -> Result<Json<GrantCandidates>, ApiError> {
+    let actor = user.actor();
+    let account = facts(&state, &actor, id).await?;
+    user.require(Permission::ManageGrants, &account.context())?;
+    if awaits_review(account.status) {
+        return Err(ApiError::Conflict);
+    }
+    // Only now: a call refused above tried no name, and spends nothing.
+    state.limits.check_grant_candidates(actor.id)?;
+    // garde checked it can start a username.
+    let prefix = UsernamePrefix::try_from(query.q.expose()).map_err(ApiError::internal)?;
+    let names =
+        state
+            .grants
+            .candidates(&actor, id, &prefix)
+            .await
+            .map_err(|error| match error {
+                CandidatesError::NotFound => ApiError::NotFound,
+                CandidatesError::Denied(error) => ApiError::from(error),
+                CandidatesError::Pending => ApiError::Conflict,
+                CandidatesError::Store(error) => ApiError::from(error),
+                other @ CandidatesError::Disagreement => ApiError::internal(other),
+            })?;
+    Ok(Json(GrantCandidates {
+        usernames: names.iter().map(ToString::to_string).collect(),
     }))
 }
 

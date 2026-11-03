@@ -103,7 +103,7 @@ test("the Owner promotes a Member and reviews their grants, revoking one", async
   await held.getByRole("button", { name: `Revoke ${MEMBER}'s access to AfkBot1` }).click();
   await held.getByRole("button", { name: "Revoke", exact: true }).click();
   await expect(held.getByText("They hold no grants.")).toBeVisible();
-  await main.getByRole("link", { name: "Back to users" }).click();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(main.getByRole("heading", { name: "Users", level: 1 })).toBeVisible();
 });
 
@@ -123,7 +123,7 @@ test("a Manage grantee's own row says You, and Leave is their way out", async ({
     .getByRole("navigation", { name: "Main" })
     .getByRole("link", { name: "Accounts" })
     .click();
-  await main.getByRole("link", { name: "Open AfkBot1" }).click();
+  await main.getByRole("link", { name: "AfkBot1", exact: true }).click();
   const mine = main.getByRole("row", { name: new RegExp(MEMBER) });
   await expect(mine.getByText("You", { exact: true })).toBeVisible();
   await expect(mine.getByRole("button", { name: /Revoke/ })).toBeHidden();
@@ -133,7 +133,7 @@ test("a Manage grantee's own row says You, and Leave is their way out", async ({
   await page.getByRole("button", { name: "Continue" }).click();
 
   await expect(page.getByText("You left AfkBot1.")).toBeVisible();
-  await expect(main.getByRole("link", { name: "Open AfkBot1" })).toBeHidden();
+  await expect(main.getByRole("link", { name: "AfkBot1", exact: true })).toBeHidden();
 });
 
 test("a Member leaves a shared account after the password", async ({ page, context }) => {
@@ -149,7 +149,7 @@ test("a Member leaves a shared account after the password", async ({ page, conte
     .getByRole("navigation", { name: "Main" })
     .getByRole("link", { name: "Accounts" })
     .click();
-  await main.getByRole("link", { name: "Open AfkBot1" }).click();
+  await main.getByRole("link", { name: "AfkBot1", exact: true }).click();
   await main.getByRole("button", { name: "Leave", exact: true }).click();
   await expect(main.getByText(/You lose access to it and its bot/)).toBeVisible();
   await main.getByRole("button", { name: "Leave account" }).click();
@@ -157,6 +157,6 @@ test("a Member leaves a shared account after the password", async ({ page, conte
   await page.getByRole("button", { name: "Continue" }).click();
 
   await expect(page.getByText("You left AfkBot1.")).toBeVisible();
-  await expect(main.getByRole("link", { name: "Open AfkBot1" })).toBeHidden();
+  await expect(main.getByRole("link", { name: "AfkBot1", exact: true })).toBeHidden();
   await expect(main.getByRole("heading", { name: "Accounts", level: 1 })).toBeVisible();
 });

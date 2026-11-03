@@ -26,8 +26,8 @@ use utoipa::openapi::schema::Schema;
 use crate::ErrorResponse;
 use crate::accounts::{
     AccountPage, AccountResponse, ChangeGrantRequest, CreateGrantRequest,
-    CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
-    HeldGrantPage, LinkFlowResponse, LinkStartedResponse,
+    CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantCandidates, GrantPage,
+    GrantResponse, HeldGrantPage, LinkFlowResponse, LinkStartedResponse,
 };
 use crate::agents::{AgentPage, AgentResponse, AgentStatus};
 use crate::audit::AuditPage;
@@ -87,6 +87,7 @@ pub fn components() -> BTreeMap<String, RefOr<Schema>> {
     add::<CreateGrantRequest>(&mut schemas);
     add::<ChangeGrantRequest>(&mut schemas);
     add::<GrantResponse>(&mut schemas);
+    add::<GrantCandidates>(&mut schemas);
     add::<GrantPage>(&mut schemas);
     add::<AgentStatus>(&mut schemas);
     add::<AgentResponse>(&mut schemas);

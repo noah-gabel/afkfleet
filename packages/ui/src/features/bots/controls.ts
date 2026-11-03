@@ -11,6 +11,9 @@ import type { BotResponse } from "../../generated/BotResponse";
 /** A lifecycle control. */
 export type Control = "start" | "stop" | "restart" | "resume" | "reset";
 
+/** What a card offers: start or stop, nothing else (U88). */
+export type CardControl = Extract<Control, "start" | "stop">;
+
 /** The reported states a restart applies to. */
 const RUNNING: ReadonlySet<string> = new Set([
   "connecting",
@@ -36,4 +39,15 @@ export function controlsFor(bot: Pick<BotResponse, "status" | "desired_state">):
   return status.kind === "reported" && RUNNING.has(String(status.state))
     ? ["stop", "restart"]
     : ["stop"];
+}
+
+/** The one button `bot`'s card offers (U88, S124), if its state offers start or stop. */
+export function cardControl(
+  bot: Pick<BotResponse, "status" | "desired_state">,
+): CardControl | null {
+  return (
+    controlsFor(bot).find(
+      (control): control is CardControl => control === "start" || control === "stop",
+    ) ?? null
+  );
 }

@@ -10,7 +10,7 @@ import type { ModeResponse } from "@afkfleet/ui/generated/ModeResponse";
 import type { ServerSettingsResponse } from "@afkfleet/ui/generated/ServerSettingsResponse";
 import { expect, test } from "@playwright/test";
 
-import { ADMIN, COMMANDS, FakeBackend, MEMBER, OWNER, PASSWORD } from "../fake/backend";
+import { ADMIN, COMMANDS, FakeBackend, MEMBER, NEW_USER, OWNER, PASSWORD } from "../fake/backend";
 
 /** The built-in `farm` mode, as the server seeds it. */
 const FARM = "01a14202-2800-7000-8000-000000000002";
@@ -863,4 +863,25 @@ test("says a listed grant is dormant to the Owner alone (S90)", () => {
 
   expect(toTheOwner).toBe(true);
   expect(toTheHolder).toBeUndefined();
+});
+
+test("the suggestions leave out whoever can't be given a grant, as the server does", () => {
+  const backend = new FakeBackend();
+  const account = backend.addAccount(OWNER);
+  backend.share(account, MEMBER, "view");
+  const names = (outcome: unknown) =>
+    (outcome as { value: { usernames: string[] } }).value.usernames;
+
+  signedInAs(backend, OWNER);
+
+  expect(
+    names(backend.handle("grant_candidates", { id: account, q: OWNER.slice(0, 1) })),
+  ).not.toContain(OWNER);
+  expect(names(backend.handle("grant_candidates", { id: account, q: MEMBER }))).toEqual([]);
+  expect(names(backend.handle("grant_candidates", { id: account, q: NEW_USER }))).toEqual([
+    NEW_USER,
+  ]);
+  expect(
+    names(backend.handle("grant_candidates", { id: account, q: NEW_USER.toUpperCase() })),
+  ).toEqual([NEW_USER]);
 });

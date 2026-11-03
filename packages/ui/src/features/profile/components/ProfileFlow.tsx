@@ -12,15 +12,17 @@
 // when its request was sent: the step-up's 5 minutes, or the setup token's `expires_in`.
 //
 // When it's done, the server has ended every other session of the user: the toast says so,
-// and `me` and the sessions are fetched again.
+// and `me` and the sessions are fetched again. A flow's end replaces its entry, so Back doesn't reopen
+// it. The new recovery codes show only once, so that step takes Back away (ADR-0020, U112, R215).
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useReducer } from "react";
+import { useEffect, useReducer } from "react";
 import { toast } from "sonner";
 
 import { toApiError } from "../../../api/ApiError";
 import { useApiClient } from "../../../api/context";
 import { SESSIONS_KEY } from "../../../api/queries";
+import { useAppStores } from "../../../app/context";
 import type { MfaConfirmResponse } from "../../../generated/MfaConfirmResponse";
 import { useStepGuard } from "../../../hooks/useStepGuard";
 import { isStepUpRequired } from "../../../lib/stepUp";
@@ -71,6 +73,14 @@ export function ProfileFlow({ mode }: { mode: "password" | "mfa" }) {
   const navigate = useNavigate();
   const { alive, isCurrent, guarded, pending } = useStepGuard(state.stepId);
   const requestSecret = useEnrollment(state.step.kind === "setup" ? state.stepId : null, dispatch);
+  const { back } = useAppStores();
+  const showingCodes = state.step.kind === "recovery";
+  useEffect(() => {
+    back.getState().hold(showingCodes);
+    return () => {
+      back.getState().hold(false);
+    };
+  }, [back, showingCodes]);
 
   /** Done, if the step is still current: the toast, fresh data, the profile. */
   async function done(from: number, message: string): Promise<void> {
@@ -83,7 +93,7 @@ export function ProfileFlow({ mode }: { mode: "password" | "mfa" }) {
       queryClient.invalidateQueries({ queryKey: SESSIONS_KEY }),
     ]);
     if (alive.current) {
-      await navigate({ to: "/profile" });
+      await navigate({ to: "/profile", replace: true });
     }
   }
 
@@ -143,7 +153,7 @@ export function ProfileFlow({ mode }: { mode: "password" | "mfa" }) {
 
   const finish = () => guarded((from) => done(from, MFA_REPLACED));
   const ended = () => dispatch({ type: "stepEnded", from: state.stepId });
-  const cancel = () => void navigate({ to: "/profile" });
+  const cancel = () => void navigate({ to: "/profile", replace: true });
 
   const step = state.step;
   switch (step.kind) {

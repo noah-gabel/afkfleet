@@ -16,6 +16,7 @@ mod mc_uuid;
 mod server_address;
 mod server_key;
 mod username;
+mod username_prefix;
 
 pub use agent_capacity::{AgentCapacity, AgentCapacityError};
 pub use agent_name::{AgentName, AgentNameError};
@@ -26,6 +27,7 @@ pub use mc_uuid::{McUuid, McUuidError};
 pub use server_address::{Host, ServerAddress, ServerAddressError};
 pub use server_key::{ServerKey, ServerKeyError};
 pub use username::{Username, UsernameError};
+pub use username_prefix::{UsernamePrefix, UsernamePrefixError};
 
 #[cfg(test)]
 mod tests {

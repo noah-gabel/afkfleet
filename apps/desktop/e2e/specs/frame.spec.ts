@@ -1,12 +1,12 @@
 // The frame in a small window (Plan.md P11.11; ADR-0020, U91, S101, S102, S106), in Edge, as a
 // Vitest has no layout: the app's minimum window holds the whole sidebar with the banner up, it
-// collapses at 1000 px with every name kept, and a tooltip isn't clipped.
+// collapses under 1056 px with every name kept (U113), and a tooltip isn't clipped.
 
 import { readFileSync } from "node:fs";
 
 import type { Page } from "@playwright/test";
 
-import { OWNER } from "../fake/backend";
+import { MEMBER, NEW_USER, OWNER } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
 import { enterCode, expectHome, logIn } from "./steps";
 import { inScheme, logoParts } from "./theme";
@@ -44,11 +44,11 @@ test("the minimum window holds the whole sidebar, a certificate banner up", asyn
   await expect(banner.getByRole("button", { name: "Server settings" })).toBeVisible();
 
   // The minimum window collapses the sidebar; the widest one at that height is its tallest form.
-  for (const width of [main.minWidth, 1000]) {
+  for (const width of [main.minWidth, 1056]) {
     await page.setViewportSize({ width, height: main.minHeight });
     await expect
       .poll(async () => (await sidebar(page).boundingBox())?.width)
-      .toBe(width < 1000 ? 64 : 208);
+      .toBe(width < 1056 ? 64 : 208);
 
     await expect(nav(page).getByRole("link", { name: "Audit log" })).toBeInViewport({ ratio: 1 });
     await expect(page.getByRole("button", { name: "Log out" })).toBeInViewport({ ratio: 1 });
@@ -62,6 +62,118 @@ test("the minimum window holds the whole sidebar, a certificate banner up", asyn
     const edge = (await sidebar(page).boundingBox())?.width;
     expect((await banner.boundingBox())?.x).toBe(edge);
   }
+});
+
+for (const screen of ["Home", "Modes", "Agents"] as const) {
+  test(`on ${screen}, wide content scrolls in its column at the minimum window, never the page`, async ({
+    page,
+    context,
+  }) => {
+    await signedIn(page, context);
+    await page.setViewportSize({ width: main.minWidth, height: main.minHeight });
+    await nav(page).getByRole("link", { name: screen, exact: true }).click();
+    const content = page.getByRole("main");
+    await expect(content).toBeVisible();
+
+    const seen = await content.evaluate((held) => {
+      const wide = document.createElement("div");
+      wide.style.width = "2000px";
+      wide.style.height = "20px";
+      held.append(wide);
+      window.scrollBy(500, 500);
+      const column = document.querySelector("[data-slot=content]");
+      if (column === null) {
+        throw new Error("no content column");
+      }
+      const start = column.getBoundingClientRect().left;
+      column.scrollLeft = 500;
+      const rail = document.querySelector("aside");
+      const box = wide.getBoundingClientRect();
+      const hit = rail === null ? null : document.elementFromPoint(30, box.top + 5);
+      const read = {
+        page: [window.scrollX, window.scrollY],
+        sideways: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+        columnStart: start,
+        railWidth: rail?.getBoundingClientRect().width,
+        columnScrolled: column.scrollLeft,
+        wideUnderRail: hit !== null && wide.contains(hit),
+      };
+      wide.remove();
+      return read;
+    });
+
+    expect(seen.page).toEqual([0, 0]);
+    expect(seen.sideways).toBe(false);
+    expect(seen.columnStart).toBe(seen.railWidth);
+    expect(seen.columnScrolled).toBe(500);
+    expect(seen.wideUnderRail).toBe(false);
+  });
+}
+
+test("the column goes back to its top on a new screen, and the page itself never scrolls", async ({
+  page,
+  context,
+}) => {
+  await signedIn(page, context);
+  await page.setViewportSize({ width: main.minWidth, height: main.minHeight });
+  const scrolled = await page.evaluate(() => {
+    const column = document.querySelector("[data-slot=content]");
+    if (column === null) {
+      throw new Error("no content column");
+    }
+    // In the column, not the screen, so it outlives the navigation: with nothing to scroll on the
+    // next screen, the column would read 0 whether or not anything reset it.
+    const tall = document.createElement("div");
+    tall.style.height = "3000px";
+    tall.style.flexShrink = "0";
+    column.append(tall);
+    column.scrollTop = 1000;
+    return {
+      column: column.scrollTop,
+      page: document.documentElement.scrollHeight > document.documentElement.clientHeight,
+    };
+  });
+  expect(scrolled).toEqual({ column: 1000, page: false });
+
+  await nav(page).getByRole("link", { name: "Modes", exact: true }).click();
+  await expect(page.getByRole("main").getByRole("link", { name: "New mode" })).toBeVisible();
+
+  await expect
+    .poll(() => page.locator("[data-slot=content]").evaluate((column) => column.scrollTop))
+    .toBe(0);
+});
+
+test("2FA setup's top can be reached at the minimum window", async ({ page, context }) => {
+  await fakeBackend(context);
+  await page.setViewportSize({ width: main.minWidth, height: main.minHeight });
+  await page.goto("/");
+  await logIn(page, NEW_USER);
+  await expect(page.getByRole("img", { name: /QR code/ })).toBeVisible();
+
+  const seen = await page.evaluate(() => {
+    const heading = document.querySelector("h1");
+    const scroller = document.querySelector("[data-slot=screen]");
+    if (heading === null || scroller === null) {
+      throw new Error("no heading or scroller");
+    }
+    scroller.scrollTop = 0;
+    return {
+      top: heading.getBoundingClientRect().top,
+      scrolls: scroller.scrollHeight > scroller.clientHeight,
+      page: document.documentElement.scrollHeight > document.documentElement.clientHeight,
+    };
+  });
+
+  expect(seen.top).toBeGreaterThanOrEqual(0);
+  expect(seen.scrolls).toBe(true);
+  expect(seen.page).toBe(false);
+
+  // The real wheel: a script can set `scrollTop` on a box that only clips.
+  await page.getByRole("img", { name: /QR code/ }).hover();
+  await page.mouse.wheel(0, 200);
+  await expect
+    .poll(() => page.locator("[data-slot=screen]").evaluate((scroller) => scroller.scrollTop))
+    .toBeGreaterThan(0);
 });
 
 test("a sign-in step's heading takes the focus without looking focused", async ({
@@ -122,17 +234,17 @@ test("the banner runs the window's full width when signed out", async ({ page, c
   expect((await banner.boundingBox())?.x).toBe(0);
 });
 
-test("the sidebar collapses under 1000 px, keeping each name and showing initials", async ({
+test("the sidebar collapses under 1056 px, keeping each name and showing initials", async ({
   page,
   context,
 }) => {
   await signedIn(page, context);
 
-  await page.setViewportSize({ width: 1000, height: 700 });
+  await page.setViewportSize({ width: 1056, height: 700 });
   await expect.poll(async () => (await sidebar(page).boundingBox())?.width).toBe(208);
   await expect(page.getByRole("group", { name: "Account" }).getByText(OWNER)).toBeVisible();
 
-  await page.setViewportSize({ width: 999, height: 700 });
+  await page.setViewportSize({ width: 1055, height: 700 });
   await expect.poll(async () => (await sidebar(page).boundingBox())?.width).toBe(64);
 
   for (const name of [
@@ -294,4 +406,30 @@ test("no tip covers a control or takes the pointer, in either form", async ({ pa
       await expect(tip).toHaveCount(0);
     }
   }
+});
+
+test("a login typed during a slow logout waits for the login screen, not the fields behind it", async ({
+  page,
+  context,
+}) => {
+  const backend = await signedIn(page, context);
+  backend.addAccount(OWNER);
+  await nav(page)
+    .getByRole("link", { name: /^Accounts/ })
+    .click();
+  await page.getByRole("main").getByRole("link", { name: "AfkBot1", exact: true }).click();
+  // A field named as the login form's is on screen: "Share with"'s Username.
+  const shareField = page.getByRole("combobox", { name: "Username" });
+  await expect(shareField).toBeVisible();
+  backend.hold("logout");
+
+  await page.getByRole("button", { name: "Log out" }).click();
+  const typing = logIn(page, MEMBER);
+  // Whatever it does, it mustn't type into the screen that's leaving.
+  await expect(shareField).toHaveValue("");
+  backend.release();
+  await typing;
+
+  await enterCode(page, backend.code(MEMBER));
+  await expectHome(page, MEMBER);
 });

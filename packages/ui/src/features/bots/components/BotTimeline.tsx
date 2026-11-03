@@ -6,6 +6,7 @@ import { useId } from "react";
 import { type TimelineItem, timeline } from "../../../api/liveRecord";
 import { useModes } from "../../../api/queries";
 import { useRecord } from "../../../app/context";
+import { Card } from "../../../components/ui/card";
 import { formatClockSeconds } from "../../../lib/time";
 import { modeLabel, modesOf } from "../facts";
 import { entryText, gapText, TIMELINE } from "../texts";
@@ -23,30 +24,35 @@ export function BotTimeline({ id }: { id: string }) {
   const items = timeline(record, id);
   const named = (modeId: string) => modeLabel(modeId, modes);
   return (
-    <section aria-labelledby={headingId} className="flex flex-col gap-2">
-      <h2 id={headingId} className="text-lg font-semibold">
-        {TIMELINE.heading}
-      </h2>
-      <p className="text-xs text-muted-foreground">{TIMELINE.note}</p>
-      {items.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{TIMELINE.empty}</p>
-      ) : (
-        <ol className="flex flex-col gap-1 text-sm">
-          {items.map((item) => {
-            const at = timeOf(item);
-            const text = item.kind === "gap" ? gapText(item.downMs) : entryText(item, named);
-            // One frame or event makes at most one item of a kind.
-            return (
-              <li key={`${item.kind}-${item.arrived}-${text}`} className="flex gap-3">
-                <time dateTime={at} className="shrink-0 tabular-nums text-muted-foreground">
-                  {formatClockSeconds(at)}
-                </time>
-                <span className="break-words">{text}</span>
-              </li>
-            );
-          })}
-        </ol>
-      )}
+    <section aria-labelledby={headingId}>
+      <Card className="gap-2 p-3">
+        <h2 id={headingId} className="text-base font-semibold">
+          {TIMELINE.heading}
+        </h2>
+        <p className="text-xs text-muted-foreground">{TIMELINE.note}</p>
+        {items.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{TIMELINE.empty}</p>
+        ) : (
+          <ol className="flex flex-col gap-1 text-sm">
+            {items.map((item) => {
+              const at = timeOf(item);
+              const text = item.kind === "gap" ? gapText(item.downMs) : entryText(item, named);
+              // One frame or event makes at most one item of a kind.
+              return (
+                <li key={`${item.kind}-${item.arrived}-${text}`} className="flex gap-3">
+                  <time
+                    dateTime={at}
+                    className="shrink-0 font-mono text-xs/5 text-muted-foreground"
+                  >
+                    {formatClockSeconds(at)}
+                  </time>
+                  <span className="min-w-0 break-words">{text}</span>
+                </li>
+              );
+            })}
+          </ol>
+        )}
+      </Card>
     </section>
   );
 }

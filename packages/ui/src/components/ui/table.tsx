@@ -12,14 +12,17 @@ import type * as React from "react";
 
 /**
  * Below which width of the table's own box a column drops. A container query, so the sidebar's
- * jump at 1000 px counts: 810 px of box is U91's 1050 px window with the wide sidebar and its
- * padding. Give a head and its cells the same value. Never drop the first column, a row's controls
- * or anything a row is found by: a row's accessible name comes from the cells that stay.
+ * jump counts: 810 px of box is U91's 1050 px window with the wide sidebar and its padding. The query
+ * reads the content box, inside the container's 1 px borders, so each value is 2 px less than its
+ * name. Give a head and its cells the same value. Never drop the first column, a row's controls or
+ * anything a row is found by: a row's accessible name comes from the cells that stay.
  */
-export type TableDrop = "under-810";
+export type TableDrop = "under-810" | "under-620" | "under-520";
 
 const DROP: Record<TableDrop, string> = {
-  "under-810": "@max-[50.625rem]/table:hidden",
+  "under-810": "@max-[50.5rem]/table:hidden",
+  "under-620": "@max-[38.625rem]/table:hidden",
+  "under-520": "@max-[32.375rem]/table:hidden",
 };
 
 function Table({ className, ...props }: React.ComponentProps<"table">) {

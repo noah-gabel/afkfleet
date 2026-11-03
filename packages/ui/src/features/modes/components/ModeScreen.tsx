@@ -24,7 +24,6 @@ import { isEditable, type ModeValues, newValues, valuesOf } from "../modeForm";
 import { LOADING_MODES, MODE_GONE, modesFailed, NO_LONGER_EDITABLE } from "../texts";
 import { LockedMode } from "./LockedMode";
 import { ModeEditor } from "./ModeEditor";
-import { BackLink } from "./ModeParts";
 
 /** A new mode's form. */
 export function NewModeScreen() {
@@ -67,7 +66,6 @@ export function ModeScreen({ id }: { id: string }) {
           <p role="alert" className="text-sm text-destructive">
             {modesFailed(describeError(toApiError(query.error).error))}
           </p>
-          <BackLink />
         </main>
       );
     }
@@ -81,7 +79,6 @@ export function ModeScreen({ id }: { id: string }) {
     return (
       <main className="flex max-w-3xl flex-col gap-4 p-6">
         <p role="alert">{MODE_GONE}</p>
-        <BackLink />
       </main>
     );
   }

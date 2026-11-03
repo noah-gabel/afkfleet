@@ -156,7 +156,7 @@ describe("the chat console (U43, U44)", () => {
 
     expect(screen.getByText("Loading chat…")).toBeDefined();
     answer.resolve(page([]));
-    expect(await screen.findByText("No chat yet.")).toBeDefined();
+    expect(await screen.findByText("No chat.")).toBeDefined();
     expect(app.fake.calls.filter((call) => call.method === "botChat")).toHaveLength(1);
   });
 
@@ -165,7 +165,7 @@ describe("the chat console (U43, U44)", () => {
       throw refusal(404, "not_found");
     });
 
-    expect(await screen.findByText(/^Couldn't load the chat: /)).toBeDefined();
+    expect(await screen.findByText(/^Couldn't load chat: /)).toBeDefined();
   });
 
   it("loads older lines above, then says there are none", async () => {
@@ -282,12 +282,12 @@ describe("the chat console's look (PR #77's review)", () => {
     for (const text of ["AfkBot2 joined the game", "Restart in 5 minutes"]) {
       const item = (await screen.findByText(text)).closest("li");
       expect(item?.className).toContain("italic");
-      expect(item?.className).toContain("text-muted-foreground");
+      expect(item?.className).toContain("text-console-muted");
     }
   });
 
   it("marks a name a chat format read with its icon and label, outside the capped name, never in the players' color (U55)", async () => {
-    const mark = "Read from the server's text by a chat format. Minecraft doesn't check this name.";
+    const mark = "Read by a chat format. Minecraft doesn't check this name.";
     await console_(async () =>
       page([
         said(3, { kind: "chat", text: "hello there", sender: { name: "Steve" } }),
@@ -302,16 +302,18 @@ describe("the chat console's look (PR #77's review)", () => {
     const marked = label.closest("[title]");
 
     expect(matched?.className).not.toContain("italic");
-    expect(matched?.className).not.toContain("text-muted-foreground");
+    expect(matched?.className).not.toContain("text-console-muted");
     expect(marked?.getAttribute("title")).toBe(mark);
     expect(marked?.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
     expect(label.className).toContain("sr-only");
     expect(name.contains(label)).toBe(false);
     expect(name.className).toContain("truncate");
-    expect(name.className).toContain("font-medium");
-    expect(name.className).not.toContain("text-primary");
+    expect(name.className).toContain("font-semibold");
+    expect(name.className).not.toContain("text-console-accent");
     expect(name.getAttribute("title")).toBe("Notch");
-    expect(within(screen.getByRole("log")).getByText("Steve").className).toContain("text-primary");
+    expect(within(screen.getByRole("log")).getByText("Steve").className).toContain(
+      "text-console-accent",
+    );
     const unmatched = screen.getByText("Server restarting soon").closest("li");
     expect(unmatched?.className).toContain("italic");
     expect(within(unmatched as HTMLElement).getByText("Server")).toBeDefined();

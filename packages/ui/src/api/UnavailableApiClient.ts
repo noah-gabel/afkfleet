@@ -76,6 +76,7 @@ export class UnavailableApiClient implements ApiClient {
   refuseAccount = unavailable;
   relinkAccount = unavailable;
   accountGrants = unavailable;
+  grantCandidates = unavailable;
   createGrant = unavailable;
   changeGrant = unavailable;
   revokeGrant = unavailable;

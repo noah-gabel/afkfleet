@@ -22,9 +22,11 @@
 //
 // Every corner comes from the `--radius` scale, so one line can square them all (ADR-0020, U101):
 // the theme defines only `rounded-sm`, `-md`, `-lg` and `-xl`, each a multiple of `--radius`, and
-// this refuses any other step, an arbitrary `rounded-[…]`, a bare `rounded` and a fixed corner in a
-// style. `rounded-full` (a real circle) and `rounded-none` stay fixed. **Its limit:** a text string
-// holding "rounded" as a whole word is refused too, so such a text gets reworded.
+// this refuses any other step, an arbitrary `rounded-[…]`, a bare `rounded`, a fixed corner anywhere
+// in a style key's expression, and `--radius` set in a class or a style, which would fix a whole
+// subtree's corners. `rounded-full` (a real circle) and `rounded-none` stay fixed. **Its limits:** a
+// text string holding "rounded" as a whole word is refused too, so such a text gets reworded, and a
+// corner through a constant (`borderRadius: SIZE`) goes unseen, as a colour does (ADR-0020, R207).
 //
 // A native `<select>` lives only in components/NativeSelect.tsx, whose one look holds the tokens
 // for the select and its options: WebView2 paints the open list from them, and a transparent
@@ -452,6 +454,24 @@ export function checkStylesheet(source) {
       add(scale, match[0], match.index);
     }
   }
+  for (const match of remainder.matchAll(/@apply\s+([^;{}]+);/g)) {
+    for (const token of (match[1] ?? "").split(/\s+/)) {
+      if (cornerOffScale(token)) {
+        add(scale, `@apply ${token}`, match.index);
+      }
+    }
+  }
+  // Read from the whole sheet: blanking the token blocks would hide `--border-radius: 8px` in `:root`.
+  const within = (rule, index) => index >= rule.start && index < rule.end;
+  const themes = top.filter((rule) => rule.prelude.startsWith("@theme"));
+  for (const match of css.matchAll(/(?<![\w-])(--[\w-]*radius[\w-]*)\s*:\s*([^;{}]+);/g)) {
+    const defined =
+      themes.some((rule) => within(rule, match.index)) ||
+      (match[1] === "--radius" && within(root, match.index));
+    if (!defined && !(match[2] ?? "").startsWith("var(--radius")) {
+      add(scale, match[0], match.index);
+    }
+  }
 
   for (const name of darkTokens.values.keys()) {
     if (!rootTokens.values.has(name)) {
@@ -585,14 +605,36 @@ function withoutVariants(token) {
 function cornerOffScale(token) {
   const utility = withoutVariants(token);
   return (
-    /^\[border(?:-[a-z]+)*-radius:/.test(utility) ||
+    /^\[(?:border(?:-[a-z]+)*-radius|--[\w-]*radius[\w-]*):/.test(utility) ||
     (/^rounded(?:-|$)/.test(utility) && !CORNER_ON_SCALE.test(utility))
   );
 }
 
-/** A style key that sets a corner, with its string in group 1 or its number in group 2. */
+/** A style key that sets a corner, its name in group 1; a class's `[--x:…]` isn't one. */
 const CORNER_KEY =
-  /(?<![\w-])["']?(?:borderRadius|border(?:Top|Bottom|Start|End)(?:Left|Right|Start|End)Radius|--border-radius)["']?\s*:\s*(?:["'`]([^"'`\n]*)["'`]|(\d[\w.]*))/g;
+  /(?<![\w[-])["']?(borderRadius|border(?:Top|Bottom|Start|End)(?:Left|Right|Start|End)Radius|--border-radius|--radius(?:-\w+)?)["']?\s*:/g;
+
+/** Whether the expression in `code` between `from` and `end` holds a fixed corner. */
+function holdsFixedCorner(code, strings, quoted, from, end) {
+  const fixedString = strings.some(
+    ({ text, start }) =>
+      start >= from &&
+      start < end &&
+      text !== "" &&
+      !text.startsWith("var(--radius") &&
+      !isCompared(code, start, text.length),
+  );
+  if (fixedString) {
+    return true;
+  }
+  for (const number of code.slice(from, end).matchAll(/(?<![\w.-])\d[\w.]*/g)) {
+    const start = from + number.index;
+    if (!quoted[start] && !isCompared(code, start, number[0].length)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /** Every corner in `source` off the `--radius` scale, as `{ line, rule, match }` (U101). */
 function cornersOffScale(source, code, strings) {
@@ -605,9 +647,19 @@ function cornersOffScale(source, code, strings) {
       }
     }
   }
+  const quoted = new Array(code.length).fill(false);
+  for (const { text, start } of strings) {
+    quoted.fill(true, start, start + text.length);
+  }
   for (const match of code.matchAll(CORNER_KEY)) {
-    if (!(match[1] ?? "").startsWith("var(--radius")) {
-      found.push({ line: lineOf(source, match.index), rule, match: match[0] });
+    const from = match.index + match[0].length;
+    const end = expressionEnd(code, quoted, from);
+    // `--radius` set here would fix a whole subtree's corners, whatever its value.
+    if (
+      (match[1] ?? "").startsWith("--radius") ||
+      holdsFixedCorner(code, strings, quoted, from, end)
+    ) {
+      found.push({ line: lineOf(source, match.index), rule, match: code.slice(match.index, end) });
     }
   }
   return found;
