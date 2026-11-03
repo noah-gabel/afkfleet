@@ -26,7 +26,7 @@ function RootLayout() {
         <ConnectionBanner />
         {inApp ? <LiveHint /> : null}
       </div>
-      <div data-slot="screen" className="flex min-h-0 flex-1 flex-col overflow-auto">
+      <div data-slot="screen" className="relative flex min-h-0 flex-1 flex-col overflow-auto">
         <Outlet />
       </div>
     </div>

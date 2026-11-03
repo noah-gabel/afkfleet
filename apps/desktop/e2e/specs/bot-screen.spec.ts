@@ -4,6 +4,11 @@
 // 1056 two columns with the wide sidebar, whether the column had a scrollbar or not. The console
 // fills the height, banner up or not, and nothing scrolls into blank space.
 //
+// Nor does the page: what a screen reader alone reads is `position: absolute` (`sr-only`), and
+// inside a scroller that isn't positioned it escapes, to stretch whatever scrolls above it. A long
+// chat whose lines carry such text, a parsed sender's or a user's, scrolled the whole document in
+// the app (U115, R225).
+//
 // This file runs with the scrollbars Playwright hides by default, as WebView2 shows them: a
 // classic scrollbar narrows the column it scrolls, which the switch must not depend on (PR #90's
 // review).
@@ -17,10 +22,15 @@ import { inScheme } from "./theme";
 
 test.use({ launchOptions: { ignoreDefaultArgs: ["--hide-scrollbars"] } });
 
-/** The Owner on bot 1's screen. */
-async function atBot(page: Page, context: Parameters<typeof fakeBackend>[0]): Promise<FakeBackend> {
+/** The Owner on bot 1's screen, opened from Home, its chat's older lines from `before`. */
+async function atBot(
+  page: Page,
+  context: Parameters<typeof fakeBackend>[0],
+  before: (backend: FakeBackend) => void = () => {},
+): Promise<FakeBackend> {
   const backend = await fakeBackend(context);
   backend.addAccount(OWNER);
+  before(backend);
   backend.addChat("AfkBot1", {
     at: new Date().toISOString(),
     direction: "in",
@@ -37,6 +47,26 @@ async function atBot(page: Page, context: Parameters<typeof fakeBackend>[0]): Pr
   await page.getByRole("link", { name: "Open AfkBot1" }).click();
   await expect(page.getByText("Hello from the server")).toBeVisible();
   return backend;
+}
+
+/**
+ * Forty older lines, more than the console shows, each with text only a screen reader reads: a
+ * sender a chat format read, or a line the Owner had the bot send.
+ */
+function longChat(backend: FakeBackend): void {
+  for (let n = 1; n <= 40; n += 1) {
+    const sent = n % 3 === 0;
+    backend.addChat("AfkBot1", {
+      at: new Date(Date.now() - (41 - n) * 60_000).toISOString(),
+      direction: sent ? "out" : "in",
+      kind: sent ? "user" : "system",
+      text: sent ? `Placeholder line ${n}` : `[Clan] Notch : placeholder line ${n}`,
+      ...(sent ? {} : { parsed_sender: "Notch" }),
+      truncated: false,
+      arguments_hidden: false,
+      mine: sent,
+    });
+  }
 }
 
 const chat = (page: Page) => page.getByRole("main").getByRole("region", { name: "Chat" });
@@ -176,6 +206,96 @@ for (const [width, height] of [
       backend.refuseAll(null);
     });
   }
+}
+
+/**
+ * The frame after every scroller went to its end: whether the page's own boxes scroll, where Back's
+ * row is, and every element that ends below the window outside a scroller that holds it, found up
+ * its containing blocks (an absolute element skips the boxes that aren't positioned).
+ */
+const frameAtTheEnd = (page: Page) =>
+  page.evaluate(() => {
+    const scrolls = (element: Element | null | undefined) =>
+      element !== null && element !== undefined && element.scrollHeight > element.clientHeight;
+    const content = document.querySelector("[data-slot=content]");
+    const back = () => document.querySelector("[data-slot=back-row]")?.getBoundingClientRect().top;
+    const backBefore = back();
+    const own = {
+      html: scrolls(document.documentElement),
+      body: scrolls(document.body),
+      root: scrolls(document.getElementById("root")),
+      screen: scrolls(document.querySelector("[data-slot=screen]")),
+      outer: scrolls(content?.parentElement),
+    };
+    for (const element of [document.documentElement, ...document.body.querySelectorAll("*")]) {
+      element.scrollTop = element.scrollHeight;
+    }
+    const containing = (element: Element): Element | null => {
+      const position = getComputedStyle(element).position;
+      if (position === "fixed") {
+        return null;
+      }
+      let up = element.parentElement;
+      if (position === "absolute") {
+        while (up !== null && getComputedStyle(up).position === "static") {
+          up = up.parentElement;
+        }
+      }
+      return up;
+    };
+    const held = (element: Element) => {
+      for (let up = containing(element); up !== null; up = containing(up)) {
+        if (getComputedStyle(up).overflowY !== "visible") {
+          return up.getBoundingClientRect().bottom <= innerHeight + 1;
+        }
+      }
+      return false;
+    };
+    const escaped: string[] = [];
+    for (const element of document.body.querySelectorAll("*")) {
+      const box = element.getBoundingClientRect();
+      if ((box.width > 0 || box.height > 0) && box.bottom > innerHeight + 1 && !held(element)) {
+        escaped.push(`${element.tagName.toLowerCase()} "${element.textContent?.slice(0, 30)}"`);
+      }
+    }
+    return { own, backBefore, backAfter: back(), escaped: escaped.slice(0, 5) };
+  });
+
+for (const [width, height] of [
+  [1318, 720],
+  [1280, 720],
+  [1366, 768],
+  [1920, 1080],
+  [800, 600],
+] as const) {
+  test(`at ${width}x${height} with a long chat, only the screen's scrollers scroll, Back stays`, async ({
+    page,
+    context,
+  }) => {
+    await atBot(page, context, longChat);
+    await page.setViewportSize({ width, height });
+    await expect(page.getByRole("button", { name: "Back", exact: true })).toBeVisible();
+    const beside = await sideBySide(page);
+
+    const frame = await frameAtTheEnd(page);
+
+    expect(frame.own).toEqual({
+      html: false,
+      body: false,
+      root: false,
+      screen: false,
+      outer: false,
+    });
+    expect(frame.backAfter).toBe(frame.backBefore);
+    expect(frame.escaped).toEqual([]);
+    const end = await atTheEnd(page);
+    if (beside) {
+      expect(end).toMatchObject({ columnScrolls: false, leftScrolls: true, logScrolls: true });
+    } else {
+      expect(end.columnScrolls).toBe(true);
+      expect(end.belowConsole).toBe(end.padding);
+    }
+  });
 }
 
 test("the console fills the height beside the boxes, banner up or not", async ({

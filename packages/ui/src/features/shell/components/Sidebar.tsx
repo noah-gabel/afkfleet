@@ -66,7 +66,7 @@ export function Sidebar() {
       </div>
       <nav
         aria-label="Main"
-        className="-m-1 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-1"
+        className="relative -m-1 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-1"
       >
         <Entries items={everyone} />
         {admin.length === 0 ? null : (

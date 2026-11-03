@@ -6,6 +6,10 @@
 // and the page never scrolls. It's the container the screens' layouts query. Chromium makes a scroller
 // with no focusable child a Tab stop, whose outline would otherwise lie outside the window.
 //
+// Every scroller is positioned (`relative`), here and in the screens: what only a screen reader reads
+// is `position: absolute` (`sr-only`), and inside a scroller that isn't positioned it escapes, so a
+// long chat stretched and scrolled the whole page, this row included (ADR-0020, U115, R225).
+//
 // Over the column, one row holds the way back (U111, S126). It keeps its height with nothing to go
 // back to, so a screen's heading is at the same place on every screen, and it never scrolls away.
 import { Outlet } from "@tanstack/react-router";
@@ -38,7 +42,7 @@ export function AppLayout() {
         <div
           data-slot="content"
           style={{ outlineOffset: -2 }}
-          className="@container/content flex min-h-0 flex-1 flex-col overflow-auto scroll-p-1 [&>main]:pt-1"
+          className="@container/content relative flex min-h-0 flex-1 flex-col overflow-auto scroll-p-1 [&>main]:pt-1"
         >
           <Outlet />
         </div>

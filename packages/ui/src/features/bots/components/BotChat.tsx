@@ -114,7 +114,7 @@ export function BotChat({ bot, children }: { bot: BotResponse; children?: ReactN
           ref={box}
           role="log"
           aria-label={CHAT.heading}
-          className="min-h-0 flex-1 overflow-y-auto rounded-lg border bg-console-bg p-3 font-mono text-console-fg"
+          className="relative min-h-0 flex-1 overflow-y-auto rounded-lg border bg-console-bg p-3 font-mono text-console-fg"
           onScroll={(event) => {
             const list = event.currentTarget;
             following.current =

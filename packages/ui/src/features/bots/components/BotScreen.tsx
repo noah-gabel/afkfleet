@@ -71,7 +71,7 @@ export function BotScreen({ id }: { id: string }) {
   return (
     <main className="flex flex-1 flex-col p-4 @min-[53rem]/content:min-h-0">
       <div className="grid gap-3 @min-[53rem]/content:min-h-0 @min-[53rem]/content:flex-[1_1_0] @min-[53rem]/content:grid-cols-[minmax(18rem,2fr)_3fr]">
-        <div className="flex min-w-0 flex-col gap-3 @min-[53rem]/content:-m-1 @min-[53rem]/content:overflow-y-auto @min-[53rem]/content:scroll-p-1 @min-[53rem]/content:p-1">
+        <div className="relative flex min-w-0 flex-col gap-3 @min-[53rem]/content:-m-1 @min-[53rem]/content:overflow-y-auto @min-[53rem]/content:scroll-p-1 @min-[53rem]/content:p-1">
           <section aria-labelledby={nameId}>
             <Card className="gap-3 p-3">
               <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
