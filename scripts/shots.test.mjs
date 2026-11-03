@@ -3,6 +3,8 @@
 // with no network, no capabilities and two mounts; the recipes; and the workflow.
 import assert from "node:assert/strict";
 import {
+  existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -30,6 +32,8 @@ import {
   pruneArgs,
   RESULTS,
   runArgs,
+  shots,
+  strays,
 } from "./shots.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -411,6 +415,122 @@ describe("the folders it mounts", () => {
   });
 });
 
+describe("what the container leaves", () => {
+  const temp = () => mkdtempSync(path.join(tmpdir(), "afkfleet-shots-"));
+  /** `files` under `root`, each with its folders, empty. */
+  const plant = (root, ...files) => {
+    for (const file of files) {
+      mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      writeFileSync(path.join(root, file), "");
+    }
+  };
+
+  it("in shots' folders: only theme-sweep.spec.ts/<slug>-(dark|light).png, regular, one link each", () => {
+    const folder = temp();
+    const elsewhere = temp();
+    try {
+      plant(
+        folder,
+        "theme-sweep.spec.ts/login-dark.png",
+        "theme-sweep.spec.ts/the-audit-log-a-long-list-stacked-end-light.png",
+        "theme-sweep.spec.ts/login-dim.png",
+        "theme-sweep.spec.ts/Upper-dark.png",
+        "theme-sweep.spec.ts/pwned.spec.ts",
+        "theme-sweep.spec.ts/nested/login-dark.png",
+        "pwned.spec.ts",
+        "other.spec.ts/login-dark.png",
+      );
+      plant(elsewhere, "secret.png");
+      symlinkSync(
+        elsewhere,
+        path.join(folder, "theme-sweep.spec.ts", "linked-dark.png"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      linkSync(
+        path.join(folder, "theme-sweep.spec.ts", "login-dark.png"),
+        path.join(folder, "theme-sweep.spec.ts", "login-light.png"),
+      );
+
+      assert.deepEqual(strays(folder, "shots"), [
+        "other.spec.ts/",
+        "pwned.spec.ts",
+        "theme-sweep.spec.ts/Upper-dark.png",
+        "theme-sweep.spec.ts/linked-dark.png",
+        "theme-sweep.spec.ts/login-dark.png",
+        "theme-sweep.spec.ts/login-dim.png",
+        "theme-sweep.spec.ts/login-light.png",
+        "theme-sweep.spec.ts/nested/",
+        "theme-sweep.spec.ts/pwned.spec.ts",
+      ]);
+      assert.deepEqual(strays(path.join(folder, "missing"), "shots"), []);
+    } finally {
+      try {
+        unlinkSync(path.join(folder, "theme-sweep.spec.ts", "linked-dark.png"));
+      } catch {
+        rmdirSync(path.join(folder, "theme-sweep.spec.ts", "linked-dark.png"));
+      }
+      rmSync(folder, { recursive: true, force: true });
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  it("in the results: only Playwright's folders of PNGs and error contexts, and its last run", () => {
+    const folder = temp();
+    try {
+      plant(
+        folder,
+        ".last-run.json",
+        "theme-sweep-login-shots/login-dark-actual.png",
+        "theme-sweep-login-shots/login-dark-diff.png",
+        "theme-sweep-login-shots/error-context.md",
+        "theme-sweep-login-shots/pwned.spec.ts",
+        "theme-sweep-login-shots/deeper/x.png",
+        "pwned.spec.ts",
+      );
+
+      assert.deepEqual(strays(folder, "results"), [
+        "pwned.spec.ts",
+        "theme-sweep-login-shots/deeper/",
+        "theme-sweep-login-shots/pwned.spec.ts",
+      ]);
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
+  it("stops an update the moment the run ends, listing and keeping what it left", () => {
+    const root = temp();
+    const said = [];
+    try {
+      const docker = (args) => {
+        if (args[0] === "run") {
+          plant(root, `${BASELINES}/theme-sweep.spec.ts/login-dark.png`);
+          plant(root, `${BASELINES}/pwned.spec.ts`, `${RESULTS}/x-shots/x-dark-diff.png`);
+          return 1;
+        }
+        return 0;
+      };
+      const status = shots(["update"], {
+        root,
+        docker,
+        platform: "linux",
+        uid: 1,
+        gid: 1,
+        env: {},
+        error: (message) => said.push(message),
+      });
+
+      assert.equal(status, 1);
+      assert.equal(said.length, 1, said.join("\n"));
+      assert.match(said[0] ?? "", /apps\/desktop\/e2e\/baselines\/pwned\.spec\.ts/);
+      assert.doesNotMatch(said[0] ?? "", /login-dark\.png/);
+      assert.equal(existsSync(path.join(root, BASELINES, "pwned.spec.ts")), true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("the recipes", () => {
   it("compare and update, one line each, outside check and ci", () => {
     assert.deepEqual(recipeBody("shots"), ["node scripts/shots.mjs compare"]);
@@ -471,6 +591,18 @@ describe("the workflow", () => {
 });
 
 describe("the shots", () => {
+  it("are never run as tests on the host: Edge ignores the baselines, and Vitest can't reach them", () => {
+    const edge = read("apps/desktop/playwright.config.ts");
+    assert.match(edge, /^ {2}testDir: "e2e",$/m);
+    assert.match(edge, /^ {2}testIgnore: \["baselines\/\*\*"\],$/m);
+    // The desktop app's Vitest takes only its src/; the UI package's runs inside packages/ui.
+    assert.match(
+      read("apps/desktop/vitest.config.ts"),
+      /^ {4}include: \["src\/\*\*\/\*\.test\.ts"\],$/m,
+    );
+    assert.equal(read("packages/ui/vite.config.ts").includes("root:"), false);
+  });
+
   it("are taken only by the shoot helper, and nothing installs a browser", () => {
     const specs = path.join(ROOT, "apps", "desktop", "e2e");
     for (const entry of readdirSync(specs, { recursive: true, withFileTypes: true })) {

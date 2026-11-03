@@ -9,8 +9,10 @@
 // earlier untagged builds, then runs it with no network, no capabilities and two mounts: the
 // baselines (read-only to compare, read-write to update), or a design folder for a before or an
 // after, and target/shots/results/ for what a failed shot left. A mount's folder that is a link or
-// a junction, or sits under one, is refused, so the container writes nowhere but these. On CI a
-// failure lists every diff in the job's summary. Exits with the run's status, or 1 or 2 saying why.
+// a junction, or sits under one, is refused, so the container writes nowhere but these. The moment
+// the run ends, anything it left there but shots, or Playwright's own results, stops it with exit 1,
+// listed and kept, before anything on this PC reads them (strays). On CI a failure lists every diff
+// in the job's summary. Exits with the run's status, or 1 or 2 saying why.
 // Tests: scripts/shots.test.mjs.
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync } from "node:fs";
@@ -150,63 +152,124 @@ export function diffs(root, folder) {
   return found.sort();
 }
 
-/** Runs `docker` with `args` in `root`, its output shown: answers its status. */
-function docker(root, args) {
-  return spawnSync("docker", args, { cwd: root, stdio: "inherit" }).status ?? 1;
+/** The one folder a baselines' or a design folder holds, and its shots' names (`slug` in e2e/shots.ts). */
+const SHOTS_FOLDER = "theme-sweep.spec.ts";
+const SHOT = /^[a-z0-9]+(?:-[a-z0-9]+)*-(?:dark|light)\.png$/;
+
+/** What Playwright leaves in the results: a folder per test, of PNGs and an error context. */
+const RESULT = /^(?:[^/\\]+\.png|error-context\.md)$/;
+
+/** Whether `kind`'s folder may hold a folder `name` at `depth`, or a file. */
+const ALLOWED = {
+  shots: {
+    folder: (name, depth) => depth === 0 && name === SHOTS_FOLDER,
+    file: (name, depth) => depth === 1 && SHOT.test(name),
+  },
+  results: {
+    folder: (_name, depth) => depth === 0,
+    file: (name, depth) => (depth === 0 ? name === ".last-run.json" : RESULT.test(name)),
+  },
+};
+
+/**
+ * Everything under `folder` the container wasn't meant to leave there, relative with `/` (a
+ * folder's with a trailing `/`), in order: a link or junction, a hard-linked or other file that
+ * isn't a plain one, and any folder or name `kind` doesn't hold ("shots": the baselines' or a
+ * design's one folder of shots; "results": Playwright's). Reads no file and follows no link, and
+ * doesn't look inside a folder it lists. Empty when `folder` doesn't exist.
+ */
+export function strays(folder, kind) {
+  if (lstatSync(folder, { throwIfNoEntry: false }) === undefined) {
+    return [];
+  }
+  const found = [];
+  const visit = (relative, depth) => {
+    for (const name of readdirSync(path.join(folder, relative)).sort()) {
+      const inner = relative === "" ? name : `${relative}/${name}`;
+      const stat = lstatSync(path.join(folder, inner));
+      if (stat.isDirectory()) {
+        if (ALLOWED[kind].folder(name, depth)) {
+          visit(inner, depth + 1);
+        } else {
+          found.push(`${inner}/`);
+        }
+      } else if (!stat.isFile() || stat.nlink !== 1 || !ALLOWED[kind].file(name, depth)) {
+        found.push(inner);
+      }
+    }
+  };
+  visit("", 0);
+  return found.sort();
 }
 
-function main(args) {
-  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+/** What the run left that it shouldn't have, under the folders it could write, from `root`. */
+function leftBehind(root, results, shotsFolder) {
+  const from = (folder, kind) =>
+    strays(folder, kind).map((inner) =>
+      path.relative(root, path.join(folder, inner)).split(path.sep).join("/"),
+    );
+  return [...from(results, "results"), ...from(shotsFolder, "shots")];
+}
+
+/**
+ * The run for `args` on `host`: its root, `docker` (the arguments, and whether its output shows,
+ * answering the status), platform, ids, environment and error output. Answers the exit status.
+ */
+export function shots(args, host) {
+  const { root, docker, error } = host;
   const [mode, given] = args;
   if (!(mode in UPDATE) || (mode === "design") !== (given !== undefined) || args.length > 2) {
-    console.error(USAGE);
+    error(USAGE);
     return 2;
   }
-  if (spawnSync("docker", ["version", "--format", "{{.Server.Version}}"]).status !== 0) {
-    console.error(NO_DOCKER);
+  if (docker(["version", "--format", "{{.Server.Version}}"], false) !== 0) {
+    error(NO_DOCKER);
     return 1;
   }
   let design;
   try {
     design = mode === "design" ? designFolder(root, given) : undefined;
-  } catch (error) {
-    console.error(error.message);
+  } catch (refused) {
+    error(refused.message);
     return 2;
   }
   const results = path.join(root, RESULTS);
-  for (const folder of [results, design ?? path.join(root, BASELINES)]) {
+  const shotsFolder = design ?? path.join(root, BASELINES);
+  for (const folder of [results, shotsFolder]) {
     mkdirSync(folder, { recursive: true });
     const problem = mountProblem(root, folder);
     if (problem !== null) {
-      console.error(problem);
+      error(problem);
       return 1;
     }
   }
   for (const step of [buildArgs(), pruneArgs()]) {
-    const status = docker(root, step);
+    const status = docker(step, true);
     if (status !== 0) {
       return status;
     }
   }
   const status = docker(
-    root,
-    runArgs({
-      mode,
-      root,
-      platform: process.platform,
-      uid: process.getuid?.(),
-      gid: process.getgid?.(),
-      design,
-    }),
+    runArgs({ mode, root, platform: host.platform, uid: host.uid, gid: host.gid, design }),
+    true,
   );
+  // Before anything reads what the container wrote: nothing but shots may be there, or the next
+  // `just e2e` on this PC could run it (S130).
+  const left = leftBehind(root, results, shotsFolder);
+  if (left.length > 0) {
+    error(
+      `The container left what only shots may be. Nothing was deleted; look at each, remove what isn't yours, and run again:\n${left.join("\n")}`,
+    );
+    return 1;
+  }
   const failed = status === 0 ? [] : diffs(root, results);
   if (failed.length > 0) {
-    console.error(
+    error(
       `The shots that differ, each beside its expected and actual image:\n${failed.join("\n")}`,
     );
-    if (process.env.GITHUB_STEP_SUMMARY !== undefined) {
+    if (host.env.GITHUB_STEP_SUMMARY !== undefined) {
       appendFileSync(
-        process.env.GITHUB_STEP_SUMMARY,
+        host.env.GITHUB_STEP_SUMMARY,
         `### Screenshots that differ\n\nRun \`just shots\` to see them in ${RESULTS}/.\n\n${failed.map((file) => `- \`${file}\``).join("\n")}\n`,
       );
     }
@@ -215,5 +278,15 @@ function main(args) {
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.exitCode = main(process.argv.slice(2));
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  process.exitCode = shots(process.argv.slice(2), {
+    root,
+    docker: (args, shown) =>
+      spawnSync("docker", args, { cwd: root, stdio: shown ? "inherit" : "pipe" }).status ?? 1,
+    platform: process.platform,
+    uid: process.getuid?.(),
+    gid: process.getgid?.(),
+    env: process.env,
+    error: (message) => console.error(message),
+  });
 }

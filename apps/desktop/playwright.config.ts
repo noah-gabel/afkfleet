@@ -13,6 +13,8 @@ const ci = process.env.CI !== undefined;
 export default defineConfig({
   testDir: "e2e",
   testMatch: "**/*.spec.ts",
+  // The screenshots' container writes there: nothing in it may ever run here (S130).
+  testIgnore: ["baselines/**"],
   outputDir: "test-results",
   updateSnapshots: "none",
   forbidOnly: ci,
