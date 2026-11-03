@@ -48,7 +48,7 @@ Where things are:
    - Small commits with messages like `P2.6: add Stop transition`.
    - Push only the task branch: `git push -u origin <branch>`.
    - Open the PR with `gh pr create`. Title: `P2.6: <task name>`. Body: goal, what changed, deviations, every new or changed snapshot, and the Definition of Done checklist from below.
-   - **Watch CI after every push.** Straight after it, in a background Bash: `sleep 30; gh pr checks <n> --watch --fail-fast --interval 30 > "$TEMP/ci.txt" 2>&1; echo "exit $?"`. Exit 0 is all green; anything else means act now (see "When CI fails" below). Never pipe the watch: `| tail` prints nothing until the last job ends, so a red job sits unseen behind a slow one.
+   - **Watch CI after every push** (the user's rule, approved 2026-11-03, ADR-0020). Straight after it, in a background Bash: `sleep 30; gh pr checks <n> --watch --fail-fast --interval 30 > target/ci.txt 2>&1; echo "exit $?"`. Its output stays in this repository, in the gitignored `target/`. Exit 0 is all green; anything else means act now (see "When CI fails" below). Never pipe the watch: `| tail` prints nothing until the last job ends, so a red job sits unseen behind a slow one.
    - Then **stop and wait**, and only then: CI is green, or the user has been told what's still red and why. The user reviews and merges.
 8. **Stay in scope.** Keep changes to the task. Propose refactors outside it; don't do them silently.
 9. **Finish the phase.** When a phase is done, check its **Definition of Done** point by point and report.
