@@ -2903,9 +2903,11 @@ Built on the planning above, in one PR on `p11/p11.11-design-admin`, fourteen co
 
 *`just check`'s e2e stage* failed once, on `parts.spec`, which planted `under-810`'s class after R228 had removed it, so Tailwind no longer generated it; the spec now plants `under-790`'s.
 
+*`just test-slow`* (the branch touches Docker files): `slow_online_mode_scenario` failed twice on Mojang's authentication, once when the client's garbage token got an unexpected answer instead of a refusal, once when the online-mode container said `multiplayer.disconnect.authservers_down` for the offline account, and passed alone in between. L4 touches nothing on that path (`fleet-mc` is unchanged since 2026-10-28, the server image pinned by digest); the other five ran green, and fail-fast skipped the seventh both times.
+
 *Mutations* (each failed its tests, then was restored): MCALLERROLE, MNOAUX, MREPEAT, MCOMPOSE, MSHIFT, MMETA, MUPONLY, MCANDROOT, MNOREFRESH; MCOLUMN; MNOSTICKY, MNOSCROLL, MORDER; MDIP, MTRUNC; MDIP2; MNOSCROLL (the textarea). MP6 and MNOWRAP passed and weren't valid mutations here (R239; the names fit without wrapping).
 
-*Size:* about 7,300 changed lines before the records and 240 PNGs, at the top of the planned 6,500–7,300.
+*Size:* 5,641 added and 1,851 removed, records included, about 7,500 changed lines, just past the planned 6,500–7,300, and 240 PNGs.
 
 ### L4's texts, as approved (U96)
 The table the user approved at L4's plan review, with their own wording of the servers' Delete question and the "After it respawns" hint. Anything not listed stays: headings, field labels, action names, the audit's action, target and outcome words, server messages, and the user's own wordings.
