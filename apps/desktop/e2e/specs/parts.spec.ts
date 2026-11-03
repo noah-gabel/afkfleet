@@ -26,7 +26,7 @@ test("a column drops by its box's width, and a spanning row follows the table", 
     row.insertCell().textContent = "agent-main";
     const dropped = row.insertCell();
     dropped.id = "planted-dropped";
-    dropped.className = "@max-[50.5rem]/table:hidden";
+    dropped.className = "@max-[49.25rem]/table:hidden";
     dropped.textContent = "1.0";
     const span = table.insertRow().insertCell();
     span.id = "planted-span";
@@ -47,9 +47,9 @@ test("a column drops by its box's width, and a spanning row follows the table", 
       (document.getElementById("planted") as HTMLElement).style.width = value;
     }, width);
 
-  await setWidth("809px");
+  await setWidth("789px");
   expect(await display()).toBe("none");
-  await setWidth("810px");
+  await setWidth("790px");
   expect(await display()).toBe("table-cell");
 
   // The long text wraps inside the kept columns' width instead of pushing the table wider.
