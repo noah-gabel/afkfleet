@@ -576,7 +576,8 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
       }
       apart={
         row !== undefined && configure ? (
-          <div className="w-full">
+          // Set apart as the mode editor's Delete is (U121).
+          <div className="w-full border-t pt-3">
             <DeleteAction
               row={row}
               writes={writes}

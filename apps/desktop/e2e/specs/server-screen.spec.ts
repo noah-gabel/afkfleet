@@ -137,3 +137,18 @@ test("stacked, Save's password prompt takes the focus in view, and changed setti
   expect(await where(changed)).toEqual({ inColumn: true, underBar: false });
   await frameHolds(page, "a server's settings stacked, changed");
 });
+
+test("Delete is set apart by a rule, as the mode editor's (U121)", async ({ page, context }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await atLongSettings(page, context);
+
+  const apart = await page
+    .getByRole("button", { name: "Delete", exact: true })
+    .evaluate((button) => {
+      const holder = button.closest("[data-slot=editor-apart] > *");
+      const style = holder === null ? null : getComputedStyle(holder);
+      return { border: style?.borderTopWidth, padding: style?.paddingTop };
+    });
+
+  expect(apart).toEqual({ border: "1px", padding: "12px" });
+});
