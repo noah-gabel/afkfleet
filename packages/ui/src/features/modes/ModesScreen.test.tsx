@@ -144,7 +144,7 @@ describe("the modes' list", () => {
     await vi.waitFor(() => expect(app.path()).toBe("/modes/new"));
   });
 
-  it("says why when the modes couldn't be read", async () => {
+  it("says why when the modes couldn't be read, and keeps New mode (PR #92's review)", async () => {
     await atScreen("/modes", {
       modes: async () => {
         throw refusal(500, "internal");
@@ -153,6 +153,7 @@ describe("the modes' list", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toMatch(/^Couldn't load modes: refused: internal/);
+    expect(screen.getByRole("link", { name: "New mode" })).toBeDefined();
   });
 
   it("is in the nav for a Member, right after Home", async () => {

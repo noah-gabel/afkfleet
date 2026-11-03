@@ -50,8 +50,11 @@ export function ModesScreen() {
     <main className="flex flex-1 flex-col gap-4 p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-lg font-semibold tracking-tight">{MODES_HEADING}</h1>
-        {/* Hidden while loading, and while the empty state offers its own (as U108). */}
-        {typeof known === "string" || known.length === 0 ? null : <NewModeLink />}
+        {/* Hidden while loading, and while the empty state offers its own (as U108); kept when the
+            list can't be read, as a mode can still be made (PR #92's review). */}
+        {known === "loading" || (typeof known !== "string" && known.length === 0) ? null : (
+          <NewModeLink />
+        )}
       </div>
       <p className="text-sm text-muted-foreground">{MODES_INTRO}</p>
       <Body query={query} known={known} />

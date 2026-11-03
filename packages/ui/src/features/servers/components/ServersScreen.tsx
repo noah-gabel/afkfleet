@@ -49,8 +49,11 @@ export function ServersScreen() {
     <main className="flex flex-1 flex-col gap-4 p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-lg font-semibold tracking-tight">{SERVERS_HEADING}</h1>
-        {/* Hidden while loading, and while the empty state offers its own (as U108). */}
-        {configure && query.data !== undefined && query.data.length > 0 ? <AddServerLink /> : null}
+        {/* Hidden while loading, and while the empty state offers its own (as U108); kept when the
+            list can't be read, as a server can still be added (PR #92's review). */}
+        {configure && (query.data === undefined ? query.error !== null : query.data.length > 0) ? (
+          <AddServerLink />
+        ) : null}
       </div>
       <p className="text-sm text-muted-foreground">{SERVERS_INTRO}</p>
       <Body query={query} configure={configure} />

@@ -105,7 +105,7 @@ describe("the Minecraft servers' list", () => {
     expect(screen.queryByRole("link", { name: "Add server" })).toBeNull();
   });
 
-  it("says why when the servers couldn't be read", async () => {
+  it("says why when the servers couldn't be read, and keeps Add server (PR #92's review)", async () => {
     await atScreen(
       "/admin/servers",
       {
@@ -118,5 +118,6 @@ describe("the Minecraft servers' list", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toMatch(/^Couldn't load servers: refused: internal/);
+    expect(screen.getByRole("link", { name: "Add server" })).toBeDefined();
   });
 });

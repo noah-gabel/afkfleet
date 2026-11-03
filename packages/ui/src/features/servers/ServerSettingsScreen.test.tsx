@@ -1020,7 +1020,8 @@ describe("what Save brings, where a stacked editor shows it (PR #92's review)", 
     };
     const { app, state } = await atEditor(isNew ? "new" : ROW.id, {
       rows: [ROW],
-      handlers: error === null ? {} : { createServerSettings: refuse, updateServerSettings: refuse },
+      handlers:
+        error === null ? {} : { createServerSettings: refuse, updateServerSettings: refuse },
     });
     if (isNew) {
       await screen.findByRole("heading", { name: "Add server", level: 1 });
