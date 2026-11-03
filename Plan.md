@@ -4305,6 +4305,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
 > Note (Phase 11's DoD, the first check) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "The DoD's first check"): **the user's first check (2026-10-28) passed every step as expected,** on `p11/p11-dod-kit`: the stack from the `dod-*` recipes, the Owner's login with 2FA, the user's own Microsoft account linked, its bot set to `127.0.0.1:25566` after a step-up, Start pressed in the app and the bot Online, the Minecraft server's own `rcon-cli list` showing the player, then the bot stopped, the logout, and the container removed. **The first DoD item is met.** `target/dod-run/` keeps the linked account for M's 24-hour run, the second item.
 
+> Note (Phase 11's DoD, group M's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U127–U133, S133–S135): **the 24-hour run is the user's, on M's branch (`p11/p11-wrap-up`),** with one bot on the local container (U128), `public_targets = false` kept (U127). A bot asks for a Minecraft session only when it connects, so the run proves a renewal by restarting the container at least 24 h after Start: the bot reconnects by itself with a new session (U129). `dod-server` and `dod-agent` log JSON at `info` into `target/dod-run/logs/` through `scripts/dod-log.mjs` (S134, U132), and after the stop the user's `just dod-log-check` prints only counts, afkfleet's own fixed messages, bot numbers and relative times, ending in PASS or FAIL (S135, U133). The outcome is recorded there.
+
 ---
 
 ### Phase 12: Deployment & operations
