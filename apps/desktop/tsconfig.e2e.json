@@ -5,5 +5,5 @@
     "resolveJsonModule": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["e2e", "playwright.config.ts", "vite.e2e.config.ts"]
+  "include": ["e2e", "playwright.config.ts", "playwright.shots.config.ts", "vite.e2e.config.ts"]
 }

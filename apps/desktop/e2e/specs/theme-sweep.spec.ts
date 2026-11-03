@@ -8,7 +8,8 @@
 import type { Page } from "@playwright/test";
 
 import { type FakeBackend, MEMBER, NEW_USER, OWNER, PASSWORD } from "../fake/backend";
-import { expect, fakeBackend, test } from "../fixtures";
+import { expect, fakeBackend, shooting, test } from "../fixtures";
+import { NOW } from "../shots";
 import { enterCode, expectHome, logIn, push } from "./steps";
 import {
   AA,
@@ -38,6 +39,7 @@ test("the check itself reports what it should, at the numbers it should", async 
   page,
   context,
 }) => {
+  test.skip(shooting(), "the check's own tests measure; they make no baseline");
   await fakeBackend(context);
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
@@ -101,6 +103,7 @@ test("the check holds AA: normal and large text, placeholders, and every form a 
   page,
   context,
 }) => {
+  test.skip(shooting(), "the check's own tests measure; they make no baseline");
   await fakeBackend(context);
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
@@ -179,6 +182,7 @@ test("the check reads a marked control's focus from its cells, not an outline", 
   page,
   context,
 }) => {
+  test.skip(shooting(), "the check's own tests measure; they make no baseline");
   await fakeBackend(context);
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
@@ -295,6 +299,7 @@ test("the check holds each focus stop's outline, and walks the whole page", asyn
   page,
   context,
 }) => {
+  test.skip(shooting(), "the check's own tests measure; they make no baseline");
   await fakeBackend(context);
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
@@ -480,6 +485,7 @@ test("the check holds each focus stop's outline, and walks the whole page", asyn
 });
 
 test("every native select holds the theme's tokens, its options too", async ({ page, context }) => {
+  test.skip(shooting(), "the check's own tests measure; they make no baseline");
   const backend = await fakeBackend(context);
   const account = backend.addAccount(OWNER);
   backend.share(account, MEMBER, "view");
@@ -593,11 +599,11 @@ test("Home, its bots in every status, and a bot's screen", async ({ page, contex
   const main = page.getByRole("main");
 
   await expect(page.getByRole("link", { name: "Open AfkBot1" })).toBeVisible();
-  await bothThemes(page, "Home, every status");
+  await bothThemes(page, "Home, every status", { small: true });
 
   const id = backend.bot("AfkBot1").id;
   backend.addChat("AfkBot1", {
-    at: new Date().toISOString(),
+    at: NOW,
     direction: "in",
     kind: "system",
     text: "Hello from the server",
@@ -613,30 +619,32 @@ test("Home, its bots in every status, and a bot's screen", async ({ page, contex
 
   await push(page, {
     update: "event",
-    event: { type: "bot_died", bot_id: id, at: new Date().toISOString() },
+    event: { type: "bot_died", bot_id: id, at: NOW },
   });
   await expect(main.getByRole("region", { name: "Timeline" }).getByText("Died")).toBeVisible();
   const toast = page.getByText("AfkBot1 died.");
   await toast.hover();
-  await bothThemes(page, "a bot, its timeline and a toast");
+  await bothThemes(page, "a bot, its timeline and a toast", { toasts: 1, keepPointer: true });
   await expect(toast).toBeVisible();
 
   await page.getByRole("link", { name: "Home", exact: true }).first().click();
   await expect(page.getByRole("link", { name: "Open AfkBot1" })).toBeVisible();
+  // The died toast goes first, so the row below shows its error toast alone (S131).
+  await expect(page.locator("[data-sonner-toast]")).toHaveCount(0, { timeout: 10_000 });
 
   await push(page, {
     update: "event",
     event: {
       type: "bot_alert",
       bot_id: backend.bot("AfkBot3").id,
-      at: new Date().toISOString(),
+      at: NOW,
       state: "failed",
       reason: "crash_loop",
     },
   });
   const failed = page.locator("[data-sonner-toast][data-type=error]");
   await failed.hover();
-  await bothThemes(page, "Home, its notice and an error toast");
+  await bothThemes(page, "Home, its notice and an error toast", { toasts: 1, keepPointer: true });
   await expect(failed).toBeVisible();
 });
 
@@ -647,7 +655,7 @@ test("a bot's console in every look, and its screen stacked and loading", async 
   const backend = await fakeBackend(context);
   backend.addAccount(OWNER);
   backend.addAccount(OWNER);
-  const at = new Date().toISOString();
+  const at = NOW;
   const line = {
     at,
     direction: "in",
@@ -691,7 +699,7 @@ test("a bot's console in every look, and its screen stacked and loading", async 
 
   await page.setViewportSize({ width: 800, height: 600 });
   await expect(chat.getByText("The server said something")).toBeAttached();
-  await bothThemes(page, "a bot's screen, stacked");
+  await bothThemes(page, "a bot's screen, stacked", { end: true });
   await page.setViewportSize({ width: 1280, height: 720 });
 
   // A bot this sign-in hasn't read yet, its read held.
@@ -710,7 +718,7 @@ test("a bot waiting for its agent, as the Owner and as a Member", async ({ page,
   backend.share(account, MEMBER, "control");
   backend.setBot("AfkBot1", {
     desiredState: "stopped",
-    status: { kind: "unknown", state: "online", agent_last_seen_at: new Date().toISOString() },
+    status: { kind: "unknown", state: "online", agent_last_seen_at: NOW },
     agent: { id: "01900000-0000-7000-8000-000000000301", name: "agent-main", status: "offline" },
   });
   await signIn(page, backend, OWNER);
@@ -778,13 +786,15 @@ test("an account's screen: a row's question, the step-up, and below Manage", asy
     "aria-selected",
     "true",
   );
-  await textsInBothThemes(page, "Share with, its list open and an option active");
+  await textsInBothThemes(page, "Share with, its list open and an option active", {
+    keepFocus: true,
+  });
   await page.keyboard.press("Escape");
   await shareField.fill("");
   await table.getByRole("button", { name: `Revoke ${MEMBER}'s access` }).click();
   await table.getByRole("button", { name: "Revoke", exact: true }).click();
   await expect(main.getByLabel("Current password")).toBeVisible();
-  await bothThemes(page, "an account, a row's step-up");
+  await bothThemes(page, "an account, a row's step-up", { height: 800 });
 
   await page.getByRole("button", { name: "Log out" }).click();
   await logIn(page, MEMBER);
@@ -860,11 +870,13 @@ test("the bot screen and the empty lists of someone with nothing yet", async ({
   await expect(main.getByRole("heading", { name: "Accounts", level: 1 })).toBeVisible();
   const tile = main.getByRole("link", { name: "Offline account" });
   await expect(tile).toBeVisible();
-  await bothThemes(page, "accounts, empty, the tiles");
+  await bothThemes(page, "accounts, empty, the tiles", { small: true });
   await tile.hover();
-  await textsInBothThemes(page, "accounts, empty, a tile hovered");
+  await textsInBothThemes(page, "accounts, empty, a tile hovered", { keepPointer: true });
   await main.getByRole("link", { name: "Microsoft account" }).hover();
-  await textsInBothThemes(page, "accounts, empty, the main tile hovered");
+  await textsInBothThemes(page, "accounts, empty, the main tile hovered", {
+    keepPointer: true,
+  });
   await page.mouse.move(0, 0);
 
   await tile.click();
@@ -882,7 +894,7 @@ test("the bot screen and the empty lists of someone with nothing yet", async ({
   await bothThemes(page, "a link's code");
   await nav(page, "Profile");
   await expect(page.getByRole("group", { name: "Theme" })).toBeVisible();
-  await bothThemes(page, "profile");
+  await bothThemes(page, "profile", { height: 1100 });
 });
 
 test("modes: the list, the editor, a conflict, and a locked one", async ({ page, context }) => {
@@ -893,13 +905,13 @@ test("modes: the list, the editor, a conflict, and a locked one", async ({ page,
 
   await nav(page, "Modes");
   await expect(main.getByRole("link", { name: "New mode" })).toBeVisible();
-  await bothThemes(page, "modes");
+  await bothThemes(page, "modes", { small: true });
 
   await main.getByRole("link", { name: "New mode" }).click();
   await main.getByLabel("Name").fill("Fishing");
   const joining = main.getByRole("group", { name: "When it joins", exact: true });
   await joining.getByRole("button", { name: "Add step" }).click();
-  await bothThemes(page, "the mode editor");
+  await bothThemes(page, "the mode editor", { height: 1000, small: true, smallHeight: 1000 });
   await joining
     .getByRole("group", { name: "Step 1", exact: true })
     .getByLabel("What it does")
@@ -911,7 +923,7 @@ test("modes: the list, the editor, a conflict, and a locked one", async ({ page,
   await main.getByLabel("Name").fill("Mine");
   await save.click();
   await expect(main.getByText(/This mode changed since you opened it/)).toBeVisible();
-  await bothThemes(page, "the mode editor, a conflict");
+  await bothThemes(page, "the mode editor, a conflict", { height: 1400 });
 
   await page.getByRole("button", { name: "Log out" }).click();
   await logIn(page, MEMBER);
@@ -920,7 +932,7 @@ test("modes: the list, the editor, a conflict, and a locked one", async ({ page,
   await nav(page, "Modes");
   await main.getByRole("link", { name: "Open warp" }).click();
   await expect(main.getByRole("button", { name: "Make a copy" })).toBeVisible();
-  await bothThemes(page, "a locked mode, its command cut");
+  await bothThemes(page, "a locked mode, its command cut", { height: 1000 });
 });
 
 test("servers, accounts with their grants, and the Owner's admin screens", async ({
@@ -954,39 +966,39 @@ test("servers, accounts with their grants, and the Owner's admin screens", async
   await page.getByLabel("Server address").fill("MC.example.com");
   await main.getByRole("button", { name: "Save" }).click();
   await expect(page.getByLabel("Current password")).toBeVisible();
-  await bothThemes(page, "a server's settings, the step-up");
+  await bothThemes(page, "a server's settings, the step-up", { height: 1100 });
   await page.getByLabel("Current password").fill(PASSWORD);
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(main.getByRole("heading", { name: "mc.example.com:25565", level: 1 })).toBeVisible();
   await nav(page, "Minecraft servers");
   await expect(main.getByRole("listitem").filter({ hasText: "mc.example.com" })).toBeVisible();
-  await bothThemes(page, "servers");
+  await bothThemes(page, "servers", { small: true });
 
   await nav(page, "Accounts");
   const accountLink = main.getByRole("link", { name: "AfkBot1", exact: true });
   await expect(accountLink).toBeVisible();
-  await bothThemes(page, "accounts");
+  await bothThemes(page, "accounts", { small: true });
   await accountLink.click();
   await expect(main.getByRole("table", { name: "Who has access" })).toBeVisible();
-  await bothThemes(page, "an account and who has access");
+  await bothThemes(page, "an account and who has access", { small: true, smallHeight: 800 });
 
   await nav(page, "Users");
   await expect(main.getByRole("row", { name: new RegExp(MEMBER) })).toBeVisible();
-  await bothThemes(page, "users");
+  await bothThemes(page, "users", { small: true });
   await main
     .getByRole("row", { name: new RegExp(MEMBER) })
     .getByRole("link", { name: /Review grants/ })
     .click();
   await main.getByRole("button", { name: /Show who has access/ }).click();
   await expect(main.getByRole("table", { name: /Who has access to/ })).toBeVisible();
-  await bothThemes(page, "the grants review");
+  await bothThemes(page, "the grants review", { small: true });
 
   await nav(page, "Invites");
   await expect(main.getByRole("heading", { name: "Invites", level: 1 })).toBeVisible();
-  await bothThemes(page, "invites");
+  await bothThemes(page, "invites", { small: true });
   await nav(page, "Agents");
   await expect(main.getByRole("row", { name: /agent-main/ })).toBeVisible();
-  await bothThemes(page, "agents");
+  await bothThemes(page, "agents", { small: true });
   await main
     .getByRole("row", { name: /agent-main/ })
     .getByRole("button", { name: "Disable" })
@@ -995,7 +1007,7 @@ test("servers, accounts with their grants, and the Owner's admin screens", async
   await bothThemes(page, "agents, the question");
   await nav(page, "Audit log");
   await expect(main.getByText(/can't be read/)).toBeVisible();
-  await bothThemes(page, "the audit log, an unreadable row");
+  await bothThemes(page, "the audit log, an unreadable row", { small: true });
 });
 
 test("the banner, the start screen, loading and the error panel", async ({ page, context }) => {
@@ -1023,7 +1035,7 @@ test("the banner, the start screen, loading and the error panel", async ({ page,
   await logOut.hover();
   await expect(page.locator("[data-slot=tooltip]")).toBeVisible();
   // A Tab moves the focus, which closes a tip, so this row holds its texts only.
-  await textsInBothThemes(page, "the collapsed sidebar, a tooltip open");
+  await textsInBothThemes(page, "the collapsed sidebar, a tooltip open", { skip: true });
   await page.mouse.move(600, 600);
   await expect(page.locator("[data-slot=tooltip]")).toHaveCount(0);
   await bothThemes(page, "the collapsed sidebar");

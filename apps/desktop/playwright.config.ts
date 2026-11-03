@@ -2,6 +2,8 @@
 // engine of the app's WebView2, so nothing is downloaded (`channel: "msedge"`; no
 // `playwright install`). `vite preview` serves dist-e2e/, which `just e2e` builds first.
 // The specs are e2e/**/*.spec.ts: the browser specs in e2e/specs, Node-only ones in e2e/unit.
+// Here the sweep's rows measure; the screenshot baselines come only from
+// playwright.shots.config.ts in Playwright's pinned image, so nothing here may write one.
 import { defineConfig, devices } from "@playwright/test";
 
 import { BASE_URL } from "./e2e/base";
@@ -12,6 +14,7 @@ export default defineConfig({
   testDir: "e2e",
   testMatch: "**/*.spec.ts",
   outputDir: "test-results",
+  updateSnapshots: "none",
   forbidOnly: ci,
   retries: 0,
   reporter: ci ? [["list"], ["github"]] : "list",

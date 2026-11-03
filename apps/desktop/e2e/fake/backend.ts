@@ -728,8 +728,11 @@ export class FakeBackend {
   readonly #called = new Map<string, number>();
   readonly #refuseNext = new Map<string, Outcome>();
   readonly #waiting: (() => void)[] = [];
+  /** The time a state's `since` and a sent line's `at` take: fixed in the screenshots (S131). */
+  readonly #now: () => Date;
 
-  constructor() {
+  constructor(options: { readonly now?: () => Date } = {}) {
+    this.#now = options.now ?? (() => new Date());
     this.#addUser(OWNER, "owner", true);
     this.#addUser(NEW_USER, "member", false);
     this.#addUser(MEMBER, "member", true);
@@ -1829,7 +1832,7 @@ export class FakeBackend {
     } else if (bot.serverAddress === undefined) {
       bot.status = { kind: "unplaced", why: "no_server", ...resting };
     } else {
-      bot.status = { kind: "awaiting_report", since: new Date().toISOString() };
+      bot.status = { kind: "awaiting_report", since: this.#now().toISOString() };
     }
   }
 
@@ -1892,7 +1895,7 @@ export class FakeBackend {
     }
     const kept: ChatLine = {
       id: this.#nextLine(),
-      at: new Date().toISOString(),
+      at: this.#now().toISOString(),
       direction: "out",
       kind: "user",
       text: line,

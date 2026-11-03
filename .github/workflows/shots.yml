@@ -1,0 +1,53 @@
+# The screenshot baselines (`just shots`; ADR-0020, U97, U118, S130): the theme sweep's rows
+# shot in Playwright's pinned Linux image and compared to the committed PNGs, to the pixel. It
+# runs on the pull requests that touch what the image builds or renders, on pushes to main and on
+# demand, and it is never a required check, so a pull request it doesn't run on is never blocked.
+# A failure annotates each shot that differs and lists the diffs in the job's summary; `just
+# shots` makes the same images on a PC with Docker. Third-party actions are pinned to full commit
+# SHAs (version in the comment), as in ci.yml.
+name: Screenshots
+
+on:
+  pull_request:
+    paths:
+      - "packages/**"
+      - "apps/desktop/**"
+      - "deploy/docker/shots.Dockerfile"
+      - "deploy/docker/shots.Dockerfile.dockerignore"
+      - "scripts/shots.mjs"
+      - ".github/workflows/shots.yml"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "patches/**"
+      - "tsconfig.base.json"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shots-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  JUST_VERSION: "1.58.0"
+
+jobs:
+  shots:
+    name: shots
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+        with:
+          tool: just@${{ env.JUST_VERSION }}
+      - run: just shots

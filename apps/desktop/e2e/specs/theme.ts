@@ -1,4 +1,5 @@
-// What the theme's specs do on a page (Plan.md P11.10; ADR-0020, S96).
+// What the theme's specs do on a page (Plan.md P11.10; ADR-0020, S96). A sweep row measures in Edge
+// and, in the screenshots' project, is its own baseline instead (U125, R226).
 import type { Page } from "@playwright/test";
 
 import {
@@ -10,7 +11,11 @@ import {
   type TabStep,
   type Walked,
 } from "../contrast";
-import { expect } from "../fixtures";
+import { expect, shooting } from "../fixtures";
+import { inScheme, type Scheme } from "./scheme";
+import { type ShotOptions, shoot } from "./shoot";
+
+export { inScheme, type Scheme } from "./scheme";
 
 /** WCAG AA, which every text holds in both themes (ADR-0020, S97, S108). */
 export const AA: Floors = { normal: 4.5, large: 3 };
@@ -54,26 +59,6 @@ export function logoParts(page: Page): Promise<readonly LogoPart[]> {
   return asked<readonly LogoPart[]>(page, { kind: "logo" });
 }
 
-/** What a theme is called in the media query and in `<html>`'s class. */
-export type Scheme = "light" | "dark";
-
-/** Waits until Windows' setting says `scheme` and `<html>` follows it, animations finished. */
-export async function inScheme(page: Page, scheme: Scheme): Promise<void> {
-  await page.emulateMedia({ colorScheme: scheme });
-  await expect(page.locator("html")).toHaveClass(new RegExp(`\\b${scheme}\\b`));
-  await page.evaluate(() =>
-    Promise.all(
-      document.getAnimations().flatMap((animation) => {
-        if (animation.effect?.getComputedTiming().endTime === Number.POSITIVE_INFINITY) {
-          return [];
-        }
-        animation.finish();
-        return [animation.finished];
-      }),
-    ),
-  );
-}
-
 /**
  * Holds what's on the page to AA in the theme it's in, its texts and each focus stop, naming `row`
  * when it fails.
@@ -89,8 +74,19 @@ export async function measured(page: Page, row: string, scheme: Scheme): Promise
   expect(colorScheme, `${row} in ${scheme}`).toBe(scheme);
 }
 
-/** Only the texts on the page, in both themes: for a row a Tab would change, as it should. */
-export async function textsInBothThemes(page: Page, row: string): Promise<void> {
+/**
+ * Only the texts on the page, in both themes: for a row a Tab would change, as it should. In the
+ * screenshots' project, the row's baselines instead, as `shot` asks.
+ */
+export async function textsInBothThemes(
+  page: Page,
+  row: string,
+  shot: ShotOptions = {},
+): Promise<void> {
+  if (shooting()) {
+    await shoot(page, row, shot);
+    return;
+  }
   for (const scheme of ["dark", "light"] as const) {
     await inScheme(page, scheme);
     const found = await walked(page, AA);
@@ -129,8 +125,15 @@ export async function selectsInTokens(page: Page, row: string, scheme: Scheme): 
   return found.length;
 }
 
-/** What's on the page, in both themes, flipped in place. */
-export async function bothThemes(page: Page, row: string): Promise<void> {
+/**
+ * What's on the page, in both themes, flipped in place. In the screenshots' project, the row's
+ * baselines instead, as `shot` asks.
+ */
+export async function bothThemes(page: Page, row: string, shot: ShotOptions = {}): Promise<void> {
+  if (shooting()) {
+    await shoot(page, row, shot);
+    return;
+  }
   for (const scheme of ["dark", "light"] as const) {
     await inScheme(page, scheme);
     await measured(page, row, scheme);
