@@ -89,7 +89,11 @@ for (const [width, rail] of [
     await page.setViewportSize({ width: 800, height: 600 });
     await expect.poll(() => sideBySide(page)).toBe(false);
     const column = page.locator("[data-slot=content]");
-    expect(await column.evaluate((held) => held.offsetWidth - held.clientWidth)).toBeGreaterThan(0);
+    expect(
+      await column.evaluate((held) =>
+        held instanceof HTMLElement ? held.offsetWidth - held.clientWidth : 0,
+      ),
+    ).toBeGreaterThan(0);
 
     await page.setViewportSize({ width, height: 600 });
 
