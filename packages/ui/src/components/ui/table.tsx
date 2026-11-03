@@ -12,15 +12,34 @@ import type * as React from "react";
 
 /**
  * Below which width of the table's own box a column drops. A container query, so the sidebar's
- * jump counts: 810 px of box is U91's 1050 px window with the wide sidebar and its padding. The query
- * reads the content box, inside the container's 1 px borders, so each value is 2 px less than its
- * name. Give a head and its cells the same value. Never drop the first column, a row's controls or
- * anything a row is found by: a row's accessible name comes from the cells that stay.
+ * jump counts. The query reads the content box, inside the container's 1 px borders, so each value
+ * is 2 px less than its name. Give a head and its cells the same value. Never drop the first column,
+ * a row's controls or anything a row is found by: a row's accessible name comes from the cells that
+ * stay.
+ *
+ * A full-width screen's box (`p-4`) is the window less 96 px on the rail, under 1056 px, and less
+ * 240 px beside the wide sidebar, both less a scrollbar, so it shrinks by 144 px at 1056. So that
+ * widening the window never shows a column, hides it and shows it again, a value is either at most
+ * 797 (the box at 1056 px with a 17 px scrollbar) or over 959 (the box at 1055 px on the rail with
+ * none) (ADR-0020, R228); `tables.spec.ts` holds every table to that.
  */
-export type TableDrop = "under-810" | "under-620" | "under-520";
+export type TableDrop =
+  | "under-1180"
+  | "under-1100"
+  | "under-1040"
+  | "under-960"
+  | "under-790"
+  | "under-720"
+  | "under-620"
+  | "under-520";
 
 const DROP: Record<TableDrop, string> = {
-  "under-810": "@max-[50.5rem]/table:hidden",
+  "under-1180": "@max-[73.625rem]/table:hidden",
+  "under-1100": "@max-[68.625rem]/table:hidden",
+  "under-1040": "@max-[64.875rem]/table:hidden",
+  "under-960": "@max-[59.875rem]/table:hidden",
+  "under-790": "@max-[49.25rem]/table:hidden",
+  "under-720": "@max-[44.875rem]/table:hidden",
   "under-620": "@max-[38.625rem]/table:hidden",
   "under-520": "@max-[32.375rem]/table:hidden",
 };

@@ -1,13 +1,15 @@
-// The Owner's grants review of one user (Plan.md P11.9; ADR-0018, ADR-0020, U79, S50, S90, R178):
-// the grants they hold first, dormant ones marked, computed by the server; then their accounts a
-// grant shares, each account's grants read only when it's opened, since grants per account have
-// no cap, and dormant ones marked there too. Every revoke goes through the accounts' own route, asks first, and takes a step-up when
-// the server wants one (useStepUpAction). The users' screen links here only for whom the Owner may
-// review; anyone else who got here reads the server's refusal in place of each list.
+// The Owner's grants review of one user (Plan.md P11.9, P11.11; ADR-0018, ADR-0020, U79, U124, S50,
+// S90, R178): the grants they hold, dormant ones marked, computed by the server, beside their
+// accounts a grant shares, each account's grants read only when it's opened, since grants per
+// account have no cap, and dormant ones marked there too. Side by side on the bot screen's switch,
+// the held grants first when stacked; each table drops When, then Given by, in a small box (U122).
+// Every revoke goes through the accounts' own route, asks first, and takes a step-up when the server
+// wants one (useStepUpAction). The users' screen links here only for whom the Owner may review;
+// anyone else who got here reads the server's refusal in place of each list.
 // Nothing here carries a secret but the step-up's password, which StepUpForm holds. Every answer
 // only reads the lists again (ADR-0020, S87).
 import { useQueryClient } from "@tanstack/react-query";
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, type ReactNode, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { toApiError } from "../../../api/ApiError";
@@ -21,28 +23,56 @@ import {
   useSharedAccounts,
   useUserNames,
 } from "../../../api/queries";
+import { ScreenState } from "../../../components/ScreenState";
 import { Alert, AlertDescription } from "../../../components/ui/alert";
 import { Button } from "../../../components/ui/button";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+  TableSpanRow,
+} from "../../../components/ui/table";
 import type { AccountResponse } from "../../../generated/AccountResponse";
 import type { GrantResponse } from "../../../generated/GrantResponse";
 import type { HeldGrantResponse } from "../../../generated/HeldGrantResponse";
 import { formatTime } from "../../../lib/time";
-import { accessLabel, NOBODY_ELSE, revoked, revokeQuestion } from "../../accounts/texts";
+import {
+  accessLabel,
+  LOADING_ACCESS,
+  NOBODY_ELSE,
+  revoked,
+  revokeQuestion,
+} from "../../accounts/texts";
 import { useStepUpAction } from "../hooks/useStepUpAction";
 import { StepUpPrompt } from "./StepUpPrompt";
 
 const HELD_HEADING = "Grants they hold";
-const HELD_NONE = "They hold no grants.";
+const HELD_NONE = "No grants held.";
+const LOADING_HELD = "Loading grants…";
 const DORMANT =
-  "Dormant: their role already gives them Manage here. It counts again if they become a Member or the account's owner becomes an Admin.";
+  "Dormant: their role gives Manage here. Counts again if they become a Member or the owner an Admin.";
 const SHARED_HEADING = "Their accounts others can use";
-const SHARED_NONE = "No grant shares their accounts.";
+const SHARED_NONE = "None shared.";
+const LOADING_SHARED = "Loading accounts…";
 const SHOW_ACCESS = "Show who has access";
 const HIDE_ACCESS = "Hide";
 
+/** Why the held grants couldn't be read. */
+function heldFailed(why: string): string {
+  return `Couldn't load grants: ${why}`;
+}
+
+/** Why the shared accounts couldn't be read. */
+function sharedFailed(why: string): string {
+  return `Couldn't load accounts: ${why}`;
+}
+
 /** The mark on a grant on the reviewed user's account: "their" would read as the reviewed user. */
 function dormantOn(who: string): string {
-  return `Dormant: ${who}'s role already gives them Manage here. It counts again if ${who} becomes a Member or the account's owner becomes an Admin.`;
+  return `Dormant: ${who}'s role gives Manage here. Counts again if ${who} becomes a Member or the owner an Admin.`;
 }
 
 /** The screen's writes, as its rows take them. */
@@ -77,8 +107,8 @@ function RevokeExtras({
     return null;
   }
   return (
-    <tr>
-      <td colSpan={columns} className="pb-3">
+    <TableSpanRow span={columns} className="pb-3">
+      <div className="flex flex-col gap-2">
         {asking ? (
           <Alert>
             <AlertDescription className="flex flex-col gap-2 text-foreground">
@@ -107,8 +137,8 @@ function RevokeExtras({
             {failure}
           </p>
         )}
-      </td>
-    </tr>
+      </div>
+    </TableSpanRow>
   );
 }
 
@@ -128,7 +158,7 @@ function RevokeButton({
     <Button
       type="button"
       size="sm"
-      variant="outline"
+      variant="ghost"
       aria-label={`Revoke ${who}'s access to ${account}`}
       disabled={disabled}
       onClick={onClick}
@@ -154,26 +184,28 @@ function HeldRow({
   const [asking, setAsking] = useState(false);
   return (
     <Fragment>
-      <tr className="border-t align-top">
-        <td className="py-2 pr-3">
-          {grant.account.name}
+      <TableRow>
+        <TableCell>
+          <span className="font-mono break-all">{grant.account.name}</span>
           {grant.dormant ? (
             <span className="block text-xs text-muted-foreground">{DORMANT}</span>
           ) : null}
-        </td>
-        <td className="py-2 pr-3">{grant.owner.username}</td>
-        <td className="py-2 pr-3">{accessLabel(grant.level)}</td>
-        <td className="py-2 pr-3">{grant.granted_by.username}</td>
-        <td className="py-2 pr-3">{formatTime(grant.granted_at)}</td>
-        <td className="py-2 text-right">
+        </TableCell>
+        <TableCell className="font-mono break-all">{grant.owner.username}</TableCell>
+        <TableCell>{accessLabel(grant.level)}</TableCell>
+        <TableCell drop="under-520" className="font-mono break-all">
+          {grant.granted_by.username}
+        </TableCell>
+        <TableCell drop="under-620">{formatTime(grant.granted_at)}</TableCell>
+        <TableCell className="text-right">
           <RevokeButton
             who={who}
             account={grant.account.name}
             disabled={revoking.busy}
             onClick={() => setAsking(true)}
           />
-        </td>
-      </tr>
+        </TableCell>
+      </TableRow>
       <RevokeExtras
         revoking={revoking}
         rowKey={key}
@@ -190,38 +222,51 @@ function HeldRow({
   );
 }
 
+/** One of the review's two sections: its heading in a box, then its list. */
+function Section({ id, heading, children }: { id: string; heading: string; children: ReactNode }) {
+  return (
+    <section
+      aria-labelledby={id}
+      className="flex min-w-0 flex-col gap-3 rounded-lg border bg-card p-3"
+    >
+      <h2 id={id} className="text-base font-semibold">
+        {heading}
+      </h2>
+      {children}
+    </section>
+  );
+}
+
 /** The grants they hold. */
 function HeldSection({ id, who, revoking }: { id: string; who: string; revoking: Revoking }) {
   const held = useHeldGrants(id);
   const rows = held.data?.pages.flatMap((page) => page.items) ?? [];
   return (
-    <section aria-labelledby="held-heading" className="flex flex-col gap-3">
-      <h2 id="held-heading" className="text-lg font-semibold">
-        {HELD_HEADING}
-      </h2>
+    <Section id="held-heading" heading={HELD_HEADING}>
       {held.isError ? (
-        <p role="alert" className="text-sm text-destructive">
-          {describeError(toApiError(held.error).error)}
-        </p>
+        <ScreenState kind="error">
+          {heldFailed(describeError(toApiError(held.error).error))}
+        </ScreenState>
       ) : null}
+      {held.isPending ? <ScreenState kind="loading">{LOADING_HELD}</ScreenState> : null}
       {held.isSuccess && rows.length === 0 ? (
-        <p className="text-muted-foreground">{HELD_NONE}</p>
+        <ScreenState kind="empty">{HELD_NONE}</ScreenState>
       ) : null}
       {rows.length === 0 ? null : (
-        <table aria-label={HELD_HEADING} className="w-full text-left text-sm">
-          <thead className="text-muted-foreground">
-            <tr>
-              <th className="py-1 pr-3 font-medium">Account</th>
-              <th className="py-1 pr-3 font-medium">Owner</th>
-              <th className="py-1 pr-3 font-medium">Access</th>
-              <th className="py-1 pr-3 font-medium">Given by</th>
-              <th className="py-1 pr-3 font-medium">When</th>
-              <th className="py-1 font-medium">
+        <Table aria-label={HELD_HEADING}>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Account</TableHead>
+              <TableHead>Owner</TableHead>
+              <TableHead>Access</TableHead>
+              <TableHead drop="under-520">Given by</TableHead>
+              <TableHead drop="under-620">When</TableHead>
+              <TableHead>
                 <span className="sr-only">Actions</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {rows.map((grant) => (
               <HeldRow
                 key={grant.account.id}
@@ -231,8 +276,8 @@ function HeldSection({ id, who, revoking }: { id: string; who: string; revoking:
                 revoking={revoking}
               />
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       )}
       {held.hasNextPage ? (
         <Button
@@ -245,7 +290,7 @@ function HeldSection({ id, who, revoking }: { id: string; who: string; revoking:
           Show more
         </Button>
       ) : null}
-    </section>
+    </Section>
   );
 }
 
@@ -264,25 +309,27 @@ function SharedGrantRow({
   const [asking, setAsking] = useState(false);
   return (
     <Fragment>
-      <tr className="border-t align-top">
-        <td className="py-2 pr-3">
-          {who}
+      <TableRow>
+        <TableCell>
+          <span className="font-mono break-all">{who}</span>
           {grant.dormant === true ? (
             <span className="block text-xs text-muted-foreground">{dormantOn(who)}</span>
           ) : null}
-        </td>
-        <td className="py-2 pr-3">{accessLabel(grant.level)}</td>
-        <td className="py-2 pr-3">{grant.granted_by.username}</td>
-        <td className="py-2 pr-3">{formatTime(grant.granted_at)}</td>
-        <td className="py-2 text-right">
+        </TableCell>
+        <TableCell>{accessLabel(grant.level)}</TableCell>
+        <TableCell drop="under-520" className="font-mono break-all">
+          {grant.granted_by.username}
+        </TableCell>
+        <TableCell drop="under-620">{formatTime(grant.granted_at)}</TableCell>
+        <TableCell className="text-right">
           <RevokeButton
             who={who}
             account={account.name}
             disabled={revoking.busy}
             onClick={() => setAsking(true)}
           />
-        </td>
-      </tr>
+        </TableCell>
+      </TableRow>
       <RevokeExtras
         revoking={revoking}
         rowKey={key}
@@ -304,29 +351,28 @@ function SharedGrants({ account, revoking }: { account: AccountResponse; revokin
   const grants = useGrants(account.id, true);
   const rows = grants.data?.pages.flatMap((page) => page.items) ?? [];
   return (
-    <div className="flex flex-col gap-2 pl-4">
+    <div className="flex flex-col gap-2">
       {grants.isError ? (
-        <p role="alert" className="text-sm text-destructive">
-          {describeError(toApiError(grants.error).error)}
-        </p>
+        <ScreenState kind="error">{describeError(toApiError(grants.error).error)}</ScreenState>
       ) : null}
+      {grants.isPending ? <ScreenState kind="loading">{LOADING_ACCESS}</ScreenState> : null}
       {grants.isSuccess && rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{NOBODY_ELSE}</p>
+        <ScreenState kind="empty">{NOBODY_ELSE}</ScreenState>
       ) : null}
       {rows.length === 0 ? null : (
-        <table aria-label={`Who has access to ${account.name}`} className="text-left text-sm">
-          <thead className="text-muted-foreground">
-            <tr>
-              <th className="py-1 pr-3 font-medium">User</th>
-              <th className="py-1 pr-3 font-medium">Access</th>
-              <th className="py-1 pr-3 font-medium">Given by</th>
-              <th className="py-1 pr-3 font-medium">When</th>
-              <th className="py-1 font-medium">
+        <Table aria-label={`Who has access to ${account.name}`}>
+          <TableHeader>
+            <TableRow>
+              <TableHead>User</TableHead>
+              <TableHead>Access</TableHead>
+              <TableHead drop="under-520">Given by</TableHead>
+              <TableHead drop="under-620">When</TableHead>
+              <TableHead>
                 <span className="sr-only">Actions</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {rows.map((grant) => (
               <SharedGrantRow
                 key={grant.user.id}
@@ -335,8 +381,8 @@ function SharedGrants({ account, revoking }: { account: AccountResponse; revokin
                 revoking={revoking}
               />
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       )}
       {grants.hasNextPage ? (
         <Button
@@ -357,13 +403,13 @@ function SharedGrants({ account, revoking }: { account: AccountResponse; revokin
 function SharedAccount({ account, revoking }: { account: AccountResponse; revoking: Revoking }) {
   const [open, setOpen] = useState(false);
   return (
-    <li className="flex flex-col gap-2 border-t py-2">
+    <li className="flex flex-col gap-2 border-t py-2 first:border-t-0 first:pt-0">
       <div className="flex items-center justify-between gap-2 text-sm">
-        <span>{account.name}</span>
+        <span className="min-w-0 font-mono break-all">{account.name}</span>
         <Button
           type="button"
           size="sm"
-          variant="outline"
+          variant="ghost"
           aria-label={`${open ? "Hide" : "Show"} who has access to ${account.name}`}
           onClick={() => setOpen(!open)}
         >
@@ -380,17 +426,15 @@ function SharedSection({ id, revoking }: { id: string; revoking: Revoking }) {
   const shared = useSharedAccounts(id);
   const rows = shared.data?.pages.flatMap((page) => page.items) ?? [];
   return (
-    <section aria-labelledby="shared-heading" className="flex flex-col gap-3">
-      <h2 id="shared-heading" className="text-lg font-semibold">
-        {SHARED_HEADING}
-      </h2>
+    <Section id="shared-heading" heading={SHARED_HEADING}>
       {shared.isError ? (
-        <p role="alert" className="text-sm text-destructive">
-          {describeError(toApiError(shared.error).error)}
-        </p>
+        <ScreenState kind="error">
+          {sharedFailed(describeError(toApiError(shared.error).error))}
+        </ScreenState>
       ) : null}
+      {shared.isPending ? <ScreenState kind="loading">{LOADING_SHARED}</ScreenState> : null}
       {shared.isSuccess && rows.length === 0 ? (
-        <p className="text-muted-foreground">{SHARED_NONE}</p>
+        <ScreenState kind="empty">{SHARED_NONE}</ScreenState>
       ) : null}
       {rows.length === 0 ? null : (
         <ul className="flex flex-col">
@@ -410,7 +454,7 @@ function SharedSection({ id, revoking }: { id: string; revoking: Revoking }) {
           Show more
         </Button>
       ) : null}
-    </section>
+    </Section>
   );
 }
 
@@ -443,10 +487,15 @@ export function GrantsReviewScreen({ id }: { id: string }) {
     },
   };
   return (
-    <main className="flex max-w-4xl flex-col gap-6 p-6">
-      <h1 className="text-2xl font-semibold tracking-tight break-all">{`Grants of ${who}`}</h1>
-      <HeldSection id={id} who={who} revoking={revoking} />
-      <SharedSection id={id} revoking={revoking} />
+    <main className="flex flex-1 flex-col gap-4 p-4">
+      <h1 className="text-lg font-semibold tracking-tight break-all">{`Grants of ${who}`}</h1>
+      <div
+        data-slot="review-sections"
+        className="grid items-start gap-3 @min-[53rem]/content:grid-cols-2"
+      >
+        <HeldSection id={id} who={who} revoking={revoking} />
+        <SharedSection id={id} revoking={revoking} />
+      </div>
     </main>
   );
 }

@@ -85,9 +85,9 @@ describe("the grants review", () => {
   it("says when there's nothing to review", async () => {
     await atReview();
 
-    expect((await section("Grants they hold")).getByText("They hold no grants.")).toBeDefined();
+    expect((await section("Grants they hold")).getByText("No grants held.")).toBeDefined();
     expect(
-      (await section("Their accounts others can use")).getByText("No grant shares their accounts."),
+      (await section("Their accounts others can use")).getByText("None shared."),
     ).toBeDefined();
   });
 
@@ -108,7 +108,7 @@ describe("the grants review", () => {
     expect(dormant.getByText("Manage")).toBeDefined();
     expect(
       dormant.getByText(
-        "Dormant: their role already gives them Manage here. It counts again if they become a Member or the account's owner becomes an Admin.",
+        "Dormant: their role gives Manage here. Counts again if they become a Member or the owner an Admin.",
       ),
     ).toBeDefined();
   });
@@ -132,7 +132,7 @@ describe("the grants review", () => {
     const carol = within(await shared.findByRole("row", { name: /carol/ }));
     expect(
       carol.getByText(
-        "Dormant: carol's role already gives them Manage here. It counts again if carol becomes a Member or the account's owner becomes an Admin.",
+        "Dormant: carol's role gives Manage here. Counts again if carol becomes a Member or the owner an Admin.",
       ),
     ).toBeDefined();
     const dave = within(shared.getByRole("row", { name: /dave/ }));
@@ -195,6 +195,49 @@ describe("the grants review", () => {
     expect(sharedAccounts).toHaveBeenLastCalledWith(REVIEWED, accountId(4), undefined);
   });
 
+  it("puts its two sections side by side on the bot screen's switch (U124)", async () => {
+    await atReview();
+    await section("Grants they hold");
+
+    const both = document.querySelector("[data-slot=review-sections]");
+    expect(both?.className).toContain("@min-[53rem]/content:grid-cols-2");
+    expect(both?.children).toHaveLength(2);
+  });
+
+  it("says each list loads, as a status", async () => {
+    await atReview({
+      userGrants: () => new Promise(() => {}),
+      sharedAccounts: () => new Promise(() => {}),
+    });
+
+    expect(
+      (await section("Grants they hold")).getByText("Loading grants…").getAttribute("role"),
+    ).toBe("status");
+    expect(
+      (await section("Their accounts others can use"))
+        .getByText("Loading accounts…")
+        .getAttribute("role"),
+    ).toBe("status");
+  });
+
+  it("says which list couldn't be read", async () => {
+    await atReview({
+      userGrants: async () => {
+        throw refusal(500, "internal");
+      },
+      sharedAccounts: async () => {
+        throw refusal(500, "internal");
+      },
+    });
+
+    expect((await section("Grants they hold")).getByRole("alert").textContent).toMatch(
+      /^Couldn't load grants: /,
+    );
+    expect((await section("Their accounts others can use")).getByRole("alert").textContent).toMatch(
+      /^Couldn't load accounts: /,
+    );
+  });
+
   it("shows the server's refusal where a list can't be read", async () => {
     await atReview({
       userGrants: async () => {
@@ -245,7 +288,7 @@ describe("the grants review", () => {
 
       expect(await screen.findByText("bob no longer has access.")).toBeDefined();
       expect(revokeGrant).toHaveBeenLastCalledWith(accountId(1), REVIEWED);
-      expect(await heldGrants.findByText("They hold no grants.")).toBeDefined();
+      expect(await heldGrants.findByText("No grants held.")).toBeDefined();
     });
 
     it("sends nothing on Cancel", async () => {
@@ -283,7 +326,7 @@ describe("the grants review", () => {
       await app.user.click(shared.getByRole("button", { name: "Revoke" }));
 
       expect(revokeGrant).toHaveBeenCalledWith(accountId(1), CAROL.id);
-      expect(await shared.findByText("No grant shares their accounts.")).toBeDefined();
+      expect(await shared.findByText("None shared.")).toBeDefined();
     });
 
     it("takes a revoked row away when the account keeps a second grantee", async () => {
@@ -413,11 +456,9 @@ describe("the users' screen's way to the review", () => {
       screen.getAllByRole("button", { name: "Make admin" }).at(-1) as HTMLElement,
     );
 
-    expect(
-      await screen.findByText("bob is now an Admin. Grants made before this stay."),
-    ).toBeDefined();
+    expect(await screen.findByText("bob now an Admin. Earlier grants stay.")).toBeDefined();
     expect(app.path()).toBe("/admin/users");
-    const offer = screen.getByText("bob is now an Admin. Grants made before this stay.")
+    const offer = screen.getByText("bob now an Admin. Earlier grants stay.")
       .parentElement as HTMLElement;
     await app.user.click(within(offer).getByRole("link", { name: "Review grants" }));
     expect(await screen.findByRole("heading", { name: "Grants of bob", level: 1 })).toBeDefined();
@@ -443,9 +484,7 @@ describe("the users' screen's way to the review", () => {
       screen.getAllByRole("button", { name: "Make member" }).at(-1) as HTMLElement,
     );
 
-    expect(
-      await screen.findByText("bob is now a Member. Grants they hold count again."),
-    ).toBeDefined();
+    expect(await screen.findByText("bob now a Member. Their grants count again.")).toBeDefined();
   });
 
   it("offers nothing after disabling someone", async () => {
@@ -455,7 +494,7 @@ describe("the users' screen's way to the review", () => {
     await app.user.click(row.getByRole("button", { name: "Disable" }));
     await app.user.click(screen.getAllByRole("button", { name: "Disable" }).at(-1) as HTMLElement);
 
-    await screen.findByText("bob is disabled.");
+    await screen.findByText("bob disabled.");
     expect(screen.queryByText(/Grants/)).toBeNull();
   });
 });

@@ -1072,6 +1072,13 @@ export class FakeBackend {
     return this.#addUser(username, "admin", true).id;
   }
 
+  /** A Member named `username`, never logged in and disabled if asked: for the long lists (L4). */
+  addMember(username: string, options: { readonly disabled?: boolean } = {}): string {
+    const user = this.#addUser(username, "member", false);
+    user.disabled = options.disabled === true;
+    return user.id;
+  }
+
   /** The ID of the user named `username`. */
   userId(username: string): string {
     return this.#user(username).id;

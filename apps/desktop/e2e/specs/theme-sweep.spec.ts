@@ -1035,6 +1035,62 @@ test("servers: loading, failed, a long list, and sixteen texts with eight format
   await page.setViewportSize({ width: 1280, height: 720 });
 });
 
+test("users and the grants review: loading, failed, and long lists", async ({ page, context }) => {
+  const backend = await fakeBackend(context);
+  const main = page.getByRole("main");
+  await signIn(page, backend, OWNER);
+  backend.hold("users");
+  await nav(page, "Users");
+  await expect(main.getByText("Loading users…")).toBeVisible();
+  await bothThemes(page, "users, loading");
+  backend.release();
+  await expect(main.getByRole("table", { name: "Users" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Log out" }).click();
+  backend.refuse("users", { status: 500, code: "internal" });
+  await signIn(page, backend, OWNER);
+  await nav(page, "Users");
+  await expect(main.getByText(/Couldn't load users/)).toBeVisible();
+  await bothThemes(page, "users, failed");
+  backend.refuse("users", null);
+
+  for (let n = 1; n <= 30; n += 1) {
+    backend.addMember(`longusername_with_32_characte${String(n).padStart(3, "0")}`, {
+      disabled: n % 3 === 0,
+    });
+  }
+  for (let n = 1; n <= 20; n += 1) {
+    backend.share(backend.addAccount(OWNER), MEMBER, "control");
+  }
+  const theirs = backend.addAccount(MEMBER);
+  for (let n = 1; n <= 20; n += 1) {
+    backend.share(theirs, `longusername_with_32_characte${String(n).padStart(3, "0")}`, "view");
+  }
+  await page.getByRole("button", { name: "Log out" }).click();
+  await signIn(page, backend, OWNER);
+  await nav(page, "Users");
+  await expect(main.getByRole("row", { name: /longusername_with_32_characte030/ })).toBeVisible();
+  await bothThemes(page, "users, a long list", { height: 1600, small: true, smallHeight: 3000 });
+
+  backend.hold("user_grants");
+  backend.hold("shared_accounts");
+  await main
+    .getByRole("row", { name: new RegExp(MEMBER) })
+    .getByRole("link", { name: /Review grants/ })
+    .click();
+  await expect(main.getByText("Loading grants…")).toBeVisible();
+  await bothThemes(page, "the grants review, loading");
+  backend.release();
+  await expect(main.getByRole("table", { name: "Grants they hold" })).toBeVisible();
+  await main.getByRole("button", { name: /Show who has access/ }).click();
+  await expect(main.getByRole("table", { name: /Who has access to/ })).toBeVisible();
+  await bothThemes(page, "the grants review, long lists", {
+    height: 1100,
+    small: true,
+    smallHeight: 3000,
+  });
+});
+
 test("servers, accounts with their grants, and the Owner's admin screens", async ({
   page,
   context,

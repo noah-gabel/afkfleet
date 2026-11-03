@@ -130,6 +130,46 @@ describe("the users screen", () => {
     expect(row("afkadmin").getByText("Active")).toBeDefined();
   });
 
+  it("says what 2FA not set up means, tersely", async () => {
+    await atUsers();
+
+    expect(
+      screen.getByText(
+        "2FA not set up: registered, never logged in. Whoever logs in first with its password sets it up. Disable it if your invitee doesn't finish.",
+      ),
+    ).toBeDefined();
+  });
+
+  it("shows each status as a status line, Disabled as a warning (R229)", async () => {
+    await atUsers();
+
+    const line = (username: string, word: string) =>
+      row(username).getByText(word).closest("[data-slot=status-line]");
+    expect(line("afkbot4", "Disabled")?.className).toContain("text-warning");
+    expect(line("afkadmin", "Active")?.className).toContain("text-muted-foreground");
+  });
+
+  it("says so while the users load, as a status", async () => {
+    await atScreen("/admin/users", { users: () => new Promise(() => {}) }, { user: actor() });
+
+    expect((await screen.findByText("Loading users…")).getAttribute("role")).toBe("status");
+  });
+
+  it("says why the users couldn't be read", async () => {
+    await atScreen(
+      "/admin/users",
+      {
+        users: async () => {
+          throw refusal(500, "internal");
+        },
+      },
+      { user: actor() },
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/^Couldn't load users: refused: internal/);
+  });
+
   it("offers the Owner a role change and disabling on Members and Admins, nothing on themselves", async () => {
     await atUsers();
 
@@ -168,7 +208,7 @@ describe("the users screen", () => {
     const app = await atUsers();
 
     await app.user.click(row("afkbot3").getByRole("button", { name: "Make admin" }));
-    expect(screen.getByText("Making afkbot3 an Admin logs them out everywhere.")).toBeDefined();
+    expect(screen.getByText("Make afkbot3 an Admin? Logs them out everywhere.")).toBeDefined();
     await app.user.click(screen.getByRole("button", { name: "Cancel" }));
 
     expect(patches(app)).toEqual([]);
@@ -182,7 +222,7 @@ describe("the users screen", () => {
       within(screen.getByRole("alert")).getByRole("button", { name: "Make admin" }),
     );
 
-    expect(await screen.findByText("afkbot3 is now an Admin.")).toBeDefined();
+    expect(await screen.findByText("afkbot3 now an Admin.")).toBeDefined();
     expect(patches(app)).toEqual([[MEMBER.id, { role: "admin" }]]);
     await waitFor(() => expect(row("afkbot3").getByText("Admin")).toBeDefined());
   });
@@ -194,7 +234,7 @@ describe("the users screen", () => {
 
     expect(
       screen.getByText(
-        "Making afkadmin a Member logs them out everywhere and revokes their pending invites.",
+        "Make afkadmin a Member? Logs them out everywhere and revokes their pending invites.",
       ),
     ).toBeDefined();
   });
@@ -205,14 +245,14 @@ describe("the users screen", () => {
     await app.user.click(row("afkbot3").getByRole("button", { name: "Disable" }));
     expect(
       screen.getByText(
-        "Disabling afkbot3 logs them out everywhere and revokes their pending invites. They can't log in until they're enabled again.",
+        "Disable afkbot3? Logs them out everywhere and revokes their pending invites. No login until enabled again.",
       ),
     ).toBeDefined();
     await app.user.click(
       within(screen.getByRole("alert")).getByRole("button", { name: "Disable" }),
     );
 
-    expect(await screen.findByText("afkbot3 is disabled.")).toBeDefined();
+    expect(await screen.findByText("afkbot3 disabled.")).toBeDefined();
     expect(patches(app)).toEqual([[MEMBER.id, { disabled: true }]]);
   });
 
@@ -221,7 +261,7 @@ describe("the users screen", () => {
 
     await app.user.click(row("afkbot4").getByRole("button", { name: "Enable" }));
 
-    expect(await screen.findByText("afkbot4 is enabled.")).toBeDefined();
+    expect(await screen.findByText("afkbot4 enabled.")).toBeDefined();
     expect(patches(app)).toEqual([[GONE.id, { disabled: false }]]);
   });
 
@@ -259,7 +299,7 @@ describe("a change that needs a step-up", () => {
     await app.user.type(prompt, PASSWORD);
     await app.user.click(screen.getByRole("button", { name: "Continue" }));
 
-    expect(await screen.findByText("afkbot4 is enabled.")).toBeDefined();
+    expect(await screen.findByText("afkbot4 enabled.")).toBeDefined();
     expect(app.fake.calls.find((call) => call.method === "stepUp")?.args).toEqual([
       { password: PASSWORD },
     ]);
@@ -275,14 +315,14 @@ describe("a change that needs a step-up", () => {
     await app.user.click(row("afkbot4").getByRole("button", { name: "Enable" }));
     await app.user.type(await screen.findByLabelText("Current password"), PASSWORD);
     await app.user.click(screen.getByRole("button", { name: "Continue" }));
-    await screen.findByText("afkbot4 is enabled.");
+    await screen.findByText("afkbot4 enabled.");
 
     await app.user.click(row("afkbot3").getByRole("button", { name: "Disable" }));
     await app.user.click(
       within(screen.getByRole("alert")).getByRole("button", { name: "Disable" }),
     );
 
-    expect(await screen.findByText("afkbot3 is disabled.")).toBeDefined();
+    expect(await screen.findByText("afkbot3 disabled.")).toBeDefined();
     expect(app.fake.calls.filter((call) => call.method === "stepUp")).toHaveLength(1);
   });
 
@@ -352,7 +392,7 @@ describe("a change that needs a step-up", () => {
     await app.user.click(row("afkbot4").getByRole("button", { name: "Enable" }));
     await app.user.type(await screen.findByLabelText("Current password"), PASSWORD);
     await app.user.click(screen.getByRole("button", { name: "Continue" }));
-    await screen.findByText("afkbot4 is enabled.");
+    await screen.findByText("afkbot4 enabled.");
 
     expect(cacheText(app)).not.toContain(PASSWORD);
   });

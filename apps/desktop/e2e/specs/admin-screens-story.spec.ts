@@ -87,14 +87,14 @@ test("the Owner promotes a Member and reviews their grants, revoking one", async
   const row = main.getByRole("row", { name: new RegExp(`^${MEMBER}`) });
   await row.getByRole("button", { name: "Make admin" }).click();
   await main
-    .getByText(/logs them out everywhere/)
+    .getByText(/Logs them out everywhere/)
     .locator("..")
     .getByRole("button", { name: "Make admin" })
     .click();
   await page.getByLabel("Current password").fill(PASSWORD);
   await page.getByRole("button", { name: "Continue" }).click();
 
-  const offer = main.getByText(`${MEMBER} is now an Admin. Grants made before this stay.`);
+  const offer = main.getByText(`${MEMBER} now an Admin. Earlier grants stay.`);
   await expect(offer).toBeVisible();
   await offer.locator("..").getByRole("link", { name: "Review grants" }).click();
 
@@ -102,7 +102,7 @@ test("the Owner promotes a Member and reviews their grants, revoking one", async
   const held = main.getByRole("region", { name: "Grants they hold" });
   await held.getByRole("button", { name: `Revoke ${MEMBER}'s access to AfkBot1` }).click();
   await held.getByRole("button", { name: "Revoke", exact: true }).click();
-  await expect(held.getByText("They hold no grants.")).toBeVisible();
+  await expect(held.getByText("No grants held.")).toBeVisible();
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(main.getByRole("heading", { name: "Users", level: 1 })).toBeVisible();
 });

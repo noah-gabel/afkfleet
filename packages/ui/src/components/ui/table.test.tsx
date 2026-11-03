@@ -17,13 +17,13 @@ function sample(span = false) {
       <TableHeader>
         <TableRow>
           <TableHead>Name</TableHead>
-          <TableHead drop="under-810">Version</TableHead>
+          <TableHead drop="under-790">Version</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         <TableRow>
           <TableCell>agent-main</TableCell>
-          <TableCell drop="under-810">1.0</TableCell>
+          <TableCell drop="under-790">1.0</TableCell>
         </TableRow>
         {span ? <TableSpanRow span={2}>Disabling it is final.</TableSpanRow> : null}
       </TableBody>
@@ -49,7 +49,7 @@ describe("Table", () => {
   it("drops a marked column's head and cell at the same width, and no other", () => {
     sample();
 
-    const dropped = "@max-[50.5rem]/table:hidden";
+    const dropped = "@max-[49.25rem]/table:hidden";
     expect(screen.getByRole("columnheader", { name: "Version" }).className).toContain(dropped);
     expect(screen.getByRole("cell", { name: "1.0" }).className).toContain(dropped);
     expect(screen.getByRole("columnheader", { name: "Name" }).className).not.toContain(dropped);
