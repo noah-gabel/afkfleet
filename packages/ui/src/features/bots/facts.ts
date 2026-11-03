@@ -11,6 +11,7 @@ import type { ModeResponse } from "../../generated/ModeResponse";
 import { formatDuration } from "../../lib/duration";
 import { formatTime } from "../../lib/time";
 import {
+  AGENTS_LINK,
   agentText,
   disconnectText,
   HIDDEN_MODE,
@@ -81,7 +82,7 @@ export function botFacts(
   if (place === "screen" && status.attempt !== undefined && trying(status)) {
     facts.push({ term: LABEL.attempt, value: String(status.attempt) });
   }
-  facts.push(...reasons(bot));
+  facts.push(...reasons(bot, place));
   // A card shows how the last session ended only while the bot isn't online.
   if (status.last_disconnect !== undefined && (place === "screen" || uptime === null)) {
     facts.push({ term: LABEL.lastDisconnect, value: disconnectText(status.last_disconnect) });
@@ -144,9 +145,10 @@ function trying(status: BotStatus): boolean {
 /**
  * Why a bot doesn't run: that it waits for an agent that can't be reached (S125), why it isn't placed,
  * why it rests paused or failed, or two of them, the first one first, each under its own label; a
- * reason alone under "Reason".
+ * reason alone under "Reason". On a card, the wait leads to the agents for whoever the server
+ * names the agent to (U116); a screen offers that below its facts.
  */
-function reasons(bot: BotResponse): Fact[] {
+function reasons(bot: BotResponse, place: Place): Fact[] {
   const { status } = bot;
   const resting = restingText(status);
   const restingFact = (value: string): Fact => ({
@@ -154,7 +156,11 @@ function reasons(bot: BotResponse): Fact[] {
     value,
   });
   if (status.kind === "unknown") {
-    const waiting = waitingText(bot.agent?.status);
+    const text = waitingText(bot.agent?.status);
+    const waiting: Fact =
+      place === "card" && bot.agent !== undefined
+        ? { ...text, link: { to: "/admin/agents", label: AGENTS_LINK } }
+        : text;
     return resting === null ? [waiting] : [waiting, restingFact(resting)];
   }
   const notRunning = notRunningText(status);

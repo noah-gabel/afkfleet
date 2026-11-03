@@ -38,15 +38,27 @@ const STOPPED = bot(1, {
   },
 });
 
-/** Home over `handlers`, at `NOW`, the bots `page` unless they say otherwise. */
-async function home(page: BotPage, handlers: Partial<ApiClient> = {}) {
+/** Home over `handlers` as `user`, at `NOW`, the bots `page` unless they say otherwise. */
+async function home(page: BotPage, handlers: Partial<ApiClient> = {}, user = me()) {
   const time = fakeTime();
   vi.setSystemTime(NOW);
   const app = await signedIn(
     { bots: async () => page, modes: async () => ({ items: [AFK] }), ...handlers },
-    { advanceTimers: time.advanceTimers },
+    { advanceTimers: time.advanceTimers, user },
   );
   return { app, time };
+}
+
+/** The agent the server names a waiting bot's to Admins and the Owner. */
+const AGENT = { id: "01900000-0000-7000-8000-000000000301", name: "agent-main" };
+
+/** Bot 3, which waits on its agent, named `agent` when the viewer is told. */
+function waiting(agent?: "offline" | "disabled" | "expired") {
+  return bot(3, {
+    desired_state: "running",
+    status: { kind: "unknown", state: "online", since: SINCE, agent_last_seen_at: SINCE },
+    ...(agent === undefined ? {} : { agent: { ...AGENT, status: agent } }),
+  });
 }
 
 /** The card of the bot whose account is `name`. */
@@ -198,5 +210,57 @@ describe("Home", () => {
     expect(
       (line as HTMLElement).compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+});
+
+describe("the way to a waiting bot's agent, on its card (U116)", () => {
+  it.each(["offline", "disabled", "expired"] as const)(
+    "is offered on the waiting fact for an agent %s, as the list's read names it",
+    async (status) => {
+      await home({ items: [waiting(status)] }, {}, me("owner"));
+      const shown = await card("AfkBot3");
+
+      const link = shown.getByRole("link", { name: "Agents" });
+      expect(link.getAttribute("href")).toBe("/admin/agents");
+      // On the fact, after the waiting text, and above the card's own link, as its button is.
+      expect(link.closest("dd")?.textContent).toMatch(/^(Tied|Agent).*Agents$/);
+      expect(link.className).toContain("z-10");
+    },
+  );
+
+  it.each(["offline", "disabled", "expired"] as const)(
+    "appears when the bot's frame says its agent went %s",
+    async (status) => {
+      const watch = fakeWatch();
+      const answering = bot(3, {
+        agent: { ...AGENT, status: "online" },
+        desired_state: "running",
+        status: { kind: "reported", state: "online", since: SINCE, online_since: SINCE },
+      });
+      await home({ items: [answering] }, { watchEvents: watch.handler }, me("owner"));
+      const shown = await card("AfkBot3");
+      expect(shown.queryByRole("link", { name: "Agents" })).toBeNull();
+
+      watch.latest().push(botFrame(waiting(status)));
+
+      expect(await shown.findByRole("link", { name: "Agents" })).toBeDefined();
+    },
+  );
+
+  it("leads to the agents, not to the bot", async () => {
+    const { app } = await home({ items: [waiting("offline")] }, {}, me("owner"));
+    const shown = await card("AfkBot3");
+
+    await app.user.click(shown.getByRole("link", { name: "Agents" }));
+
+    expect(app.path()).toBe("/admin/agents");
+  });
+
+  it("isn't offered to a Member, whom the server doesn't name the agent", async () => {
+    await home({ items: [waiting()] });
+    const shown = await card("AfkBot3");
+
+    expect(shown.getByText("Tied until it returns or an admin releases it.")).toBeDefined();
+    expect(shown.queryByRole("link", { name: "Agents" })).toBeNull();
   });
 });
