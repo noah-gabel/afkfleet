@@ -696,6 +696,8 @@ describe("the shots", () => {
     );
     assert.match(config, /^ {2}expect: \{ toHaveScreenshot: COMPARE \},$/m);
     assert.match(config, /^ {2}retries: 0,$/m);
+    // A compare that leaves a baseline no row shot fails (PR #92's review), on CI and here.
+    assert.equal(config.split('["./e2e/orphans-reporter.ts"]').length, 3);
     assert.match(config, /^ {2}updateSnapshots: "none",$/m);
     // R234: software rasterization in one pass, in sRGB, with no subpixel text.
     const flags = /args: \[([^\]]*)\]/.exec(config)?.[1] ?? "";

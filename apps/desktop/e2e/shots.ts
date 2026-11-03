@@ -52,3 +52,15 @@ export function slug(row: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
 }
+
+/** The annotation each shot leaves on its test: its file's name, for the orphans' check. */
+export const SHOT_ANNOTATION = "shot";
+
+/**
+ * The baselines no row shot in a run that took `taken`, in order: each a file that compares
+ * nothing, so it fails the compare (PR #92's review).
+ */
+export function orphans(baselines: readonly string[], taken: readonly string[]): string[] {
+  const shot = new Set(taken);
+  return baselines.filter((file) => !shot.has(file)).sort();
+}

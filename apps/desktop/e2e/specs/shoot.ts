@@ -6,8 +6,8 @@
 // smallest one too, or its column's end as well.
 import type { Page } from "@playwright/test";
 
-import { expect } from "../fixtures";
-import { SMALL, slug } from "../shots";
+import { expect, test } from "../fixtures";
+import { SHOT_ANNOTATION, SMALL, slug } from "../shots";
 import { inScheme } from "./scheme";
 
 /** What a row asks of its shots. */
@@ -156,6 +156,8 @@ async function inBothThemes(page: Page, name: string, options: ShotOptions): Pro
     await inScheme(page, scheme);
     expect(await problems(page, options), `${name} in ${scheme}`).toEqual([]);
     await expect(page).toHaveScreenshot(`${name}-${scheme}.png`);
+    // What the run shot, for the orphans' check (e2e/orphans-reporter.ts).
+    test.info().annotations.push({ type: SHOT_ANNOTATION, description: `${name}-${scheme}.png` });
   }
 }
 

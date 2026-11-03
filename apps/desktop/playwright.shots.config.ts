@@ -30,7 +30,10 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: ci,
   retries: 0,
-  reporter: ci ? [["list"], ["github"]] : "list",
+  // The orphans' check fails a compare that left a baseline no row shot.
+  reporter: ci
+    ? [["list"], ["github"], ["./e2e/orphans-reporter.ts"]]
+    : [["list"], ["./e2e/orphans-reporter.ts"]],
   expect: { toHaveScreenshot: COMPARE },
   projects: [
     {

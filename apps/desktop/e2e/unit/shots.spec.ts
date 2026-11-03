@@ -2,7 +2,7 @@
 // in the pinned image, compared to the last pixel, and named after their row.
 import { expect, test } from "@playwright/test";
 
-import { COMPARE, IMAGE_MARKER, refusal, slug } from "../shots";
+import { COMPARE, IMAGE_MARKER, orphans, refusal, slug } from "../shots";
 
 test("the shots run only in the pinned Linux image", () => {
   expect(refusal("linux", { [IMAGE_MARKER]: "1" })).toBeUndefined();
@@ -26,4 +26,14 @@ test("a row's name becomes its file's name", () => {
   expect(slug("Home, every status")).toBe("home-every-status");
   expect(slug("a bot's screen, stacked")).toBe("a-bot-s-screen-stacked");
   expect(slug("2FA setup")).toBe("2fa-setup");
+});
+
+test("a baseline no row shot is an orphan, and only that", () => {
+  expect(
+    orphans(
+      ["login-light.png", "gone-dark.png", "login-dark.png", "gone-light.png"],
+      ["login-dark.png", "login-light.png", "new-dark.png"],
+    ),
+  ).toEqual(["gone-dark.png", "gone-light.png"]);
+  expect(orphans(["login-dark.png"], ["login-dark.png"])).toEqual([]);
 });
