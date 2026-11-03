@@ -1223,7 +1223,7 @@ expression: answer.json()
         "type": "object"
       },
       "GrantCandidates": {
-        "description": "`GET /accounts/{id}/grant-candidates`: the usernames that start with\nwhat's typed and can be given a grant on the account, in order, at most\n[`GRANT_CANDIDATES_MAX`] of them. Only names: never a role or an ID.",
+        "description": "`GET /accounts/{id}/grant-candidates`: the usernames that start with\nwhat's typed and can be given a grant on the account, in order, at most 8\nof them. Only names: never a role or an ID.",
         "properties": {
           "usernames": {
             "description": "The usernames.",

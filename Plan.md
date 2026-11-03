@@ -4637,6 +4637,7 @@ per_user_burst = 30
 link_flows_total = 3                     # Microsoft link flows at once on the server
 link_flows_per_user_per_day = 10         # counted from the audit log
 grants_by_name_per_user_per_hour = 10    # grants created by username, per user
+grant_candidates_per_user_per_hour = 60  # "Share with" suggestions read, per user, across their accounts
 enroll_per_ip_per_min = 5                # Enroll calls on the gRPC port, per client IP
 connect_per_cert_per_min = 10            # Connect calls on the gRPC port, per client certificate
 bot_actions_per_bot_per_min = 5          # start, restart, reset, resume and server changes, per bot
@@ -4689,6 +4690,8 @@ retention_days = 365                     # 90–730: every entry holds a user's 
 > Note (Appendix A, Phase 11, group E) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U19, U21, U22): `[chat]` gains `retention_days` (1–30, 14 by default) and `max_lines_per_bot` (100–200,000, 50,000), and a new `[audit]` section `retention_days` (90–730, 365); an error names the key. Unused invites and enrollment tokens are kept `[audit] retention_days` past their expiry (S46).
 
 > Note (Appendix A, Phase 11, group H5) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U50, R122): the agent's `[control_plane]` gains `public_targets` (a bool, `true` by default): with `false` a public address is refused like an unlisted private one (`blocked`), and the policy of a connector nobody configured refuses public addresses too. A parse error under `[standalone]`. `deploy/dod/agent.toml` sets it to `false`.
+
+> Note (Appendix A, Phase 11, group L3) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U110, S127): `[rate_limits]` gains `grant_candidates_per_user_per_hour` (1–600, 60 by default, all at once if need be; the user's approval at the plan review): how many times one user may read the suggestions behind "Share with" in an hour, one bucket across all their accounts.
 
 `agent.toml`
 ```toml

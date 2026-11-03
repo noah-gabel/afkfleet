@@ -259,7 +259,9 @@ impl GrantService {
     }
 
     /// The usernames starting with `prefix` that `actor` could give a grant
-    /// on `account` to, in order, at most 8. It reads the account and asks
+    /// on `account` to, in order, at most
+    /// [`GRANT_CANDIDATES_MAX`](crate::ports::grants::GRANT_CANDIDATES_MAX).
+    /// It reads the account and asks
     /// `authorize()` itself, and checks each row against `implicit_manage`,
     /// since the query copies that rule: a row they disagree on fails the list.
     ///

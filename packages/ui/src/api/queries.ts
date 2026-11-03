@@ -300,6 +300,17 @@ export function grantsQuery(api: ApiClient, id: string) {
 }
 
 /**
+ * The suggestions' key, outside the accounts' keys on purpose (ADR-0020, S129): every read spends
+ * the server's limit of 60 an hour, so no account refresh may read an open list again.
+ */
+export const GRANT_CANDIDATES_KEY = ["grant-candidates"] as const;
+
+/** The suggestions for account `id` by `q`. */
+export function grantCandidatesKey(id: string, q: string) {
+  return [...GRANT_CANDIDATES_KEY, id, q] as const;
+}
+
+/**
  * Who could be given a grant on account `id`, by `q`, what's typed so far (ADR-0020, U110, S127): only
  * while `q` could start a username, as `enabled` says, and held in the cache only while it's shown,
  * as what's typed could be a password in the wrong field. Until the answer comes the last one stays,
@@ -308,7 +319,7 @@ export function grantsQuery(api: ApiClient, id: string) {
 export function useGrantCandidates(id: string, q: string, enabled: boolean) {
   const api = useApiClient();
   return useQuery({
-    queryKey: ["accounts", "grant-candidates", id, q] as const,
+    queryKey: grantCandidatesKey(id, q),
     queryFn: () => api.grantCandidates(id, q),
     enabled: enabled && q !== "" && usernamePrefix.safeParse(q).success,
     gcTime: 0,

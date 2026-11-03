@@ -434,14 +434,18 @@ export function checkStylesheet(source) {
   ) {
     add(scale, "no @theme { --radius-*: initial; } keeps Tailwind's radius steps out", 0);
   }
-  const steps = [...tokens(inline.body, inline.start).values].filter(([name]) =>
-    name.startsWith("--radius-"),
+  // Every `@theme` block, as a step a later one redefines wins (PR #90's review).
+  const themes = top.filter((rule) => rule.prelude.startsWith("@theme"));
+  const steps = themes.flatMap((rule) =>
+    [...tokens(rule.body, rule.start).values]
+      .filter(([name]) => name.startsWith("--radius-"))
+      .map(([name, value]) => [name, value, rule.start]),
   );
-  for (const [name, value] of steps) {
+  for (const [name, value, start] of steps) {
     if (!RADIUS_STEPS.includes(name)) {
-      add(scale, `${name} is off the scale`, inline.start);
+      add(scale, `${name} is off the scale`, start);
     } else if (!/^(?:var\(--radius\)|calc\(var\(--radius\) \* [\d.]+\))$/.test(value)) {
-      add(scale, `${name}: ${value} isn't a multiple of --radius`, inline.start);
+      add(scale, `${name}: ${value} isn't a multiple of --radius`, start);
     }
   }
   for (const name of RADIUS_STEPS) {
@@ -463,7 +467,6 @@ export function checkStylesheet(source) {
   }
   // Read from the whole sheet: blanking the token blocks would hide `--border-radius: 8px` in `:root`.
   const within = (rule, index) => index >= rule.start && index < rule.end;
-  const themes = top.filter((rule) => rule.prelude.startsWith("@theme"));
   for (const match of css.matchAll(/(?<![\w-])(--[\w-]*radius[\w-]*)\s*:\s*([^;{}]+);/g)) {
     const defined =
       themes.some((rule) => within(rule, match.index)) ||

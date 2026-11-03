@@ -388,6 +388,28 @@ describe("the stylesheet", () => {
     );
   });
 
+  it("refuses a step redefined in another @theme block (PR #90's review)", () => {
+    for (const block of ["@theme", "@theme inline"]) {
+      assert.deepEqual(
+        cssRules((css) => `${css}${block} { --radius-md: 3px; }\n`),
+        ["radius scale"],
+        block,
+      );
+      assert.deepEqual(
+        cssRules((css) => `${css}${block} { --radius-2xl: var(--radius); }\n`),
+        ["radius scale"],
+        block,
+      );
+    }
+  });
+
+  it("takes a step derived from --radius in another @theme block", () => {
+    assert.deepEqual(
+      cssRules((css) => `${css}@theme { --radius-md: calc(var(--radius) * 0.5); }\n`),
+      [],
+    );
+  });
+
   it("refuses a step off the scale, and a scale without a step", () => {
     assert.deepEqual(
       cssRules((css) => css.replace("--radius-lg: var(--radius);", "--radius-2xl: var(--radius);")),

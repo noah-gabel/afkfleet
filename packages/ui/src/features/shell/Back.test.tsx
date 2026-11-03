@@ -111,6 +111,104 @@ describe("the Back control", () => {
     expect(app.path()).toBe(`/bots/${BOT}`);
   });
 
+  /** One input, whether the browser keeps it (`prevented`), and whether it goes back. */
+  interface Input {
+    readonly name: string;
+    readonly event: () => Event;
+    readonly prevented: boolean;
+    readonly goesBack: boolean;
+  }
+
+  const mouse = (type: string, button: number) => () =>
+    new MouseEvent(type, { button, bubbles: true, cancelable: true });
+  const altLeft = (init: KeyboardEventInit) => () =>
+    new KeyboardEvent("keydown", {
+      key: "ArrowLeft",
+      altKey: true,
+      bubbles: true,
+      cancelable: true,
+      ...init,
+    });
+
+  it.each<Input>([
+    {
+      name: "back side-button, mousedown",
+      event: mouse("mousedown", 3),
+      prevented: true,
+      goesBack: false,
+    },
+    {
+      name: "back side-button, mouseup",
+      event: mouse("mouseup", 3),
+      prevented: true,
+      goesBack: true,
+    },
+    {
+      name: "back side-button, auxclick",
+      event: mouse("auxclick", 3),
+      prevented: true,
+      goesBack: false,
+    },
+    {
+      name: "forward side-button, mousedown",
+      event: mouse("mousedown", 4),
+      prevented: true,
+      goesBack: false,
+    },
+    {
+      name: "forward side-button, mouseup",
+      event: mouse("mouseup", 4),
+      prevented: true,
+      goesBack: false,
+    },
+    {
+      name: "forward side-button, auxclick",
+      event: mouse("auxclick", 4),
+      prevented: true,
+      goesBack: false,
+    },
+    { name: "Alt+Left", event: altLeft({}), prevented: true, goesBack: true },
+    {
+      name: "Alt+Left held down (a repeat)",
+      event: altLeft({ repeat: true }),
+      prevented: false,
+      goesBack: false,
+    },
+    {
+      name: "Alt+Left while composing",
+      event: altLeft({ isComposing: true }),
+      prevented: false,
+      goesBack: false,
+    },
+    {
+      name: "Shift+Alt+Left",
+      event: altLeft({ shiftKey: true }),
+      prevented: false,
+      goesBack: false,
+    },
+    { name: "Meta+Alt+Left", event: altLeft({ metaKey: true }), prevented: false, goesBack: false },
+  ])(
+    "$name: kept from the browser $prevented, goes back $goesBack",
+    async ({ event, prevented, goesBack }) => {
+      const app = await homeThenBot();
+      const sent = event();
+
+      act(() => {
+        document.body.dispatchEvent(sent);
+      });
+
+      expect(sent.defaultPrevented).toBe(prevented);
+      if (goesBack) {
+        await waitFor(() => expect(app.path()).toBe("/home"));
+      } else {
+        await act(async () => {
+          await Promise.resolve();
+        });
+        expect(app.path()).toBe(`/bots/${BOT}`);
+      }
+    },
+  );
+
   it("stops at the first screen however often it's pressed", async () => {
     const app = await homeThenBot();
 
