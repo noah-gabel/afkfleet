@@ -13,7 +13,7 @@ import { refusal } from "../../test/signIn";
 
 const COPY = "Make a copy";
 const SAVE_AS_COPY = "Save as copy";
-const CUT_IN_COPY = "Add its arguments: the original's are hidden from you.";
+const CUT_IN_COPY = "Add its arguments. The original's are hidden from you.";
 
 const BUILT_IN = mode(1, {
   name: "afk",
@@ -81,7 +81,7 @@ describe("Make a copy (U63)", () => {
         },
       ],
     });
-    expect(await screen.findByText("Saved a copy as afk copy.")).toBeDefined();
+    expect(await screen.findByText("Copy saved as afk copy.")).toBeDefined();
     await vi.waitFor(() => expect(app.path()).toBe(`/modes/${modeId(9)}`));
     expect(await screen.findByRole("heading", { name: "afk copy", level: 1 })).toBeDefined();
   });
@@ -180,9 +180,7 @@ describe("Make a copy (U63)", () => {
     await app.user.click(saveButton());
 
     expect(
-      await screen.findByText(
-        "You already have 50 modes, the most you can have. Delete one to add another.",
-      ),
+      await screen.findByText("Mode limit reached (50). Delete one to add another."),
     ).toBeDefined();
   });
 
@@ -239,7 +237,7 @@ describe("Save as copy (U63, R168)", () => {
         ],
       });
       expect(calls(app, "updateMode")).toHaveLength(1);
-      expect(await screen.findByText("Saved a copy as Fishing copy.")).toBeDefined();
+      expect(await screen.findByText("Copy saved as Fishing copy.")).toBeDefined();
       await vi.waitFor(() => expect(app.path()).toBe(`/modes/${modeId(9)}`));
     },
   );

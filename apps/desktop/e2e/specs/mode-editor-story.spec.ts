@@ -8,7 +8,7 @@ import { MEMBER, OWNER, PASSWORD } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
 import { enterCode, expectHome, logIn } from "./steps";
 
-const SAVED = "Saved. Bots using this mode switch to the change at once.";
+const SAVED = "Saved. Bots using it switch at once.";
 
 test("the Owner creates a mode, drags a step, and meets each conflict", async ({
   page,
@@ -84,13 +84,13 @@ test("the Owner creates a mode, drags a step, and meets each conflict", async ({
   await save.click();
   await expect(
     page.getByText(
-      "Enter your password to save a command off the allowlist. It counts for 5 minutes.",
+      "Enter your password to save a command off the allowlist. Counts for 5 minutes.",
     ),
   ).toBeVisible();
   await page.getByLabel("Current password").fill(PASSWORD);
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByText(SAVED)).toBeVisible();
-  await expect(main.getByText("Sends a command off the allowlist:")).toBeVisible();
+  await expect(main.getByText("Sends a command off the allowlist.")).toBeVisible();
 
   // Another device changed it meanwhile: Save's 409, then the newest version.
   backend.changeMode("Fishing", { name: "Elsewhere" });
@@ -110,11 +110,9 @@ test("the Owner creates a mode, drags a step, and meets each conflict", async ({
   await expect(
     main.getByText("A bot you can't set this mode on uses it, so this change can't be saved."),
   ).toBeVisible();
-  await expect(
-    main.getByText("Someone who can control that bot has to switch it to another mode first."),
-  ).toBeVisible();
+  await expect(main.getByText("Someone who controls that bot must switch it first.")).toBeVisible();
   await main.getByRole("button", { name: "Save as copy" }).click();
-  await expect(page.getByText("Saved a copy as Mine.")).toBeVisible();
+  await expect(page.getByText("Copy saved as Mine.")).toBeVisible();
   await expect(main.getByRole("heading", { name: "Mine", level: 1 })).toBeVisible();
 
   // Delete: AfkBot1 runs the copy, so it's refused, and says which bot.
@@ -131,7 +129,7 @@ test("the Owner creates a mode, drags a step, and meets each conflict", async ({
       "A bot uses this mode, so it can't be deleted. Switch every bot to another mode first.",
     ),
   ).toBeVisible();
-  await expect(main.getByText("Bots you can see that use this mode:")).toBeVisible();
+  await expect(main.getByText("Bots you can see using it:")).toBeVisible();
   await main.getByRole("link", { name: "AfkBot1" }).click();
   await main.getByLabel("Mode", { exact: true }).selectOption({ label: "afk (built in)" });
   await expect(main.getByLabel("Mode", { exact: true })).toBeEnabled();
@@ -162,23 +160,21 @@ test("a Member sees a shared mode locked, its command cut, and copies it", async
   await expect(main.getByRole("button", { name: "Save", exact: true })).toHaveCount(0);
   await expect(first.getByLabel("Message")).toHaveValue("/warp");
   await expect(first.getByLabel("Message")).toHaveAttribute("readonly", "");
-  await expect(
-    first.getByText("Its arguments are hidden: only someone who can edit this mode sees them."),
-  ).toBeVisible();
+  await expect(first.getByText("Arguments hidden. Only its editors see them.")).toBeVisible();
 
   await main.getByRole("button", { name: "Make a copy" }).click();
   await expect(main.getByRole("heading", { name: "New mode", level: 1 })).toBeVisible();
   await expect(main.getByLabel("Name")).toHaveValue("warp copy");
   await expect(
-    first.getByText("Add its arguments: the original's are hidden from you."),
+    first.getByText("Add its arguments. The original's are hidden from you."),
   ).toBeVisible();
   await first.getByLabel("Message").fill("/spawn");
   await expect(first.getByText("Add its arguments:")).toHaveCount(0);
   await main.getByRole("button", { name: "Save", exact: true }).click();
 
-  await expect(page.getByText("Saved a copy as warp copy.")).toBeVisible();
+  await expect(page.getByText("Copy saved as warp copy.")).toBeVisible();
   await expect(main.getByRole("heading", { name: "warp copy", level: 1 })).toBeVisible();
-  await expect(main.getByText("Yours · Private · 1 step")).toBeVisible();
+  await expect(main.locator("[data-slot=editor-box]")).toContainText(/Owners*Yours/);
 });
 
 test("a step moves with the keyboard on its handle, within its section", async ({
@@ -207,7 +203,7 @@ test("a step moves with the keyboard on its handle, within its section", async (
   // The sensor starts listening for arrows just after the pick-up, a moment no person meets.
   await expect(async () => {
     await page.keyboard.press("ArrowDown");
-    await expect(page.getByText("Step 1 moved to position 2 of 2.")).toBeAttached({ timeout: 300 });
+    await expect(page.getByText("Step 1 moved to 2 of 2.")).toBeAttached({ timeout: 300 });
   }).toPass({ timeout: 5_000 });
   await page.keyboard.press("Space");
 

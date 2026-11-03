@@ -18,10 +18,11 @@ import { useRef, useState } from "react";
 import { toApiError } from "../../../api/ApiError";
 import { describeError } from "../../../api/describeError";
 import { useModes } from "../../../api/queries";
+import { ScreenState } from "../../../components/ScreenState";
 import type { ModeResponse } from "../../../generated/ModeResponse";
 import { modesOf } from "../../bots/facts";
 import { isEditable, type ModeValues, newValues, valuesOf } from "../modeForm";
-import { LOADING_MODES, MODE_GONE, modesFailed, NO_LONGER_EDITABLE } from "../texts";
+import { LOADING_MODE, MODE_GONE, modesFailed, NO_LONGER_EDITABLE } from "../texts";
 import { LockedMode } from "./LockedMode";
 import { ModeEditor } from "./ModeEditor";
 
@@ -60,25 +61,17 @@ export function ModeScreen({ id }: { id: string }) {
         />
       );
     }
-    if (known === "failed") {
-      return (
-        <main className="flex max-w-3xl flex-col gap-4 p-6">
-          <p role="alert" className="text-sm text-destructive">
-            {modesFailed(describeError(toApiError(query.error).error))}
-          </p>
-        </main>
-      );
-    }
-    if (known === "loading") {
-      return (
-        <main className="p-6">
-          <p className="text-sm text-muted-foreground">{LOADING_MODES}</p>
-        </main>
-      );
-    }
     return (
-      <main className="flex max-w-3xl flex-col gap-4 p-6">
-        <p role="alert">{MODE_GONE}</p>
+      <main className="flex max-w-3xl flex-col gap-4 p-4">
+        {known === "failed" ? (
+          <ScreenState kind="error">
+            {modesFailed(describeError(toApiError(query.error).error))}
+          </ScreenState>
+        ) : known === "loading" ? (
+          <ScreenState kind="loading">{LOADING_MODE}</ScreenState>
+        ) : (
+          <ScreenState kind="error">{MODE_GONE}</ScreenState>
+        )}
       </main>
     );
   }

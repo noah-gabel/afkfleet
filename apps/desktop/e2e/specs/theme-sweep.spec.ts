@@ -699,7 +699,7 @@ test("a bot's console in every look, and its screen stacked and loading", async 
 
   await page.setViewportSize({ width: 800, height: 600 });
   await expect(chat.getByText("The server said something")).toBeAttached();
-  await bothThemes(page, "a bot's screen, stacked", { end: true });
+  await bothThemes(page, "a bot's screen, stacked", { end: "all" });
   await page.setViewportSize({ width: 1280, height: 720 });
 
   // A bot this sign-in hasn't read yet, its read held.
@@ -911,7 +911,7 @@ test("modes: the list, the editor, a conflict, and a locked one", async ({ page,
   await main.getByLabel("Name").fill("Fishing");
   const joining = main.getByRole("group", { name: "When it joins", exact: true });
   await joining.getByRole("button", { name: "Add step" }).click();
-  await bothThemes(page, "the mode editor", { height: 1000, small: true, smallHeight: 1000 });
+  await bothThemes(page, "the mode editor", { small: true, smallHeight: 1000 });
   await joining
     .getByRole("group", { name: "Step 1", exact: true })
     .getByLabel("What it does")
@@ -923,7 +923,7 @@ test("modes: the list, the editor, a conflict, and a locked one", async ({ page,
   await main.getByLabel("Name").fill("Mine");
   await save.click();
   await expect(main.getByText(/This mode changed since you opened it/)).toBeVisible();
-  await bothThemes(page, "the mode editor, a conflict", { height: 1400 });
+  await bothThemes(page, "the mode editor, a conflict");
 
   await page.getByRole("button", { name: "Log out" }).click();
   await logIn(page, MEMBER);
@@ -932,7 +932,60 @@ test("modes: the list, the editor, a conflict, and a locked one", async ({ page,
   await nav(page, "Modes");
   await main.getByRole("link", { name: "Open warp" }).click();
   await expect(main.getByRole("button", { name: "Make a copy" })).toBeVisible();
-  await bothThemes(page, "a locked mode, its command cut", { height: 1000 });
+  await bothThemes(page, "a locked mode, its command cut");
+});
+
+test("modes: loading, failed, none, a long list, and sixteen steps in two columns and stacked", async ({
+  page,
+  context,
+}) => {
+  const backend = await fakeBackend(context);
+  const main = page.getByRole("main");
+  backend.clearModes();
+  // Home reads the modes too, so the read is held from the sign-in on.
+  backend.hold("modes");
+  await signIn(page, backend, MEMBER);
+  await nav(page, "Modes");
+  await expect(main.getByText("Loading modes…")).toBeVisible();
+  await bothThemes(page, "modes, loading");
+  backend.release();
+  await expect(main.getByText("No modes.")).toBeVisible();
+  await bothThemes(page, "modes, none");
+
+  await page.getByRole("button", { name: "Log out" }).click();
+  backend.refuse("modes", { status: 500, code: "internal" });
+  await signIn(page, backend, MEMBER);
+  await nav(page, "Modes");
+  await expect(main.getByText(/Couldn't load modes/)).toBeVisible();
+  await bothThemes(page, "modes, failed");
+  backend.refuse("modes", null);
+
+  for (let n = 1; n <= 24; n += 1) {
+    backend.addMode(MEMBER, `Mode with a longer name ${n}`);
+  }
+  backend.addMode(
+    MEMBER,
+    "Sixteen steps",
+    Array.from({ length: 16 }, (_, n) => ({
+      action: { type: "send_chat" as const, message: `hello ${n}` },
+      schedule:
+        n < 6
+          ? { type: "at_start" as const }
+          : { type: "every" as const, interval_ms: 60_000, jitter_ms: 0 },
+      probability: 100,
+    })),
+  );
+  await page.getByRole("button", { name: "Log out" }).click();
+  await signIn(page, backend, MEMBER);
+  await nav(page, "Modes");
+  await expect(main.getByRole("link", { name: "Open Mode with a longer name 24" })).toBeVisible();
+  await bothThemes(page, "modes, a long list", { height: 1200, small: true, smallHeight: 2000 });
+  await main.getByRole("link", { name: "Open Sixteen steps" }).click();
+  await expect(main.getByRole("heading", { name: "Sixteen steps", level: 1 })).toBeVisible();
+  await bothThemes(page, "a mode, sixteen steps");
+  await page.setViewportSize({ width: 800, height: 600 });
+  await bothThemes(page, "a mode, sixteen steps, stacked", { end: "ends" });
+  await page.setViewportSize({ width: 1280, height: 720 });
 });
 
 test("servers, accounts with their grants, and the Owner's admin screens", async ({

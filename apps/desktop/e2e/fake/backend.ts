@@ -727,6 +727,7 @@ export class FakeBackend {
   readonly #held = new Set<string>();
   readonly #called = new Map<string, number>();
   readonly #refuseNext = new Map<string, Outcome>();
+  readonly #refusingCommand = new Map<string, Outcome>();
   readonly #waiting: (() => void)[] = [];
   /** The time a state's `since` and a sent line's `at` take: fixed in the screenshots (S131). */
   readonly #now: () => Date;
@@ -819,6 +820,10 @@ export class FakeBackend {
       this.#refuseNext.delete(command);
       return refusal;
     }
+    const lasting = this.#refusingCommand.get(command);
+    if (lasting !== undefined) {
+      return lasting;
+    }
     // Not the theme's, which reaches no server, nor the profile, which only the app holds.
     if (this.#refusing !== null && command !== "set_window_theme" && command !== "server_profile") {
       return refused(this.#refusing);
@@ -846,6 +851,21 @@ export class FakeBackend {
             },
           },
     );
+  }
+
+  /**
+   * Every `command` answers `status` and `code` until `refuse(command, null)`: for a screen's failed
+   * state, which a read on mount would otherwise retry past (L4).
+   */
+  refuse(
+    command: string,
+    refusal: { readonly status: number; readonly code: ErrorCode } | null,
+  ): void {
+    if (refusal === null) {
+      this.#refusingCommand.delete(command);
+    } else {
+      this.#refusingCommand.set(command, api(refusal.status, refusal.code));
+    }
   }
 
   /** How many times `command` reached the fake. Names only: arguments may hold a secret. */
@@ -1735,6 +1755,30 @@ export class FakeBackend {
     }
     this.#modes = this.#modes.filter((one) => one !== mode);
     return value();
+  }
+
+  /** No mode at all, built-in ones included: for the list's empty state (L4). */
+  clearModes(): void {
+    this.#modes = [];
+  }
+
+  /** A private mode of `owner`'s, newest, with `steps`: for the long lists and editors (L4). */
+  addMode(owner: string, name: string, steps: readonly ModeStepRequest[] = []): string {
+    const id = `01b00000-0000-7000-8000-${String(this.#next()).padStart(12, "0")}`;
+    this.#modes = [
+      {
+        id,
+        name,
+        visibility: "private",
+        ownerId: this.#user(owner).id,
+        version: 1,
+        created_at: MODE_TIME,
+        updated_at: MODE_TIME,
+        steps: [...steps],
+      },
+      ...this.#modes,
+    ];
+    return id;
   }
 
   /** Mode `name` changed by another device (R166): the next edit at its old version is stale. */

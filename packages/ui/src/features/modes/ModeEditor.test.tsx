@@ -30,15 +30,24 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/** The mode's summary in its box: each fact's label and value. */
+function summary(): Record<string, string | null | undefined> {
+  const box = document.querySelector("[data-slot=editor-box]");
+  return Object.fromEntries(
+    [...(box?.querySelectorAll("dt") ?? [])].map((term) => [
+      term.textContent,
+      term.nextElementSibling?.textContent,
+    ]),
+  );
+}
+
 describe("a new mode", () => {
   it("is private, with no switch, and says the choice comes after saving (U67)", async () => {
     await atMode("new");
 
     expect(await screen.findByRole("heading", { name: "New mode", level: 1 })).toBeDefined();
     expect(
-      screen.getByText(
-        "New modes start private. If you're allowed to share it, the choice appears after saving.",
-      ),
+      screen.getByText("Starts private. If you may share it, the choice appears after saving."),
     ).toBeDefined();
     expect(screen.queryByRole("combobox", { name: "Who can see it" })).toBeNull();
     expect(saveButton().disabled).toBe(false);
@@ -109,9 +118,7 @@ describe("a new mode", () => {
     await app.user.click(saveButton());
 
     expect(
-      await screen.findByText(
-        "You already have 50 modes, the most you can have. Delete one to add another.",
-      ),
+      await screen.findByText("Mode limit reached (50). Delete one to add another."),
     ).toBeDefined();
   });
 
@@ -157,10 +164,7 @@ describe("a step's card (S12, U68, U70, U72)", () => {
   it.each<[string, string[]]>([
     [
       "Look in a direction",
-      [
-        "Yaw (left or right, as the F3 screen shows it)",
-        "Pitch (up or down, as the F3 screen shows it)",
-      ],
+      ["Yaw (left or right, as F3 shows it)", "Pitch (up or down, as F3 shows it)"],
     ],
     [
       "Look around randomly",
@@ -236,15 +240,13 @@ describe("a step's card (S12, U68, U70, U72)", () => {
 
     expect(
       within(section("onRespawn")).getByText(
-        "After a death, the bot respawns, lets go of the use button and stops sneaking, then runs these steps. A chat step here is skipped if the last one went out less than 30 seconds ago.",
+        "After a death: respawns, releases the use button, stops sneaking, then runs these. A chat step is skipped within 30 s of the last.",
       ),
     ).toBeDefined();
-    expect(
-      within(section("atStart")).getByText("Runs once each time the bot joins a server."),
-    ).toBeDefined();
+    expect(within(section("atStart")).getByText("Runs once on each join.")).toBeDefined();
     expect(
       within(section("repeating")).getByText(
-        "Repeats while the bot is online, starting one wait after it joins.",
+        "Repeats while online, starting one wait after joining.",
       ),
     ).toBeDefined();
   });
@@ -273,9 +275,7 @@ describe("a step's card (S12, U68, U70, U72)", () => {
     expect(screen.queryByText(/^Step \d moved/)).toBeNull();
     await app.user.click(button(3, "Move up"));
 
-    expect(screen.getByText("Step 3 moved to position 2 of 3.").getAttribute("role")).toBe(
-      "status",
-    );
+    expect(screen.getByText("Step 3 moved to 2 of 3.").getAttribute("role")).toBe("status");
     await app.user.click(saveButton());
     await vi.waitFor(() => expect(calls(app, "updateMode")).toHaveLength(1));
     const [, request] = calls(app, "updateMode")[0] as [string, UpdateModeRequest];
@@ -320,11 +320,8 @@ describe("editing a mode (S14, S18, S84)", () => {
     expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Fishing");
     const repeating = card("repeating", 1);
     expect(
-      (
-        within(repeating).getByLabelText(
-          "Yaw (left or right, as the F3 screen shows it)",
-        ) as HTMLInputElement
-      ).value,
+      (within(repeating).getByLabelText("Yaw (left or right, as F3 shows it)") as HTMLInputElement)
+        .value,
     ).toBe("-12.5");
     expect((within(repeating).getByLabelText("Every") as HTMLInputElement).value).toBe("45");
     expect((within(repeating).getByLabelText("Every: unit") as HTMLSelectElement).value).toBe(
@@ -388,9 +385,7 @@ describe("editing a mode (S14, S18, S84)", () => {
         ],
       },
     ]);
-    expect(
-      await screen.findByText("Saved. Bots using this mode switch to the change at once."),
-    ).toBeDefined();
+    expect(await screen.findByText("Saved. Bots using it switch at once.")).toBeDefined();
     expect(app.path()).toBe(`/modes/${ROW.id}`);
     await waitFor(() => expect(saveButton().disabled).toBe(true));
     // The next edit sends the version the answer gave.
@@ -411,9 +406,7 @@ describe("editing a mode (S14, S18, S84)", () => {
     await fill(app, screen.getByLabelText("Name"), "Fishing 2");
     await app.user.click(saveButton());
 
-    expect(
-      await screen.findByText("Nothing to save: the mode already reads like this."),
-    ).toBeDefined();
+    expect(await screen.findByText("Nothing to save.")).toBeDefined();
   });
 
   it("sends nothing for an interleaved mode until something changes, then the sections' order", async () => {
@@ -484,11 +477,9 @@ describe("editing a mode (S14, S18, S84)", () => {
     const { app } = await atMode(marked.id, { rows: [marked], stamped: true });
     await screen.findByRole("heading", { name: "Mode 1", level: 1 });
 
-    expect(screen.getByText("afkadmin · Private · 1 step")).toBeDefined();
+    expect(summary()).toEqual({ Owner: "afkadmin", Steps: "1" });
     expect(
-      screen.getByText(
-        "Sends a command off the allowlist: only someone who manages a bot can choose this mode.",
-      ),
+      screen.getByText("Sends a command off the allowlist. Needs Manage to choose."),
     ).toBeDefined();
     await fill(app, screen.getByLabelText("Name"), "Renamed");
     await app.user.click(saveButton());
@@ -529,7 +520,7 @@ describe("dragging a step (U68, R167)", () => {
     const instructions = document.getElementById(handle.getAttribute("aria-describedby") ?? "");
 
     expect(instructions?.textContent).toBe(
-      "To pick up a step, press Space or Enter. Use the arrow keys to move it, then Space or Enter to drop it, or Escape to cancel.",
+      "Space or Enter picks up a step. Arrow keys move it; Space or Enter drops it, Escape cancels.",
     );
     expect(handle.getAttribute("aria-roledescription")).toBe("sortable");
   });
@@ -572,8 +563,7 @@ describe("dragging a step (U68, R167)", () => {
 
 describe("a command off the allowlist (S16, R162)", () => {
   const COMMAND = mode(1, { steps: [shownStep({ type: "send_chat", message: "hello" })] });
-  const PROMPT =
-    "Enter your password to save a command off the allowlist. It counts for 5 minutes.";
+  const PROMPT = "Enter your password to save a command off the allowlist. Counts for 5 minutes.";
 
   /** The mode's chat step, changed to a command. */
   async function typed(options: Parameters<typeof atMode>[1] = {}) {
@@ -609,9 +599,7 @@ describe("a command off the allowlist (S16, R162)", () => {
       },
     ]);
     expect(calls(app, "updateModeWithCommands")).toEqual([body, body]);
-    expect(
-      await screen.findByText("Saved. Bots using this mode switch to the change at once."),
-    ).toBeDefined();
+    expect(await screen.findByText("Saved. Bots using it switch at once.")).toBeDefined();
   });
 
   it("asks nothing while the step-up still holds", async () => {
@@ -887,7 +875,7 @@ describe("the locked view (U73, R160, R161)", () => {
     expect(
       (within(card("onRespawn", 1)).getByLabelText("Sneaking") as HTMLInputElement).value,
     ).toBe("Start");
-    expect(screen.getByText("Built in · Shared · 3 steps")).toBeDefined();
+    expect(summary()).toEqual({ Owner: "Built in", Steps: "3" });
   });
 
   it("marks a cut command outside its text", async () => {
@@ -904,7 +892,7 @@ describe("the locked view (U73, R160, R161)", () => {
     const message = within(card("atStart", 1)).getByLabelText("Message") as HTMLInputElement;
     expect(message.value).toBe("/warp");
     const said = within(card("atStart", 1)).getByText(
-      "Its arguments are hidden: only someone who can edit this mode sees them.",
+      "Arguments hidden. Only its editors see them.",
     );
     expect(message.getAttribute("aria-describedby")).toContain(said.id);
   });
@@ -938,13 +926,11 @@ describe("the locked view (U73, R160, R161)", () => {
     await screen.findByRole("heading", { name: "Mode 1", level: 1 });
 
     expect(
-      screen.getByText(
-        "This mode has a step this app doesn't know, so it opens read-only. Update the app to edit it.",
-      ),
+      screen.getByText("Has a step this app doesn't know: read-only. Update the app to edit it."),
     ).toBeDefined();
     expect(
       within(screen.getByRole("group", { name: block ?? "" })).getByText(
-        "This app doesn't know this step.",
+        "Step unknown to this app.",
       ),
     ).toBeDefined();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
@@ -975,13 +961,60 @@ describe("the locked view (U73, R160, R161)", () => {
   });
 });
 
+/** Whether `first` comes before `second` in the document. */
+function precedes(first: Element, second: Element): boolean {
+  return (first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+}
+
+describe("the editor's parts (U120)", () => {
+  it("puts the mode's fields, then the steps, then Save and Cancel, then a copy and Delete", async () => {
+    await atMode(modeId(1), { rows: [mode(1, { name: "Fishing" })] });
+    await screen.findByRole("heading", { name: "Fishing", level: 1 });
+
+    const name = screen.getByLabelText("Name");
+    const steps = section("atStart");
+    const actions = document.querySelector("[data-slot=editor-actions]");
+    const apart = document.querySelector("[data-slot=editor-apart]");
+    expect(actions).not.toBeNull();
+    expect(apart).not.toBeNull();
+    const save = within(actions as HTMLElement).getByRole("button", { name: "Save" });
+    within(actions as HTMLElement).getByRole("button", { name: "Cancel" });
+    const copy = within(apart as HTMLElement).getByRole("button", { name: "Make a copy" });
+    const remove = within(apart as HTMLElement).getByRole("button", { name: "Delete" });
+
+    expect([
+      precedes(name, steps),
+      precedes(steps, save),
+      precedes(save, copy),
+      precedes(copy, remove),
+    ]).toEqual([true, true, true, true]);
+  });
+
+  it("gives a locked mode no Save or Cancel, only a copy", async () => {
+    await atMode(modeId(1), {
+      rows: [
+        mode(1, { name: "Theirs", editable: false, deletable: false, ownership: "someone_else" }),
+      ],
+    });
+    await screen.findByRole("heading", { name: "Theirs", level: 1 });
+
+    expect(document.querySelector("[data-slot=editor-actions]")).toBeNull();
+    const apart = document.querySelector("[data-slot=editor-apart]");
+    expect(within(apart as HTMLElement).getByRole("button", { name: "Make a copy" })).toBeDefined();
+  });
+});
+
 describe("a mode that isn't there", () => {
+  it("says it loads, as a status", async () => {
+    await atMode(modeId(5), { handlers: { modes: () => new Promise(() => {}) } });
+
+    expect((await screen.findByText("Loading mode…")).getAttribute("role")).toBe("status");
+  });
+
   it("says so, with the way back", async () => {
     await atMode(modeId(5));
 
-    expect(
-      await screen.findByText("This mode doesn't exist any more, or you can't see it."),
-    ).toBeDefined();
+    expect(await screen.findByText("Mode not found or not available to you.")).toBeDefined();
     expect(screen.getByRole("button", { name: "Back" })).toBeDefined();
   });
 

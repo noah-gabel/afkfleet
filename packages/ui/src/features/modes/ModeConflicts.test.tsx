@@ -17,12 +17,11 @@ import { PASSWORD, refusal } from "../../test/signIn";
 const CHANGED = "This mode changed since you opened it. Load it again to see the change.";
 const BY_OTHERS = "A bot you can't set this mode on uses it, so this change can't be saved.";
 const EXPLAINED =
-  "Someone who can control that bot has to switch it to another mode first. Your edits are still here; you can save them as a copy.";
+  "Someone who controls that bot must switch it first. Your edits are kept: save them as a copy.";
 const IN_USE =
   "A bot uses this mode, so it can't be deleted. Switch every bot to another mode first.";
-const LEFT =
-  "This mode was deleted, or you can no longer see it. Your edits are still here; you can save them as a copy.";
-const NOT_EDITABLE = "You can no longer edit this mode, so your edits weren't kept.";
+const LEFT = "Mode deleted or no longer visible to you. Your edits are kept: save them as a copy.";
+const NOT_EDITABLE = "You can no longer edit this mode. Your edits weren't kept.";
 
 const ROW = mode(1, {
   name: "Fishing",
@@ -354,7 +353,7 @@ describe("the form while its row changes (S83)", () => {
     );
     await screenSawIt();
 
-    expect(screen.queryByText("Loading modes…")).toBeNull();
+    expect(screen.queryByText("Loading mode…")).toBeNull();
     expect(screen.queryByText(LEFT)).toBeNull();
     expect(nameField().value).toBe("Mine");
     await act(async () => read.resolve());
@@ -409,9 +408,7 @@ describe("the form while its row changes (S83)", () => {
       state.rows = [];
       await listHolds(app, []);
 
-      expect(
-        await screen.findByText("This mode doesn't exist any more, or you can't see it."),
-      ).toBeDefined();
+      expect(await screen.findByText("Mode not found or not available to you.")).toBeDefined();
       expect(screen.queryByDisplayValue("/login my-secret")).toBeNull();
       expect(screen.queryByRole("button", { name: "Save as copy" })).toBeNull();
       expect(screen.queryByText(LEFT)).toBeNull();
@@ -429,7 +426,7 @@ describe("the form while its row changes (S83)", () => {
         expect(app.runtime.queryClient.getQueryData(MODES_LIST_KEY)).toBeUndefined(),
       );
 
-      expect(await screen.findByText("Loading modes…")).toBeDefined();
+      expect(await screen.findByText("Loading mode…")).toBeDefined();
       expect(screen.queryByDisplayValue("/login my-secret")).toBeNull();
       expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
       await act(async () => read.resolve());
@@ -443,7 +440,7 @@ describe("the form while its row changes (S83)", () => {
       await act(async () => {
         void app.runtime.queryClient.resetQueries({ queryKey: MODES_LIST_KEY, exact: true });
       });
-      await screen.findByText("Loading modes…");
+      await screen.findByText("Loading mode…");
       await act(async () => read.resolve());
 
       expect(await screen.findByText(NOT_EDITABLE)).toBeDefined();
@@ -483,7 +480,7 @@ describe("the form while its row changes (S83)", () => {
 
 describe("Delete (S16, S17)", () => {
   const deleted = "Deleted Fishing.";
-  const ask = "Delete Fishing? This can't be undone.";
+  const ask = "Delete Fishing? Can't be undone.";
 
   /** The App on a mode with `deleteMode` as `answer`, stepped up unless told otherwise. */
   async function atDelete(deleteMode: (id: string) => Promise<void>, stamped = true) {
@@ -631,7 +628,7 @@ describe("the bots at mode_in_use (U66, R169)", () => {
     const second: BotPage = { items: [onMode(1, "AfkBot1", ROW.id)] };
     const { app } = await refused(async (before) => (before === undefined ? first : second));
 
-    expect(await screen.findByText("Bots you can see that use this mode:")).toBeDefined();
+    expect(await screen.findByText("Bots you can see using it:")).toBeDefined();
     const links = screen.getAllByRole("link", { name: /^AfkBot/ });
     expect(links.map((link) => link.textContent)).toEqual(["AfkBot3", "AfkBot1"]);
     await app.user.click(links[1] as HTMLElement);
@@ -643,7 +640,7 @@ describe("the bots at mode_in_use (U66, R169)", () => {
     const { app } = await refused(async (before) =>
       before === undefined ? { items: [], next: botId(1) } : later.promise,
     );
-    const SAID = "It's a bot you can't see, so its owner has to switch it.";
+    const SAID = "A bot you can't see. Its owner must switch it.";
 
     await vi.waitFor(() => expect(calls(app, "bots").map((args) => args[0])).toContain(botId(1)));
     expect(screen.queryByText(SAID)).toBeNull();
@@ -665,7 +662,7 @@ describe("the bots at mode_in_use (U66, R169)", () => {
 
     await app.user.click(screen.getByRole("button", { name: "Delete" }));
     await app.user.click(await screen.findByRole("button", { name: "Delete mode" }));
-    const SAID = "It's a bot you can't see, so its owner has to switch it.";
+    const SAID = "A bot you can't see. Its owner must switch it.";
     expect(await screen.findByText(SAID)).toBeDefined();
     await act(async () => older.resolve({ items: [onMode(1, "AfkBot1", ROW.id)] }));
 
@@ -678,11 +675,9 @@ describe("the bots at mode_in_use (U66, R169)", () => {
       throw refusal(500, "internal");
     });
 
-    expect(await screen.findByText(/^Couldn't read your bots: refused: internal/)).toBeDefined();
+    expect(await screen.findByText(/^Couldn't load bots: refused: internal/)).toBeDefined();
     expect(screen.getByText(IN_USE)).toBeDefined();
-    expect(
-      screen.queryByText("It's a bot you can't see, so its owner has to switch it."),
-    ).toBeNull();
+    expect(screen.queryByText("A bot you can't see. Its owner must switch it.")).toBeNull();
   });
 
   it("drops the list at the next try", async () => {
@@ -713,9 +708,7 @@ describe("a mode gone before it opened", () => {
   it("is the gone screen, not a form", async () => {
     await atMode(modeId(5), { rows: [ROW] });
 
-    expect(
-      await screen.findByText("This mode doesn't exist any more, or you can't see it."),
-    ).toBeDefined();
+    expect(await screen.findByText("Mode not found or not available to you.")).toBeDefined();
     expect(screen.queryByLabelText("Name")).toBeNull();
   });
 });

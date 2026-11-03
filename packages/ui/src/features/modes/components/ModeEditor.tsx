@@ -33,6 +33,7 @@ import { useApiClient } from "../../../api/context";
 import { describeError } from "../../../api/describeError";
 import { MODE_MAX_STEPS } from "../../../api/limits";
 import { MODES_LIST_KEY } from "../../../api/queries";
+import { EditorColumns } from "../../../components/EditorColumns";
 import { FormField } from "../../../components/FormField";
 import { NativeSelect } from "../../../components/NativeSelect";
 import { RetryWaitMessage } from "../../../components/RetryWaitMessage";
@@ -347,84 +348,99 @@ export function ModeEditor({
   const errors = form.formState.errors;
   const canSave = row === undefined || form.formState.isDirty;
   return (
-    <main className="flex max-w-3xl flex-col gap-6 p-6">
-      <h1 className="text-2xl font-semibold tracking-tight">{row?.name ?? NEW_MODE}</h1>
-      {row === undefined ? null : <ModeSummary mode={row} />}
-      <form className="flex flex-col gap-6" noValidate onSubmit={(event) => void submit(event)}>
-        <FormField id={`${formId}-name`} label={NAME_FIELD} error={errors.name?.message}>
-          {(control) => (
-            <Input {...control} autoComplete="off" readOnly={locked} {...form.register("name")} />
-          )}
-        </FormField>
-        {row === undefined ? (
-          <p className="text-sm text-muted-foreground">{STARTS_PRIVATE}</p>
-        ) : (
-          <FormField
-            id={`${formId}-visibility`}
-            label={VISIBILITY_FIELD}
-            error={errors.visibility?.message}
-          >
-            {(control) =>
-              row.visibility_editable ? (
-                <NativeSelect {...control} disabled={locked} {...form.register("visibility")}>
-                  <option value="private">{VISIBILITY_PRIVATE}</option>
-                  <option value="shared">{VISIBILITY_SHARED}</option>
-                </NativeSelect>
-              ) : (
-                <Input {...control} readOnly value={visibilityText(row.visibility)} />
-              )
-            }
+    <EditorColumns
+      form={{ id: formId, onSubmit: (event) => void submit(event) }}
+      box={
+        <>
+          <h1 className="text-lg font-semibold tracking-tight break-words">
+            {row?.name ?? NEW_MODE}
+          </h1>
+          {row === undefined ? null : <ModeSummary mode={row} />}
+          <FormField id={`${formId}-name`} label={NAME_FIELD} error={errors.name?.message}>
+            {(control) => (
+              <Input {...control} autoComplete="off" readOnly={locked} {...form.register("name")} />
+            )}
           </FormField>
-        )}
-        {SECTIONS.map((section) => (
-          <StepSection
-            key={section}
-            form={form}
-            section={section}
-            view={view}
-            full={total >= MODE_MAX_STEPS}
-            unknown={0}
-            announce={setAnnouncement}
-          />
-        ))}
-        <p role="status" className="sr-only">
-          {announcement}
-        </p>
-        {formError === undefined ? null : (
-          <p role="alert" className="text-sm whitespace-pre-line text-destructive">
-            {formError}
+          {row === undefined ? (
+            <p className="text-sm text-muted-foreground">{STARTS_PRIVATE}</p>
+          ) : (
+            <FormField
+              id={`${formId}-visibility`}
+              label={VISIBILITY_FIELD}
+              error={errors.visibility?.message}
+            >
+              {(control) =>
+                row.visibility_editable ? (
+                  <NativeSelect {...control} disabled={locked} {...form.register("visibility")}>
+                    <option value="private">{VISIBILITY_PRIVATE}</option>
+                    <option value="shared">{VISIBILITY_SHARED}</option>
+                  </NativeSelect>
+                ) : (
+                  <Input {...control} readOnly value={visibilityText(row.visibility)} />
+                )
+              }
+            </FormField>
+          )}
+        </>
+      }
+      sections={
+        <>
+          {SECTIONS.map((section) => (
+            <StepSection
+              key={section}
+              form={form}
+              section={section}
+              view={view}
+              full={total >= MODE_MAX_STEPS}
+              unknown={0}
+              announce={setAnnouncement}
+            />
+          ))}
+          <p role="status" className="sr-only">
+            {announcement}
           </p>
-        )}
-        {conflict === null || gone ? null : (
-          // One live region: the Alert's own.
-          <Alert>
-            <AlertDescription className="flex flex-col gap-2 text-foreground">
-              <p>{conflict.text}</p>
-              {conflict.kind === "others" ? <p>{IN_USE_BY_OTHERS}</p> : null}
-              {reloadFailed === null ? null : <p className="text-destructive">{reloadFailed}</p>}
-              {conflict.kind === "changed" ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="self-start"
-                  disabled={locked}
-                  onClick={() => void loadAgain()}
-                >
-                  {LOAD_AGAIN}
-                </Button>
-              ) : null}
+        </>
+      }
+      notes={
+        <>
+          {formError === undefined ? null : (
+            <p role="alert" className="text-sm whitespace-pre-line text-destructive">
+              {formError}
+            </p>
+          )}
+          {conflict === null || gone ? null : (
+            // One live region: the Alert's own.
+            <Alert>
+              <AlertDescription className="flex flex-col gap-2 text-foreground">
+                <p>{conflict.text}</p>
+                {conflict.kind === "others" ? <p>{IN_USE_BY_OTHERS}</p> : null}
+                {reloadFailed === null ? null : <p className="text-destructive">{reloadFailed}</p>}
+                {conflict.kind === "changed" ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="self-start"
+                    disabled={locked}
+                    onClick={() => void loadAgain()}
+                  >
+                    {LOAD_AGAIN}
+                  </Button>
+                ) : null}
+                {keepAsCopy}
+              </AlertDescription>
+            </Alert>
+          )}
+          {gone ? (
+            <div className="flex flex-col gap-2">
+              <p role="alert">{LEFT_THE_LIST}</p>
               {keepAsCopy}
-            </AlertDescription>
-          </Alert>
-        )}
-        {gone ? (
-          <div className="flex flex-col gap-2">
-            <p role="alert">{LEFT_THE_LIST}</p>
-            {keepAsCopy}
-          </div>
-        ) : null}
-        <RetryWaitMessage wait={wait} />
-        <div className="flex gap-2">
+            </div>
+          ) : null}
+          <RetryWaitMessage wait={wait} />
+        </>
+      }
+      actions={
+        <>
           {gone ? null : (
             <Button type="submit" disabled={locked || wait.waiting !== null || !canSave}>
               {SAVE}
@@ -441,37 +457,45 @@ export function ModeEditor({
           >
             {CANCEL}
           </Button>
-        </div>
-      </form>
-      {/* Outside the form: "Confirm it's you" is a form of its own. */}
-      {writes.prompt === SAVE_KEY ? (
-        <StepUpPrompt
-          id="step-up-save"
-          text={SAVE_STEP_UP}
-          pending={writes.running !== null}
-          onConfirm={writes.confirm}
-          onCancel={writes.cancel}
-        />
-      ) : null}
-      {writes.failure?.key === SAVE_KEY ? (
-        <p role="alert" className="text-sm text-destructive">
-          {writes.failure.message}
-        </p>
-      ) : null}
-      {onCopy === undefined || gone ? null : (
-        <Button
-          type="button"
-          variant="outline"
-          className="self-start"
-          disabled={locked}
-          onClick={() => onCopy(copyOfValues(form.getValues()))}
-        >
-          {MAKE_A_COPY}
-        </Button>
-      )}
-      {row?.deletable && !gone ? (
-        <DeleteMode mode={row} writes={writes} onGone={() => setGoneToSave(true)} />
-      ) : null}
-    </main>
+        </>
+      }
+      prompt={
+        <>
+          {writes.prompt === SAVE_KEY ? (
+            <StepUpPrompt
+              id="step-up-save"
+              text={SAVE_STEP_UP}
+              pending={writes.running !== null}
+              onConfirm={writes.confirm}
+              onCancel={writes.cancel}
+            />
+          ) : null}
+          {writes.failure?.key === SAVE_KEY ? (
+            <p role="alert" className="text-sm text-destructive">
+              {writes.failure.message}
+            </p>
+          ) : null}
+        </>
+      }
+      apart={
+        <>
+          {onCopy === undefined || gone ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={locked}
+              onClick={() => onCopy(copyOfValues(form.getValues()))}
+            >
+              {MAKE_A_COPY}
+            </Button>
+          )}
+          {row?.deletable && !gone ? (
+            <div className="w-full border-t pt-3">
+              <DeleteMode mode={row} writes={writes} onGone={() => setGoneToSave(true)} />
+            </div>
+          ) : null}
+        </>
+      }
+    />
   );
 }

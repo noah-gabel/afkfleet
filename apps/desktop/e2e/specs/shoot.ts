@@ -18,8 +18,11 @@ export interface ShotOptions {
   readonly small?: boolean;
   /** The small shot's height, a multiple of 100, when its content needs more than 600. */
   readonly smallHeight?: number;
-  /** The column scrolls by design (a stacked bot's screen): shot at its top and at its end. */
-  readonly end?: boolean;
+  /**
+   * The column scrolls by design: shot at its top and at its end. `all` requires the two to cover
+   * all of it (a stacked bot's screen); `ends` leaves out a long middle on purpose (a long mode).
+   */
+  readonly end?: "all" | "ends";
   /** How many toasts the row shows; the shot waits until exactly that many are up. */
   readonly toasts?: number;
   /** The pointer stays where the row put it: on its toast, or on a tile whose hover is the row. */
@@ -123,7 +126,7 @@ export function problems(page: Page, options: ShotOptions): Promise<readonly str
       }
       return found;
     },
-    { keepFocus: options.keepFocus === true, end: options.end === true },
+    { keepFocus: options.keepFocus === true, end: options.end !== undefined },
   );
 }
 
@@ -181,7 +184,7 @@ export async function shoot(page: Page, row: string, options: ShotOptions = {}):
   const restore = await ready(page, options);
   try {
     await inBothThemes(page, name, options);
-    if (options.end === true) {
+    if (options.end !== undefined) {
       const span = await page.evaluate(() => {
         const column = document.querySelector("[data-slot=content]");
         if (column === null) {
@@ -192,10 +195,12 @@ export async function shoot(page: Page, row: string, options: ShotOptions = {}):
         return { tall, window: innerHeight };
       });
       expect(span, `${row}: no content column to scroll`).not.toBeNull();
-      // Its top and its end cover all of it only if it's at most twice the window.
-      expect(span?.tall ?? 0, `${row}: taller than two windows`).toBeLessThanOrEqual(
-        2 * (span?.window ?? 0),
-      );
+      if (options.end === "all") {
+        // Its top and its end cover all of it only if it's at most twice the window.
+        expect(span?.tall ?? 0, `${row}: taller than two windows`).toBeLessThanOrEqual(
+          2 * (span?.window ?? 0),
+        );
+      }
       await inBothThemes(page, `${name}-end`, options);
       await page.evaluate(() => {
         document.querySelector("[data-slot=content]")?.scrollTo({ top: 0 });

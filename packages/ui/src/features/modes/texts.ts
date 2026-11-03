@@ -9,11 +9,15 @@ import type { UserLabel } from "../../generated/UserLabel";
 /** The nav entry's, the list's and the back link's text. */
 export const MODES_HEADING = "Modes";
 /** What the list says first. */
-export const MODES_INTRO = "A mode is what a bot does while it's online.";
+export const MODES_INTRO = "What a bot does while online.";
 /** The list's way to a new mode, and a new mode's heading. */
 export const NEW_MODE = "New mode";
-/** The list, or a mode, while the modes load. */
+/** The list while the modes load. */
 export const LOADING_MODES = "Loading modes…";
+/** A mode's screen while the modes load. */
+export const LOADING_MODE = "Loading mode…";
+/** The list with no mode in it. */
+export const NO_MODES = "No modes.";
 
 /** The list, or a mode, when the modes couldn't be read. */
 export function modesFailed(why: string): string {
@@ -49,21 +53,15 @@ export function visibilityText(visibility: ModeVisibility): string {
   }
 }
 
-/** How many steps a mode holds. */
-export function stepCount(count: number): string {
-  if (count === 0) {
-    return "No steps";
-  }
-  return count === 1 ? "1 step" : `${count} steps`;
-}
+/** A card's labelled facts (U119). */
+export const FACT = { owner: "Owner", visibility: "Visibility", steps: "Steps" } as const;
 
 /** A mode that sends a command off the allowlist (S68). */
-export const MARK_UNLISTED =
-  "Sends a command off the allowlist: only someone who manages a bot can choose this mode.";
+export const MARK_UNLISTED = "Sends a command off the allowlist. Needs Manage to choose.";
 /** Beside a command that came with its arguments cut (S15). */
-export const MARK_CUT = "Its arguments are hidden: only someone who can edit this mode sees them.";
+export const MARK_CUT = "Arguments hidden. Only its editors see them.";
 /** Beside such a command in a copy, while it still reads as it came (U63, R170). */
-export const MARK_CUT_IN_COPY = "Add its arguments: the original's are hidden from you.";
+export const MARK_CUT_IN_COPY = "Add its arguments. The original's are hidden from you.";
 
 export const NAME_FIELD = "Name";
 export const VISIBILITY_FIELD = "Who can see it";
@@ -72,21 +70,21 @@ export const VISIBILITY_PRIVATE = "Private";
 export const VISIBILITY_SHARED = "Shared with everyone";
 /** On a new mode or a copy, which has no flag to read yet (U67). */
 export const STARTS_PRIVATE =
-  "New modes start private. If you're allowed to share it, the choice appears after saving.";
+  "Starts private. If you may share it, the choice appears after saving.";
 
 /** The sections (U68). */
 export const SECTION_TEXT = {
   atStart: {
     heading: "When it joins",
-    hint: "Runs once each time the bot joins a server.",
+    hint: "Runs once on each join.",
   },
   repeating: {
     heading: "While it's online",
-    hint: "Repeats while the bot is online, starting one wait after it joins.",
+    hint: "Repeats while online, starting one wait after joining.",
   },
   onRespawn: {
     heading: "After it respawns",
-    hint: "After a death, the bot respawns, lets go of the use button and stops sneaking, then runs these steps. A chat step here is skipped if the last one went out less than 30 seconds ago.",
+    hint: "After a death: respawns, releases the use button, stops sneaking, then runs these. A chat step is skipped within 30 s of the last.",
   },
 } as const;
 
@@ -107,7 +105,7 @@ export const MOVE_DOWN = "Move down";
 
 /** What the live region says after a move. */
 export function stepMoved(n: number, position: number, count: number): string {
-  return `Step ${n} moved to position ${position} of ${count}.`;
+  return `Step ${n} moved to ${position} of ${count}.`;
 }
 
 export const WHAT_IT_DOES = "What it does";
@@ -125,8 +123,8 @@ export const ACTION_TEXT: Readonly<Record<ModeActionKind, string>> = {
   send_chat: "Send chat or a command",
 };
 
-export const YAW_FIELD = "Yaw (left or right, as the F3 screen shows it)";
-export const PITCH_FIELD = "Pitch (up or down, as the F3 screen shows it)";
+export const YAW_FIELD = "Yaw (left or right, as F3 shows it)";
+export const PITCH_FIELD = "Pitch (up or down, as F3 shows it)";
 export const MAX_YAW_FIELD = "Turn up to (degrees either way)";
 export const MAX_PITCH_FIELD = "Tilt up to (degrees either way)";
 export const SNEAK_FIELD = "Sneaking";
@@ -155,7 +153,7 @@ export const CANCEL = "Cancel";
 
 /** What the password prompt says when a save holds a command off the allowlist (S16). */
 export const SAVE_STEP_UP =
-  "Enter your password to save a command off the allowlist. It counts for 5 minutes.";
+  "Enter your password to save a command off the allowlist. Counts for 5 minutes.";
 
 /** The toast after a create. */
 export function created(name: string): string {
@@ -163,13 +161,13 @@ export function created(name: string): string {
 }
 
 /** The toast after a save. */
-export const SAVED = "Saved. Bots using this mode switch to the change at once.";
+export const SAVED = "Saved. Bots using it switch at once.";
 /** The toast after a save that changed nothing (S21, S84). */
-export const NOTHING_TO_SAVE = "Nothing to save: the mode already reads like this.";
+export const NOTHING_TO_SAVE = "Nothing to save.";
 
 /** What Delete asks first. */
 export function deleteQuestion(name: string): string {
-  return `Delete ${name}? This can't be undone.`;
+  return `Delete ${name}? Can't be undone.`;
 }
 
 export const DELETE_MODE = "Delete mode";
@@ -180,27 +178,27 @@ export function deleted(name: string): string {
 }
 
 /** A create's 409 `conflict`: the user owns the most modes (S19). */
-export const CAP_REACHED = `You already have ${MAX_MODES_PER_OWNER} modes, the most you can have. Delete one to add another.`;
+export const CAP_REACHED = `Mode limit reached (${MAX_MODES_PER_OWNER}). Delete one to add another.`;
 
 /** After a 409 `mode_changed`, next to the server's own text (U64). */
 export const LOAD_AGAIN = "Load again";
 /** After a 409 `mode_in_use_by_others`, under the server's own text (U65). */
 export const IN_USE_BY_OTHERS =
-  "Someone who can control that bot has to switch it to another mode first. Your edits are still here; you can save them as a copy.";
+  "Someone who controls that bot must switch it first. Your edits are kept: save them as a copy.";
 
 /** A mode that isn't there: never was, or the viewer can't see it. */
-export const MODE_GONE = "This mode doesn't exist any more, or you can't see it.";
+export const MODE_GONE = "Mode not found or not available to you.";
 /** The row left the list while the form was open (S83). */
 export const LEFT_THE_LIST =
-  "This mode was deleted, or you can no longer see it. Your edits are still here; you can save them as a copy.";
+  "Mode deleted or no longer visible to you. Your edits are kept: save them as a copy.";
 /** `editable` turned false while the form was open (S83). */
-export const NO_LONGER_EDITABLE = "You can no longer edit this mode, so your edits weren't kept.";
+export const NO_LONGER_EDITABLE = "You can no longer edit this mode. Your edits weren't kept.";
 
 /** A step of a type this version doesn't know (R160). */
-export const UNKNOWN_STEP = "This app doesn't know this step.";
+export const UNKNOWN_STEP = "Step unknown to this app.";
 /** A mode holding one. */
 export const UNKNOWN_MODE =
-  "This mode has a step this app doesn't know, so it opens read-only. Update the app to edit it.";
+  "Has a step this app doesn't know: read-only. Update the app to edit it.";
 
 /** The way to a copy (U63). */
 export const MAKE_A_COPY = "Make a copy";
@@ -216,16 +214,16 @@ export function copyName(name: string): string {
 
 /** The toast after a copy. */
 export function savedCopy(name: string): string {
-  return `Saved a copy as ${name}.`;
+  return `Copy saved as ${name}.`;
 }
 
 /** The bots at a `mode_in_use` (U66). */
-export const BOTS_THAT_USE_IT = "Bots you can see that use this mode:";
-export const A_BOT_YOU_CANT_SEE = "It's a bot you can't see, so its owner has to switch it.";
+export const BOTS_THAT_USE_IT = "Bots you can see using it:";
+export const A_BOT_YOU_CANT_SEE = "A bot you can't see. Its owner must switch it.";
 
 /** When the bots at a `mode_in_use` couldn't be read. */
 export function botsFailed(why: string): string {
-  return `Couldn't read your bots: ${why}`;
+  return `Couldn't load bots: ${why}`;
 }
 
 /** The drag handle's name (U68). */
@@ -235,7 +233,7 @@ export function dragStep(n: number): string {
 
 /** What a screen reader hears on the handle (R167). */
 export const DRAG_INSTRUCTIONS =
-  "To pick up a step, press Space or Enter. Use the arrow keys to move it, then Space or Enter to drop it, or Escape to cancel.";
+  "Space or Enter picks up a step. Arrow keys move it; Space or Enter drops it, Escape cancels.";
 
 /** What the live region says when a step is picked up. */
 export function pickedUp(n: number): string {
