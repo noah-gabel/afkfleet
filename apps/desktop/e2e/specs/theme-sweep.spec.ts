@@ -15,6 +15,7 @@ import {
   AA,
   bothThemes,
   focusProblems,
+  frameHolds,
   inScheme,
   measured,
   selectsInTokens,
@@ -1473,5 +1474,6 @@ test("the banner, the start screen, loading and the error panel", async ({ page,
     await page.goto("/?panel=error");
     await expect(page.getByRole("heading", { name: /App error/ })).toBeVisible();
     await measured(page, "the error panel", scheme);
+    await frameHolds(page, `the error panel, ${scheme}`);
   }
 });

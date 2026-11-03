@@ -174,7 +174,7 @@ test("a Member sees a shared mode locked, its command cut, and copies it", async
 
   await expect(page.getByText("Copy saved as warp copy.")).toBeVisible();
   await expect(main.getByRole("heading", { name: "warp copy", level: 1 })).toBeVisible();
-  await expect(main.locator("[data-slot=editor-box]")).toContainText(/Owners*Yours/);
+  await expect(main.locator("[data-slot=editor-box]")).toContainText(/Owner\s*Yours/);
 });
 
 test("a step moves with the keyboard on its handle, within its section", async ({
