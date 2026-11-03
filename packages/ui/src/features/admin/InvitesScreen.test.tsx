@@ -87,7 +87,15 @@ function called(app: App, method: keyof ApiClient): unknown[][] {
   return app.fake.calls.filter((call) => call.method === method).map((call) => [...call.args]);
 }
 
+/** Opens the new invite's box, unless it's open (U123). */
+async function openBox(app: App) {
+  if (screen.queryByRole("button", { name: "Create invite" }) === null) {
+    await app.user.click(screen.getByRole("button", { name: "New invite" }));
+  }
+}
+
 async function create(app: App, role?: "Member" | "Admin") {
+  await openBox(app);
   if (role !== undefined) {
     await app.user.click(screen.getByLabelText(role));
   }
@@ -108,6 +116,55 @@ describe("the invites screen", () => {
     expect(row(EXPIRED).getByText("Expired")).toBeDefined();
   });
 
+  it("opens the new invite's box from New invite, at the top right, and Cancel closes it (U123)", async () => {
+    const app = await atInvites();
+    const button = screen.getByRole("button", { name: "New invite" });
+    expect(screen.queryByRole("button", { name: "Create invite" })).toBeNull();
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+
+    await app.user.click(button);
+
+    const box = screen.getByRole("region", { name: "New invite" });
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    expect(within(box).getByRole("button", { name: "Create invite" })).toBeDefined();
+    await app.user.click(within(box).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("region", { name: "New invite" })).toBeNull();
+    expect(called(app, "createInvite")).toEqual([]);
+  });
+
+  it("shows each state as a status line in its tone (R229)", async () => {
+    await atInvites();
+
+    const line = (created: InviteResponse, word: string) =>
+      row(created).getByText(word).closest("[data-slot=status-line]")?.className;
+    expect(line(PENDING_MEMBER, "Pending")).toContain("text-info");
+    expect(line(USED, "Used")).toContain("text-success");
+    expect(line(EXPIRED, "Expired")).toContain("text-muted-foreground");
+  });
+
+  it("says so while the invites load, as a status", async () => {
+    await atScreen("/admin/invites", { invites: () => new Promise(() => {}) }, { user: actor() });
+    expect((await screen.findByText("Loading invites…")).getAttribute("role")).toBe("status");
+  });
+
+  it("says there are no invites", async () => {
+    await atScreen("/admin/invites", { invites: async () => ({ items: [] }) }, { user: actor() });
+    expect(await screen.findByText("No invites.")).toBeDefined();
+  });
+
+  it("says why the invites couldn't be read", async () => {
+    await atScreen(
+      "/admin/invites",
+      {
+        invites: async () => {
+          throw refusal(500, "internal");
+        },
+      },
+      { user: actor() },
+    );
+    expect((await screen.findByRole("alert")).textContent).toMatch(/^Couldn't load invites: /);
+  });
+
   it("offers Revoke only on the pending invites the actor may revoke", async () => {
     await atInvites({ me: actor("admin") });
 
@@ -121,12 +178,10 @@ describe("the invites screen", () => {
     const app = await atInvites();
 
     await app.user.click(row(PENDING_MEMBER).getByRole("button", { name: "Revoke" }));
-    expect(
-      screen.getByText("Revoking this invite means its code can't be used to register."),
-    ).toBeDefined();
+    expect(screen.getByText("Revoke this invite? Its code then can't register.")).toBeDefined();
     await app.user.click(within(screen.getByRole("alert")).getByRole("button", { name: "Revoke" }));
 
-    expect(await screen.findByText("The invite was revoked.")).toBeDefined();
+    expect(await screen.findByText("Invite revoked.")).toBeDefined();
     expect(called(app, "revokeInvite")).toEqual([[PENDING_MEMBER.id]]);
   });
 
@@ -141,8 +196,9 @@ describe("the invites screen", () => {
 
   it("gives an Admin no choice: the invite is for a Member", async () => {
     const app = await atInvites({ me: actor("admin") });
+    await openBox(app);
 
-    expect(screen.getByText("The invite is for a Member.")).toBeDefined();
+    expect(screen.getByText("For a Member.")).toBeDefined();
     expect(screen.queryByLabelText("Admin")).toBeNull();
     await create(app);
 
@@ -158,9 +214,9 @@ describe("the invites screen", () => {
     await app.user.click(screen.getByRole("button", { name: "Continue" }));
 
     expect(await screen.findByText(CODE)).toBeDefined();
-    expect(screen.getByText(/shown only this once/)).toBeDefined();
+    expect(screen.getByText(/Shown only now/)).toBeDefined();
     expect(
-      screen.getByText(`It works once, until ${formatTimeWithZone(CREATED.invite.expires_at)}.`),
+      screen.getByText(`Works once, until ${formatTimeWithZone(CREATED.invite.expires_at)}.`),
     ).toBeDefined();
     expect(called(app, "createInvite")).toHaveLength(2);
   });
@@ -180,7 +236,8 @@ describe("the invites screen", () => {
       }),
     );
     await app.user.click(screen.getByRole("button", { name: "Copy code" }));
-    expect(await screen.findByText(CODE_COPIED)).toBeDefined();
+    // Both say the same (U96), so the second is a second toast.
+    await waitFor(() => expect(screen.getAllByText(CODE_COPIED)).toHaveLength(2));
     expect(await navigator.clipboard.readText()).toBe(CODE);
   });
 

@@ -151,3 +151,22 @@ test("the grants review's two tables, stacked and then side by side from 912 px 
   expect(await acrossWidths(page, "Grants they hold", [912])).toEqual([]);
   expect(await acrossWidths(page, name, [912])).toEqual([]);
 });
+
+for (const [count, scrolls] of [
+  [1, "with no scrollbar"],
+  [30, "with the column's scrollbar"],
+] as const) {
+  test(`Invites, ${scrolls}`, async ({ page, context }) => {
+    const backend = await fakeBackend(context);
+    for (let n = 1; n <= count; n += 1) {
+      const maker = longName(100 + n);
+      backend.addAdmin(maker);
+      backend.addMember(longName(n));
+      backend.addInvite(maker, n % 2 === 0 ? longName(n) : undefined);
+    }
+    await atScreen(page, backend, "Invites");
+    await expect(page.getByRole("table", { name: "Invites" })).toBeVisible();
+
+    expect(await acrossWidths(page, "Invites")).toEqual([]);
+  });
+}

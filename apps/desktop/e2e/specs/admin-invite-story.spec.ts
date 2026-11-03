@@ -14,10 +14,11 @@ test("an invite goes from the Owner to a new user who sets up 2FA", async ({ pag
   await expectHome(page, OWNER);
 
   await page.getByRole("link", { name: "Invites" }).click();
+  await page.getByRole("button", { name: "New invite" }).click();
   await page.getByRole("button", { name: "Create invite" }).click();
   await page.getByLabel("Current password").fill(PASSWORD);
   await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByText(/shown only this once/)).toBeVisible();
+  await expect(page.getByText(/Shown only now/)).toBeVisible();
   const code = backend.newestInviteCode() ?? "";
   await expect(page.getByText(code, { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Copy code" }).click();

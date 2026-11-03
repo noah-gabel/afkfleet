@@ -1072,6 +1072,21 @@ export class FakeBackend {
     return this.#addUser(username, "admin", true).id;
   }
 
+  /** An invite `creator` made, used by `user` if given, else pending: for the long lists (L4). */
+  addInvite(creator: string, user?: string): string {
+    const response: InviteResponse = {
+      id: id(this.#next()),
+      role: "member",
+      state: user === undefined ? "pending" : "used",
+      created_by: { id: this.#user(creator).id, username: creator },
+      created_at: "2026-10-13T08:00:00.000Z",
+      expires_at: "2026-10-16T08:00:00.000Z",
+      ...(user === undefined ? {} : { used_by: { id: this.#user(user).id, username: user } }),
+    };
+    this.#invites.push({ code: this.#newCode(), response });
+    return response.id;
+  }
+
   /** A Member named `username`, never logged in and disabled if asked: for the long lists (L4). */
   addMember(username: string, options: { readonly disabled?: boolean } = {}): string {
     const user = this.#addUser(username, "member", false);

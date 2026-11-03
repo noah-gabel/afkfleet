@@ -1091,6 +1091,48 @@ test("users and the grants review: loading, failed, and long lists", async ({ pa
   });
 });
 
+test("invites: loading, failed, a long list, and a new invite's code", async ({
+  page,
+  context,
+}) => {
+  const backend = await fakeBackend(context);
+  const main = page.getByRole("main");
+  await signIn(page, backend, OWNER);
+  backend.hold("invites");
+  await nav(page, "Invites");
+  await expect(main.getByText("Loading invites…")).toBeVisible();
+  await bothThemes(page, "invites, loading");
+  backend.release();
+  await expect(main.getByRole("table", { name: "Invites" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Log out" }).click();
+  backend.refuse("invites", { status: 500, code: "internal" });
+  await signIn(page, backend, OWNER);
+  await nav(page, "Invites");
+  await expect(main.getByText(/Couldn't load invites/)).toBeVisible();
+  await bothThemes(page, "invites, failed");
+  backend.refuse("invites", null);
+
+  // Eighteen more beside the fake's one, under the cap of 20 pending.
+  await main.getByRole("button", { name: "New invite" }).click();
+  await main.getByRole("button", { name: "Create invite" }).click();
+  await page.getByLabel("Current password").fill(PASSWORD);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(main.getByRole("button", { name: "Done" })).toBeVisible();
+  for (let n = 2; n <= 18; n += 1) {
+    await main.getByRole("button", { name: "Done" }).click();
+    await main.getByRole("button", { name: "New invite" }).click();
+    await main.getByRole("button", { name: "Create invite" }).click();
+    await expect(main.getByRole("button", { name: "Done" })).toBeVisible();
+  }
+  await expect(main.getByText(/Shown only now/)).toBeVisible();
+  await bothThemes(page, "invites, a long list and a new invite's code", {
+    height: 1200,
+    small: true,
+    smallHeight: 2000,
+  });
+});
+
 test("servers, accounts with their grants, and the Owner's admin screens", async ({
   page,
   context,

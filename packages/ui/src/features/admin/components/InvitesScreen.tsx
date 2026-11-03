@@ -1,14 +1,16 @@
-// The invites screen (Plan.md P8.8, ADR-0016, ADR-0017): every invite in its state, newest
-// first, a page at a time, and a new one.
-// - The form offers only the roles the actor may invite (permissions.ts): the Owner a
-//   Member or an Admin, an Admin a Member. Creating needs a step-up, asked for when the
-//   server wants it (useStepUpAction).
-// - The code is shown once. `createInvite` is a direct call, never a mutation, since its
-//   answer carries the code (CLAUDE.md); the code lives only in this screen's state, with
-//   "Copy invitation" (the server, the code, its end and the CA's fingerprints) and "Copy
-//   code", until "Done" or the user leaves.
+// The invites screen (Plan.md P8.8, P11.11; ADR-0016, ADR-0017, ADR-0020, U122, U123): every invite
+// in its state, newest first, a page at a time, and a new one.
+// - "New invite", at the top right as Accounts' add buttons are, opens a box above the table with
+//   the roles the actor may invite (permissions.ts): the Owner a Member or an Admin, an Admin a
+//   Member. Creating needs a step-up, asked for when the server wants it (useStepUpAction).
+// - The code is shown once, in that box. `createInvite` is a direct call, never a mutation, since
+//   its answer carries the code (CLAUDE.md); the code lives only in this screen's state, with
+//   "Copy invitation" (the server, the code, its end and the CA's fingerprints) and "Copy code",
+//   until "Done" closes the box or the user leaves.
 // - Revoking a pending invite the actor may revoke asks first, then needs the step-up too.
+// - In a small window the table drops Created, then Created by, then Used by (U122, R228).
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { PlusIcon } from "lucide-react";
 import { Fragment, useState } from "react";
 import { toast } from "sonner";
 
@@ -16,8 +18,19 @@ import { toApiError } from "../../../api/ApiError";
 import { useApiClient } from "../../../api/context";
 import { describeError } from "../../../api/describeError";
 import { INVITES_KEY, useInvites, useMe, useServerProfile } from "../../../api/queries";
-import { Alert, AlertDescription, AlertTitle } from "../../../components/ui/alert";
+import { ScreenState } from "../../../components/ScreenState";
+import { StatusLine, type Tone } from "../../../components/StatusLine";
+import { Alert, AlertDescription } from "../../../components/ui/alert";
 import { Button } from "../../../components/ui/button";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+  TableSpanRow,
+} from "../../../components/ui/table";
 import type { CommandError } from "../../../generated/CommandError";
 import type { CreatedInviteResponse } from "../../../generated/CreatedInviteResponse";
 import type { InviteResponse } from "../../../generated/InviteResponse";
@@ -32,33 +45,41 @@ import { canRevoke, inviteRoles } from "../permissions";
 import { StepUpPrompt } from "./StepUpPrompt";
 
 /** At most 20 pending invites per creator: the server's 409. */
-export const INVITE_CAP =
-  "You have 20 pending invites. Revoke one, or wait until one is used or expires.";
-/** The toast after "Copy invitation". */
+export const INVITE_CAP = "20 invites pending. Revoke one, or wait for one to be used or expire.";
+/** The toast after "Copy invitation" or "Copy code". */
 export const INVITATION_COPIED =
-  "Invitation copied. Send it, then copy something else: Windows' clipboard history may keep a copy.";
-/** The toast after "Copy code". */
-export const CODE_COPIED =
-  "Code copied. Send it, then copy something else: Windows' clipboard history may keep a copy.";
+  "Copied. Send it, then copy something else: Windows' clipboard history may keep a copy.";
+export const CODE_COPIED = INVITATION_COPIED;
 /** The toast when copying failed. */
 export const COPY_FAILED = "Copy failed. Select the code by hand.";
+const NEW_INVITE = "New invite";
+const LOADING_INVITES = "Loading invites…";
+const NO_INVITES = "No invites.";
+
+/** Why the invites couldn't be read. */
+function invitesFailed(why: string): string {
+  return `Couldn't load invites: ${why}`;
+}
 
 /** The key of the create form's write. */
 const CREATE = "create";
 
-/** How an invite's state reads; one this app doesn't know shows as the server sent it. */
-function stateLabel(state: InviteState): string {
+/** The table's columns, which a row's question spans. */
+const COLUMNS = 7;
+
+/** How an invite's state reads, and its tone; one this app doesn't know shows as sent (R229). */
+function stateLine(state: InviteState): { text: string; tone: Tone } {
   switch (state) {
     case "pending":
-      return "Pending";
+      return { text: "Pending", tone: "info" };
     case "used":
-      return "Used";
+      return { text: "Used", tone: "success" };
     case "revoked":
-      return "Revoked";
+      return { text: "Revoked", tone: "neutral" };
     case "expired":
-      return "Expired";
+      return { text: "Expired", tone: "neutral" };
     default:
-      return state;
+      return { text: state, tone: "neutral" };
   }
 }
 
@@ -81,6 +102,7 @@ export function InvitesScreen() {
     mutationFn: (id: string) => api.revokeInvite(id),
     onSettled: refetch,
   });
+  const [open, setOpen] = useState(false);
   const [created, setCreated] = useState<CreatedInviteResponse | null>(null);
   const [asking, setAsking] = useState<string | null>(null);
   const roles = actor === undefined ? [] : inviteRoles(actor.role);
@@ -101,47 +123,83 @@ export function InvitesScreen() {
     });
   }
 
+  function close(): void {
+    writes.cancel();
+    setCreated(null);
+    setOpen(false);
+  }
+
   function revokeNow(invite: InviteResponse): void {
     setAsking(null);
     void writes.attempt({
       key: invite.id,
       run: async () => {
         await revoke.mutateAsync(invite.id);
-        toast.success("The invite was revoked.");
+        toast.success("Invite revoked.");
       },
     });
   }
 
   return (
-    <main className="flex flex-col gap-4 p-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Invites</h1>
-      {roles.length === 0 ? null : (
-        <section aria-labelledby="new-invite-heading" className="flex max-w-xl flex-col gap-3">
-          <h2 id="new-invite-heading" className="text-lg font-semibold">
-            New invite
-          </h2>
-          {roles.length === 1 ? (
-            <p className="text-sm">The invite is for a Member.</p>
-          ) : (
-            <fieldset className="flex gap-4 text-sm">
-              <legend className="sr-only">The invite is for</legend>
-              {roles.map((option) => (
-                <label key={option} className="flex items-center gap-2">
-                  <input
-                    type="radio"
-                    name="invite-role"
-                    className="size-4 accent-primary"
-                    checked={role === option}
-                    onChange={() => setRole(option)}
-                  />
-                  {roleLabel(option)}
-                </label>
-              ))}
-            </fieldset>
-          )}
-          <Button type="button" className="self-start" disabled={busy} onClick={create}>
-            Create invite
+    <main className="flex flex-1 flex-col gap-4 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-lg font-semibold tracking-tight">Invites</h1>
+        {roles.length === 0 ? null : (
+          <Button
+            type="button"
+            size="sm"
+            aria-expanded={open}
+            aria-controls="new-invite"
+            disabled={open}
+            onClick={() => setOpen(true)}
+          >
+            <PlusIcon aria-hidden="true" />
+            {NEW_INVITE}
           </Button>
+        )}
+      </div>
+      {open && roles.length > 0 ? (
+        <section
+          id="new-invite"
+          aria-labelledby="new-invite-heading"
+          className="flex max-w-xl flex-col gap-3 rounded-lg border bg-card p-3"
+        >
+          <h2 id="new-invite-heading" className="text-base font-semibold">
+            {NEW_INVITE}
+          </h2>
+          {created === null ? (
+            <>
+              {roles.length === 1 ? (
+                <p className="text-sm">For a Member.</p>
+              ) : (
+                <fieldset className="flex gap-4 text-sm">
+                  <legend className="sr-only">For</legend>
+                  {roles.map((option) => (
+                    <label key={option} className="flex items-center gap-2">
+                      <input
+                        type="radio"
+                        name="invite-role"
+                        className="size-4 accent-primary"
+                        checked={role === option}
+                        onChange={() => setRole(option)}
+                      />
+                      {roleLabel(option)}
+                    </label>
+                  ))}
+                </fieldset>
+              )}
+              <div className="flex gap-2">
+                <Button type="button" disabled={busy} onClick={create}>
+                  Create invite
+                </Button>
+                <Button type="button" variant="outline" onClick={close}>
+                  Cancel
+                </Button>
+              </div>
+            </>
+          ) : (
+            <CreatedInvite created={created} onDone={close} />
+          )}
           {writes.prompt === CREATE ? (
             <StepUpPrompt
               id="step-up-create"
@@ -155,109 +213,120 @@ export function InvitesScreen() {
               {writes.failure.message}
             </p>
           ) : null}
-          {created === null ? null : (
-            <CreatedInvite created={created} onDone={() => setCreated(null)} />
-          )}
         </section>
-      )}
-      {invites.isError ? (
-        <p role="alert" className="text-sm text-destructive">
-          {describeError(toApiError(invites.error).error)}
-        </p>
       ) : null}
-      <table aria-label="Invites" className="w-full text-left text-sm">
-        <thead className="text-muted-foreground">
-          <tr>
-            <th className="py-1 font-medium">Role</th>
-            <th className="py-1 font-medium">State</th>
-            <th className="py-1 font-medium">Created by</th>
-            <th className="py-1 font-medium">Created</th>
-            <th className="py-1 font-medium">Expires</th>
-            <th className="py-1 font-medium">Used by</th>
-            <th className="py-1 font-medium">
-              <span className="sr-only">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((invite) => {
-            const revocable = actor !== undefined && canRevoke(actor.role, invite);
-            const failure = writes.failure?.key === invite.id ? writes.failure.message : undefined;
-            const extra =
-              asking === invite.id || writes.prompt === invite.id || failure !== undefined;
-            return (
-              <Fragment key={invite.id}>
-                <tr className="border-t">
-                  <td className="py-2">{roleLabel(invite.role)}</td>
-                  <td className="py-2">{stateLabel(invite.state)}</td>
-                  <td className="py-2">{invite.created_by.username}</td>
-                  <td className="py-2">{formatTime(invite.created_at)}</td>
-                  <td className="py-2">{formatTime(invite.expires_at)}</td>
-                  <td className="py-2">{invite.used_by?.username ?? ""}</td>
-                  <td className="py-2">
-                    <div className="flex justify-end">
-                      {revocable ? (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          disabled={busy}
-                          onClick={() => setAsking(invite.id)}
-                        >
-                          Revoke
-                        </Button>
-                      ) : null}
-                    </div>
-                  </td>
-                </tr>
-                {extra ? (
-                  <tr>
-                    <td colSpan={7} className="pb-3">
-                      {asking === invite.id ? (
-                        <Alert>
-                          <AlertDescription className="flex flex-col gap-2 text-foreground">
-                            <p>Revoking this invite means its code can't be used to register.</p>
-                            <div className="flex gap-2">
-                              <Button
-                                type="button"
-                                variant="destructive"
-                                disabled={busy}
-                                onClick={() => revokeNow(invite)}
-                              >
-                                Revoke
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                onClick={() => setAsking(null)}
-                              >
-                                Cancel
-                              </Button>
-                            </div>
-                          </AlertDescription>
-                        </Alert>
-                      ) : null}
-                      {writes.prompt === invite.id ? (
-                        <StepUpPrompt
-                          id={`step-up-${invite.id}`}
-                          pending={writes.running !== null}
-                          onConfirm={writes.confirm}
-                          onCancel={writes.cancel}
-                        />
-                      ) : null}
-                      {failure === undefined ? null : (
-                        <p role="alert" className="text-sm text-destructive">
-                          {failure}
-                        </p>
-                      )}
-                    </td>
-                  </tr>
-                ) : null}
-              </Fragment>
-            );
-          })}
-        </tbody>
-      </table>
+      {invites.isError ? (
+        <ScreenState kind="error">
+          {invitesFailed(describeError(toApiError(invites.error).error))}
+        </ScreenState>
+      ) : null}
+      {invites.isPending ? <ScreenState kind="loading">{LOADING_INVITES}</ScreenState> : null}
+      {invites.isSuccess && rows.length === 0 ? (
+        <ScreenState kind="empty">{NO_INVITES}</ScreenState>
+      ) : null}
+      {rows.length === 0 ? null : (
+        <Table aria-label="Invites">
+          <TableHeader>
+            <TableRow>
+              <TableHead>Role</TableHead>
+              <TableHead>State</TableHead>
+              <TableHead drop="under-960">Created by</TableHead>
+              <TableHead drop="under-1100">Created</TableHead>
+              <TableHead>Expires</TableHead>
+              <TableHead drop="under-790">Used by</TableHead>
+              <TableHead>
+                <span className="sr-only">Actions</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((invite) => {
+              const revocable = actor !== undefined && canRevoke(actor.role, invite);
+              const failure =
+                writes.failure?.key === invite.id ? writes.failure.message : undefined;
+              const extra =
+                asking === invite.id || writes.prompt === invite.id || failure !== undefined;
+              const state = stateLine(invite.state);
+              return (
+                <Fragment key={invite.id}>
+                  <TableRow>
+                    <TableCell>{roleLabel(invite.role)}</TableCell>
+                    <TableCell>
+                      <StatusLine tone={state.tone}>{state.text}</StatusLine>
+                    </TableCell>
+                    <TableCell drop="under-960" className="font-mono break-all">
+                      {invite.created_by.username}
+                    </TableCell>
+                    <TableCell drop="under-1100">{formatTime(invite.created_at)}</TableCell>
+                    <TableCell>{formatTime(invite.expires_at)}</TableCell>
+                    <TableCell drop="under-790" className="font-mono break-all">
+                      {invite.used_by?.username ?? ""}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex justify-end">
+                        {revocable ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            disabled={busy}
+                            onClick={() => setAsking(invite.id)}
+                          >
+                            Revoke
+                          </Button>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                  {extra ? (
+                    <TableSpanRow span={COLUMNS} className="pb-3">
+                      <div className="flex flex-col gap-2">
+                        {asking === invite.id ? (
+                          <Alert>
+                            <AlertDescription className="flex flex-col gap-2 text-foreground">
+                              <p>Revoke this invite? Its code then can't register.</p>
+                              <div className="flex gap-2">
+                                <Button
+                                  type="button"
+                                  variant="destructive"
+                                  disabled={busy}
+                                  onClick={() => revokeNow(invite)}
+                                >
+                                  Revoke
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  onClick={() => setAsking(null)}
+                                >
+                                  Cancel
+                                </Button>
+                              </div>
+                            </AlertDescription>
+                          </Alert>
+                        ) : null}
+                        {writes.prompt === invite.id ? (
+                          <StepUpPrompt
+                            id={`step-up-${invite.id}`}
+                            pending={writes.running !== null}
+                            onConfirm={writes.confirm}
+                            onCancel={writes.cancel}
+                          />
+                        ) : null}
+                        {failure === undefined ? null : (
+                          <p role="alert" className="text-sm text-destructive">
+                            {failure}
+                          </p>
+                        )}
+                      </div>
+                    </TableSpanRow>
+                  ) : null}
+                </Fragment>
+              );
+            })}
+          </TableBody>
+        </Table>
+      )}
       {invites.hasNextPage ? (
         <Button
           type="button"
@@ -290,35 +359,30 @@ function CreatedInvite({
     ...(server?.custom_ca === undefined ? {} : { fingerprints: server.custom_ca.fingerprints }),
   });
   return (
-    <Alert>
-      <AlertTitle>{`New invite for a ${roleLabel(created.invite.role)}`}</AlertTitle>
-      <AlertDescription className="flex flex-col gap-2 text-foreground">
-        <p>
-          Send this code to the person you invite. It's shown only this once; the server keeps only
-          its hash.
-        </p>
-        <code className="rounded-md bg-muted p-2 font-mono text-sm select-all">{created.code}</code>
-        <p>{`It works once, until ${formatTimeWithZone(created.invite.expires_at)}.`}</p>
-        <div className="flex gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => void copyWithToast(invitation, INVITATION_COPIED, COPY_FAILED)}
-          >
-            Copy invitation
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => void copyWithToast(created.code, CODE_COPIED, COPY_FAILED)}
-          >
-            Copy code
-          </Button>
-          <Button type="button" onClick={onDone}>
-            Done
-          </Button>
-        </div>
-      </AlertDescription>
-    </Alert>
+    <div className="flex flex-col gap-2 text-sm">
+      <p className="font-semibold">{`New invite for a ${roleLabel(created.invite.role)}`}</p>
+      <p>Send this code to your invitee. Shown only now; the server keeps only its hash.</p>
+      <code className="rounded-md bg-muted p-2 font-mono text-sm select-all">{created.code}</code>
+      <p>{`Works once, until ${formatTimeWithZone(created.invite.expires_at)}.`}</p>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => void copyWithToast(invitation, INVITATION_COPIED, COPY_FAILED)}
+        >
+          Copy invitation
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => void copyWithToast(created.code, CODE_COPIED, COPY_FAILED)}
+        >
+          Copy code
+        </Button>
+        <Button type="button" onClick={onDone}>
+          Done
+        </Button>
+      </div>
+    </div>
   );
 }
