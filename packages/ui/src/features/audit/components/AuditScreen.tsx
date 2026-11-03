@@ -1,17 +1,33 @@
-// The audit log's screen (Plan.md P11.9; ADR-0020, U78, U80, U81, S47, S52, S85, S89,
-// R173–R175), for Admins and the Owner: every entry a page at a time, newest first, or one
-// target's. An entry's time, who did it, what, on what, how it ended, from which address, and
-// its details, all plain text (R174). Entries never wait for the names (S85).
+// The audit log's screen (Plan.md P11.9, P11.11; ADR-0020, U78, U80, U81, U122, S47, S52, S85, S89,
+// S132, R173–R175), for Admins and the Owner: every entry a page at a time, newest first, or one
+// target's. An entry's time, who did it, what, on what, how it ended, from which address, and its
+// details, all plain text (R174). Entries never wait for the names (S85).
+//
+// Every column matters here, so in a small box the table stacks each entry into a labelled block
+// rather than dropping any (U122): one <table>, which CSS turns into blocks below a 784 px box,
+// its heads only for screen readers then, and each cell a label and its value. The label is real
+// text, so the sweep measures it, and aria-hidden, as the head names the cell; a cell is never
+// hidden, so every entry keeps its seven cells in order and each its head (S132). 784 px of box is
+// under the box beside the wide sidebar, so the window's width alone decides the form (R228).
 //
 // Nothing here carries a secret, and the server built each entry the same for every viewer (R65):
 // reads are queries, kept in memory until the session's end empties the cache (S87).
 import { Link } from "@tanstack/react-router";
-import { useMemo } from "react";
+import { type ReactNode, useMemo } from "react";
 
 import { toApiError } from "../../../api/ApiError";
 import { describeError } from "../../../api/describeError";
 import { type AuditFilter, useAudit, useUserNames } from "../../../api/queries";
+import { ScreenState } from "../../../components/ScreenState";
 import { Button } from "../../../components/ui/button";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "../../../components/ui/table";
 import type { AuditEntryResponse } from "../../../generated/AuditEntryResponse";
 import type { AuditTargetKind } from "../../../generated/AuditTargetKind";
 import { formatTime } from "../../../lib/time";
@@ -26,6 +42,7 @@ import {
   FILTER_EMPTY,
   FILTER_ON_USER,
   LOAD_AGAIN,
+  LOADING_AUDIT,
   NAMES_FAILED,
   NO_USER,
   ONLY_THIS_TARGET,
@@ -39,17 +56,43 @@ import {
   unreadableEntry,
 } from "../texts";
 
+/** The stacked form's classes, below a 784 px box, written out whole for Tailwind (S132). */
+const STACK = {
+  table: "@max-[48.875rem]/table:block",
+  head: "@max-[48.875rem]/table:sr-only",
+  body: "@max-[48.875rem]/table:block",
+  row: "@max-[48.875rem]/table:grid @max-[48.875rem]/table:grid-cols-[max-content_minmax(0,1fr)] @max-[48.875rem]/table:gap-x-3 @max-[48.875rem]/table:py-2",
+  cell: "@max-[48.875rem]/table:col-span-2 @max-[48.875rem]/table:grid @max-[48.875rem]/table:grid-cols-subgrid @max-[48.875rem]/table:py-0.5",
+  label:
+    "hidden font-mono text-[0.6875rem] font-semibold tracking-wider text-muted-foreground uppercase @max-[48.875rem]/table:block",
+};
+
 /** The users' names by ID, as far as they could be read. */
 type Names = ReadonlyMap<string, string>;
+
+/** A cell of `column`, its label shown only when stacked, and none when it holds nothing. */
+function Cell({ column, children }: { column: number; children: ReactNode }) {
+  const empty = children === null || children === undefined || children === "";
+  return (
+    <TableCell className={`align-top ${STACK.cell}`}>
+      {empty ? null : (
+        <span data-slot="cell-label" aria-hidden="true" className={STACK.label}>
+          {COLUMNS[column]}
+        </span>
+      )}
+      {empty ? null : <div className="min-w-0 wrap-anywhere">{children}</div>}
+    </TableCell>
+  );
+}
 
 /** A user's ID: their name with the whole ID on hover and for screen readers, or the ID (U80). */
 function UserName({ id, names }: { id: string; names: Names }) {
   const name = names.get(id);
   if (name === undefined) {
-    return <span className="break-all">{id}</span>;
+    return <span className="font-mono wrap-anywhere">{id}</span>;
   }
   return (
-    <span title={id}>
+    <span title={id} className="font-mono wrap-anywhere">
       {name}
       <span className="sr-only"> ({id})</span>
     </span>
@@ -94,7 +137,7 @@ function On({
       {target.kind === "user" ? (
         <UserName id={target.id} names={names} />
       ) : (
-        <span className="break-all">{target.id}</span>
+        <span className="font-mono wrap-anywhere">{target.id}</span>
       )}
       {shown ? null : (
         <Button asChild size="sm" variant="link" className="h-auto p-0">
@@ -113,10 +156,14 @@ function On({
 
 /** An entry's details, one line each, plain text however long or strange (R174). */
 function Details({ entry, names }: { entry: AuditEntryResponse; names: Names }) {
+  const lines = detailLines(entry);
+  if (lines.length === 0) {
+    return null;
+  }
   return (
     <ul className="flex flex-col gap-0.5">
-      {detailLines(entry).map((line) => (
-        <li key={`${line.label}:${line.value}`} className="max-w-full overflow-hidden break-words">
+      {lines.map((line) => (
+        <li key={`${line.label}:${line.value}`} className="wrap-anywhere">
           {line.user === undefined ? (
             line.label === "" ? (
               line.value
@@ -144,22 +191,24 @@ function EntryRow({
   names: Names;
   filter: AuditFilter | undefined;
 }) {
+  const on = <On entry={entry} names={names} filter={filter} />;
+  const details = <Details entry={entry} names={names} />;
   return (
-    <tr className="border-t align-top">
-      <td className="py-2 pr-3">{formatTime(entry.at)}</td>
-      <td className="py-2 pr-3">
+    <TableRow className={STACK.row}>
+      <Cell column={0}>{formatTime(entry.at)}</Cell>
+      <Cell column={1}>
         <Who entry={entry} names={names} />
-      </td>
-      <td className="py-2 pr-3">{actionLabel(entry.action)}</td>
-      <td className="py-2 pr-3">
-        <On entry={entry} names={names} filter={filter} />
-      </td>
-      <td className="py-2 pr-3">{outcomeLabel(entry.outcome)}</td>
-      <td className="py-2 pr-3">{entry.ip ?? ""}</td>
-      <td className="py-2">
-        <Details entry={entry} names={names} />
-      </td>
-    </tr>
+      </Cell>
+      <Cell column={2}>
+        <span className="wrap-anywhere">{actionLabel(entry.action)}</span>
+      </Cell>
+      <Cell column={3}>{entry.target === undefined ? null : on}</Cell>
+      <Cell column={4}>{outcomeLabel(entry.outcome)}</Cell>
+      <Cell column={5}>
+        {entry.ip === undefined ? null : <span className="font-mono">{entry.ip}</span>}
+      </Cell>
+      <Cell column={6}>{detailLines(entry).length === 0 ? null : details}</Cell>
+    </TableRow>
   );
 }
 
@@ -167,7 +216,7 @@ function EntryRow({
 function FilterLine({ filter, names }: { filter: AuditFilter; names: Names }) {
   return (
     <div className="flex flex-col gap-1 text-sm">
-      <p className="break-all">
+      <p className="wrap-anywhere">
         {showingOnly(filter.kind as AuditTargetKind)}{" "}
         {filter.kind === "user" ? <UserName id={filter.id} names={names} /> : filter.id}.
       </p>
@@ -191,43 +240,48 @@ export function AuditScreen({ filter }: { filter?: AuditFilter }) {
   );
   const rows = useMemo(() => auditRows(audit.data?.pages ?? []), [audit.data]);
   return (
-    <main className="flex flex-col gap-4 p-6">
-      <h1 className="text-2xl font-semibold tracking-tight">{AUDIT_HEADING}</h1>
+    <main className="flex flex-1 flex-col gap-4 p-4">
+      <h1 className="text-lg font-semibold tracking-tight">{AUDIT_HEADING}</h1>
       <p className="text-sm text-muted-foreground">{AUDIT_INTRO}</p>
       {filter === undefined ? null : <FilterLine filter={filter} names={names} />}
       {users.isError ? <p className="text-sm text-muted-foreground">{NAMES_FAILED}</p> : null}
       {audit.isError ? (
-        <p role="alert" className="text-sm text-destructive">
+        <ScreenState kind="error">
           {auditFailed(describeError(toApiError(audit.error).error))}
-        </p>
+        </ScreenState>
       ) : null}
+      {audit.isPending ? <ScreenState kind="loading">{LOADING_AUDIT}</ScreenState> : null}
       {audit.isSuccess && rows.length === 0 ? (
-        <p>{filter === undefined ? AUDIT_EMPTY : FILTER_EMPTY}</p>
-      ) : (
-        <table aria-label={AUDIT_HEADING} className="w-full text-left text-sm">
-          <thead className="text-muted-foreground">
-            <tr>
+        <ScreenState kind="empty">{filter === undefined ? AUDIT_EMPTY : FILTER_EMPTY}</ScreenState>
+      ) : null}
+      {rows.length === 0 ? null : (
+        <Table aria-label={AUDIT_HEADING} className={STACK.table}>
+          <TableHeader className={STACK.head}>
+            <TableRow>
               {COLUMNS.map((column) => (
-                <th key={column} className="py-1 pr-3 font-medium">
-                  {column}
-                </th>
+                <TableHead key={column}>{column}</TableHead>
               ))}
-            </tr>
-          </thead>
-          <tbody>
+            </TableRow>
+          </TableHeader>
+          <TableBody className={STACK.body}>
             {rows.map((row) =>
               row.kind === "entry" ? (
                 <EntryRow key={row.id} entry={row.entry} names={names} filter={filter} />
               ) : (
-                <tr key={row.id} className="border-t">
-                  <td colSpan={COLUMNS.length} className="py-2 italic text-destructive">
-                    {unreadableEntry(row.id)}
-                  </td>
-                </tr>
+                <TableRow key={row.id} className={STACK.row}>
+                  <TableCell
+                    colSpan={COLUMNS.length}
+                    className={`italic text-destructive ${STACK.cell}`}
+                  >
+                    <div className="w-0 min-w-full wrap-anywhere @max-[48.875rem]/table:col-span-2">
+                      {unreadableEntry(row.id)}
+                    </div>
+                  </TableCell>
+                </TableRow>
               ),
             )}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       )}
       <div className="flex gap-2">
         {audit.hasNextPage ? (

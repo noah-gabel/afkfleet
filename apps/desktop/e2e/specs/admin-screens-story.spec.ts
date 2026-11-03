@@ -67,7 +67,7 @@ test("the Owner disables an agent, releases its bots and reads it in the audit l
     main.getByRole("row", { name: /Old data deleted/ }).getByText("The server"),
   ).toBeVisible();
   await expect(
-    main.getByText(`Entry ${unreadable} can't be read. The server's log says why.`),
+    main.getByText(`Entry ${unreadable} unreadable. The server's log says why.`),
   ).toBeVisible();
 });
 

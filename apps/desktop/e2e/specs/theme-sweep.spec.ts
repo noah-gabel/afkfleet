@@ -1170,6 +1170,84 @@ test("agents: loading, none, failed, and a long list", async ({ page, context })
   await bothThemes(page, "agents, a long list", { height: 2100, small: true, smallHeight: 3500 });
 });
 
+test("the audit log: loading, nothing, failed, without names, narrowed, and a long list", async ({
+  page,
+  context,
+}) => {
+  const backend = await fakeBackend(context);
+  const main = page.getByRole("main");
+  await signIn(page, backend, OWNER);
+  backend.hold("audit");
+  await nav(page, "Audit log");
+  await expect(main.getByText("Loading audit log…")).toBeVisible();
+  await bothThemes(page, "the audit log, loading");
+  backend.release();
+  await expect(main.getByText("Nothing recorded.")).toBeVisible();
+  await bothThemes(page, "the audit log, nothing recorded");
+
+  await page.getByRole("button", { name: "Log out" }).click();
+  backend.refuse("audit", { status: 500, code: "internal" });
+  await signIn(page, backend, OWNER);
+  await nav(page, "Audit log");
+  await expect(main.getByText(/Couldn't load audit log/)).toBeVisible();
+  await bothThemes(page, "the audit log, failed");
+  backend.refuse("audit", null);
+
+  const member = backend.userId(MEMBER);
+  for (const action of ["user.set_role", "user.set_disabled", "user.change_password"] as const) {
+    backend.addAuditEntry({
+      action,
+      actor: backend.userId(OWNER),
+      target: { kind: "user", id: member },
+      metadata: [{ key: "user_id", text: member }],
+    });
+  }
+  backend.addAgent("agent-without-entries");
+  await page.getByRole("button", { name: "Log out" }).click();
+  backend.refuse("users", { status: 500, code: "internal" });
+  await signIn(page, backend, OWNER);
+  await nav(page, "Audit log");
+  await expect(main.getByText("Names unavailable. Users show by ID.")).toBeVisible();
+  await bothThemes(page, "the audit log, names unavailable");
+  backend.refuse("users", null);
+
+  await page.getByRole("button", { name: "Log out" }).click();
+  await signIn(page, backend, OWNER);
+  await nav(page, "Agents");
+  await main.getByRole("link", { name: "Audit of agent-without-entries" }).click();
+  await expect(main.getByText("Nothing for this target.")).toBeVisible();
+  await bothThemes(page, "the audit log, nothing for this target");
+  await nav(page, "Users");
+  await main.getByRole("link", { name: `Audit of ${MEMBER}` }).click();
+  await expect(main.getByText(/What happened to this user/)).toBeVisible();
+  await bothThemes(page, "the audit log, on a user", { small: true, smallHeight: 900 });
+
+  for (let n = 1; n <= 60; n += 1) {
+    backend.addAuditEntry({
+      action: n % 2 === 0 ? "agent.connect" : "security.agent_identity_conflict",
+      outcome: n % 3 === 0 ? "failure" : "success",
+      ip: "2001:db8:ffff:ffff:ffff:ffff:ffff:fffe",
+      target: {
+        kind: "agent",
+        id: `01900000-0000-7000-8000-0000000003${String(n).padStart(2, "0")}`,
+      },
+      metadata: [
+        { key: "reason", text: "name_mismatch" },
+        { key: "agent_name", text: "agent-on-the-host-with-a-long-name-and-more-001" },
+        { key: "certificate_serial", text: "7f3a9c0e5b2d4f6a8c1e3b5d7f9a0c2e4b6d8f0a" },
+      ],
+    });
+  }
+  backend.addUnreadableEntry();
+  await nav(page, "Audit log");
+  await expect(main.getByRole("button", { name: "Show more" })).toBeVisible();
+  await bothThemes(page, "the audit log, a long list", { end: "ends" });
+  await page.setViewportSize({ width: 800, height: 600 });
+  await expect(main.getByRole("table", { name: "Audit log" })).toHaveCSS("display", "block");
+  await bothThemes(page, "the audit log, a long list, stacked", { end: "ends" });
+  await page.setViewportSize({ width: 1280, height: 720 });
+});
+
 test("servers, accounts with their grants, and the Owner's admin screens", async ({
   page,
   context,
@@ -1241,7 +1319,7 @@ test("servers, accounts with their grants, and the Owner's admin screens", async
   await expect(main.getByText(/Disable agent-main for good/)).toBeVisible();
   await bothThemes(page, "agents, the question");
   await nav(page, "Audit log");
-  await expect(main.getByText(/can't be read/)).toBeVisible();
+  await expect(main.getByText(/unreadable\./)).toBeVisible();
   await bothThemes(page, "the audit log, an unreadable row", { small: true });
 });
 
