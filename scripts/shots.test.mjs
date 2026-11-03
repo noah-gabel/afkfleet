@@ -222,8 +222,8 @@ describe("the build context", () => {
 });
 
 describe("the docker commands", () => {
-  it("build the one Dockerfile for amd64 under the local tag", () => {
-    assert.deepEqual(buildArgs(), [
+  it("build the one Dockerfile for amd64 under the local tag, writing its ID", () => {
+    assert.deepEqual(buildArgs("/repo/target/shots/image-id"), [
       "build",
       "--platform",
       "linux/amd64",
@@ -231,9 +231,14 @@ describe("the docker commands", () => {
       "deploy/docker/shots.Dockerfile",
       "--tag",
       IMAGE,
+      "--iidfile",
+      "/repo/target/shots/image-id",
       ".",
     ]);
   });
+
+  /** The ID a build wrote: what runs, never the shared tag. */
+  const ID = `sha256:${"0123456789abcdef".repeat(4)}`;
 
   const base = (user) => [
     "run",
@@ -257,7 +262,7 @@ describe("the docker commands", () => {
     "CI",
   ];
   const tail = (update) => [
-    IMAGE,
+    ID,
     "node_modules/.bin/playwright",
     "test",
     "--config",
@@ -267,7 +272,14 @@ describe("the docker commands", () => {
 
   it("compare on Linux as the host's own user, the baselines read-only", () => {
     assert.deepEqual(
-      runArgs({ mode: "compare", root: "/repo", platform: "linux", uid: 1001, gid: 118 }),
+      runArgs({
+        mode: "compare",
+        root: "/repo",
+        platform: "linux",
+        uid: 1001,
+        gid: 118,
+        image: ID,
+      }),
       [
         ...base("1001:118"),
         "--mount",
@@ -280,7 +292,7 @@ describe("the docker commands", () => {
   });
 
   it("update on Windows as the image's user, the baselines writable", () => {
-    assert.deepEqual(runArgs({ mode: "update", root: "C:\\repo", platform: "win32" }), [
+    assert.deepEqual(runArgs({ mode: "update", root: "C:\\repo", platform: "win32", image: ID }), [
       ...base("pwuser"),
       "--mount",
       "type=bind,source=C:\\repo\\apps\\desktop\\e2e\\baselines,target=/app/apps/desktop/e2e/baselines",
@@ -299,6 +311,7 @@ describe("the docker commands", () => {
         uid: 1,
         gid: 2,
         design: "/repo/target/design-l4/before",
+        image: ID,
       }),
       [
         ...base("1:2"),
@@ -311,6 +324,18 @@ describe("the docker commands", () => {
         ...tail("all"),
       ],
     );
+  });
+
+  it("run as the image's user when the host's is root, never as root", () => {
+    const args = runArgs({
+      mode: "compare",
+      root: "/repo",
+      platform: "linux",
+      uid: 0,
+      gid: 0,
+      image: ID,
+    });
+    assert.equal(args[args.indexOf("--user") + 1], "pwuser");
   });
 
   it("never widen what the container may do", () => {
@@ -503,6 +528,9 @@ describe("what the container leaves", () => {
     const said = [];
     try {
       const docker = (args) => {
+        if (args[0] === "build") {
+          writeFileSync(args[args.indexOf("--iidfile") + 1], `sha256:${"a".repeat(64)}`);
+        }
         if (args[0] === "run") {
           plant(root, `${BASELINES}/theme-sweep.spec.ts/login-dark.png`);
           plant(root, `${BASELINES}/pwned.spec.ts`, `${RESULTS}/x-shots/x-dark-diff.png`);
@@ -525,6 +553,63 @@ describe("what the container leaves", () => {
       assert.match(said[0] ?? "", /apps\/desktop\/e2e\/baselines\/pwned\.spec\.ts/);
       assert.doesNotMatch(said[0] ?? "", /login-dark\.png/);
       assert.equal(existsSync(path.join(root, BASELINES, "pwned.spec.ts")), true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("the image it runs", () => {
+  const host = (root, docker, said) => ({
+    root,
+    docker,
+    platform: "linux",
+    uid: 1,
+    gid: 1,
+    env: {},
+    error: (message) => said.push(message),
+  });
+
+  it("is the one its build just made, by the ID the build wrote, never the shared tag", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "afkfleet-shots-"));
+    const id = `sha256:${"b".repeat(64)}`;
+    const runs = [];
+    try {
+      const docker = (args) => {
+        if (args[0] === "build") {
+          writeFileSync(args[args.indexOf("--iidfile") + 1], `${id}\n`);
+        }
+        if (args[0] === "run") {
+          runs.push(args);
+        }
+        return 0;
+      };
+
+      assert.equal(shots(["compare"], host(root, docker, [])), 0);
+      assert.equal(runs.length, 1);
+      assert.equal(runs[0]?.includes(id), true);
+      assert.equal(runs[0]?.includes(IMAGE), false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("isn't run when the build wrote no ID it can read", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "afkfleet-shots-"));
+    const said = [];
+    let ran = false;
+    try {
+      const docker = (args) => {
+        if (args[0] === "build") {
+          writeFileSync(args[args.indexOf("--iidfile") + 1], "afkfleet-shots:local");
+        }
+        ran ||= args[0] === "run";
+        return 0;
+      };
+
+      assert.equal(shots(["compare"], host(root, docker, said)), 1);
+      assert.equal(ran, false);
+      assert.match(said.join("\n"), /image ID/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

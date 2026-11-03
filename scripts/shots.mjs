@@ -15,7 +15,15 @@
 // in the job's summary. Exits with the run's status, or 1 or 2 saying why.
 // Tests: scripts/shots.test.mjs.
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -28,6 +36,10 @@ const TITLE = "org.opencontainers.image.title=afkfleet-shots";
 export const DOCKERFILE = "deploy/docker/shots.Dockerfile";
 export const BASELINES = "apps/desktop/e2e/baselines";
 export const RESULTS = "target/shots/results";
+/** Where the build writes the ID of the image it made, which is what runs. */
+export const IMAGE_ID = "target/shots/image-id";
+/** What a build's ID looks like. */
+const ID = /^sha256:[0-9a-f]{64}$/;
 
 /** Where the image keeps the repository's copy. */
 const APP = "/app";
@@ -39,9 +51,23 @@ const USAGE =
   "usage: node scripts/shots.mjs compare | update | design target/design-<name>[/<folder>]";
 const NO_DOCKER = "Docker doesn't answer. Start Docker Desktop, then run just shots again.";
 
-/** `docker build`'s arguments. */
-export function buildArgs() {
-  return ["build", "--platform", "linux/amd64", "--file", DOCKERFILE, "--tag", IMAGE, "."];
+/**
+ * `docker build`'s arguments, writing the new image's ID to `iidfile`: the run takes the image by
+ * that ID, never by the shared tag, which another build could move meanwhile.
+ */
+export function buildArgs(iidfile) {
+  return [
+    "build",
+    "--platform",
+    "linux/amd64",
+    "--file",
+    DOCKERFILE,
+    "--tag",
+    IMAGE,
+    "--iidfile",
+    iidfile,
+    ".",
+  ];
 }
 
 /** `docker image prune`'s: only this image's earlier builds, which lost their tag. */
@@ -50,11 +76,12 @@ export function pruneArgs() {
 }
 
 /**
- * `docker run`'s arguments for `mode`, on a host `platform` with the repository at `root`: as the
- * host's own user on Linux, so the runner owns what it writes, and the image's `pwuser` elsewhere.
- * Only `HOME` and `CI` reach the container. `design` is the design mode's folder.
+ * `docker run`'s arguments for `mode`, on a host `platform` with the repository at `root`, of
+ * `image`, a build's ID: as the host's own user on Linux, so the runner owns what it writes, and
+ * the image's `pwuser` elsewhere, or when the host's user is root, so nothing runs as root. Only
+ * `HOME` and `CI` reach the container. `design` is the design mode's folder.
  */
-export function runArgs({ mode, root, platform, uid, gid, design }) {
+export function runArgs({ mode, root, platform, uid, gid, design, image }) {
   const join = platform === "win32" ? path.win32.join : path.posix.join;
   const mount = (source, target, readonly) => [
     "--mount",
@@ -69,7 +96,7 @@ export function runArgs({ mode, root, platform, uid, gid, design }) {
     "--network",
     "none",
     "--user",
-    platform === "linux" ? `${uid}:${gid}` : "pwuser",
+    platform === "linux" && uid !== 0 ? `${uid}:${gid}` : "pwuser",
     "--cap-drop",
     "ALL",
     "--security-opt",
@@ -88,7 +115,7 @@ export function runArgs({ mode, root, platform, uid, gid, design }) {
   }
   args.push(
     ...mount(join(root, RESULTS), `${APP}/${RESULTS}`, false),
-    IMAGE,
+    image,
     // Not `pnpm exec`, which would check the image's install again and can't write it.
     "node_modules/.bin/playwright",
     "test",
@@ -243,14 +270,22 @@ export function shots(args, host) {
       return 1;
     }
   }
-  for (const step of [buildArgs(), pruneArgs()]) {
+  // An earlier build's ID never stands in for this one's.
+  const iidfile = path.join(root, IMAGE_ID);
+  rmSync(iidfile, { force: true });
+  for (const step of [buildArgs(iidfile), pruneArgs()]) {
     const status = docker(step, true);
     if (status !== 0) {
       return status;
     }
   }
+  const image = existsSync(iidfile) ? readFileSync(iidfile, "utf8").trim() : "";
+  if (!ID.test(image)) {
+    error(`The build wrote no image ID to run in ${IMAGE_ID}, so nothing ran.`);
+    return 1;
+  }
   const status = docker(
-    runArgs({ mode, root, platform: host.platform, uid: host.uid, gid: host.gid, design }),
+    runArgs({ mode, root, platform: host.platform, uid: host.uid, gid: host.gid, design, image }),
     true,
   );
   // Before anything reads what the container wrote: nothing but shots may be there, or the next
