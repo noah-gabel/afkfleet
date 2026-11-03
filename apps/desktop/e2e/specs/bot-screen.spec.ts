@@ -1,7 +1,12 @@
-// A bot's screen in the real engine (Plan.md P11.11; ADR-0020, U39, U91, U92, U105, U113, S123): where
-// its two columns are, as jsdom has no layout. Widening the window goes stacked, then two columns,
-// and never back: below 912 stacked on the rail, 912 to 1055 two columns on the rail, from 1056 two
-// columns with the wide sidebar. The console fills the height, banner up or not.
+// A bot's screen in the real engine (Plan.md P11.11; ADR-0020, U39, U91, U92, U105, U113, U115, S123):
+// where its two columns are, as jsdom has no layout. Widening the window goes stacked, then two
+// columns, and never back: below 912 stacked on the rail, 912 to 1055 two columns on the rail, from
+// 1056 two columns with the wide sidebar, whether the column had a scrollbar or not. The console
+// fills the height, banner up or not, and nothing scrolls into blank space.
+//
+// This file runs with the scrollbars Playwright hides by default, as WebView2 shows them: a
+// classic scrollbar narrows the column it scrolls, which the switch must not depend on (PR #90's
+// review).
 
 import type { Page } from "@playwright/test";
 
@@ -9,6 +14,8 @@ import { type FakeBackend, MEMBER, OWNER } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
 import { enterCode, expectHome, logIn } from "./steps";
 import { inScheme } from "./theme";
+
+test.use({ launchOptions: { ignoreDefaultArgs: ["--hide-scrollbars"] } });
 
 /** The Owner on bot 1's screen. */
 async function atBot(page: Page, context: Parameters<typeof fakeBackend>[0]): Promise<FakeBackend> {
@@ -68,6 +75,103 @@ for (const [width, beside, rail] of [
     await expect.poll(() => railWidth(page)).toBe(rail);
     await expect.poll(() => sideBySide(page)).toBe(beside);
   });
+}
+
+for (const [width, rail] of [
+  [912, 64],
+  [1056, 208],
+] as const) {
+  test(`at ${width} px it's two columns even coming from stacked, its scrollbar shown`, async ({
+    page,
+    context,
+  }) => {
+    await atBot(page, context);
+    await page.setViewportSize({ width: 800, height: 600 });
+    await expect.poll(() => sideBySide(page)).toBe(false);
+    const column = page.locator("[data-slot=content]");
+    expect(await column.evaluate((held) => held.offsetWidth - held.clientWidth)).toBeGreaterThan(0);
+
+    await page.setViewportSize({ width, height: 600 });
+
+    await expect.poll(() => railWidth(page)).toBe(rail);
+    await expect.poll(() => sideBySide(page)).toBe(true);
+  });
+}
+
+/** Up the certificate banner over the bot's screen, as a refusing server does. */
+async function withBanner(page: Page, backend: FakeBackend): Promise<void> {
+  backend.refuseAll("certificate");
+  await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Modes" }).click();
+  await expect(
+    page.locator("[data-slot=connection-banner]").getByRole("button", { name: "Server settings" }),
+  ).toBeVisible();
+  // Still refusing, so the banner stays up over the bot its cache still holds.
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(chat(page)).toBeVisible();
+}
+
+/** The column scrolled to its end: what scrolls, and the room below the screen's last element. */
+const atTheEnd = (page: Page) =>
+  page.locator("[data-slot=content]").evaluate((column) => {
+    column.scrollTop = column.scrollHeight;
+    const main = column.querySelector("main");
+    const grid = main?.firstElementChild;
+    const left = grid?.firstElementChild;
+    const chat = main?.querySelector("section[aria-label=Chat]");
+    const log = chat?.querySelector("[role=log]");
+    if (main === null || main === undefined || !(left instanceof HTMLElement) || !chat || !log) {
+      throw new Error("no screen to measure");
+    }
+    let last = 0;
+    for (const element of main.querySelectorAll("*")) {
+      const box = element.getBoundingClientRect();
+      if (box.height > 0) {
+        last = Math.max(last, box.bottom);
+      }
+    }
+    const bottom = column.getBoundingClientRect().bottom;
+    return {
+      columnScrolls: column.scrollHeight > column.clientHeight,
+      leftScrolls: getComputedStyle(left).overflowY === "auto",
+      logScrolls: getComputedStyle(log).overflowY === "auto",
+      padding: Number.parseFloat(getComputedStyle(main).paddingBottom),
+      belowLast: Math.round(bottom - last),
+      belowConsole: Math.round(bottom - chat.getBoundingClientRect().bottom),
+    };
+  });
+
+for (const [width, height] of [
+  [800, 600],
+  [1000, 700],
+  [1400, 900],
+] as const) {
+  for (const banner of [false, true]) {
+    test(`at ${width}x${height}${banner ? " under the banner" : ""}, nothing scrolls into blank space`, async ({
+      page,
+      context,
+    }) => {
+      const backend = await atBot(page, context);
+      await page.setViewportSize({ width, height });
+      if (banner) {
+        await withBanner(page, backend);
+      }
+      const beside = await sideBySide(page);
+
+      const end = await atTheEnd(page);
+
+      if (beside) {
+        // Each column scrolls by itself, and the column around them not at all.
+        expect(end).toMatchObject({ columnScrolls: false, leftScrolls: true, logScrolls: true });
+        expect(end.belowLast).toBeGreaterThanOrEqual(0);
+        expect(end.belowLast).toBeLessThanOrEqual(end.padding);
+      } else {
+        // The scroll ends at the console's foot and the screen's padding, nothing after it.
+        expect(end.belowConsole).toBe(end.padding);
+        expect(end.belowLast).toBe(end.padding);
+      }
+      backend.refuseAll(null);
+    });
+  }
 }
 
 test("the console fills the height beside the boxes, banner up or not", async ({
