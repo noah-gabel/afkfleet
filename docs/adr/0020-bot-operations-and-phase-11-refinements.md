@@ -2886,7 +2886,7 @@ L4 is P11.11's last group, in one PR on `p11/p11.11-design-admin`, PR #90's revi
 - **R233. Users has no empty state:** the list always holds you.
 
 ### As built (group L4)
-Built on the planning above, in one PR on `p11/p11.11-design-admin`, fifteen commits before its review: the leftovers, the harness, the frame check, one commit per screen, two with the three fixes the baselines' reading found, two test fixes (jsdom's `scrollIntoView`, `parts.spec`), and the records in two. P11.11 is ticked. Each new test ran red first, against a stub with the real signature where there was one to stub, or through a named mutation, restored.
+Built on the planning above, in one PR on `p11/p11.11-design-admin`, its commits: the leftovers, the harness, the frame check, one commit per screen, two with the three fixes the baselines' reading found, two test fixes (jsdom's `scrollIntoView`, `parts.spec`), and the records in two. P11.11 is ticked. Each new test ran red first, against a stub with the real signature where there was one to stub, or through a named mutation, restored.
 
 *Choices made while building:*
 - **R234. Determinism.** Two runs of the image first differed in 22 of 156 PNGs, by anti-aliasing. Software rasterization (`--disable-gpu`, `--disable-gpu-rasterization`, `--disable-partial-raster`, `--force-color-profile=srgb`, `--disable-lcd-text`) made them identical, 156 of 156, so `threshold: 0` holds. Inside the image, `pnpm exec` failed its dependency check, so the script runs `node_modules/.bin/playwright`, and Vite's `.vite-temp` is world-writable for `pwuser`.
