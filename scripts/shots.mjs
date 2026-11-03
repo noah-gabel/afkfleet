@@ -293,7 +293,7 @@ export function shots(args, host) {
   const left = leftBehind(root, results, shotsFolder);
   if (left.length > 0) {
     error(
-      `The container left what only shots may be. Nothing was deleted; look at each, remove what isn't yours, and run again:\n${left.join("\n")}`,
+      `Where only shots may be, this run found more, left by the container or there before. Nothing was deleted; look at each, remove what isn't yours, and run again:\n${left.join("\n")}`,
     );
     return 1;
   }
