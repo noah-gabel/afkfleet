@@ -19,6 +19,7 @@ const RECIPES = [
   "dod-enroll",
   "dod-agent",
   "dod-app",
+  "dod-log-check",
   "dod-clean",
 ];
 

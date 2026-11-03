@@ -433,6 +433,16 @@ dod-app: app-build
     @echo "Enter http://127.0.0.1:8090 as the server's address in the app."
     target/release/afkfleet-desktop.exe
 
+# The 24-hour run's verdict from the files scripts/dod-log.mjs left in `dir` (S135): it prints
+# only counts, afkfleet's own fixed messages, bot numbers and times from the first session,
+# never a value, a name or a path, then PASS or FAIL with the reasons. Run it once dod-agent
+# and dod-server are stopped, before dod-clean, which deletes the logs. No exit message: the
+# script prints its own lines.
+# The user only: check the DoD's 24-hour run by its logs in target/dod-run/logs/.
+[no-exit-message]
+dod-log-check dir=(justfile_directory() / "target" / "dod-run" / "logs"):
+    node scripts/dod-log-check.mjs "{{ dir }}"
+
 # Only this repository's target/dod-run; it refuses while dod-server or dod-agent runs, or
 # a link in the way, each saying what to do, and never touches Docker (U52). No exit
 # message: the script prints its own lines.
