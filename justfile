@@ -374,14 +374,16 @@ dod-build:
 # As dev-server, with deploy/dod/server.toml: Node creates the folder, the vault key when
 # it's missing (never overwritten, never printed) and the PKI with `pki init` when its files
 # are missing, for localhost, 127.0.0.1 and ::1 (never overwritten). [grpc] is on, on
-# 127.0.0.1:7453. No exit message: on Windows, Ctrl+C reaches just and PowerShell too.
-# The user only: run the DoD checks' server with deploy/dod/server.toml, its database, vault key and PKI in target/dod-run/.
+# 127.0.0.1:7453. It logs JSON at info through scripts/dod-log.mjs, which keeps each start's
+# lines in `logs` for just dod-log-check and shows them readable in the terminal (S134, U132).
+# No exit message: on Windows, Ctrl+C reaches just and PowerShell too.
+# The user only: run the DoD checks' server with deploy/dod/server.toml, its database, vault key, PKI and logs in target/dod-run/.
 [no-exit-message]
-dod-server $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dod-run" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=(justfile_directory() / "target" / "dod-run" / "vault-key-1") $AFKFLEET_SERVER__GRPC__CA_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.crt") $AFKFLEET_SERVER__GRPC__CA_KEY_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.key") $AFKFLEET_SERVER__GRPC__SERVER_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "server.crt") $AFKFLEET_SERVER__GRPC__SERVER_KEY_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "server.key") $AFKFLEET_SERVER__LOG__FILTER="info":
+dod-server logs=(justfile_directory() / "target" / "dod-run" / "logs") $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dod-run" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=(justfile_directory() / "target" / "dod-run" / "vault-key-1") $AFKFLEET_SERVER__GRPC__CA_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.crt") $AFKFLEET_SERVER__GRPC__CA_KEY_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.key") $AFKFLEET_SERVER__GRPC__SERVER_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "server.crt") $AFKFLEET_SERVER__GRPC__SERVER_KEY_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "server.key") $AFKFLEET_SERVER__LOG__FILTER="info" $AFKFLEET_SERVER__LOG__FORMAT="json":
     node -e "require('node:fs').mkdirSync(require('node:path').dirname(process.argv[1]), { recursive: true })" "{{ AFKFLEET_SERVER__DATABASE__PATH }}"
     node scripts/dev-vault-key.mjs "{{ AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1 }}"
     node scripts/dev-pki.mjs --release deploy/dod/server.toml "{{ AFKFLEET_SERVER__GRPC__CA_CERT_FILE }}" "{{ AFKFLEET_SERVER__GRPC__CA_KEY_FILE }}" "{{ AFKFLEET_SERVER__GRPC__SERVER_CERT_FILE }}" "{{ AFKFLEET_SERVER__GRPC__SERVER_KEY_FILE }}"
-    cargo run --release -p fleet-server --bin afkfleet-server -- serve --config deploy/dod/server.toml
+    node scripts/dod-log.mjs "{{ logs }}" server cargo run --release -p fleet-server --bin afkfleet-server -- serve --config deploy/dod/server.toml
 
 # `user create-owner` with the password typed twice at the terminal, hidden; never an
 # argument. The same six paths as dod-server: deploy/dod/server.toml sets [grpc] bind, so
@@ -415,12 +417,13 @@ dod-enroll dir=(justfile_directory() / "target" / "dod-run" / "agent") $AFKFLEET
 # The identity dod-enroll left, with dod-server's CA; its heartbeat file, which dod-clean
 # checks, goes into `dir` too. Its bot dials only 127.0.0.1 (dod-mc-up's server), never a
 # public address (U50): the recipe exports public_targets false itself, as the log filter,
-# so a variable in the shell can't flip it (PR #78's review). No exit message: on Windows,
-# Ctrl+C reaches just and PowerShell too.
-# The user only: run the DoD checks' agent with deploy/dod/agent.toml against dod-server.
+# so a variable in the shell can't flip it (PR #78's review). It logs JSON at info through
+# scripts/dod-log.mjs into `logs`, as dod-server does (S134, U132). No exit message: on
+# Windows, Ctrl+C reaches just and PowerShell too.
+# The user only: run the DoD checks' agent with deploy/dod/agent.toml against dod-server, its logs in target/dod-run/logs/.
 [no-exit-message]
-dod-agent dir=(justfile_directory() / "target" / "dod-run" / "agent") $AFKFLEET_AGENT__CONTROL_PLANE__CA_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.crt") $AFKFLEET_AGENT__CONTROL_PLANE__CERT_FILE=(dir / "agent.crt") $AFKFLEET_AGENT__CONTROL_PLANE__KEY_FILE=(dir / "agent.key") $AFKFLEET_AGENT__RUNTIME__HEARTBEAT_FILE=(dir / "agent.alive") $AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS="false" $AFKFLEET_AGENT__LOG__FILTER="info":
-    cargo run --release -p fleet-agent --bin afkfleet-agent -- run --config deploy/dod/agent.toml
+dod-agent dir=(justfile_directory() / "target" / "dod-run" / "agent") logs=(justfile_directory() / "target" / "dod-run" / "logs") $AFKFLEET_AGENT__CONTROL_PLANE__CA_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.crt") $AFKFLEET_AGENT__CONTROL_PLANE__CERT_FILE=(dir / "agent.crt") $AFKFLEET_AGENT__CONTROL_PLANE__KEY_FILE=(dir / "agent.key") $AFKFLEET_AGENT__RUNTIME__HEARTBEAT_FILE=(dir / "agent.alive") $AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS="false" $AFKFLEET_AGENT__LOG__FILTER="info" $AFKFLEET_AGENT__LOG__FORMAT="json":
+    node scripts/dod-log.mjs "{{ logs }}" agent cargo run --release -p fleet-agent --bin afkfleet-agent -- run --config deploy/dod/agent.toml
 
 # app-build first (the release exe), then the exe itself: a GUI app, so the recipe returns
 # once it starts (R125). Close every other afkfleet window first: a second start only

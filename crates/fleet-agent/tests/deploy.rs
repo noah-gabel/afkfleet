@@ -421,7 +421,8 @@ fn the_dod_agent_loads_with_dod_agents_exports_and_dials_only_its_container() {
     let (config, dir) = load_dod_config("dod-agent");
 
     assert_eq!(config.name.as_str(), "dod-agent");
-    assert_eq!(config.log.format, LogFormat::Pretty);
+    // JSON, which scripts/dod-log.mjs keeps in target/dod-run/logs (S134).
+    assert_eq!(config.log.format, LogFormat::Json);
     assert_eq!(config.log.filter.as_str(), "info");
     assert_eq!(config.heartbeat_file, dir.join("agent").join("agent.alive"));
     let AgentMode::ControlPlane(plane) = &config.mode else {
@@ -474,6 +475,8 @@ fn dod_enroll_writes_the_identity_dod_agent_runs() {
     );
     let (config, _) = load_dod_config("dod-enroll");
     assert!(matches!(config.mode, AgentMode::ControlPlane(_)));
+    // Not logged to a file: its streams carry the bundle (S134).
+    assert_eq!(config.log.format, LogFormat::Pretty);
 }
 
 #[test]

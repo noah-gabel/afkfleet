@@ -10,12 +10,14 @@
 # target/dod-run/pki/ca.crt) and AFKFLEET_AGENT__CONTROL_PLANE__CERT_FILE and
 # __KEY_FILE in target/dod-run/agent/; `just dod-agent` also passes the
 # heartbeat file, target/dod-run/agent/agent.alive, which `just dod-clean`
-# checks. They export AFKFLEET_AGENT__LOG__FILTER="info" too.
+# checks. They export AFKFLEET_AGENT__LOG__FILTER="info" too, and `just dod-agent`
+# exports AFKFLEET_AGENT__LOG__FORMAT="json": scripts/dod-log.mjs keeps each
+# start's lines in target/dod-run/logs (ADR-0020, S134, U132).
 
 name = "dod-agent"
 
 [log]
-format = "pretty"
+format = "pretty"                        # dod-enroll's; dod-agent exports json
 filter = "info"                          # the recipes export info too; chat is only at debug
 
 [control_plane]
