@@ -4,9 +4,19 @@
 // target/dod-run (U33). The check reads this repository's own sources and Cargo.lock, as it
 // does at the user's run.
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import process from "node:process";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -14,6 +24,7 @@ import {
   BOT_STATES,
   checkLogs,
   chronoTime,
+  errorCode,
   lockedCrates,
   main,
   REUSE_MARGIN_MS,
@@ -750,6 +761,76 @@ describe("nothing to check", () => {
 
     assert.equal(code, 2);
     assert.deepEqual(said, ["usage: node scripts/dod-log-check.mjs <logs folder>\n"]);
+  });
+});
+
+describe("logs it can't read (PR #93's review)", () => {
+  /** What `main` prints for the folder, by stream, and its exit code. */
+  async function mainSays() {
+    const said = { out: [], err: [] };
+    const code = await main([folder], {
+      stdout: (text) => said.out.push(text),
+      stderr: (text) => said.err.push(text),
+    });
+    return { code, said };
+  }
+
+  /** The text for an error with `code`: no path, nothing judged. */
+  const unread = (code) => `The check couldn't read the logs (${code}); nothing was judged.\n`;
+
+  it("says only the error's code and exits 2 when a log is a dangling link", async () => {
+    plant(goodRun());
+    symlinkSync(
+      path.join(folder, "gone"),
+      path.join(folder, "agent-20261103T192902Z.jsonl"),
+      process.platform === "win32" ? "junction" : "file",
+    );
+
+    const { code, said } = await mainSays();
+
+    assert.equal(code, 2);
+    assert.deepEqual(said, { out: [], err: [unread("ENOENT")] });
+  });
+
+  it("says only the error's code and exits 2 when a log can't be read", {
+    skip: process.getuid?.() === 0 && "root reads every file",
+  }, async () => {
+    plant(goodRun());
+    const log = path.join(folder, "server-20261103T192900Z.jsonl");
+    // Windows keeps a file readable whatever its mode, so a deny entry takes read away there.
+    if (process.platform === "win32") {
+      execFileSync("icacls", [log, "/deny", "*S-1-1-0:(R)"], { stdio: "ignore" });
+    } else {
+      chmodSync(log, 0o000);
+    }
+    try {
+      const { code, said } = await mainSays();
+
+      assert.equal(code, 2);
+      assert.deepEqual(said, {
+        out: [],
+        err: [unread(process.platform === "win32" ? "EPERM" : "EACCES")],
+      });
+    } finally {
+      if (process.platform === "win32") {
+        execFileSync("icacls", [log, "/remove:d", "*S-1-1-0"], { stdio: "ignore" });
+      } else {
+        chmodSync(log, 0o600);
+      }
+    }
+  });
+
+  it("names an error by its code alone, and one without a code as unknown", () => {
+    assert.equal(
+      errorCode(Object.assign(new Error("C:\\path\\to\\afkfleet"), { code: "EBUSY" })),
+      "EBUSY",
+    );
+    assert.equal(
+      errorCode(Object.assign(new Error("x"), { code: "C:\\path\\to\\afkfleet" })),
+      "unknown",
+    );
+    assert.equal(errorCode(new TypeError("C:\\path\\to\\afkfleet")), "unknown");
+    assert.equal(errorCode("C:\\path\\to\\afkfleet"), "unknown");
   });
 });
 

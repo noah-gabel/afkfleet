@@ -8,7 +8,8 @@
 // the warnings' and errors' messages when they are fixed texts of afkfleet's own sources,
 // each bot's sessions by number, and times from the first session; never a field's value, a
 // message with values, a third-party message, a file name or a path. It ends in PASS (exit 0)
-// or FAIL with its reasons (exit 1); with nothing to check, or a wrong command line, exit 2.
+// or FAIL with its reasons (exit 1); with nothing to check, a log it can't read (named by its
+// error's code alone) or a wrong command line, exit 2.
 //
 // PASS needs: exactly one start of each that ended with code 0 after its stop line; every
 // log line one of the binaries' JSON lines and every stderr line cargo's; no ERROR but
@@ -641,6 +642,15 @@ export function checkLogs(folder, context) {
   return { code: reasons.size === 0 ? 0 : 1, text: `${out.join("\n")}\n` };
 }
 
+/**
+ * What an error is called in the check's output: its system code (`ENOENT`, `EBUSY`, …), or
+ * "unknown". Never its message, which names the path.
+ */
+export function errorCode(error) {
+  const code = error?.code;
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]*$/.test(code) ? code : "unknown";
+}
+
 /** The script: checks the one folder it's given, against this repository's sources. */
 export async function main(args, io = {}) {
   const out = io.stdout ?? ((text) => process.stdout.write(text));
@@ -653,7 +663,16 @@ export async function main(args, io = {}) {
     literals: sourceLiterals(ROOT),
     crates: lockedCrates(readFileSync(path.join(ROOT, "Cargo.lock"), "utf8")),
   };
-  const { code, text } = checkLogs(args[0], context);
+  let checked;
+  try {
+    checked = checkLogs(args[0], context);
+  } catch (error) {
+    // A dangling link, a file a scanner holds (EBUSY, EPERM) or one gone while it reads: Node's
+    // own report would name the path (PR #93's review).
+    err(`The check couldn't read the logs (${errorCode(error)}); nothing was judged.\n`);
+    return 2;
+  }
+  const { code, text } = checked;
   (code === 2 ? err : out)(text);
   return code;
 }
