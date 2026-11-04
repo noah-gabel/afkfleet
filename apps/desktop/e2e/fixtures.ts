@@ -8,6 +8,8 @@
 //   and there must have been no violation, no console error and no uncaught error. The page
 //   is served with the release CSP (e2e/csp.ts), so a library that injects a style or
 //   evaluates code fails here, as it would in the app.
+// - While the theme sweep's Tab walk runs, the window's own focus and blur reach none of the
+//   page's listeners (ADR-0020, R260).
 // - In the screenshots' project, the page's clock and the fake's are fixed at `NOW`, so no shot
 //   depends on when it ran (ADR-0020, S131).
 import { defineNetworkFixture } from "@msw/playwright";
@@ -64,6 +66,21 @@ export const test = base.extend<{ guards: undefined }>({
           seen.push(`${event.violatedDirective} ${event.blockedURI}`);
         });
         Object.freeze(Object.prototype);
+      });
+      // The Tab walk leaves the page at its end and comes back, which the window hears as losing
+      // its focus and getting it back. A query read again on focus (the agents', R177) would then
+      // change the row after the walk's last stop: the walk's doing, not a Tab's in the row. So
+      // while a walk runs (contrast.ts's `__focusWalk`), the window's own focus and blur stop
+      // here. A window's own event reaches its listeners in the order they were added, capture
+      // or not (Edge, measured), and these come before any of the app's (R260).
+      await page.addInitScript(() => {
+        const quiet = (event: Event) => {
+          if (event.target === window && "__focusWalk" in window) {
+            event.stopImmediatePropagation();
+          }
+        };
+        addEventListener("focus", quiet, true);
+        addEventListener("blur", quiet, true);
       });
 
       await use(undefined);

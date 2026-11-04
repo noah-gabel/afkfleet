@@ -3123,6 +3123,15 @@ Built as planned, one PR on `p11/p11-wrap-up`, in six commits before the run: th
 
 *Slips of mine, each caught before its commit:* a scripted edit of `dod-kit.test.mjs` whose escapes didn't match wrote nothing and was redone with the editor; the literal reader's call kept the old name after a rename, so it called JavaScript's global `unescape`, which the escapes test caught; a test expected `\u{a}` where JSON's own escape `\n` is just as safe, and was corrected, its check that no control character reaches the terminal unchanged.
 
+### PR #93's CI
+The PR's first CI run was red in the `e2e` job alone, in two theme-sweep rows M didn't touch. Both had passed three times here and on `main`'s CI at L4's merge. Each was a row's race with time, which CI's slower runner lost; the fixes are in the e2e harness and one row, nothing in the app.
+- **R260. The Tab walk's way out of the page read the agents again.** In "agents, failed", the dark walk ended with no `[role=alert]` where it began with one.
+  - The walk leaves the page at its end and comes back, which the window hears as `blur` and `focus`: a probe in the row measured one of each per walk, each followed by a read of the agents. Agents read again on the window's focus (R177), and a query without data goes back to pending while it reads, so its error is gone until the 500 comes back. Here the answer came before the walk's end count; on CI it came after.
+  - Now, while a walk runs (`__focusWalk` on the window), an init script in the guards' fixture stops the window's own `focus` and `blur`. It's added before any of the app's listeners, and a window's own event reaches its listeners in the order they were added, capture or not (measured in Edge, which is why a listener added at the walk's start didn't work). An element's focus reaches every listener as before, and the row's change check is unchanged.
+  - The walk's self-test gains a window listener that drops an alert: red against the old walk with CI's own message, green now. The row's probe saw two reads of the agents during its walks before, none after.
+  - *Rejected:* waiting for the walk's reads before the end count (Playwright sees a read end before the page renders its answer, so a race stays); reading the row until it's back (a change that reverts by itself would pass); ending the walk before it leaves the page (changes how it finds a trap).
+- **R261. The servers row waits for its save's toast to go.** At "invites", the frame check found the toast "Added mc.example.com:25565." below the window. The row took 5.9 s on CI, so the invites screen, six measures after the save, came at the toast's end (4 s, then 200 ms in which sonner slides it down, a slide `inScheme` finishes). Every other row that saves waits for its toast, and the shots wait at each shot; this one now waits right after the save. No baseline changes, as the shots already waited.
+
 ### Notes for later groups
 - **B2 (P11.3's history):** built (above).
 - **C (P11.4):** decided at C's planning (above), built in C1, C2 and C3.
