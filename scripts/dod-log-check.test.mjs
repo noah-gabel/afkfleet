@@ -27,6 +27,7 @@ import {
   errorCode,
   lockedCrates,
   main,
+  modulePaths,
   REUSE_MARGIN_MS,
   sourceLiterals,
   TEXTS,
@@ -37,6 +38,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CONTEXT = {
   literals: sourceLiterals(ROOT),
   crates: lockedCrates(readFileSync(path.join(ROOT, "Cargo.lock"), "utf8")),
+  paths: modulePaths(ROOT),
 };
 
 const MIN = 60_000;
@@ -257,7 +259,7 @@ describe("a run that passes", () => {
     assert.equal(code, 0, text);
     assert.match(
       text,
-      /\n {2}ERROR {2}azalea_client::plugins::connection {2}×1 {2}\(message not shown: not afkfleet's own\) \(allowed: the container's restart\)\n/,
+      /\n {2}ERROR {2}azalea_client {2}×1 {2}\(message not shown: not afkfleet's own\) \(allowed: the container's restart\)\n/,
     );
     assert.match(text, /By level: ERROR 1, WARN 1, INFO 13/);
   });
@@ -273,6 +275,7 @@ describe("what it prints (S135)", () => {
       chat: "my chat secret says hi",
       bot: "0192f0e0-9999-7aaa-8bbb-00000000beef",
       target: "Zq7SecretTarget",
+      segment: "Zq7SecretSegment",
       file: "Zq7SecretFile.txt",
       stderr: "Zq7SecretStderrLine",
       spanValue: "Zq7SecretSpanValue",
@@ -316,6 +319,7 @@ describe("what it prints (S135)", () => {
         everything,
       ),
       line(KICK - 3 * HOUR, "WARN", secrets.target, "a fixed-looking message", everything),
+      line(KICK - 3 * HOUR, "WARN", `fleet_mc::${secrets.segment}`, "a fixed-looking message"),
       JSON.stringify({
         timestamp: stamp(KICK - 2 * HOUR),
         level: "WARN",
@@ -344,6 +348,25 @@ describe("what it prints (S135)", () => {
     assert.match(text, /\(another target\)/);
     assert.match(text, /"the session ended; the bot connects again"/);
     assert.match(text, /^Bot 1: /m);
+  });
+
+  it("prints a target whole only when it's a module path of afkfleet's sources, else its crate alone", () => {
+    const run = goodRun();
+    run.agent.splice(
+      3,
+      0,
+      line(KICK - HOUR, "WARN", "fleet_mc::Zq7SecretSegment", "hi"),
+      line(KICK - HOUR, "WARN", "fleet_mc::host::Zq7SecretSegment", "hi"),
+      line(KICK - HOUR, "WARN", "azalea_client::plugins::Zq7SecretSegment", "hi"),
+      line(KICK - HOUR, "WARN", "fleet_runtime::actor::effects", "hi"),
+    );
+
+    const { text } = checked(run);
+
+    assert.doesNotMatch(text, /Zq7SecretSegment|plugins/);
+    assert.match(text, /\n {2}fleet_mc {2}INFO 0 {2}WARN 2 {2}ERROR 0\n/);
+    assert.match(text, /\n {2}azalea_client {2}INFO 0 {2}WARN 1 {2}ERROR 0\n/);
+    assert.match(text, /\n {2}fleet_runtime::actor::effects {2}INFO 12 {2}WARN 2 {2}ERROR 0\n/);
   });
 
   it("counts a target that isn't a crate of Cargo.lock under one placeholder", () => {
@@ -870,6 +893,34 @@ describe("its readers", () => {
     assert.ok(
       crates.has("afkfleet_server") && crates.has("afkfleet_agent") && crates.has("afkfleet"),
     );
+  });
+
+  it("reads the workspace's module paths as targets write them, and nothing else", () => {
+    const paths = modulePaths(ROOT);
+
+    for (const known of [
+      "fleet_server",
+      "fleet_server::app::agents::session_grants",
+      "fleet_mc::host",
+      "fleet_mc::connector",
+      "fleet_agent::run",
+      "fleet_proto::generated",
+      "afkfleet_server",
+      "afkfleet_agent",
+      TEXTS.panicTarget,
+    ]) {
+      assert.ok(paths.has(known), known);
+    }
+    for (const unknown of [
+      "fleet_server::lib",
+      "fleet_server::main",
+      "fleet_agent::run::mod",
+      "afkfleet_server::app",
+      "fleet_mc::host::rs",
+      "azalea_client",
+    ]) {
+      assert.ok(!paths.has(unknown), unknown);
+    }
   });
 });
 

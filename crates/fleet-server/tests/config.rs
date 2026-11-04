@@ -1837,8 +1837,11 @@ fn dod_exports(recipe: &str, root: &Path) -> Vec<(String, String)> {
 /// `just dod-server`, `just dod-owner` and `just dod-enrollment-token` each
 /// load `deploy/dod/server.toml` with exactly their exports and nothing else from the
 /// environment; their paths go to the jail, never target/dod-run (U33). Only
-/// `dod-server` logs JSON, which `scripts/dod-log.mjs` keeps in
-/// target/dod-run/logs (S134); the other two print to the terminal alone.
+/// `dod-server` exports the JSON format, and every command its recipe runs
+/// takes it: `serve`, whose lines `scripts/dod-log.mjs` keeps in
+/// target/dod-run/logs, and `pki init` when the PKI is missing, whose lines
+/// reach the terminal alone (S134). The other two print Pretty lines to the
+/// terminal.
 #[rstest]
 #[case::serve("dod-server", LogFormat::Json)]
 #[case::create_owner("dod-owner", LogFormat::Pretty)]
@@ -1872,7 +1875,7 @@ fn the_dod_config_loads_with_exactly_each_dod_recipes_exports(
 /// R126: `deploy/dod/server.toml` sets `[grpc] bind`, so every command's
 /// validation needs the PKI's four paths and the vault key; each recipe that
 /// loads it passes what `dod-server` does, but the JSON format, which only
-/// `dod-server`'s logged run takes (S134).
+/// `dod-server` exports, for every command it runs (S134).
 #[test]
 fn every_dod_recipe_that_loads_the_server_config_exports_what_dod_server_does() {
     let root = Path::new("/dod-run");

@@ -4,8 +4,9 @@
 //   node scripts/dod-log-check.mjs <logs folder>
 //
 // It reads the files scripts/dod-log.mjs left in target/dod-run/logs, one start of dod-server
-// and one of dod-agent, and prints only what's safe to share: counts per level and target,
-// the warnings' and errors' messages when they are fixed texts of afkfleet's own sources,
+// and one of dod-agent, and prints only what's safe to share: counts per level and target (a
+// target whole when it's a module path of afkfleet's sources, else its crate alone), the
+// warnings' and errors' messages when they are fixed texts of afkfleet's own sources,
 // each bot's sessions by number, and times from the first session; never a field's value, a
 // message with values, a third-party message, a file name or a path. It ends in PASS (exit 0)
 // or FAIL with its reasons (exit 1); with nothing to check, a log it can't read (named by its
@@ -127,6 +128,71 @@ export function sourceLiterals(root) {
   return literals;
 }
 
+/** The names of `toml`'s `[package]` and `[[bin]]`s (a Cargo.toml), as a target writes them. */
+function crateNames(toml) {
+  const names = { lib: null, bins: [] };
+  let section = "";
+  for (const raw of toml.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith("[")) {
+      section = line;
+      continue;
+    }
+    const name = /^name\s*=\s*"([^"]+)"$/.exec(line)?.[1]?.replaceAll("-", "_");
+    if (name !== undefined && section === "[package]") {
+      names.lib = name;
+    } else if (name !== undefined && section === "[[bin]]") {
+      names.bins.push(name);
+    }
+  }
+  return names;
+}
+
+/**
+ * Every module path of the workspace's crates, as a target writes it: each library's modules,
+ * from its files under `src` and the inline modules they declare; each binary by its name alone,
+ * as its `main.rs` declares none; and the panic hook's `afkfleet::panic`. A target is printed
+ * whole only when it's one of them, so no segment past a crate brings a value along.
+ */
+export function modulePaths(root) {
+  const paths = new Set([TEXTS.panicTarget]);
+  const crates = path.join(root, "crates");
+  for (const crate of readdirSync(crates, { withFileTypes: true })) {
+    const manifest = path.join(crates, crate.name, "Cargo.toml");
+    const src = path.join(crates, crate.name, "src");
+    if (!crate.isDirectory() || !existsSync(manifest) || !existsSync(src)) {
+      continue;
+    }
+    const { lib, bins } = crateNames(readFileSync(manifest, "utf8"));
+    for (const bin of bins) {
+      paths.add(bin);
+    }
+    if (lib === null) {
+      continue;
+    }
+    paths.add(lib);
+    for (const file of rustFiles(src)) {
+      const parts = path.relative(src, file).replace(/\.rs$/, "").split(path.sep);
+      if (parts.join("/") === "main") {
+        continue;
+      }
+      if (parts.at(-1) === "mod" || parts.join("/") === "lib") {
+        parts.pop();
+      }
+      for (let end = 1; end <= parts.length; end += 1) {
+        paths.add([lib, ...parts.slice(0, end)].join("::"));
+      }
+      const text = readFileSync(file, "utf8");
+      for (const [, name] of text.matchAll(
+        /^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{/gm,
+      )) {
+        paths.add([lib, ...parts, name].join("::"));
+      }
+    }
+  }
+  return paths;
+}
+
 /**
  * The crates in `lockText` (Cargo.lock) as a target's first segment writes them, with the
  * binaries' own crates and the panic hook's `afkfleet`.
@@ -190,17 +256,24 @@ function botOf(fields) {
   return fields.bot_id ?? span ?? null;
 }
 
-/** A target as printed: a Rust path whose first segment is a known crate, or the placeholder. */
-function shownTarget(target, crates) {
+/**
+ * A target as printed: whole when it's a module path of afkfleet's sources; else, when it's a
+ * Rust path whose first segment is a known crate, that crate alone, as a segment past it may
+ * carry anything (PR #93's review); else the placeholder.
+ */
+function shownTarget(target, context) {
   const pathLike = /^[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)*$/.test(target);
-  return pathLike && crates.has(target.split("::")[0]) ? target : ANOTHER_TARGET;
+  const crate = target.split("::")[0];
+  if (!pathLike || !context.crates.has(crate)) {
+    return ANOTHER_TARGET;
+  }
+  return context.paths.has(target) ? target : crate;
 }
 
 /** A message as printed: quoted when it's afkfleet's own and a fixed text, else why not. */
 function shownMessage(line, context) {
   const own =
-    /^(fleet_|afkfleet)/.test(line.target) &&
-    shownTarget(line.target, context.crates) !== ANOTHER_TARGET;
+    /^(fleet_|afkfleet)/.test(line.target) && shownTarget(line.target, context) !== ANOTHER_TARGET;
   if (!own) {
     return NOT_OURS;
   }
@@ -500,7 +573,7 @@ function judgeProcess(kind, start, log, context, windows, reasons) {
   let panics = 0;
   for (const line of log.lines) {
     levels.set(line.level, levels.get(line.level) + 1);
-    const target = shownTarget(line.target, context.crates);
+    const target = shownTarget(line.target, context);
     const counts = targets.get(target) ?? { INFO: 0, WARN: 0, ERROR: 0 };
     if (line.level in counts) {
       counts[line.level] += 1;
@@ -574,7 +647,7 @@ function judgeProcess(kind, start, log, context, windows, reasons) {
 
 /**
  * Checks the logs in `folder`: `{ code, text }`, the text being everything to print.
- * `context` holds the sources' literals and Cargo.lock's crates.
+ * `context` holds the sources' literals, Cargo.lock's crates and the module paths.
  */
 export function checkLogs(folder, context) {
   if (!existsSync(folder) || !statSync(folder).isDirectory()) {
@@ -662,6 +735,7 @@ export async function main(args, io = {}) {
   const context = {
     literals: sourceLiterals(ROOT),
     crates: lockedCrates(readFileSync(path.join(ROOT, "Cargo.lock"), "utf8")),
+    paths: modulePaths(ROOT),
   };
   let checked;
   try {
