@@ -8,7 +8,7 @@
 // so nothing is ever appended to or overwritten: `<kind>-<stamp>.jsonl` holds stdout, every
 // byte as received; `.stderr.txt` stderr; `.exit.json` the command's exit code or signal,
 // once it ends. The terminal gets each stdout line short and readable, written only after
-// the line is in the file, and stderr unchanged.
+// the line is in the file, and stderr unchanged; a terminal that goes away only loses its copy.
 //
 // The command shares this console, so Ctrl+C reaches it as it would without the wrapper; the
 // wrapper itself keeps running through Ctrl+C and Ctrl+Break until the command has ended and
@@ -271,5 +271,11 @@ if (
   process.argv[1] !== undefined &&
   import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
 ) {
+  // A terminal that went away reports it later, as an `error` event (EPIPE), which would end
+  // the wrapper and lose the rest of the file and the exit record. The terminal is only a copy,
+  // so its trouble never stops the log (PR #93's review).
+  for (const stream of [process.stdout, process.stderr]) {
+    stream.on("error", () => {});
+  }
   process.exitCode = await main(process.argv.slice(2));
 }

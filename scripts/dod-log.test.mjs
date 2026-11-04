@@ -3,8 +3,9 @@
 // Every run logs into its own temporary folder and never touches target/dod-run (U33). The
 // commands are this Node with `-e`, so nothing here starts cargo or a binary of afkfleet.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -422,5 +423,56 @@ describe("main", { timeout: 20000 }, () => {
     assert.deepEqual(io.writes.err, [
       "usage: node scripts/dod-log.mjs <absolute folder> <server|agent> <command> [arguments…]\n",
     ]);
+  });
+});
+
+describe("the script, its terminal gone (PR #93's review)", { timeout: 20000 }, () => {
+  it("keeps every line in the file and writes the exit record when the terminal's reader closes early", async () => {
+    // One line, then 200 more once the test says so on stdin, which the command shares.
+    const script = [
+      'console.log("first");',
+      'process.stdin.once("data", () => {',
+      '  for (let n = 0; n < 200; n += 1) console.log("line " + n);',
+      "});",
+    ].join("\n");
+    const wrapper = spawn(
+      process.execPath,
+      [path.join(ROOT, "scripts", "dod-log.mjs"), folder, "server", ...node(script).flat()],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+    let said = "";
+    wrapper.stderr.on("data", (chunk) => {
+      said += chunk;
+    });
+    const ended = new Promise((resolve) => wrapper.on("close", (code) => resolve(code)));
+    await within(
+      new Promise((resolve) => {
+        let shown = "";
+        wrapper.stdout.on("data", (chunk) => {
+          shown += chunk;
+          if (shown.includes("first\n")) {
+            resolve();
+          }
+        });
+      }),
+      "the first line on the terminal",
+    );
+
+    wrapper.stdout.destroy();
+    wrapper.stdin.end("go\n");
+    const code = await within(ended, "the wrapper's end");
+
+    const names = readdirSync(folder);
+    const file = (part) => {
+      const name = names.find((each) => each.endsWith(part));
+      assert.ok(name !== undefined, `no ${part} in ${names.join(", ")}; stderr: ${said}`);
+      return readFileSync(path.join(folder, name), "utf8");
+    };
+    assert.equal(code, 0, said);
+    assert.equal(
+      file(".jsonl"),
+      ["first", ...Array.from({ length: 200 }, (_, n) => `line ${n}`), ""].join("\n"),
+    );
+    assert.deepEqual(JSON.parse(file(".exit.json")), { code: 0, signal: null });
   });
 });
