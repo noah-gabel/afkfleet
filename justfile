@@ -344,16 +344,18 @@ app-build-check:
 icons:
     node scripts/icons.mjs
 
-# --- The definition of done's checks with a real account (ADR-0020, U1, U33, U50-U52, S72) ---
+# --- The definition of done's checks with a real account (ADR-0020, U1, U33, U50-U52, S72, S134, S135) ---
 # Phase 11's first check and M's 24-hour run. THE USER ONLY: the AI never runs a dod-*
 # recipe, and never reads, lists or prints anything in target/dod-run/, which holds the
 # user's real account, sealed, next to the vault key that opens it, the PKI and the agent's
-# identity. Every path is a parameter under target/dod-run/; every binary is a release build
-# (`--release`, so a long run's exes never block debug builds) logging at info, so no chat
-# text is printed (chat is logged only at debug). Their own ports, so they run beside the
+# identity, and the 24-hour run's logs. Every path is a parameter under target/dod-run/;
+# every binary is a release build (`--release`, so a long run's exes never block debug
+# builds) logging at info, so no chat text is printed or kept (chat is logged only at
+# debug). Their own ports, so they run beside the
 # dev stack: HTTP 127.0.0.1:8090, gRPC 127.0.0.1:7453, Minecraft 127.0.0.1:25566. Nothing
 # secret is ever an argument: dod-owner asks for the password hidden, and dod-enroll reads
-# the bundle from stdin. The steps are README's "The DoD's first check".
+# the bundle from stdin. The steps are README's "The DoD's first check" and "The DoD's
+# 24-hour run".
 
 # The user only: start the DoD checks' online-mode Minecraft server and wait until it's healthy (needs Docker).
 dod-mc-up:
