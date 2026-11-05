@@ -89,6 +89,12 @@ Features come first, then what packages them, then the release. There is one bra
   - One setup script does the one-time steps. It checks the prerequisites, creates the vault key and the PKI with the right owners and modes, refuses to overwrite anything that exists, and prints what to do next.
   - An update is documented as two commands, and every step says what success looks like.
   - The AI writes the script and its tests and never runs it on a real host. Group C decides its form.
+- **U9. Every subagent is read-only, and checked** *(the user's rule at group B's plan review)*. During group B's planning, the repository's `.config/` folder (nextest's config) was moved into `.claude/` when the first review agent started. Neither the user nor the main session moved it; it was moved back unchanged before the branch was made. From then on:
+  - every subagent's brief says it is read-only: it creates, edits, moves or deletes no file, and runs no command that writes or changes git state;
+  - the session notes `git status --short` with the untracked files before each subagent starts, and compares them after it finishes;
+  - any change the session didn't make stops the work and goes to the user.
+
+  CLAUDE.md's step 10 and `.claude/agents/Explore.md` carry it.
 - **Approved at the plan review:** the four groups, S1–S8, and group A's texts as drafted. The waiting screen's buttons are the user's own "Server settings" and "Log out on this PC". A logout the server didn't confirm shows the existing shared warning ("Logged out here. Server not told ({reason}): the session may stay valid until it expires."), and one it confirmed shows nothing. README's line on the app's start is corrected to match.
 
 ### Decided by the review agents *(approved by the user at the plan review)*
