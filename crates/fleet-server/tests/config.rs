@@ -16,13 +16,14 @@ use chrono::TimeDelta;
 use figment::Jail;
 use fleet_core::auth::{InviteTtl, LockoutPolicy, SessionPolicy};
 use fleet_core::authz::{CommandAllowlist, CommandAllowlistError};
+use fleet_core::backup::BackupPolicy;
 use fleet_core::chat::ChatRate;
 use fleet_core::retention::{AuditRetention, ChatBound, ChatRetention};
 use fleet_server::config::{
-    AccountsConfig, Argon2Params, AuditConfig, AuthConfig, ChatConfig, ConfigError, DatabaseConfig,
-    GrpcConfig, Heartbeats, HttpConfig, LinkFlowLimits, LogConfig, LogFilterError, LogFormat,
-    ParseError, ParseProblem, ParseSource, PkiPaths, ProblemKind, Problems, Rate, RateLimitConfig,
-    ServerConfig, UnknownLogFormatError, VaultConfig, load,
+    AccountsConfig, Argon2Params, AuditConfig, AuthConfig, BackupConfig, ChatConfig, ConfigError,
+    DatabaseConfig, GrpcConfig, Heartbeats, HttpConfig, LinkFlowLimits, LogConfig, LogFilterError,
+    LogFormat, ParseError, ParseProblem, ParseSource, PkiPaths, ProblemKind, Problems, Rate,
+    RateLimitConfig, ServerConfig, UnknownLogFormatError, VaultConfig, load,
 };
 use fleet_server::http::rate_limit::{IpNet, IpNetError, TrustedProxies};
 use fleet_startup::telemetry::{NoRules, layer_with};
@@ -188,6 +189,7 @@ fn only_the_database_path_and_the_vault_are_required() {
                 },
                 database: DatabaseConfig {
                     path: db_path(jail),
+                    backups: None
                 },
                 log: LogConfig::default(),
                 auth: AuthConfig {
@@ -526,23 +528,23 @@ fn a_misspelled_environment_variable_names_the_variable() {
     });
 }
 
-/// `[database]` holds only its path; the `backup_*` keys are P12.3's, so
-/// they're still unknown keys.
+/// `[database]` holds its path and, since P12.3, the `backup_*` keys
+/// (ADR-0022): a typo of one is an unknown key that names them all.
 #[test]
-fn a_key_of_a_later_phase_is_unknown_until_that_phase() {
+fn an_unknown_database_key_names_every_known_one() {
     in_jail(|jail| {
         let toml = format!(
-            "[database]\npath = {}\nbackup_keep = 14\n{}",
+            "[database]\npath = {}\nbackup_count = 14\n{}",
             toml_path(&db_path(jail)),
             vault(jail)
         );
         let error = parse_error(load_toml(jail, &toml));
 
-        assert_eq!(error.key().to_string(), "database.backup_keep");
+        assert_eq!(error.key().to_string(), "database.backup_count");
         assert_eq!(
             error.problem(),
             &ParseProblem::UnknownKey {
-                expected: &["path"]
+                expected: &["path", "backup_dir", "backup_interval_hours", "backup_keep"]
             }
         );
     });
@@ -1371,6 +1373,292 @@ fn each_bot_keeps_100_to_200_000_lines() {
                 }]
             );
         }
+    });
+}
+
+/// The backups' folder, inside the jail. Loading the config never reads it.
+fn backups_path(jail: &Jail) -> PathBuf {
+    jail.directory().join("backups")
+}
+
+/// The database's path, then `extra` lines of `[database]`, then the vault.
+fn with_database(jail: &Jail, extra: &str) -> String {
+    format!(
+        "[database]\npath = {}\n{extra}\n{}",
+        toml_path(&db_path(jail)),
+        vault(jail)
+    )
+}
+
+/// `[database] backup_dir` with `extra` lines after it.
+fn with_backups(jail: &Jail, extra: &str) -> String {
+    with_database(
+        jail,
+        &format!("backup_dir = {}\n{extra}", toml_path(&backups_path(jail))),
+    )
+}
+
+/// ADR-0022, S4: without `backup_dir` the server takes no backups.
+#[test]
+fn backups_are_off_without_backup_dir() {
+    in_jail(|jail| {
+        let toml = minimal(jail);
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        assert_eq!(config.database.backups, None);
+    });
+}
+
+#[test]
+fn backup_dir_alone_takes_a_backup_a_day_and_keeps_two_weeks() {
+    in_jail(|jail| {
+        let toml = with_backups(jail, "");
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        assert_eq!(
+            config.database.backups,
+            Some(BackupConfig {
+                dir: backups_path(jail),
+                policy: BackupPolicy::default(),
+            })
+        );
+        assert_eq!(config.database.path, db_path(jail));
+    });
+}
+
+#[test]
+fn every_backup_key_maps_to_its_setting() {
+    in_jail(|jail| {
+        let toml = with_backups(jail, "backup_interval_hours = 12\nbackup_keep = 30\n");
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        assert_eq!(
+            config.database.backups,
+            Some(BackupConfig {
+                dir: backups_path(jail),
+                policy: BackupPolicy::try_new(12, 30).unwrap(),
+            })
+        );
+    });
+}
+
+#[test]
+fn a_backup_comes_every_1_to_168_hours() {
+    in_jail(|jail| {
+        let template = with_backups(jail, "EXTRA");
+        let with = |hours: u32| {
+            template.replace(
+                "EXTRA",
+                &format!("backup_interval_hours = {hours}\nbackup_keep = 1"),
+            )
+        };
+
+        for hours in [1, 168] {
+            let config = load_toml(jail, &with(hours)).unwrap();
+            assert_eq!(
+                config.database.backups.unwrap().policy.interval_hours(),
+                hours
+            );
+        }
+        for (hours, message) in [(0, "lower than 1"), (169, "greater than 168")] {
+            let problems = invalid(load_toml(jail, &with(hours)));
+            assert_eq!(keys(&problems), ["database.backup_interval_hours"]);
+            assert_eq!(
+                kinds(&problems),
+                [ProblemKind::OutOfRange {
+                    message: message.to_owned()
+                }]
+            );
+        }
+    });
+}
+
+#[test]
+fn one_to_60_backups_are_kept() {
+    in_jail(|jail| {
+        let template = with_backups(jail, "EXTRA");
+        let with = |keep: u32| {
+            template.replace(
+                "EXTRA",
+                &format!("backup_interval_hours = 1\nbackup_keep = {keep}"),
+            )
+        };
+
+        for keep in [1, 60] {
+            let config = load_toml(jail, &with(keep)).unwrap();
+            assert_eq!(config.database.backups.unwrap().policy.keep(), keep);
+        }
+        for (keep, message) in [(0, "lower than 1"), (61, "greater than 60")] {
+            let problems = invalid(load_toml(jail, &with(keep)));
+            assert_eq!(keys(&problems), ["database.backup_keep"]);
+            assert_eq!(
+                kinds(&problems),
+                [ProblemKind::OutOfRange {
+                    message: message.to_owned()
+                }]
+            );
+        }
+    });
+}
+
+/// The kept backups cover at most 720 hours, chat's 30-day ceiling, which
+/// bounds how long deleted chat lives on in them.
+#[test]
+fn the_kept_backups_cover_at_most_720_hours() {
+    in_jail(|jail| {
+        let fits = load_toml(jail, &with_backups(jail, "backup_keep = 30\n")).unwrap();
+        let over = invalid(load_toml(jail, &with_backups(jail, "backup_keep = 31\n")));
+
+        assert_eq!(fits.database.backups.unwrap().policy.keep(), 30);
+        assert_eq!(keys(&over), ["database.backup_keep"]);
+        assert_eq!(
+            kinds(&over),
+            [ProblemKind::ProductOver {
+                key: "backup_interval_hours",
+                max: 720
+            }]
+        );
+        assert_eq!(
+            kinds(&over).first().unwrap().to_string(),
+            "times `backup_interval_hours` must be at most 720"
+        );
+    });
+}
+
+#[test]
+fn the_backup_numbers_need_backup_dir() {
+    in_jail(|jail| {
+        let toml = with_database(jail, "backup_interval_hours = 12\nbackup_keep = 7\n");
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(
+            keys(&problems),
+            ["database.backup_interval_hours", "database.backup_keep"]
+        );
+        assert_eq!(
+            kinds(&problems),
+            [
+                ProblemKind::Needs { key: "backup_dir" },
+                ProblemKind::Needs { key: "backup_dir" }
+            ]
+        );
+    });
+}
+
+#[rstest]
+#[case::empty("''", ProblemKind::Empty)]
+#[case::relative("'backups'", ProblemKind::NotAbsolute)]
+fn backup_dir_is_an_absolute_path(#[case] value: &str, #[case] kind: ProblemKind) {
+    in_jail(|jail| {
+        let toml = with_database(jail, &format!("backup_dir = {value}\n"));
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), ["database.backup_dir"]);
+        assert_eq!(kinds(&problems), [kind]);
+    });
+}
+
+#[test]
+fn backup_dir_never_climbs() {
+    in_jail(|jail| {
+        // Written out: `join` resolves a `..` on a Windows verbatim path.
+        let sep = std::path::MAIN_SEPARATOR;
+        let climbing = format!("{}{sep}..{sep}elsewhere", backups_path(jail).display());
+        let toml = with_database(jail, &format!("backup_dir = '{climbing}'\n"));
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), ["database.backup_dir"]);
+        assert_eq!(kinds(&problems), [ProblemKind::ParentDir]);
+    });
+}
+
+#[test]
+fn backup_dir_is_neither_the_databases_folder_nor_above_it() {
+    in_jail(|jail| {
+        let folder = jail.directory().to_owned();
+        let above = folder.parent().unwrap().to_owned();
+
+        for dir in [folder, above] {
+            let toml = with_database(jail, &format!("backup_dir = {}\n", toml_path(&dir)));
+            let problems = invalid(load_toml(jail, &toml));
+            // The jail's folder holds the vault's key file too.
+            assert_eq!(
+                keys(&problems),
+                ["database.backup_dir", "database.backup_dir"]
+            );
+            assert_eq!(
+                kinds(&problems),
+                [
+                    ProblemKind::HoldsDatabase,
+                    ProblemKind::HoldsKey {
+                        key: "vault.master_key_files"
+                    }
+                ]
+            );
+        }
+    });
+}
+
+#[test]
+fn backup_dir_holds_no_vault_key() {
+    in_jail(|jail| {
+        let toml = format!(
+            "[database]\npath = {}\nbackup_dir = {}\n[vault]\nmaster_key_files = {{ 1 = {}, 2 = {} }}\nactive_key_id = 1\n",
+            toml_path(&db_path(jail)),
+            toml_path(&backups_path(jail)),
+            toml_path(&key_path(jail, 1)),
+            toml_path(&backups_path(jail).join("vault-key-2")),
+        );
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), ["database.backup_dir"]);
+        assert_eq!(
+            kinds(&problems),
+            [ProblemKind::HoldsKey {
+                key: "vault.master_key_files"
+            }]
+        );
+    });
+}
+
+#[test]
+fn backup_dir_holds_neither_pki_key() {
+    in_jail(|jail| {
+        let backups = backups_path(jail);
+        let inside = |name: &str| toml_path(&backups.join(name));
+        let toml = format!(
+            "{}[grpc]\nca_cert_file = {}\nca_key_file = {}\nserver_cert_file = {}\nserver_key_file = {}\n",
+            with_backups(jail, ""),
+            toml_path(&pki_path(jail, "ca.crt")),
+            inside("ca.key"),
+            toml_path(&pki_path(jail, "server.crt")),
+            inside("server.key"),
+        );
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(
+            keys(&problems),
+            ["database.backup_dir", "database.backup_dir"]
+        );
+        assert_eq!(
+            kinds(&problems),
+            [
+                ProblemKind::HoldsKey {
+                    key: "grpc.ca_key_file"
+                },
+                ProblemKind::HoldsKey {
+                    key: "grpc.server_key_file"
+                }
+            ]
+        );
     });
 }
 

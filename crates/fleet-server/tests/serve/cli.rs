@@ -334,6 +334,7 @@ async fn create_owner_with_password_stdin_creates_the_owner_and_audits_it() {
     let database = sqlite::open(
         &DatabaseConfig {
             path: dir.join("afkfleet.db"),
+            backups: None,
         },
         DatabaseOptions::default(),
     )

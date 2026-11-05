@@ -38,6 +38,7 @@ const SHORT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(1);
 fn config_in(dir: &TempDir) -> DatabaseConfig {
     DatabaseConfig {
         path: dir.path().join("afkfleet.db"),
+        backups: None,
     }
 }
 
@@ -170,6 +171,7 @@ async fn a_missing_folder_is_refused_and_nothing_is_created() {
     let folder = dir.path().join("typo");
     let config = DatabaseConfig {
         path: folder.join("afkfleet.db"),
+        backups: None,
     };
 
     let result = open(&config, DatabaseOptions::default()).await;
@@ -277,6 +279,7 @@ async fn open_migrated_refuses_a_missing_folder() {
     let folder = dir.path().join("typo");
     let config = DatabaseConfig {
         path: folder.join("afkfleet.db"),
+        backups: None,
     };
 
     let result = open_migrated(&config, DatabaseOptions::default()).await;
@@ -790,6 +793,7 @@ mod permissions {
         fs::set_permissions(&folder, Permissions::from_mode(0o500)).unwrap();
         let config = DatabaseConfig {
             path: folder.join("afkfleet.db"),
+            backups: None,
         };
 
         let result = open(&config, DatabaseOptions::default()).await;
@@ -814,6 +818,7 @@ mod permissions {
         fs::set_permissions(&locked, Permissions::from_mode(0o000)).unwrap();
         let config = DatabaseConfig {
             path: folder.join("afkfleet.db"),
+            backups: None,
         };
 
         let result = open(&config, DatabaseOptions::default()).await;

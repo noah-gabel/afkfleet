@@ -347,6 +347,7 @@ mod tests {
             },
             database: DatabaseConfig {
                 path: dir.join("afkfleet.db"),
+                backups: None,
             },
             log: LogConfig::default(),
             auth: AuthConfig::default(),

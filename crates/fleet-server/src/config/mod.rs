@@ -18,7 +18,7 @@
 //!   `[accounts]` and the link flows' rate limits (ADR-0018); Phase 10 adds
 //!   the optional `[grpc]`, and `[chat]`'s command allowlist with the bots'
 //!   endpoints (ADR-0019); Phase 11 adds `[chat]`'s retention and `[audit]`
-//!   (ADR-0020).
+//!   (ADR-0020); Phase 12 adds `[database]`'s backup keys (ADR-0022).
 //! - **Secrets never go in this file.** A key for a secret names the file
 //!   that holds it and ends in `_file` or `_files`; a test checks every
 //!   key's name (security rule 4). fleet-startup's `secret_file` reads those
@@ -27,6 +27,7 @@
 mod accounts;
 mod audit;
 mod auth;
+mod backups;
 mod chat;
 mod error;
 mod heartbeats;
@@ -49,6 +50,7 @@ use crate::http::rate_limit::TrustedProxies;
 pub use accounts::AccountsConfig;
 pub use audit::AuditConfig;
 pub use auth::{Argon2Params, Argon2ParamsError, AuthConfig, Bounds};
+pub use backups::BackupConfig;
 pub use chat::ChatConfig;
 pub use error::{ConfigError, Problem, ProblemKind, Problems};
 pub use fleet_startup::config::{
@@ -188,6 +190,9 @@ pub struct DatabaseConfig {
     /// The SQLite file. Required and absolute, so a server started from
     /// another directory can't silently create a fresh, empty database.
     pub path: PathBuf,
+    /// The backups (`backup_dir`, `backup_interval_hours`, `backup_keep`), or
+    /// `None` when `backup_dir` isn't set: then the server takes none.
+    pub backups: Option<BackupConfig>,
 }
 
 impl ServerConfig {

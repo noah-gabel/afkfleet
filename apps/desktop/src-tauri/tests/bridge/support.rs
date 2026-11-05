@@ -605,6 +605,7 @@ fn config(dir: &TempDir) -> ServerConfig {
         },
         database: DatabaseConfig {
             path: dir.path().join("afkfleet.db"),
+            backups: None,
         },
         log: LogConfig {
             format: LogFormat::Json,

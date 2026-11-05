@@ -349,7 +349,10 @@ async fn rotate_key_moves_a_linked_accounts_token_to_the_new_key_on_a_copy(
     assert!(report.contains("key 2 (active)"), "{report}");
     assert!(report.contains("key 1: seals nothing"), "{report}");
     let db = sqlite::open(
-        &DatabaseConfig { path: copy.clone() },
+        &DatabaseConfig {
+            path: copy.clone(),
+            backups: None,
+        },
         DatabaseOptions::default(),
     )
     .await
@@ -383,7 +386,10 @@ async fn rotate_key_moves_a_linked_accounts_token_to_the_new_key_on_a_copy(
     // sqlx's test file is 0644, and the server opens only owner-only files on Unix.
     owner_only(&original);
     let before = sqlite::open(
-        &DatabaseConfig { path: original },
+        &DatabaseConfig {
+            path: original,
+            backups: None,
+        },
         DatabaseOptions::default(),
     )
     .await

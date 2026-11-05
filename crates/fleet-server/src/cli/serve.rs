@@ -1773,7 +1773,10 @@ mod tests {
                 max_body_bytes: 65_536,
                 trusted_proxies: TrustedProxies::default(),
             },
-            database: DatabaseConfig { path },
+            database: DatabaseConfig {
+                path,
+                backups: None,
+            },
             log: LogConfig::default(),
             auth: AuthConfig {
                 sessions,
@@ -1845,7 +1848,10 @@ mod tests {
                 max_body_bytes: 65_536,
                 trusted_proxies: TrustedProxies::default(),
             },
-            database: DatabaseConfig { path },
+            database: DatabaseConfig {
+                path,
+                backups: None,
+            },
             log: LogConfig::default(),
             auth: AuthConfig::default(),
             rate_limits: RateLimitConfig::default(),

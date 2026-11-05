@@ -376,6 +376,7 @@ mod tests {
             },
             database: DatabaseConfig {
                 path: dir.join("afkfleet.db"),
+                backups: None,
             },
             log: LogConfig::default(),
             auth: AuthConfig::default(),
@@ -410,6 +411,7 @@ mod tests {
         let database = sqlite::open(
             &DatabaseConfig {
                 path: dir.join("afkfleet.db"),
+                backups: None,
             },
             DatabaseOptions::default(),
         )
@@ -472,6 +474,7 @@ mod tests {
         let database = sqlite::open_migrated(
             &DatabaseConfig {
                 path: dir.join("afkfleet.db"),
+                backups: None,
             },
             DatabaseOptions::default(),
         )
@@ -494,6 +497,7 @@ mod tests {
         let database = sqlite::open_migrated(
             &DatabaseConfig {
                 path: dir.join("afkfleet.db"),
+                backups: None,
             },
             DatabaseOptions::default(),
         )

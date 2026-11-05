@@ -96,6 +96,35 @@ pub enum ProblemKind {
     /// shown.
     #[error(transparent)]
     CommandAllowlist(CommandAllowlistError),
+    /// Set without the key it needs, like `backup_keep` without
+    /// `backup_dir`.
+    #[error("needs `{key}`")]
+    Needs {
+        /// The key it needs, without its section.
+        key: &'static str,
+    },
+    /// A path with a `..` part, which could lead anywhere.
+    #[error("must not contain `..`")]
+    ParentDir,
+    /// A backups' folder that is the database's folder or holds it.
+    #[error("must not be the database's folder or a folder above it")]
+    HoldsDatabase,
+    /// A backups' folder that holds a key file, which must be backed up
+    /// apart from the database.
+    #[error("must not hold `{key}`: back the keys up apart from the database")]
+    HoldsKey {
+        /// The key naming the file, with its section.
+        key: &'static str,
+    },
+    /// Two numbers whose product is over its limit, like the backups kept
+    /// times their interval.
+    #[error("times `{key}` must be at most {max}")]
+    ProductOver {
+        /// The other key, without its section.
+        key: &'static str,
+        /// The largest product allowed.
+        max: u32,
+    },
     /// A listener's port that another listener already uses
     /// (`[grpc] bind` and `[http] bind`).
     #[error("uses the same port as `{key}`")]

@@ -47,6 +47,7 @@ pub mod accounts;
 pub mod agents;
 pub mod audit;
 pub mod auth;
+pub mod backup;
 pub mod bots;
 pub mod challenges;
 pub mod enrollment;

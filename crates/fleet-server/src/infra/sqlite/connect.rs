@@ -77,6 +77,10 @@ pub enum PoolRole {
     Write,
     /// A read connection, which refuses every write (`query_only`).
     Read,
+    /// A connection of its own that opens the file read-only: a backup's
+    /// source, whose `VACUUM INTO` writes only the new file, and the check
+    /// of a new backup, opened `immutable` too (ADR-0022, S2).
+    Backup,
 }
 
 /// Applies every per-connection setting for `role` to `base`, which names
@@ -89,7 +93,7 @@ pub enum PoolRole {
 /// every statement at `debug` and slow ones at `warn`, and never creates a
 /// missing file ([`super::open`] does that, with the right permissions). The
 /// write connection adds `journal_mode=WAL`; read connections add
-/// `query_only=ON`.
+/// `query_only=ON`; a backup's connection opens the file read-only.
 ///
 /// `secure_delete=ON` overwrites what a delete or an update removes, freed
 /// pages included, so retention's deleted chat and old audit entries don't
@@ -121,5 +125,6 @@ pub fn connect_options(
     match role {
         PoolRole::Write => common.journal_mode(SqliteJournalMode::Wal),
         PoolRole::Read => common.pragma("query_only", "ON"),
+        PoolRole::Backup => common.read_only(true),
     }
 }

@@ -462,6 +462,7 @@ mod tests {
     fn database_config(dir: &Path) -> DatabaseConfig {
         DatabaseConfig {
             path: dir.join("afkfleet.db"),
+            backups: None,
         }
     }
 
