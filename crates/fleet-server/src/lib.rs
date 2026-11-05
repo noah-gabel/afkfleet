@@ -16,6 +16,7 @@
 //! | `infra` | the adapters: `system` (the real clock and the OS's randomness), `sqlite` (sqlx repositories), `crypto` (vault, tokens, passwords), `msauth` (Microsoft's account flows over HTTP, the adapter's own requests), `pki` (the control plane's CA, certificates and CSRs) | group B, P6.3, P7, P9, P10 |
 //! | `http` | the router, middleware, extractors, handlers per resource, the error type and the WebSocket | P6.5 |
 //! | `grpc` | the agents' port and its TLS (`listener`), enrollment; later the control stream, the agent registry, the scheduler and the reconciler | P10 |
+//! | `metrics` | the key metrics: what the services count, each server into its own Prometheus registry, which `GET /metrics` renders on `[metrics] bind` | P12.4 |
 //!
 //! Each module arrives with the task that first puts code in it (ADR-0015).
 //!
@@ -36,4 +37,5 @@ pub mod config;
 pub mod grpc;
 pub mod http;
 pub mod infra;
+pub mod metrics;
 pub mod ports;

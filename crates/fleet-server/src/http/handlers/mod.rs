@@ -29,6 +29,7 @@
 //! - [`server_settings`]: `GET` and `POST /api/v1/server-settings`, `PUT`
 //!   and `DELETE /api/v1/server-settings/{id}`, and `POST
 //!   /api/v1/server-settings/chat-format-preview` (P11.9).
+//! - [`metrics`]: `GET /metrics`, on the metrics port only (P12.4).
 //! - [`me`]: `GET /api/v1/me`, `POST /api/v1/me/password`, `GET
 //!   /api/v1/me/sessions` and `DELETE /api/v1/me/sessions/{id}` (P7.6).
 //! - [`mfa`]: `POST /api/v1/me/mfa/enroll`, `/confirm` and `/reset` (P7.7).
@@ -47,6 +48,7 @@ pub(super) mod grants;
 pub(super) mod health;
 pub(super) mod invites;
 pub(super) mod me;
+pub(super) mod metrics;
 pub(super) mod mfa;
 pub(super) mod modes;
 pub(super) mod server_settings;

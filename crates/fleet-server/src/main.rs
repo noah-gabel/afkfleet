@@ -9,7 +9,8 @@
 //!   keys (ADR-0016) and, while `[grpc]` is configured, the control plane's
 //!   PKI (ADR-0019), installs aws-lc-rs as the process's one rustls provider
 //!   (ADR-0018), builds a multi-threaded runtime, installs the stop
-//!   signals, binds `[http] bind` (and `[grpc] bind`) and runs
+//!   signals, binds `[http] bind` (and `[grpc] bind`, and `[metrics]
+//!   bind`) and runs
 //!   [`serve::run`] until a signal stops it. Every startup error
 //!   from here on is one `error` event, "the server can't start", and the
 //!   last line, "the server stopped", carries the exit code.
@@ -191,7 +192,19 @@ fn start(config: &ServerConfig, keys: VaultKeys, pki: Option<LoadedPki>) -> serv
             },
             None => None,
         };
-        serve::run(config, listener, control_plane, signals, keys).await
+        let metrics = match config.metrics {
+            Some(bind) => match TcpListener::bind(bind).await {
+                Ok(listener) => Some(listener),
+                Err(source) => {
+                    return serve::cant_start(&StartError::Listen {
+                        address: bind,
+                        source,
+                    });
+                }
+            },
+            None => None,
+        };
+        serve::run(config, listener, control_plane, metrics, signals, keys).await
     });
     runtime.shutdown_timeout(serve::RUNTIME_SHUTDOWN);
     exit

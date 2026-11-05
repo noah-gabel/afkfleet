@@ -122,10 +122,12 @@ keyring-core = "1.0.0"
 # (ADR-0011, ADR-0014).
 log = "0.4.34"
 # metrics: the facade only, with no features; its one dependency is rapidhash. The agent
-# installs the Prometheus exporter (P5.3); fleet-runtime records into it (ADR-0013).
+# installs the Prometheus exporter (P5.3); fleet-runtime records into it (ADR-0013); the
+# server records into a recorder of its own (P12.4, ADR-0022, S12).
 metrics = "0.24.6"
-# metrics-exporter-prometheus: no features. The defaults add a push gateway with its own
-# TLS stack, and the agent only installs the recorder until P12.4 enables `http-listener`.
+# metrics-exporter-prometheus: no features, ever. The defaults add a push gateway with its
+# own TLS stack, and its `http-listener` spawns unowned tasks with no timeouts; each binary
+# serves the render on its own `[metrics] bind` instead (P12.4, ADR-0022, S9).
 # Its metrics-util dependency always enables `storage`, which brings rand 0.9
 # (thread_rng) and getrandom 0.3 into normal dependencies; both were already in the
 # lockfile, and nothing uses them for secrets. One `metrics` 0.24.x in the tree keeps

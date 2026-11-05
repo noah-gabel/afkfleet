@@ -9,6 +9,7 @@
 //!   start.
 //! - `shutdown`: the graceful shutdown's timing and its effect on
 //!   connections and the database.
+//! - `metrics`: the metrics port beside the API (P12.4).
 // Integration tests are test code, but clippy only applies the test allowances
 // of clippy.toml (unwrap, panic, …) inside `#[cfg(test)]`; without this, the
 // helper functions below would count as library code.
@@ -19,5 +20,6 @@ mod boot;
 mod cli;
 mod control_plane;
 mod events;
+mod metrics;
 mod shutdown;
 mod support;

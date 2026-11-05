@@ -67,6 +67,11 @@ x509-parser.workspace = true
 # Only `log::LevelFilter`, for sqlx's statement-logging levels; clippy.toml bans its
 # logging macros (ADR-0015).
 log.workspace = true
+# The key metrics (P12.4): each server records into its own Prometheus recorder, never a
+# global one, and serves its render on `[metrics] bind` itself, so the exporter has no
+# features (ADR-0022, S9, S12).
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
 # The Microsoft adapter's own HTTP client (infra::msauth): rustls with aws-lc-rs from
 # the workspace, and `form` for the OAuth form bodies. Answers are read through the
 # adapter's capped reader; clippy.toml bans reqwest's unbounded readers (ADR-0018).

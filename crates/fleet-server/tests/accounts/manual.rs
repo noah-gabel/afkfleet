@@ -43,6 +43,7 @@ use fleet_server::grpc::reconciler::ReconcileTimings;
 use fleet_server::infra::crypto::vault::{VaultKeys, XChaChaVault};
 use fleet_server::infra::msauth::ReqwestMicrosoftAuth;
 use fleet_server::infra::system::{MonotonicClock, OsRandom, SystemClock, TokioPace};
+use fleet_server::metrics::Metrics;
 use fleet_server::ports::accounts::AccountCredential;
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord};
 use fleet_server::ports::msauth::{
@@ -571,6 +572,7 @@ async fn manual_link_flow_member_then_owner() {
                 pace: Arc::new(TokioPace),
                 reconcile: ReconcileTimings::default(),
                 clock,
+                metrics: Metrics::prometheus(),
             },
         )
         .await,

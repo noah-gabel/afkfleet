@@ -43,6 +43,7 @@ use fleet_server::infra::crypto::tokens::Sha256Tokens;
 use fleet_server::infra::crypto::vault::{DerivedKey, VaultKeys};
 use fleet_server::infra::pki::CertificateAuthority;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
+use fleet_server::metrics::Metrics;
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord};
 use fleet_server::ports::grants::AccountGrant;
@@ -575,6 +576,7 @@ impl HttpSetup {
             microsoft: fake.clone(),
             pace: pace.clone(),
             reconcile: ReconcileTimings::default(),
+            metrics: Metrics::prometheus(),
         };
         Self {
             server: Server::start_with(

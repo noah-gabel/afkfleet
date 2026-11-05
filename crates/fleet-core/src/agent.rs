@@ -46,6 +46,15 @@ pub enum ConnectRefusal {
 }
 
 impl ConnectRefusal {
+    /// Every reason, for the server's metrics, which count each from 0.
+    pub const ALL: [Self; 5] = [
+        Self::Revoked,
+        Self::Expired,
+        Self::Disabled,
+        Self::SanMismatch,
+        Self::NameMismatch,
+    ];
+
     /// The reason's stable name.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -264,5 +273,21 @@ mod tests {
         #[case] expected: AgentStatus,
     ) {
         assert_eq!(status(enabled, not_after.map(at), live, at(NOW)), expected);
+    }
+
+    #[test]
+    fn every_connect_refusal_has_its_own_stable_name() {
+        let names: Vec<_> = ConnectRefusal::ALL.map(ConnectRefusal::as_str).into();
+
+        assert_eq!(
+            names,
+            [
+                "revoked",
+                "expired",
+                "disabled",
+                "san_mismatch",
+                "name_mismatch"
+            ]
+        );
     }
 }

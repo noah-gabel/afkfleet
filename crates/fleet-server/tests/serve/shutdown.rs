@@ -843,6 +843,7 @@ async fn an_in_flight_request_finishes_after_the_signal_while_new_connections_ar
             serve::serve(
                 listener,
                 None,
+                None,
                 app_of(app, &database),
                 &database,
                 signals,
@@ -892,6 +893,7 @@ async fn the_housekeeping_stops_at_the_first_signal() {
             serve::serve(
                 listener,
                 None,
+                None,
                 app_of(app, &database),
                 &database,
                 signals,
@@ -926,6 +928,7 @@ async fn an_idle_keep_alive_connection_doesnt_hold_up_the_shutdown() {
         async move {
             serve::serve(
                 listener,
+                None,
                 None,
                 app_of(app, &database),
                 &database,
@@ -984,6 +987,7 @@ async fn a_connection_the_database_never_gets_back_fails_the_shutdown_at_the_dea
             serve::serve(
                 listener,
                 None,
+                None,
                 app_of(app, &database),
                 &database,
                 signals,
@@ -1019,7 +1023,7 @@ async fn a_server_stopped_by_a_signal_leaves_no_wal_or_shm() {
     let keys = vault_keys(&config);
     let (sender, signals) = ChannelSignals::new();
     let server =
-        tokio::spawn(async move { serve::run(&config, listener, None, signals, keys).await });
+        tokio::spawn(async move { serve::run(&config, listener, None, None, signals, keys).await });
     let body = r#"{"username":"nobody","password":"not the password at all"}"#;
     let request = format!(
         "POST /api/v1/auth/login HTTP/1.1\r\nHost: test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -1071,7 +1075,7 @@ async fn the_retention_runs_without_the_control_plane_and_sums_up_before_the_dat
     let mut commits = database.commits();
     let server = tokio::spawn({
         let database = database.clone();
-        async move { serve::serve(listener, None, app, &database, signals, TIMEOUTS).await }
+        async move { serve::serve(listener, None, None, app, &database, signals, TIMEOUTS).await }
     });
 
     within("the old entry should be deleted", commits.changed())

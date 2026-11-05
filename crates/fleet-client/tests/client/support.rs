@@ -34,6 +34,7 @@ use fleet_server::infra::crypto::vault::{DerivedKey, VaultKeys};
 use fleet_server::infra::msauth::ReqwestMicrosoftAuth;
 use fleet_server::infra::sqlite::{self, Database, DatabaseOptions};
 use fleet_server::infra::system::TokioPace;
+use fleet_server::metrics::Metrics;
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::agents::NewAgent;
 use fleet_server::ports::audit::NewAuditEntry;
@@ -115,6 +116,7 @@ impl Server {
             microsoft: Arc::new(ReqwestMicrosoftAuth::new(Arc::new(clock.clone())).unwrap()),
             pace: Arc::new(TokioPace),
             reconcile: ReconcileTimings::default(),
+            metrics: Metrics::prometheus(),
         };
         let app = app_with(
             &config,
@@ -135,7 +137,7 @@ impl Server {
                 drain: Duration::from_secs(1),
                 close: Duration::from_secs(2),
             };
-            serve(listener, None, app, &database, signals, timeouts).await
+            serve(listener, None, None, app, &database, signals, timeouts).await
         });
         Self {
             url,

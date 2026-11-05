@@ -352,6 +352,7 @@ pub(crate) fn app_of(router: Router, database: &Database) -> App {
     );
     App {
         router,
+        metrics: Router::new(),
         retention,
         housekeeping: Housekeeping::new(
             RateLimits::new(&RateLimitConfig::default(), Arc::clone(&clock)),
@@ -384,7 +385,15 @@ pub(crate) async fn running_server(dir: &Path) -> (u16, AbortOnDrop<serve::Exit>
     let config = server_config(dir, address, false);
     let keys = vault_keys(&config);
     let task = tokio::spawn(async move {
-        serve::run(&config, listener, None, ChannelSignals::silent(), keys).await
+        serve::run(
+            &config,
+            listener,
+            None,
+            None,
+            ChannelSignals::silent(),
+            keys,
+        )
+        .await
     });
     (address.port(), AbortOnDrop(task))
 }

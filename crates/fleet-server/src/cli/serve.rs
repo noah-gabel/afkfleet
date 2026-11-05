@@ -123,7 +123,7 @@ use crate::http::error::chain;
 use crate::http::middleware::RequestIds;
 use crate::http::openapi::ApiDocs;
 use crate::http::rate_limit::RateLimits;
-use crate::http::router::{AppState, Services, router};
+use crate::http::router::{AppState, Services, metrics_router, router};
 use crate::http::ws::{LiveEvents, LiveSockets};
 use crate::infra::crypto::attempt_keys::HmacAttemptKeys;
 use crate::infra::crypto::passwords::Argon2Passwords;
@@ -138,6 +138,7 @@ use crate::infra::qr::SvgQr;
 use crate::infra::sqlite::backup::BackupError;
 use crate::infra::sqlite::{self, Database, DatabaseOptions, OpenError};
 use crate::infra::system::{MonotonicClock, OsRandom, SystemClock, TokioPace};
+use crate::metrics::Metrics;
 use crate::ports::agent_connections::AgentConnections;
 use crate::ports::live_hints::LiveHints;
 use crate::ports::msauth::MicrosoftAuthProvider;
@@ -274,6 +275,9 @@ pub fn cant_start(error: &StartError) -> Exit {
 pub struct App {
     /// Every route behind the middleware stack.
     pub router: Router,
+    /// The metrics port's one route, `GET /metrics`, behind the same stack
+    /// (P12.4; ADR-0022, S9): [`serve`] serves it on `[metrics] bind`.
+    pub metrics: Router,
     /// The background task that looks after the rate limits, the lockout,
     /// the login's challenges and the finished link flows.
     pub housekeeping: Housekeeping,
@@ -377,12 +381,17 @@ pub struct ServerPorts {
     /// server; the loopback suite's hint cases run with an interval no
     /// periodic pass falls inside (ADR-0020, PR #80's review).
     pub reconcile: ReconcileTimings,
+    /// The server's own metrics registry (P12.4; ADR-0022, S12): what its
+    /// services count, and what `GET /metrics` renders. Never a global
+    /// recorder, so each server in one process counts its own.
+    pub metrics: Metrics,
 }
 
 impl ServerPorts {
     /// The real ones: [`SystemClock`], a [`MonotonicClock`] for the
     /// limiters, [`OsRandom`], [`ReqwestMicrosoftAuth`] on the system clock,
-    /// [`TokioPace`], and the reconciler's default timing. Only [`app`] calls it, so `serve`, `user
+    /// [`TokioPace`], the reconciler's default timing and a Prometheus
+    /// registry of the server's own. Only [`app`] calls it, so `serve`, `user
     /// create-owner` and the `vault` commands stay the only places the real
     /// clock and randomness are built.
     ///
@@ -397,6 +406,7 @@ impl ServerPorts {
             random: Arc::new(OsRandom),
             pace: Arc::new(TokioPace),
             reconcile: ReconcileTimings::default(),
+            metrics: Metrics::prometheus(),
         })
     }
 }
@@ -525,6 +535,12 @@ pub fn app_with(
         audit,
     });
     App {
+        metrics: metrics_router(
+            state.clone(),
+            ports.metrics.render().clone(),
+            &config.http,
+            ids.clone(),
+        ),
         router: router(
             state,
             &config.http,
@@ -1080,14 +1096,17 @@ fn account_services(
     (link_flows, accounts)
 }
 
-/// Opens the database `config` names and serves the API on `listener`, and
-/// the gRPC port on the `control_plane`'s while `[grpc]` is configured,
-/// until a signal from `signals` stops them. `keys` are the vault's, which
-/// main.rs loads before the runtime starts, like the control plane's PKI.
+/// Opens the database `config` names and serves the API on `listener`, the
+/// gRPC port on the `control_plane`'s while `[grpc]` is configured, and the
+/// metrics on `metrics` while `[metrics]` is (P12.4), until a signal from
+/// `signals` stops them. `keys` are the vault's, which main.rs loads before
+/// the runtime starts, like the control plane's PKI; main.rs binds every
+/// listener.
 pub async fn run<S: ShutdownSignals>(
     config: &ServerConfig,
     listener: TcpListener,
     control_plane: Option<ControlPlane>,
+    metrics: Option<TcpListener>,
     signals: S,
     keys: VaultKeys,
 ) -> Exit {
@@ -1135,9 +1154,20 @@ pub async fn run<S: ShutdownSignals>(
         Err(error) => return cant_start(&error),
     };
     info!(%address, "the server is listening");
+    match metrics.as_ref().map(TcpListener::local_addr) {
+        Some(Ok(address)) => info!(%address, "{METRICS_LISTENING}"),
+        Some(Err(source)) => {
+            return cant_start(&StartError::Listen {
+                address: config.metrics.unwrap_or(config.http.bind),
+                source,
+            });
+        }
+        None => info!("{METRICS_OFF}"),
+    }
     serve(
         listener,
         grpc,
+        metrics,
         app,
         &database,
         signals,
@@ -1145,6 +1175,12 @@ pub async fn run<S: ShutdownSignals>(
     )
     .await
 }
+
+/// What a start logs when the metrics endpoint listens, with its address.
+pub const METRICS_LISTENING: &str = "the metrics endpoint is listening";
+
+/// What a start logs when the metrics endpoint is off (ADR-0022, S10).
+pub const METRICS_OFF: &str = "metrics are off: [metrics] bind isn't set";
 
 /// The gRPC port's listener and TLS, and the CA, from `plane`. A server
 /// certificate that expired by `now` is logged at `error`: agents can't
@@ -1252,12 +1288,18 @@ async fn warn_about_kept_offline_accounts(config: &ServerConfig, database: &Data
 }
 
 /// Serves `app` on `listener`, every connection with its peer's address,
-/// and the `grpc` port if there is one, and runs the housekeeping and the
-/// retention, until a signal from `signals` stops them; then shuts down
-/// within `timeouts`, waits for both and closes `database`.
+/// the `grpc` port if there is one and the metrics port on `metrics` if
+/// there is one, and runs the housekeeping and the retention, until a signal
+/// from `signals` stops them; then shuts down within `timeouts`, waits for
+/// them and closes `database`.
+///
+/// The metrics port drains with the API's: a scrape still open at the drain
+/// limit is left, as an API request is, and never holds the database's
+/// close. If either port ends unasked, the server stops.
 pub async fn serve<S: ShutdownSignals>(
     listener: TcpListener,
     grpc: Option<GrpcPort>,
+    metrics: Option<TcpListener>,
     app: App,
     database: &Database,
     signals: S,
@@ -1283,13 +1325,12 @@ pub async fn serve<S: ShutdownSignals>(
         timeouts.drain,
         move || counted.open(),
     ));
-    let http = axum::serve(
+    let http = http_ports(
         listener,
-        app.router
-            .into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown.clone().cancelled_owned())
-    .into_future();
+        app.router,
+        metrics.map(|listener| (listener, app.metrics)),
+        &shutdown,
+    );
     // Boxed, so the server's future stays as small with the port as without.
     let grpc = grpc.map(|port| {
         // The `Connect` streams end at the shutdown, so tonic's drain isn't
@@ -1364,6 +1405,29 @@ pub async fn serve<S: ShutdownSignals>(
         timeouts,
     )
     .await
+}
+
+/// The API's `router` on `listener` and, with one, the metrics port's
+/// router on its listener (P12.4), every connection with its peer's
+/// address, both draining at `shutdown`; one that ends unasked stops the
+/// other.
+async fn http_ports(
+    listener: TcpListener,
+    router: Router,
+    metrics: Option<(TcpListener, Router)>,
+    shutdown: &CancellationToken,
+) -> io::Result<()> {
+    let on = |listener, router: Router| {
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown.clone().cancelled_owned())
+        .into_future()
+    };
+    let api = on(listener, router);
+    let metrics = metrics.map(|(listener, router)| on(listener, router));
+    both(api, metrics, shutdown).await
 }
 
 /// Waits for `stop`, then for `streams_ended`, the end of every `Connect`

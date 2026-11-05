@@ -161,6 +161,8 @@ fn routes() -> Router {
             get(|| async { ([(REQUEST_ID_HEADER, "handler-chosen")], "x") }),
         )
         .route("/health/probe", get(|| async { "quiet" }))
+        .route("/metrics", get(|| async { "scraped" }))
+        .route("/metrics-like", get(|| async { "not the metrics" }))
         .route("/arrival", post(arrival_age))
 }
 
@@ -921,6 +923,21 @@ async fn a_health_route_is_logged_at_debug() {
     let line = finish_line(&debug);
     assert_eq!(line["level"], "DEBUG");
     assert_eq!(line["span"]["route"], "/health/probe");
+}
+
+/// A scraper asks every few seconds (P12.4): its line is at `debug`, as a
+/// health probe's, and only the metrics route's.
+#[tokio::test]
+async fn the_metrics_route_is_logged_at_debug_and_only_it() {
+    let stack = stack();
+
+    let (_seen, info) = send_logged(&stack.app, get_request("/metrics"), "info").await;
+    let (_seen, debug) = send_logged(&stack.app, get_request("/metrics"), "debug").await;
+    let (_seen, other) = send_logged(&stack.app, get_request("/metrics-like"), "info").await;
+
+    assert_eq!(info.text(), "");
+    assert_eq!(finish_line(&debug)["level"], "DEBUG");
+    assert_eq!(finish_line(&other)["level"], "INFO");
 }
 
 #[tokio::test]

@@ -50,7 +50,7 @@ use fleet_server::http::extractors::AuthUser;
 use fleet_server::http::middleware::RequestIds;
 use fleet_server::http::openapi::{ApiDocs, OPENAPI_PATH};
 use fleet_server::http::rate_limit::{RateLimits, TrustedProxies};
-use fleet_server::http::router::{AppState, Services, api_routes};
+use fleet_server::http::router::{AppState, Services, api_routes, metrics_routes};
 use fleet_server::http::routes::{Access, RateClass, RouteEntry, Routes};
 use fleet_server::infra::crypto::attempt_keys::HmacAttemptKeys;
 use fleet_server::infra::crypto::passwords::Argon2Passwords;
@@ -452,6 +452,30 @@ async fn outside_dev_mode_the_public_routes_are_exactly_the_allowlist(
         ])
     );
     db.close().await;
+}
+
+/// The metrics port's router holds exactly one route, public on the
+/// standard class (P12.4; ADR-0022, S9), and the API's holds no metrics
+/// route at all, whatever its access.
+#[test]
+fn the_metrics_port_has_exactly_one_public_route_and_the_api_none() {
+    let metrics = metrics_routes(Routes::new(&limits()));
+    let api = api_routes(Routes::new(&limits()));
+
+    assert_eq!(
+        metrics.entries().to_vec(),
+        [RouteEntry {
+            method: Method::GET,
+            path: "/metrics".to_owned(),
+            access: Access::Public,
+            class: RateClass::Standard,
+        }]
+    );
+    assert!(
+        api.entries().iter().all(|entry| entry.path != "/metrics"),
+        "{:?}",
+        api.entries()
+    );
 }
 
 #[sqlx::test(migrations = false)]

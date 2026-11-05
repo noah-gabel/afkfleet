@@ -81,13 +81,17 @@
 //! Every API route is registered through the registry, so it can't exist
 //! without its access, its rate-limit class and its entry in the `OpenAPI`
 //! document. The document's own route isn't listed in it.
+//!
+//! The metrics port ([`metrics_router`], `[metrics] bind`; P12.4) serves one
+//! route through the registry too, `GET /metrics`, public on the standard
+//! class, behind the same middleware; the API's router never serves it.
 
-use axum::Router;
+use axum::{Extension, Router};
 use utoipa_axum::routes;
 
 use super::handlers::{
-    accounts, agents, audit, auth, bots, chat, events, grants, health, invites, me, mfa, modes,
-    server_settings, users,
+    accounts, agents, audit, auth, bots, chat, events, grants, health, invites, me, metrics, mfa,
+    modes, server_settings, users,
 };
 use super::middleware::RequestIds;
 use super::openapi::ApiDocs;
@@ -109,6 +113,7 @@ use crate::app::modes::ModeService;
 use crate::app::server_settings::ServerSettingsService;
 use crate::app::users::UserService;
 use crate::config::HttpConfig;
+use crate::metrics::MetricsRender;
 
 /// What the handlers share: the services.
 #[derive(Debug, Clone)]
@@ -313,4 +318,30 @@ pub fn api_routes(routes: Routes) -> Routes {
 pub fn router(state: AppState, http: &HttpConfig, ids: RequestIds, docs: ApiDocs) -> Router {
     let routes = Routes::new(&state.limits);
     api_routes(routes).finish(state, http, ids, docs).0
+}
+
+/// Adds the metrics port's one route to `routes`: `GET /metrics`, public,
+/// on the standard class (Plan.md P12.4; ADR-0022, S9). It's never one of
+/// the API's routes: only [`metrics_router`] serves it, on `[metrics]
+/// bind`.
+#[must_use]
+pub fn metrics_routes(routes: Routes) -> Routes {
+    routes.public_route(RateClass::Standard, routes!(metrics::render))
+}
+
+/// The metrics port's router: [`metrics_routes`] with `state`, behind the
+/// same middleware stack as the API's (the timeout, the per-IP limit of the
+/// limits `state` carries, request IDs from `ids`, the error envelope), and
+/// `render` for its handler. No `OpenAPI` document is served there.
+pub fn metrics_router(
+    state: AppState,
+    render: MetricsRender,
+    http: &HttpConfig,
+    ids: RequestIds,
+) -> Router {
+    let routes = Routes::new(&state.limits);
+    metrics_routes(routes)
+        .finish(state, http, ids, ApiDocs::Hidden)
+        .0
+        .layer(Extension(render))
 }

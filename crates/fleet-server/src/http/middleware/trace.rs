@@ -18,11 +18,12 @@
 //! - No header and no body is ever logged.
 //!
 //! Two kinds of request log their line at `debug`, so they can't flood the
-//! log: the health routes (`/health/…`), which a probe asks every few
-//! seconds (a failed readiness check is still logged by `render_errors`),
-//! and a request a rate limit refused (429), which a flood would otherwise
-//! turn into thousands of lines a second; the limiters count their
-//! refusals for the server's periodic summary instead (ADR-0016).
+//! log: the health routes (`/health/…`) and the metrics port's `/metrics`,
+//! which a probe or a scraper asks every few seconds (a failed readiness
+//! check is still logged by `render_errors`), and a request a rate limit
+//! refused (429), which a flood would otherwise turn into thousands of lines
+//! a second; the limiters count their refusals for the server's periodic
+//! summary instead (ADR-0016).
 
 use axum::extract::{MatchedPath, Request};
 use axum::http::{Method, StatusCode};
@@ -43,6 +44,9 @@ const OTHER_METHOD: &str = "<other>";
 
 /// The prefix of the routes whose line is logged at `debug`.
 const QUIET_PREFIX: &str = "/health/";
+
+/// The metrics port's route, whose line is logged at `debug` too.
+const METRICS_ROUTE: &str = "/metrics";
 
 /// The methods logged by name.
 static STANDARD_METHODS: [Method; 9] = [
@@ -94,9 +98,10 @@ fn method_label(method: &Method) -> &'static str {
         .map_or(OTHER_METHOD, Method::as_str)
 }
 
-/// Whether `route`'s line is logged at `debug`: the health routes.
+/// Whether `route`'s line is logged at `debug`: the health routes and the
+/// metrics port's.
 fn is_quiet(route: &str) -> bool {
-    route.starts_with(QUIET_PREFIX)
+    route.starts_with(QUIET_PREFIX) || route == METRICS_ROUTE
 }
 
 /// `elapsed` in milliseconds, to the microsecond.
