@@ -19,11 +19,13 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use fleet_core::account::AccountStatus;
 use fleet_core::authz::Role;
+use fleet_core::backup::BackupName;
 use fleet_core::id::{AccountId, LinkFlowId};
 use fleet_server::app::link_flows::LinkFlowStatus;
 use fleet_server::app::session_tokens::{SessionTokenPorts, SessionTokenService};
 use fleet_server::config::DatabaseConfig;
 use fleet_server::infra::crypto::vault::{VaultKeys, XChaChaVault};
+use fleet_server::infra::sqlite::backup;
 use fleet_server::infra::sqlite::{self, Database, DatabaseOptions};
 use fleet_server::ports::accounts::AccountCredential;
 use fleet_server::ports::msauth::PollOutcome;
@@ -349,7 +351,10 @@ async fn rotate_key_moves_a_linked_accounts_token_to_the_new_key_on_a_copy(
     assert!(report.contains("key 2 (active)"), "{report}");
     assert!(report.contains("key 1: seals nothing"), "{report}");
     let db = sqlite::open(
-        &DatabaseConfig { path: copy.clone() },
+        &DatabaseConfig {
+            path: copy.clone(),
+            backups: None,
+        },
         DatabaseOptions::default(),
     )
     .await
@@ -383,11 +388,85 @@ async fn rotate_key_moves_a_linked_accounts_token_to_the_new_key_on_a_copy(
     // sqlx's test file is 0644, and the server opens only owner-only files on Unix.
     owner_only(&original);
     let before = sqlite::open(
-        &DatabaseConfig { path: original },
+        &DatabaseConfig {
+            path: original,
+            backups: None,
+        },
         DatabaseOptions::default(),
     )
     .await
     .unwrap();
     assert_eq!(key_id_of(&envelope(&before, account).await).unwrap(), 1);
     before.close().await;
+}
+
+/// P12.3's restore (ADR-0022, S8): a backup of a database with a linked
+/// account holds only ciphertext and leaves nothing beside it; copied alone
+/// into a fresh folder, as the runbook restores one, it opens without
+/// migrating and its token opens with the same key; without that key,
+/// `vault status` says so with exit 3.
+#[sqlx::test(migrations = false)]
+async fn a_restored_backup_opens_with_its_key_and_holds_only_ciphertext(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let original = options.get_filename().to_owned();
+    let setup = HttpSetup::new(options).await;
+    let owner = setup.person(1, Role::Owner).await;
+    let account = link(&setup, &owner).await;
+    let backups = tempfile::tempdir().unwrap();
+
+    let written = backup::write(
+        &original,
+        backups.path(),
+        BackupName::at(at(T0)).unwrap(),
+        &CancellationToken::new(),
+        core::time::Duration::from_secs(60),
+        &DatabaseOptions::default(),
+    )
+    .await
+    .unwrap();
+    setup.db.close().await;
+
+    assert_only_ciphertext(&written.file, "in its backup");
+    let mut beside: Vec<String> = std::fs::read_dir(backups.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    beside.sort();
+    assert_eq!(beside, ["afkfleet-backup-20270115T080000Z.db"]);
+    let dir = tempfile::tempdir().unwrap();
+    let copy = dir.path().join("afkfleet.db");
+    std::fs::copy(&written.file, &copy).unwrap();
+    owner_only(&copy);
+    let restored = sqlite::open_migrated(
+        &DatabaseConfig {
+            path: copy.clone(),
+            backups: None,
+        },
+        DatabaseOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        opened(
+            &vault(1, KEY_1),
+            account,
+            &envelope(&restored, account).await
+        ),
+        "refresh-1"
+    );
+    restored.close().await;
+    let config = dir.path().join("server.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "[database]\npath = '{}'\n[log]\nformat = \"json\"\n[vault]\nmaster_key_files = {{ 2 = '{}' }}\nactive_key_id = 2\n",
+            copy.display(),
+            key_file(dir.path(), 2, KEY_2).display(),
+        ),
+    )
+    .unwrap();
+    let status = run(&["vault", "status", "--config", config.to_str().unwrap()]);
+    assert_eq!(status.status.code(), Some(3), "{}", text(&status));
 }

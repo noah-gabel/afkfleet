@@ -55,6 +55,7 @@
 mod accounts;
 mod agents;
 mod audit;
+pub mod backup;
 mod bots;
 mod chat;
 mod commits;

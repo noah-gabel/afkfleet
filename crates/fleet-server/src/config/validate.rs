@@ -4,22 +4,24 @@
 use core::num::NonZeroU32;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use chrono::TimeDelta;
 
 use super::raw::{
-    RawAccounts, RawAudit, RawAuth, RawChat, RawConfig, RawGrpc, RawLog, RawRateLimits, RawVault,
+    RawAccounts, RawAudit, RawAuth, RawChat, RawConfig, RawDatabase, RawGrpc, RawLog,
+    RawRateLimits, RawVault,
 };
 use super::{
-    AccountsConfig, Argon2Params, AuditConfig, AuthConfig, Bounds, ChatConfig, ConfigError,
-    DatabaseConfig, GrpcConfig, Heartbeats, HttpConfig, KeyPath, LinkFlowLimits, LogConfig,
-    LogFilter, LogFormat, PkiPaths, ProblemKind, Problems, Rate, RateLimitConfig, ServerConfig,
-    VaultConfig,
+    AccountsConfig, Argon2Params, AuditConfig, AuthConfig, BackupConfig, Bounds, ChatConfig,
+    ConfigError, DatabaseConfig, GrpcConfig, Heartbeats, HttpConfig, KeyPath, LinkFlowLimits,
+    LogConfig, LogFilter, LogFormat, PkiPaths, ProblemKind, Problems, Rate, RateLimitConfig,
+    ServerConfig, VaultConfig,
 };
 use fleet_core::auth::{InviteTtl, LockoutPolicy, SessionPolicy};
 use fleet_core::authz::{CommandAllowlist, CommandAllowlistError};
+use fleet_core::backup::BackupPolicy;
 use fleet_core::chat::ChatRate;
 use fleet_core::retention::{AuditRetention, ChatBound, ChatRetention};
 
@@ -63,6 +65,12 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
     let chat = chat(&raw.chat, &mut problems);
     let audit = audit(&raw.audit, &mut problems);
     let grpc = grpc(raw.grpc.as_ref(), bind, &mut problems);
+    let backups = backups(
+        &raw.database,
+        path.as_deref(),
+        &named_key_files(vault.as_ref(), grpc.as_ref().ok().and_then(Option::as_ref)),
+        &mut problems,
+    );
 
     let (
         true,
@@ -80,6 +88,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
         Some(chat),
         Some(audit),
         Ok(grpc),
+        Ok(backups),
     ) = (
         problems.is_empty(),
         bind,
@@ -96,6 +105,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
         chat,
         audit,
         grpc,
+        backups,
     )
     else {
         return Err(ConfigError::Invalid(problems.sorted()));
@@ -110,7 +120,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
             max_body_bytes: usize::try_from(raw.http.max_body_bytes).unwrap_or(usize::MAX),
             trusted_proxies,
         },
-        database: DatabaseConfig { path },
+        database: DatabaseConfig { path, backups },
         log,
         auth: AuthConfig {
             argon2,
@@ -645,6 +655,127 @@ fn bind(raw: Option<&str>, problems: &mut Problems) -> Option<SocketAddr> {
         return None;
     }
     Some(address)
+}
+
+/// Every key file the config names, with its key: none may lie in the
+/// backups' folder (ADR-0022, S4).
+fn named_key_files<'a>(
+    vault: Option<&'a VaultConfig>,
+    grpc: Option<&'a GrpcConfig>,
+) -> Vec<(&'static str, &'a Path)> {
+    let mut files: Vec<(&'static str, &'a Path)> = vault
+        .into_iter()
+        .flat_map(|vault| vault.key_files.values())
+        .map(|file| ("vault.master_key_files", file.as_path()))
+        .collect();
+    if let Some(grpc) = grpc {
+        files.push(("grpc.ca_key_file", &grpc.pki.ca_key_file));
+        files.push(("grpc.server_key_file", &grpc.pki.server_key_file));
+    }
+    files
+}
+
+/// `[database]`'s backups (ADR-0022, S4): none without `backup_dir`, where
+/// the other two keys are problems; with it, the folder's rules
+/// ([`backup_dir`]), each number in its range, then their product.
+fn backups(
+    raw: &RawDatabase,
+    database: Option<&Path>,
+    key_files: &[(&'static str, &Path)],
+    problems: &mut Problems,
+) -> Result<Option<BackupConfig>, Invalid> {
+    let section = KeyPath::root().key("database");
+    let Some(text) = raw.backup_dir.as_deref() else {
+        let mut valid = true;
+        for (key, value) in [
+            ("backup_interval_hours", raw.backup_interval_hours),
+            ("backup_keep", raw.backup_keep),
+        ] {
+            if value.is_some() {
+                problems.push(section.key(key), ProblemKind::Needs { key: "backup_dir" });
+                valid = false;
+            }
+        }
+        return if valid { Ok(None) } else { Err(Invalid) };
+    };
+    let dir = backup_dir(text, database, key_files, &section, problems);
+    let interval = raw
+        .backup_interval_hours
+        .unwrap_or(BackupPolicy::DEFAULT_INTERVAL_HOURS);
+    let keep = raw.backup_keep.unwrap_or(BackupPolicy::DEFAULT_KEEP);
+    let in_range = check_ranges(
+        "database",
+        [
+            (
+                "backup_interval_hours",
+                interval,
+                BackupConfig::INTERVAL_HOURS,
+            ),
+            ("backup_keep", keep, BackupConfig::KEEP),
+        ],
+        problems,
+    );
+    let policy = if in_range {
+        BackupPolicy::try_new(interval, keep)
+            .map_err(|_| {
+                problems.push(
+                    section.key("backup_keep"),
+                    ProblemKind::ProductOver {
+                        key: "backup_interval_hours",
+                        max: BackupPolicy::MAX_SPAN_HOURS,
+                    },
+                );
+            })
+            .ok()
+    } else {
+        None
+    };
+    match (dir, policy) {
+        (Some(dir), Some(policy)) => Ok(Some(BackupConfig { dir, policy })),
+        _ => Err(Invalid),
+    }
+}
+
+/// `[database] backup_dir`: absolute, without a `..` part, neither the
+/// database's folder nor one above it, and holding no key file. A `..` is
+/// refused by its text too, since a Windows verbatim path (`\?C:…`) keeps
+/// it as a plain name. Only the words of the paths are compared here; `serve` and `backup` check the
+/// folder on disk.
+fn backup_dir(
+    text: &str,
+    database: Option<&Path>,
+    key_files: &[(&'static str, &Path)],
+    section: &KeyPath,
+    problems: &mut Problems,
+) -> Option<PathBuf> {
+    let key = section.key("backup_dir");
+    let dir = absolute_path(text)
+        .map_err(|kind| problems.push(key.clone(), kind))
+        .ok()?;
+    if dir
+        .components()
+        .any(|component| component == Component::ParentDir || component.as_os_str() == "..")
+    {
+        problems.push(key, ProblemKind::ParentDir);
+        return None;
+    }
+    let mut valid = true;
+    if database
+        .and_then(Path::parent)
+        .is_some_and(|folder| folder.starts_with(&dir))
+    {
+        problems.push(key.clone(), ProblemKind::HoldsDatabase);
+        valid = false;
+    }
+    let mut reported: Vec<&'static str> = Vec::new();
+    for (name, file) in key_files {
+        if file.starts_with(&dir) && !reported.contains(name) {
+            problems.push(key.clone(), ProblemKind::HoldsKey { key: name });
+            reported.push(name);
+            valid = false;
+        }
+    }
+    valid.then_some(dir)
 }
 
 /// `[database] path`: required, not empty, and absolute.

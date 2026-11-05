@@ -554,6 +554,7 @@ fn config(
         },
         database: DatabaseConfig {
             path: dir.join("afkfleet.db"),
+            backups: None,
         },
         log: LogConfig {
             format: LogFormat::Json,

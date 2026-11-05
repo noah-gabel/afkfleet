@@ -271,6 +271,16 @@ dev-disable-agent id $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "t
 dev-release-agent id $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dev-server" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=(justfile_directory() / "target" / "dev-server" / "vault-key-1"):
     cargo run --quiet -p fleet-server --bin afkfleet-server -- agent release --config deploy/dev/server.toml --id "{{ id }}"
 
+# One backup of dev-server's database into target/dev-server/backups/, which it creates
+# (ADR-0022, S5): `afkfleet-server backup` with dev-server's paths, beside a running
+# dev-server or not. It prints the backup's path; the backups hold the dev database, and
+# the older ones past the 14 kept are removed. No exit message: the command prints its own.
+# Take one backup of dev-server's database.
+[no-exit-message]
+dev-backup $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dev-server" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=(justfile_directory() / "target" / "dev-server" / "vault-key-1") $AFKFLEET_SERVER__DATABASE__BACKUP_DIR=(justfile_directory() / "target" / "dev-server" / "backups"):
+    node -e "require('node:fs').mkdirSync(process.argv[1], { recursive: true })" "{{ AFKFLEET_SERVER__DATABASE__BACKUP_DIR }}"
+    cargo run --quiet -p fleet-server --bin afkfleet-server -- backup --config deploy/dev/server.toml
+
 # `vault status` on dev-server's database with its key 1: what each key ID seals, read from
 # the envelopes' headers. It reads no key file and never creates or migrates the database
 # (ADR-0018). No exit message: the command prints its own report, error line and exit code

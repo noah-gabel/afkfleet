@@ -38,6 +38,7 @@ const SHORT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(1);
 fn config_in(dir: &TempDir) -> DatabaseConfig {
     DatabaseConfig {
         path: dir.path().join("afkfleet.db"),
+        backups: None,
     }
 }
 
@@ -64,6 +65,7 @@ struct Pragmas {
     busy_timeout: Option<i64>,
     trusted_schema: Option<i64>,
     secure_delete: Option<i64>,
+    journal_size_limit: Option<i64>,
     query_only: Option<i64>,
 }
 
@@ -94,6 +96,10 @@ async fn pragmas(pool: &SqlitePool) -> Pragmas {
             .await
             .unwrap(),
         secure_delete: sqlx::query_scalar!("PRAGMA secure_delete")
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap(),
+        journal_size_limit: sqlx::query_scalar!("PRAGMA journal_size_limit")
             .fetch_one(&mut *conn)
             .await
             .unwrap(),
@@ -165,6 +171,7 @@ async fn a_missing_folder_is_refused_and_nothing_is_created() {
     let folder = dir.path().join("typo");
     let config = DatabaseConfig {
         path: folder.join("afkfleet.db"),
+        backups: None,
     };
 
     let result = open(&config, DatabaseOptions::default()).await;
@@ -272,6 +279,7 @@ async fn open_migrated_refuses_a_missing_folder() {
     let folder = dir.path().join("typo");
     let config = DatabaseConfig {
         path: folder.join("afkfleet.db"),
+        backups: None,
     };
 
     let result = open_migrated(&config, DatabaseOptions::default()).await;
@@ -529,6 +537,7 @@ async fn the_write_connection_has_the_production_pragmas() {
             busy_timeout: Some(5_000),
             trusted_schema: Some(0),
             secure_delete: Some(1),
+            journal_size_limit: Some(0),
             query_only: Some(0),
         }
     );
@@ -551,6 +560,7 @@ async fn read_connections_have_the_production_pragmas() {
             busy_timeout: Some(5_000),
             trusted_schema: Some(0),
             secure_delete: Some(1),
+            journal_size_limit: Some(0),
             query_only: Some(1),
         }
     );
@@ -783,6 +793,7 @@ mod permissions {
         fs::set_permissions(&folder, Permissions::from_mode(0o500)).unwrap();
         let config = DatabaseConfig {
             path: folder.join("afkfleet.db"),
+            backups: None,
         };
 
         let result = open(&config, DatabaseOptions::default()).await;
@@ -807,6 +818,7 @@ mod permissions {
         fs::set_permissions(&locked, Permissions::from_mode(0o000)).unwrap();
         let config = DatabaseConfig {
             path: folder.join("afkfleet.db"),
+            backups: None,
         };
 
         let result = open(&config, DatabaseOptions::default()).await;

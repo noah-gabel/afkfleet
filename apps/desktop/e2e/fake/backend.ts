@@ -212,7 +212,7 @@ const API_MESSAGES: Partial<Record<ErrorCode, string>> = {
 };
 
 /** A refusal of the Rust side. */
-function refused(code: CommandErrorCode): Outcome {
+function refused(code: CommandErrorCode): Extract<Outcome, { ok: false }> {
   return { ok: false, error: { code, message: MESSAGES[code] ?? code } };
 }
 
@@ -826,6 +826,11 @@ export class FakeBackend {
     }
     // Not the theme's, which reaches no server, nor the profile, which only the app holds.
     if (this.#refusing !== null && command !== "set_window_theme" && command !== "server_profile") {
+      // The real logout ends the session in the app whatever the server does, and answers
+      // that the server wasn't told (ADR-0022, S1).
+      if (command === "logout") {
+        return this.#logOut({ server: "unconfirmed", error: refused(this.#refusing).error });
+      }
       return refused(this.#refusing);
     }
     if (this.#held.has(command)) {
@@ -891,6 +896,13 @@ export class FakeBackend {
     }
   }
 
+  /** A logout: the session ends here, and `answer` says whether the server was told. */
+  #logOut(answer: LogoutResponse): Outcome {
+    this.#endWatch(refused("no_session"));
+    this.#session = null;
+    return value(answer);
+  }
+
   #answer(command: string, args: Record<string, unknown>): Outcome | Promise<Outcome> {
     const request = (args.request ?? {}) as Record<string, unknown>;
     switch (command as Command) {
@@ -905,9 +917,7 @@ export class FakeBackend {
       case "login_mfa":
         return this.#loginMfa(String(args.code));
       case "logout":
-        this.#endWatch(refused("no_session"));
-        this.#session = null;
-        return value({ server: "ended" } satisfies LogoutResponse);
+        return this.#logOut({ server: "ended" });
       case "register":
         return this.#register(
           String(request.invite),

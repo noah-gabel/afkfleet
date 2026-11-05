@@ -353,11 +353,15 @@ impl Default for RawAudit {
     }
 }
 
-/// `[database]`. `path` is required.
+/// `[database]`. `path` is required; the backup keys are optional, and the
+/// other two only with `backup_dir` (ADR-0022, S4).
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields, expecting = "a table of database settings")]
 pub(crate) struct RawDatabase {
     pub(crate) path: Option<String>,
+    pub(crate) backup_dir: Option<String>,
+    pub(crate) backup_interval_hours: Option<u32>,
+    pub(crate) backup_keep: Option<u32>,
 }
 
 /// `[log]`. Missing keys take their defaults (`json`, `info`).
@@ -653,6 +657,9 @@ mod secret_names {
             "http.trusted_proxies",
             "database",
             "database.path",
+            "database.backup_dir",
+            "database.backup_interval_hours",
+            "database.backup_keep",
             "log",
             "log.format",
             "log.filter",

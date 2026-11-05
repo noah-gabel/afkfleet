@@ -144,6 +144,7 @@ fn config(
         },
         database: DatabaseConfig {
             path: std::env::temp_dir().join("unused.db"),
+            backups: None,
         },
         log: LogConfig {
             format: LogFormat::Json,

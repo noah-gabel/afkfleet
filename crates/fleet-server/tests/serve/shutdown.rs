@@ -792,6 +792,7 @@ async fn database() -> (TempDir, Database) {
     let dir = TempDir::new().unwrap();
     let config = DatabaseConfig {
         path: dir.path().join("afkfleet.db"),
+        backups: None,
     };
     let database = sqlite::open(&config, DatabaseOptions::default())
         .await
@@ -1090,6 +1091,7 @@ async fn the_retention_runs_without_the_control_plane_and_sums_up_before_the_dat
     );
     let config = DatabaseConfig {
         path: dir.path().join("afkfleet.db"),
+        backups: None,
     };
     let reopened = sqlite::open(&config, DatabaseOptions::default())
         .await

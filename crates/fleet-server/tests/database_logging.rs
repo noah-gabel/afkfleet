@@ -69,6 +69,7 @@ fn levels_of(buffer: &LogBuffer, needle: &str) -> Vec<(String, String)> {
 async fn open_with(dir: &TempDir, options: DatabaseOptions) -> Database {
     let config = DatabaseConfig {
         path: dir.path().join("afkfleet.db"),
+        backups: None,
     };
     open(&config, options).await.unwrap()
 }

@@ -14,6 +14,7 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
+mod backup_cli;
 mod boot;
 mod cli;
 mod control_plane;

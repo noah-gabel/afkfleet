@@ -4313,11 +4313,36 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
 ### Phase 12: Deployment & operations
 **Goal:** A reproducible, hardened production deployment and a desktop app that can be distributed.
-**Introduces:** `tauri-plugin-updater`. Tools: cargo-chef, Docker Compose, Caddy.
+**Introduces:** `tauri-plugin-updater`. Tools: cargo-chef, Docker Compose, Caddy (optional, [ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U5).
+
+> Note (P12, Phase 12's planning, 2026-11-05) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md)):
+> - **Four group branches.** Phase 12 is built in group PRs like Phases 2–11, each after the previous PR is merged: features first, then what packages them, then the release. Each group aims at about 5,300 lines; one that grows past it is split at its plan review.
+>
+>   | Group | Branch | Tasks |
+>   |---|---|---|
+>   | A | `p12/p12.3-start-screen-and-backups` | The start screen's way out (the user's finding, below), then P12.3 (ticked here) |
+>   | B | `p12/p12.4-metrics` | P12.4 (ticked here) |
+>   | C | `p12/p12-stack` | P12.1, P12.2 and P12.7: the images, the compose project with both proxy paths, the nightly smoke test, the setup script (ticked here) |
+>   | D | `p12/p12.5-release` | P12.5 and P12.6: the installer and updater, the release workflow, the runbook finished, the DoD's kit (ticked here) |
+>
+> - **The user's frame for the phase** (U1, U2):
+>   - No paid services are required.
+>   - Images are built for linux/arm64 in CI on GitHub's arm runners, and for amd64 too if it's cheap.
+>   - HTTPS comes from Let's Encrypt over HTTP-01 on ports 80 and 443, with no Caddy plugin, for a domain name that points at the host; a free dynamic-DNS subdomain works. The token that updates its record stays on the host, never in the repository, in CI or on a command line. Let's Encrypt's IP-address certificates are the recorded fallback, not built.
+>   - The installer is unsigned. The updater's private key stays offline, and releases live on GitHub Releases.
+>   - Metrics stay on an internal port.
+>   - The operator's hosting is never named anywhere (CLAUDE.md, rule 11). The AI never touches the host or its keys.
+>   - CI secrets are the user's question first, and no production configuration dials public Minecraft servers until the user decides it (ADR-0020's U50, asked at C's planning).
+> - **Beside other services** (U4, U5): the runbook is an operator's guide for any Linux host with Docker. afkfleet installs beside the host's other services in its own compose project, network and named volumes, with no host networking. It changes nothing on the host beyond what the runbook lists, and an uninstall section removes what it added. Caddy is optional, for hosts where 80 and 443 are free; otherwise afkfleet runs behind an existing reverse proxy, whose duties the runbook lists. The smoke test covers both.
+> - **A short first install** (U8): at most about ten commands from a host with Docker, one setup script for the one-time steps (it checks the prerequisites, creates the vault key and the PKI with the right owners and modes, refuses to overwrite anything and prints what's next), updates in two commands, and every step saying what success looks like.
+> - **Backups leave the host** (U3): they are pulled to an operator's PC over SFTP.
+> - **Who decides what:** the review agents decide each group's open questions (CLAUDE.md's step 10). The user decides every dependency, CI permissions and secrets, U50 for production, the texts friends read (one table per group plan), looks and UX, and the first release tag. The DoD's steps on a real host are the user's alone.
 
 > Note (P12, from Phase 11, group A) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S3, PR #59's review): **the server is deployed before its agents.** Phase 11 adds `BotSpec.chat_rate`, which an agent of that version requires: it refuses a spec without one, so an older server's assignments would be refused. Until the first release freezes the protocol (ADR-0019, S9), an upgrade updates the server first, then the agents; P12.6's runbook says so, and a later protocol change says which side goes first.
 
 > Note (P12, from Phase 11's 24-hour run, the user's finding) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "The DoD's 24-hour run"): **Phase 12's first group gives the start screen's wait a way out.** While the saved server doesn't answer, the start screen shows "Waiting for the server…" (with the banner's "Server unreachable. Retrying every 10 s.") and nothing else: a user can neither change the server nor log out, so a server that moved or is down for good leaves the app stuck (at the run's setup, the user had to start `dev-server` just to log out of it). The fix: while it waits, the screen also offers "Server settings" and "Log out on this PC", both working without the server; a local logout removes the stored session and says the server wasn't told. README's line on the start ("a session it can't use offers a way out") is corrected to match. Its texts are the user's to approve.
+>
+> *Planned in group A ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S1, U7):* "Log out on this PC" reuses `logout`, which clears the stored session before it tries the server, asks nothing first, and disables "Server settings" while it runs; the texts were approved as drafted.
 
 - [ ] **P12.1** Dockerfiles for the server and the agent:
   - multi-stage with cargo-chef
@@ -4373,12 +4398,30 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P12.2, from Phase 11, group D1) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S28): **Caddy must never log the live events socket's query string.** `GET /api/v1/events?ticket=…` carries a ticket: single use, 30 s, and only with its session's bearer token, but still a secret. Caddy writes no access log unless a `log` directive asks for one; if P12.2 adds one, its `query` filter deletes `ticket` from `request>uri`, and P12.7's smoke test checks the log holds none.
 
   > Note (P12.2, from Phase 11, group L3, PR #90's review) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U110, S127): **the same goes for `q` on `GET /api/v1/accounts/*/grant-candidates`.** It's what a user typed into "Share with", sent as they type it, so a password pasted into the wrong field would be in it. A `log` directive's `query` filter deletes `q` on that route as it deletes `ticket`.
-- [ ] **P12.3** 🔴 Backups:
+
+  > Note (P12.2, from Phase 12's planning, the user's decisions) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U3, U4, U5, U8, R4): **beside other services, both proxy paths.**
+  > - The compose project is afkfleet's own, with its own network and named volumes and no host networking. It touches nothing else on the host.
+  > - Caddy is optional, for a host where 80 and 443 are free. Otherwise the server's HTTP port is reached through the host's existing reverse proxy, and the runbook lists what that proxy must do (TLS, WebSocket upgrades, `X-Forwarded-For` with `trusted_proxies`, HSTS, no `ticket` or `q` in its logs).
+  > - The production server config sets `[database] backup_dir`. The backups' folder (owned by 65532, files 0600) is readable by the operator's SFTP account, which their PC pulls from.
+  > - One setup script does the one-time steps; its form is group C's.
+- [x] **P12.3** 🔴 Backups:
   - a scheduled `VACUUM INTO` with retention, plus a `backup` CLI
   - a restore runbook
   - Backups contain only ciphertext. **Back up the vault key separately and securely.**
 
   > Note (P12.3, from Phase 11, group E) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S44, S45): a `VACUUM INTO` holds a read snapshot, so the retention's batches meanwhile grow the WAL: schedule the backup between its runs, or have both share a lock. A backup keeps deleted chat for the backup's own retention (`secure_delete` overwrites only the live file), and that retention needs a name apart from P11.6's. Whether to set `journal_size_limit` is decided here.
+
+  > Note (P12.3, Phase 12's group A planning) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S2–S8, R1–R3): **the design.**
+  > - **The file:** `VACUUM INTO ?` with the path bound, on a read-only connection of its own. It's written into an owner-only dot file, synced, checked (the schema and `quick_check`), then published as `afkfleet-backup-YYYYMMDDTHHMMSSZ.db` by a hard link that never overwrites.
+  > - **The schedule:** inside the retention task's loop, after a pass, when the newest backup's stamp is `backup_interval_hours` old. A stop cancels it.
+  > - **The config:** off unless `[database] backup_dir` is set; `backup_keep` 1–60 and `backup_interval_hours` 1–168, their product at most 720 h. Pruning touches only the server's own names.
+  > - **The command:** `afkfleet-server backup` takes one now and prints its path.
+  > - **No audit entry,** and `journal_size_limit = 0` on every connection.
+  > - **Restoring** follows the runbook's steps.
+  >
+  > If sqlx's macros can't read `quick_check` or `journal_size_limit`, the work stops for the user (rule 8).
+  >
+  > *Built in group A ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), "As built (group A)"):* sqlx's macros describe both reads, so no exception was needed. fleet-core's `backup` module holds the rules; `infra::sqlite::backup` the file, `app::backup` the service, `cli::retention` the schedule, `cli::backup` the command, `just dev-backup` a try on the dev database; `docs/runbook.md` starts with backups and restoring one. The off-host copy (U3) and the compose form come with group C.
 - [ ] **P12.4** A Prometheus metrics endpoint on an internal port, with the key metrics documented.
 
   > Note (P12.4, from Phase 7, group B, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): a counter of detected refresh-token reuses belongs among the key metrics, so alerting can pick up possible token theft without anyone reading `/audit` or the logs.
@@ -4392,11 +4435,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P12.4, from Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): the outbox's counts (chat dropped, refusals, session requests dropped) and the ingest's (rows stored, skipped and dropped per agent; housekeeping's `chat_dropped`) are metrics to export.
 
   > Note (P12.4, from Phase 11, group E) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S45): the retention's rows deleted per phase, a run's time and batches, and the time of its last successful run belong among the key metrics: the task isn't watched, so that time is the alert for one that died or fails every run.
+
+  > Note (P12.4, from Phase 12's group A planning) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S6, R4): **the backups' metrics**: the last success, failures, a backup's duration and size. A backup writes no audit entry, so these and its log lines are its only trail. The `backup` command runs in a process of its own, so `serve` reads the last success at start from the newest backup's name.
 - [ ] **P12.5** Tauri release:
   - NSIS installer.
   - Updater key pair; the private key is kept **offline**.
-  - An update manifest, e.g. hosted on GitHub Releases.
-  - Optional Authenticode signing, which avoids SmartScreen warnings.
+  - An update manifest, hosted on GitHub Releases.
+  - No Authenticode signing: the installer is unsigned, and README and the runbook explain Windows' "Windows protected your PC" ("More info", "Run anyway") ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U1).
   - CI builds the installer on a Windows runner.
 - [ ] **P12.6** `docs/runbook.md`:
   - install, configure, bootstrap the Owner
@@ -4439,6 +4484,17 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P12.6, from Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
   > - **Connecting to a server, for friends** *(the user's note on the app's CA field)*: the runbook and the README get a section with the server address to enter; with Caddy and Let's Encrypt (P12.2's default) the app's CA field stays empty; for a server without a public domain, how the operator exports the HTTPS CA certificate (never the control plane's agent CA from `pki init`) and hands it out, and how friends compare its fingerprint in the app's server setup.
   > - **The agent's exit 5** and what to do (disable the agent and enroll it again, or fix its name), **its start errors** (each names its files and the fix), and **`private_targets`**' rules (at most 32 networks, each inside a private range; never checked in standalone mode).
+
+  > Note (P12.6, from Phase 12's planning, the user's decisions) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U1–U4, U8, S8, R4): **an operator's guide for any Linux host with Docker.**
+  > - **It names no provider:** firewall steps are generic ("open 80 and 443 in your provider's firewall and the host's"), and so is keeping a dynamic-DNS record in step with the host's IP (its token in a root-only file on the host, read by the update, never on a command line).
+  > - **The install:** about ten commands with one setup script, then two commands per update. Every step says what success looks like.
+  > - **The uninstall** removes everything afkfleet added and nothing more.
+  > - **The restore** follows S8's steps.
+  > - **The backups' off-host copy** is the operator's PC pulling over SFTP.
+  > - **Disk sizing** adds (`backup_keep` + 1) × the database's size and the WAL's peak during a backup.
+  > - **Upgrades:** a backup is taken with the old server before an upgrade, and the key rotation's "copy the database" becomes `backup`.
+  >
+  > *Group A starts the runbook with "Backups and restore".*
 - [ ] **P12.7** 🔴 Compose smoke test in CI, run nightly:
   1. `up`
   2. health checks pass
@@ -4452,9 +4508,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P12.7, from Phase 11, group L3, PR #90's review) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S28, S127): when Caddy writes an access log, the smoke test opens the live events socket and asks `grant-candidates` for a match, then checks the log holds neither the `ticket` nor the `q` it sent (P12.2's notes).
 
+  > Note (P12.7, from Phase 12's planning, the user's decision) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U5): **both proxy paths** are smoke-tested: afkfleet's own Caddy, and afkfleet behind a stand-in for an existing reverse proxy.
+
 **DoD:**
-- A fresh VPS gets to a running system by following only the runbook.
+- A clean afkfleet install (no earlier afkfleet state) on an existing Linux host that keeps its other services, following only the runbook.
 - A friend on another PC installs the release build, registers with an invite and logs in with 2FA, over HTTPS against that system (moved from Phase 8's DoD).
+
+> Note (Phase 12's DoD, the user's change at the planning) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U6): **"A fresh VPS gets to a running system by following only the runbook" became the clean install above.** Both checks are the user's, on their own host, once group D is merged and the first release exists. The AI never touches the host.
 
 ---
 

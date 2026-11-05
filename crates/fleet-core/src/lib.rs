@@ -82,6 +82,7 @@ pub mod agent;
 pub mod audit;
 pub mod auth;
 pub mod authz;
+pub mod backup;
 pub mod bot;
 pub mod chat;
 pub mod disconnect;

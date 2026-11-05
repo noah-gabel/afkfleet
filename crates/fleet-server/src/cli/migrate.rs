@@ -135,6 +135,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let config = DatabaseConfig {
             path: dir.path().join("afkfleet.db"),
+            backups: None,
         };
         let database = sqlite::open(&config, DatabaseOptions::default())
             .await
