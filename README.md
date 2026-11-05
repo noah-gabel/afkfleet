@@ -132,7 +132,7 @@ There's no support, and I don't take feature requests. Security reports are welc
   And its TypeScript side: the UI's `ApiClient` (in `packages/ui`), which checks every input against the server's limits before sending it, the desktop app's `TauriApiClient` behind it, and a `FakeApiClient` for tests. One contract file lists every command's exact arguments, and both sides test against it.
 
   Group D's app shell, in `packages/ui`:
-  - at start, the app checks the saved server and the stored session, then opens Home, the login or the server setup; while the saved server doesn't answer, it waits and offers the server settings and a logout on this PC, which tells the server only if it answers; a session it can't use offers a way out (try again, server settings, log out)
+  - at start, the app checks the saved server and the stored session, then opens Home, the login or the server setup; while the saved server doesn't answer, it waits and offers the server settings, whose Back returns there and tries again, and a logout on this PC, which tells the server only if it answers; a session it can't use offers a way out (try again, server settings, log out)
   - a banner while the server can't be reached (it checks every 10 s, or as long as a busy server asks) or presents a certificate the app refuses
   - navigation by role: Home and Server for everyone, the admin screens (users and invites, arriving with group E) only for Admins and the Owner
   - a session that ends while you use the app takes you to the login once, with one message; "Log out" in the header

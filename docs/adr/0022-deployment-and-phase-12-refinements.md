@@ -83,6 +83,7 @@ Features come first, then what packages them, then the release. There is one bra
   - The smoke test runs both paths.
 - **U6. The DoD's install** *(the user's change to Phase 12's DoD)*. "A fresh VPS gets to a running system by following only the runbook" becomes: **a clean afkfleet install (no earlier afkfleet state) on an existing Linux host that keeps its other services, following only the runbook; then the friend's check against it.**
 - **U7. "Log out on this PC" asks nothing first** *(the user's answer)*, like every other Log out in the app.
+  - *The server setup's way back* *(the user's decision at PR #95's hands-on)*. Opened from the start screen, "Server settings" used to lead back to the login while this PC still held the session, and nothing led back to the start screen. Now, leaving the setup without saving, when the start screen opened it, goes back to the start screen. That runs the launch again: it waits again while the server doesn't answer, or opens Home once it does. The setup's link then reads "Back" (the user's text), not "Back to login". Saving a new server keeps its behaviour: the switch logs out first.
 - **U8. A short first install** *(the user's addition at the plan review, for C and D)*:
   - At most about ten commands from a host with Docker to a running afkfleet.
   - One setup script does the one-time steps. It checks the prerequisites, creates the vault key and the PKI with the right owners and modes, refuses to overwrite anything that exists, and prints what to do next.
@@ -93,7 +94,7 @@ Features come first, then what packages them, then the release. There is one bra
 ### Decided by the review agents *(approved by the user at the plan review)*
 One read-only agent per question, each given the options neutrally.
 
-- **S1 (security). "Log out on this PC" reuses `logout` and `useLogout`.**
+- **S1 (security). "Log out on this PC" reuses `logout` and `useLogout`.** *("Server settings"' way back from the setup is U7's, the user's decision at PR #95's hands-on.)*
   - **How it works:** fleet-client's `logout` clears the stored refresh token under its gate before any request, then tries the server once. An unreachable server answers `unconfirmed`, whose warning says the server wasn't told; a server that answers meanwhile is told. This is ADR-0017's "ends locally first, then revokes, best effort".
   - **The wait:** on the start screen the app holds no access token, so the logout sends one refresh. The button stays busy about 5 s for a host that drops packets (`CONNECT_TIMEOUT`) and about 20 s for a silent server (`REQUEST_TIMEOUT`); about 40 s is the worst case.
   - **What the build needs:**
@@ -203,6 +204,8 @@ One read-only agent per question, each given the options neutrally.
 On `p12/p12.3-start-screen-and-backups`, as planned (S1–S8, R1–R4).
 
 **The start screen** (S1, U7): while it waits, "Server settings" and "Log out on this PC", both through what exists (`navigate("/setup")`, `useLogout`). While a logout runs, every other choice on the start screen waits, "Try again" in the failed state included, so neither a navigation nor a launch run again can race it. The e2e fake's `refuseAll` now answers `logout` as the real command does: the session ends and the answer is `unconfirmed`. New baselines: "the start screen, waiting", dark and light. Red first: six Vitest tests against the old screen; the e2e story against the old fake.
+
+*PR #95's hands-on (U7's second point):* the start screen opens `/setup?from=start`. The setup route reads that search through `setupSearch`, which keeps nothing else, as the audit route's does. The form then offers "Back", a link to `/`, which runs the launch again; from anywhere else it still offers "Back to login". This holds in both start-screen states: waiting, and a session that can't be used. Red first: two Vitest tests found no "Back" link. The e2e step (waiting, Server settings, Back, waiting again with the session kept; then Back once the server answers, Home, and no logout) went red through a temporary mutation, the start screen opening `/setup` without `from=start`. No baseline changed.
 
 **`journal_size_limit = 0`** (S7): both pragma tests read -1 before; the at-rest test found the WAL at 7,906,312 bytes with the deleted chat's text after the snapshot ended; after the change it's under the test's 256 KiB bound, without the text.
 

@@ -92,7 +92,10 @@ function Failed({ error }: { error: CommandError }) {
   );
 }
 
-/** "Server settings", which opens the server setup; off while a logout runs. */
+/**
+ * "Server settings", which opens the server setup; off while a logout runs. The setup's way back
+ * returns here (ADR-0022, U7).
+ */
 function ServerSettings({ disabled }: { disabled: boolean }) {
   const navigate = useNavigate();
   return (
@@ -101,7 +104,7 @@ function ServerSettings({ disabled }: { disabled: boolean }) {
       variant="outline"
       disabled={disabled}
       onClick={() => {
-        void navigate({ to: "/setup" });
+        void navigate({ to: "/setup", search: { from: "start" } });
       }}
     >
       Server settings

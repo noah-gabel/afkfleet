@@ -118,6 +118,50 @@ describe("the launch", () => {
     await waitFor(() => expect(app.path()).toBe("/setup"));
   });
 
+  it("goes back from the server settings it opened to the wait, then Home once the server answers", async () => {
+    let reachable = false;
+    const app = renderApp({
+      serverProfile: async () => PROFILE,
+      me: async () => {
+        if (!reachable) {
+          throw fakeApiError("unreachable");
+        }
+        return me();
+      },
+    });
+
+    await screen.findByText("Waiting for the server…");
+    await app.user.click(screen.getByRole("button", { name: "Server settings" }));
+    await waitFor(() => expect(app.path()).toBe("/setup"));
+    expect(screen.queryByRole("link", { name: "Back to login" })).toBeNull();
+    await app.user.click(screen.getByRole("link", { name: "Back" }));
+
+    expect(await screen.findByText("Waiting for the server…")).toBeDefined();
+    expect(app.path()).toBe("/");
+    reachable = true;
+    await app.user.click(screen.getByRole("button", { name: "Server settings" }));
+    await app.user.click(await screen.findByRole("link", { name: "Back" }));
+    await waitFor(() => expect(app.path()).toBe("/home"));
+    expect(app.fake.calls.map((call) => call.method)).not.toContain("logout");
+    expect(app.runtime.stores.session.getState().phase).toBe("signed_in");
+  });
+
+  it("goes back from the server settings to the start screen when the session can't be used", async () => {
+    const app = renderApp({
+      serverProfile: async () => PROFILE,
+      me: async () => {
+        throw fakeApiError("store");
+      },
+    });
+
+    await screen.findByText("fake store");
+    await app.user.click(screen.getByRole("button", { name: "Server settings" }));
+    await app.user.click(await screen.findByRole("link", { name: "Back" }));
+
+    expect(await screen.findByText("fake store")).toBeDefined();
+    expect(app.path()).toBe("/");
+  });
+
   it("logs out on this PC while it waits, and says the server wasn't told", async () => {
     const app = renderApp({
       serverProfile: async () => PROFILE,

@@ -39,8 +39,17 @@ import { CaDetails } from "./CaDetails";
 /** A chosen file larger than a CA can be. */
 export const FILE_TOO_LARGE = "File too large: at most 64 KiB.";
 
-/** The server form, titled `title`. */
-export function ServerForm({ title }: { title: "Server setup" | "Server" }) {
+/**
+ * The server form, titled `title`. Signed out, its way back leads to the login, or, when the start
+ * screen opened it (`backTo` "start"), back to the start screen, which runs the launch again.
+ */
+export function ServerForm({
+  title,
+  backTo,
+}: {
+  title: "Server setup" | "Server";
+  backTo: "login" | "start";
+}) {
   const { data: state } = useServerProfile();
   if (state === undefined) {
     return (
@@ -49,10 +58,18 @@ export function ServerForm({ title }: { title: "Server setup" | "Server" }) {
       </main>
     );
   }
-  return <ServerFormBody title={title} state={state} />;
+  return <ServerFormBody title={title} state={state} backTo={backTo} />;
 }
 
-function ServerFormBody({ title, state }: { title: string; state: ServerProfileState }) {
+function ServerFormBody({
+  title,
+  state,
+  backTo,
+}: {
+  title: string;
+  state: ServerProfileState;
+  backTo: "login" | "start";
+}) {
   const current = state.state === "set" ? state.profile : undefined;
   const hasCurrentCa = current?.custom_ca !== undefined;
   const signedIn = useSession((session) => session.phase === "signed_in");
@@ -207,9 +224,15 @@ function ServerFormBody({ title, state }: { title: string; state: ServerProfileS
           )}
         </form>
         {!signedIn && state.state === "set" ? (
-          <Link to="/login" className="text-sm underline underline-offset-4">
-            Back to login
-          </Link>
+          backTo === "start" ? (
+            <Link to="/" className="text-sm underline underline-offset-4">
+              Back
+            </Link>
+          ) : (
+            <Link to="/login" className="text-sm underline underline-offset-4">
+              Back to login
+            </Link>
+          )
         ) : null}
       </div>
     </main>

@@ -43,3 +43,25 @@ test("opens the server settings while the server doesn't answer", async ({ page,
   await expect(page.getByRole("heading", { name: "Server setup" })).toBeVisible();
   expect(backend.timesCalled("logout")).toBe(0);
 });
+
+test("goes back from the server settings to the wait, then to Home once the server answers", async ({
+  page,
+  context,
+}) => {
+  const backend = await fakeBackend(context);
+  await waitingSignedIn(page, backend);
+
+  await page.getByRole("button", { name: "Server settings" }).click();
+  await expect(page.getByRole("heading", { name: "Server setup" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Back to login" })).toHaveCount(0);
+  await page.getByRole("link", { name: "Back", exact: true }).click();
+
+  await expect(page.getByText("Waiting for the server…")).toBeVisible();
+  // The session is still stored: once the server answers, Back leads Home.
+  await page.getByRole("button", { name: "Server settings" }).click();
+  await expect(page.getByRole("heading", { name: "Server setup" })).toBeVisible();
+  backend.refuseAll(null);
+  await page.getByRole("link", { name: "Back", exact: true }).click();
+  await expectHome(page, OWNER);
+  expect(backend.timesCalled("logout")).toBe(0);
+});
