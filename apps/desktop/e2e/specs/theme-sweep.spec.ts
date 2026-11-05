@@ -483,6 +483,41 @@ test("the check holds each focus stop's outline, and walks the whole page", asyn
   );
   expect(await page.evaluate(() => document.activeElement?.tagName)).toBe("H1");
   await removePlants();
+
+  // The walk leaves the page at its end and comes back, which the window hears as its focus going
+  // and coming back. That's no Tab in the row: a listener there that drops an alert, as the agents'
+  // read on focus does to their error (R177), changes nothing, and hears again once the walk ends
+  // (R260).
+  await page.evaluate(() => {
+    const alert = document.createElement("div");
+    alert.dataset.planted = "yes";
+    alert.setAttribute("role", "alert");
+    document.body.append(alert);
+    const heard = { focus: 0, blur: 0 };
+    const stop = new AbortController();
+    Object.assign(window, { __heard: heard, __stopHearing: stop });
+    addEventListener(
+      "focus",
+      () => {
+        heard.focus += 1;
+        alert.remove();
+      },
+      { signal: stop.signal },
+    );
+    addEventListener("blur", () => (heard.blur += 1), { signal: stop.signal });
+  });
+  const heard = () =>
+    page.evaluate(
+      () => (window as unknown as { __heard: { focus: number; blur: number } }).__heard,
+    );
+  expect(await focusProblems(page)).toEqual([]);
+  expect(await heard()).toEqual({ focus: 0, blur: 0 });
+  await page.evaluate(() => dispatchEvent(new FocusEvent("focus")));
+  expect(await heard()).toEqual({ focus: 1, blur: 0 });
+  await page.evaluate(() =>
+    (window as unknown as { __stopHearing: AbortController }).__stopHearing.abort(),
+  );
+  await removePlants();
 });
 
 test("every native select holds the theme's tokens, its options too", async ({ page, context }) => {
@@ -1374,6 +1409,8 @@ test("servers, accounts with their grants, and the Owner's admin screens", async
   await page.getByLabel("Current password").fill(PASSWORD);
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(main.getByRole("heading", { name: "mc.example.com:25565", level: 1 })).toBeVisible();
+  // Its toast goes first, so no row below measures it on its way out, below the window (R261).
+  await expect(page.locator("[data-sonner-toast]")).toHaveCount(0, { timeout: 10_000 });
   await nav(page, "Minecraft servers");
   await expect(main.getByRole("listitem").filter({ hasText: "mc.example.com" })).toBeVisible();
   await bothThemes(page, "servers", { small: true });

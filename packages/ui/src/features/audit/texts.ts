@@ -30,9 +30,12 @@ export function showingOnly(kind: AuditTargetKind): string {
   return `Showing only ${targetKindLabel(kind).toLowerCase()}`;
 }
 
-/** An entry's "Only this target", for screen readers. */
+/**
+ * An entry's "Only this target" as screen readers and voice control name it: its visible
+ * words first, then the target (WCAG 2.5.3; ADR-0020, U130).
+ */
 export function onlyTarget(kind: AuditTargetKind, who: string): string {
-  return `Only ${targetKindLabel(kind).toLowerCase()} ${who}`;
+  return `${ONLY_THIS_TARGET}: ${targetKindLabel(kind).toLowerCase()} ${who}`;
 }
 
 /** A row the server couldn't read back (ADR-0020, S52). */

@@ -6,7 +6,7 @@
  */
 export type ChatSendRequest = { 
 /**
- * The line, one line of at most [`CHAT_MESSAGE_MAX_UNITS`] UTF-16 code
+ * The line, one line of at most `CHAT_MESSAGE_MAX_UNITS` UTF-16 code
  * units once trimmed, without control characters, `§` or text-direction
  * marks. A line starting with `/` is a command.
  */

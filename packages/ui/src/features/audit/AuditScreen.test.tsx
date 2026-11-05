@@ -339,12 +339,14 @@ describe("the audit log's screen", () => {
         { user: ADMIN },
       );
 
-      await app.user.click(await screen.findByRole("link", { name: `Only bot ${BOT}` }));
+      await app.user.click(
+        await screen.findByRole("link", { name: `Only this target: bot ${BOT}` }),
+      );
 
       expect(await screen.findByText(`Showing only bot ${BOT}.`)).toBeDefined();
       await waitFor(() => expect(rows()).toHaveLength(1));
       expect(audit).toHaveBeenLastCalledWith(undefined, undefined, "bot", BOT);
-      expect(screen.queryByRole("link", { name: `Only bot ${BOT}` })).toBeNull();
+      expect(screen.queryByRole("link", { name: `Only this target: bot ${BOT}` })).toBeNull();
       expect(screen.queryByText("What happened to this user, not everything they did.")).toBeNull();
 
       await app.user.click(screen.getByRole("link", { name: "Show everything" }));
@@ -356,7 +358,9 @@ describe("the audit log's screen", () => {
     it("names a user's target and says what the filter on them shows", async () => {
       const app = await auditScreen(async () => bothTargets);
 
-      await app.user.click(await screen.findByRole("link", { name: "Only user afkbot1" }));
+      await app.user.click(
+        await screen.findByRole("link", { name: "Only this target: user afkbot1" }),
+      );
 
       const line = await screen.findByText(/^Showing only user/);
       expect(line.textContent).toBe(`Showing only user afkbot1 (${USER}).`);
@@ -365,6 +369,21 @@ describe("the audit log's screen", () => {
       expect(
         screen.getByText("What happened to this user, not everything they did."),
       ).toBeDefined();
+    });
+
+    it("names its link with the words it shows first, then the target (WCAG 2.5.3, U130)", async () => {
+      await auditScreen(async () => bothTargets);
+
+      const links = await screen.findAllByRole("link", { name: /^Only this target: / });
+
+      expect(links.map((link) => link.textContent)).toEqual([
+        "Only this target",
+        "Only this target",
+      ]);
+      expect(links.map((link) => link.getAttribute("aria-label")).sort()).toEqual([
+        `Only this target: bot ${BOT}`,
+        "Only this target: user afkbot1",
+      ]);
     });
 
     it("says so when the target has no entries", async () => {

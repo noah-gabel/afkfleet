@@ -94,6 +94,18 @@ mod tests {
 
     use super::*;
 
+    /// fleet-api-types validates a query's `limit` and documents its default
+    /// with copies of these bounds; they must never drift apart (ADR-0020,
+    /// S128, R254).
+    #[test]
+    fn the_apis_page_bounds_are_the_stores() {
+        assert_eq!(u32::from(PageLimit::MAX), fleet_api_types::page::PAGE_MAX);
+        assert_eq!(
+            u32::from(PageLimit::DEFAULT.get()),
+            fleet_api_types::page::PAGE_DEFAULT
+        );
+    }
+
     #[rstest]
     #[case::the_smallest(1)]
     #[case::the_default(50)]

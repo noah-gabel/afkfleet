@@ -16,7 +16,10 @@
 # AFKFLEET_SERVER__GRPC__*_FILE (target/dod-run/pki/, created with `pki init`
 # when missing). Because [grpc] is set here, every command's validation needs
 # all six (R126). They also export AFKFLEET_SERVER__LOG__FILTER="info", so no
-# chat text reaches the terminal or a log (chat is logged only at debug).
+# chat text reaches the terminal or a log (chat is logged only at debug), and
+# `just dod-server` exports AFKFLEET_SERVER__LOG__FORMAT="json": scripts/dod-log.mjs
+# keeps each start's lines in target/dod-run/logs for `just dod-log-check` and
+# shows them readable in the terminal (ADR-0020, S134, U132).
 
 dev_mode = false
 
@@ -24,7 +27,7 @@ dev_mode = false
 bind = "127.0.0.1:8090"                  # the app's address: http://127.0.0.1:8090
 
 [log]
-format = "pretty"
+format = "pretty"                        # dod-owner's and dod-enrollment-token's; dod-server exports json
 filter = "info"                          # the recipes export info too; chat is only at debug
 
 [vault]

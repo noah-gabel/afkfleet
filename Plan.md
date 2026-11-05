@@ -4305,6 +4305,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
 > Note (Phase 11's DoD, the first check) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "The DoD's first check"): **the user's first check (2026-10-28) passed every step as expected,** on `p11/p11-dod-kit`: the stack from the `dod-*` recipes, the Owner's login with 2FA, the user's own Microsoft account linked, its bot set to `127.0.0.1:25566` after a step-up, Start pressed in the app and the bot Online, the Minecraft server's own `rcon-cli list` showing the player, then the bot stopped, the logout, and the container removed. **The first DoD item is met.** `target/dod-run/` keeps the linked account for M's 24-hour run, the second item.
 
+> Note (Phase 11's DoD, group M's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U127–U133, S133–S135): **the 24-hour run is the user's, on M's branch (`p11/p11-wrap-up`),** with one bot on the local container (U128), `public_targets = false` kept (U127). A bot asks for a Minecraft session only when it connects, so the run proves a renewal by restarting the container at least 24 h after Start: the bot reconnects by itself with a new session (U129). `dod-server` and `dod-agent` log JSON at `info` into `target/dod-run/logs/` through `scripts/dod-log.mjs` (S134, U132), and after the stop the user's `just dod-log-check` prints only counts, afkfleet's own fixed messages, bot numbers and relative times, ending in PASS or FAIL (S135, U133). The outcome is recorded there. *Built in M ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group M)", R257–R259), with the threat model and the README brought up to Phase 11's end (R256); S133's step for a Minecraft-version bump went into ADR-0003, as `docs/runbook.md` comes with P12.6.*
+
+> Note (Phase 11's DoD, the 24-hour run) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "The DoD's 24-hour run"): **the user's 24-hour run passed** (reported on 2026-11-05), on `p11/p11-wrap-up` at PR #93's review commit: `just dod-log-check` printed PASS, and the user reported each point as PASS: the fleet ran 24 h, managed from the app; every event showed up live; the logs hold no unhandled errors. **The second DoD item is met, and with the first, Phase 11 is done.** U51's part two, which ends the DoD's folder, is the user's.
+
 ---
 
 ### Phase 12: Deployment & operations
@@ -4312,6 +4316,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Introduces:** `tauri-plugin-updater`. Tools: cargo-chef, Docker Compose, Caddy.
 
 > Note (P12, from Phase 11, group A) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S3, PR #59's review): **the server is deployed before its agents.** Phase 11 adds `BotSpec.chat_rate`, which an agent of that version requires: it refuses a spec without one, so an older server's assignments would be refused. Until the first release freezes the protocol (ADR-0019, S9), an upgrade updates the server first, then the agents; P12.6's runbook says so, and a later protocol change says which side goes first.
+
+> Note (P12, from Phase 11's 24-hour run, the user's finding) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "The DoD's 24-hour run"): **Phase 12's first group gives the start screen's wait a way out.** While the saved server doesn't answer, the start screen shows "Waiting for the server…" (with the banner's "Server unreachable. Retrying every 10 s.") and nothing else: a user can neither change the server nor log out, so a server that moved or is down for good leaves the app stuck (at the run's setup, the user had to start `dev-server` just to log out of it). The fix: while it waits, the screen also offers "Server settings" and "Log out on this PC", both working without the server; a local logout removes the stored session and says the server wasn't told. README's line on the start ("a session it can't use offers a way out") is corrected to match. Its texts are the user's to approve.
 
 - [ ] **P12.1** Dockerfiles for the server and the agent:
   - multi-stage with cargo-chef
@@ -4761,6 +4767,7 @@ All routes are prefixed with `/api/v1`. The required level is checked through `a
 | `POST /accounts/{id}/relink` | Manage | Link the account again (a link flow) |
 | `GET/POST /accounts/{id}/grants` · `PUT/DELETE /accounts/{id}/grants/{user}` | Manage (writes: step-up) | Sharing |
 | `DELETE /accounts/{id}/grants/me` | a grantee without implicit Manage (step-up) | Leave a shared account (P11.9) |
+| `GET /accounts/{id}/grant-candidates?q=` | Manage | "Share with"'s suggestions: at most 8 enabled users' names that start with `q` and could be given a grant (P11.11, ADR-0020, U110, S127) |
 | `GET /bots` · `GET/PATCH /bots/{id}` · `PUT /bots/{id}/mode` | View / Manage (`PATCH`: step-up) / Control | Bots and their state; the server address; the mode |
 | `POST /bots/{id}/start\|stop\|restart\|reset\|resume` | Control | Lifecycle |
 | `POST /bots/{id}/chat` · `POST /bots/{id}/command` · `GET /bots/{id}/chat` | Control (`/command`: step-up; a command off the allowlist: Manage) / View | Chat |

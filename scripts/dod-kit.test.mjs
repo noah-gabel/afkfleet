@@ -19,6 +19,7 @@ const RECIPES = [
   "dod-enroll",
   "dod-agent",
   "dod-app",
+  "dod-log-check",
   "dod-clean",
 ];
 
@@ -44,6 +45,15 @@ function segments(parameters, value) {
   const base =
     first === "justfile_directory()" ? [] : segments(parameters, parameters[first] ?? "(?)");
   return [...base, ...rest.map((term) => term.replace(/^"|"$/g, ""))];
+}
+
+/** The cargo command in `line`: the line itself, or what follows the log wrapper (S134). */
+function cargoPart(line) {
+  return (
+    /^(?:node scripts\/dod-log\.mjs "\{\{ logs \}\}" (?:server|agent) )?(cargo .*)$/.exec(
+      line,
+    )?.[1] ?? null
+  );
 }
 
 /** Every parameter of `recipe` whose default is a path, with its segments. */
@@ -73,7 +83,7 @@ describe("the DoD recipes", () => {
     for (const [recipe, filter] of Object.entries(BINARIES)) {
       assert.equal(recipeParameters(recipe)[filter], '"info"', recipe);
       const runs = recipeBody(recipe).filter(
-        (line) => line.startsWith("cargo ") || /^node scripts\/dev-(pki|enroll)\.mjs /.test(line),
+        (line) => cargoPart(line) !== null || /^node scripts\/dev-(pki|enroll)\.mjs /.test(line),
       );
       assert.ok(runs.length > 0, recipe);
       for (const line of runs) {
@@ -181,18 +191,75 @@ describe("just dod-build", () => {
 
   it("builds exactly what every DoD recipe runs, so none of them builds while a token waits", () => {
     const built = recipeBody("dod-build").map((line) => line.replace("cargo build ", ""));
+    const checked = new Set();
     for (const recipe of RECIPES) {
-      for (const line of recipeBody(recipe).filter((run) => run.startsWith("cargo run "))) {
-        const target = line.match(/(--release -p \S+ --bin \S+)/)?.[1];
+      for (const line of recipeBody(recipe)) {
+        const run = cargoPart(line);
+        if (run === null || !run.startsWith("cargo run ")) {
+          continue;
+        }
+        const target = run.match(/(--release -p \S+ --bin \S+)/)?.[1];
         assert.ok(target !== undefined && built.includes(target), `${recipe}: ${line}`);
+        checked.add(recipe);
       }
     }
+    // Not vacuous: the runs behind the log wrapper are found too.
+    assert.deepEqual([...checked].sort(), [
+      "dod-agent",
+      "dod-enrollment-token",
+      "dod-owner",
+      "dod-server",
+    ]);
   });
 
   it("leaves cargo's progress on stderr: no DoD build is quiet, so stdout stays the bundle", () => {
     for (const recipe of RECIPES) {
       for (const line of recipeBody(recipe)) {
         assert.doesNotMatch(line, /--quiet/, `${recipe}: ${line}`);
+      }
+    }
+  });
+});
+
+describe("the 24-hour run's log files (ADR-0020, S134)", () => {
+  /** Each logged recipe's kind, its format's export and the run behind the wrapper. */
+  const LOGGED = {
+    "dod-server": [
+      "server",
+      "$AFKFLEET_SERVER__LOG__FORMAT",
+      "cargo run --release -p fleet-server --bin afkfleet-server -- serve --config deploy/dod/server.toml",
+    ],
+    "dod-agent": [
+      "agent",
+      "$AFKFLEET_AGENT__LOG__FORMAT",
+      "cargo run --release -p fleet-agent --bin afkfleet-agent -- run --config deploy/dod/agent.toml",
+    ],
+  };
+
+  it("log dod-server and dod-agent as JSON at info through dod-log.mjs into target/dod-run/logs", () => {
+    for (const [recipe, [kind, format, run]] of Object.entries(LOGGED)) {
+      const parameters = recipeParameters(recipe);
+      const logs = Object.fromEntries(paths(recipe)).logs;
+
+      assert.deepEqual(logs, ["target", "dod-run", "logs"], recipe);
+      assert.equal(parameters[format], '"json"', recipe);
+      // Not exported: the loader refuses an AFKFLEET_ key it doesn't know, and `logs` isn't one.
+      assert.equal(parameters.$logs, undefined, recipe);
+      assert.equal(
+        recipeBody(recipe).at(-1),
+        `node scripts/dod-log.mjs "{{ logs }}" ${kind} ${run}`,
+      );
+    }
+  });
+
+  it("leave dod-owner, dod-enrollment-token and dod-enroll unwrapped: their streams carry the password prompt and the bundle", () => {
+    for (const recipe of ["dod-owner", "dod-enrollment-token", "dod-enroll"]) {
+      const parameters = Object.keys(recipeParameters(recipe));
+
+      assert.ok(!parameters.some((name) => name.endsWith("__LOG__FORMAT")), recipe);
+      assert.ok(!parameters.includes("logs"), recipe);
+      for (const line of recipeBody(recipe)) {
+        assert.doesNotMatch(line, /dod-log/, `${recipe}: ${line}`);
       }
     }
   });

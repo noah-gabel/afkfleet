@@ -344,16 +344,18 @@ app-build-check:
 icons:
     node scripts/icons.mjs
 
-# --- The definition of done's checks with a real account (ADR-0020, U1, U33, U50-U52, S72) ---
+# --- The definition of done's checks with a real account (ADR-0020, U1, U33, U50-U52, S72, S134, S135) ---
 # Phase 11's first check and M's 24-hour run. THE USER ONLY: the AI never runs a dod-*
 # recipe, and never reads, lists or prints anything in target/dod-run/, which holds the
 # user's real account, sealed, next to the vault key that opens it, the PKI and the agent's
-# identity. Every path is a parameter under target/dod-run/; every binary is a release build
-# (`--release`, so a long run's exes never block debug builds) logging at info, so no chat
-# text is printed (chat is logged only at debug). Their own ports, so they run beside the
+# identity, and the 24-hour run's logs. Every path is a parameter under target/dod-run/;
+# every binary is a release build (`--release`, so a long run's exes never block debug
+# builds) logging at info, so no chat text is printed or kept (chat is logged only at
+# debug). Their own ports, so they run beside the
 # dev stack: HTTP 127.0.0.1:8090, gRPC 127.0.0.1:7453, Minecraft 127.0.0.1:25566. Nothing
 # secret is ever an argument: dod-owner asks for the password hidden, and dod-enroll reads
-# the bundle from stdin. The steps are README's "The DoD's first check".
+# the bundle from stdin. The steps are README's "The DoD's first check" and "The DoD's
+# 24-hour run".
 
 # The user only: start the DoD checks' online-mode Minecraft server and wait until it's healthy (needs Docker).
 dod-mc-up:
@@ -374,14 +376,16 @@ dod-build:
 # As dev-server, with deploy/dod/server.toml: Node creates the folder, the vault key when
 # it's missing (never overwritten, never printed) and the PKI with `pki init` when its files
 # are missing, for localhost, 127.0.0.1 and ::1 (never overwritten). [grpc] is on, on
-# 127.0.0.1:7453. No exit message: on Windows, Ctrl+C reaches just and PowerShell too.
-# The user only: run the DoD checks' server with deploy/dod/server.toml, its database, vault key and PKI in target/dod-run/.
+# 127.0.0.1:7453. It logs JSON at info through scripts/dod-log.mjs, which keeps each start's
+# lines in `logs` for just dod-log-check and shows them readable in the terminal (S134, U132).
+# No exit message: on Windows, Ctrl+C reaches just and PowerShell too.
+# The user only: run the DoD checks' server with deploy/dod/server.toml, its database, vault key, PKI and logs in target/dod-run/.
 [no-exit-message]
-dod-server $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dod-run" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=(justfile_directory() / "target" / "dod-run" / "vault-key-1") $AFKFLEET_SERVER__GRPC__CA_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.crt") $AFKFLEET_SERVER__GRPC__CA_KEY_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.key") $AFKFLEET_SERVER__GRPC__SERVER_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "server.crt") $AFKFLEET_SERVER__GRPC__SERVER_KEY_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "server.key") $AFKFLEET_SERVER__LOG__FILTER="info":
+dod-server logs=(justfile_directory() / "target" / "dod-run" / "logs") $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dod-run" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=(justfile_directory() / "target" / "dod-run" / "vault-key-1") $AFKFLEET_SERVER__GRPC__CA_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.crt") $AFKFLEET_SERVER__GRPC__CA_KEY_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.key") $AFKFLEET_SERVER__GRPC__SERVER_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "server.crt") $AFKFLEET_SERVER__GRPC__SERVER_KEY_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "server.key") $AFKFLEET_SERVER__LOG__FILTER="info" $AFKFLEET_SERVER__LOG__FORMAT="json":
     node -e "require('node:fs').mkdirSync(require('node:path').dirname(process.argv[1]), { recursive: true })" "{{ AFKFLEET_SERVER__DATABASE__PATH }}"
     node scripts/dev-vault-key.mjs "{{ AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1 }}"
     node scripts/dev-pki.mjs --release deploy/dod/server.toml "{{ AFKFLEET_SERVER__GRPC__CA_CERT_FILE }}" "{{ AFKFLEET_SERVER__GRPC__CA_KEY_FILE }}" "{{ AFKFLEET_SERVER__GRPC__SERVER_CERT_FILE }}" "{{ AFKFLEET_SERVER__GRPC__SERVER_KEY_FILE }}"
-    cargo run --release -p fleet-server --bin afkfleet-server -- serve --config deploy/dod/server.toml
+    node scripts/dod-log.mjs "{{ logs }}" server cargo run --release -p fleet-server --bin afkfleet-server -- serve --config deploy/dod/server.toml
 
 # `user create-owner` with the password typed twice at the terminal, hidden; never an
 # argument. The same six paths as dod-server: deploy/dod/server.toml sets [grpc] bind, so
@@ -415,12 +419,13 @@ dod-enroll dir=(justfile_directory() / "target" / "dod-run" / "agent") $AFKFLEET
 # The identity dod-enroll left, with dod-server's CA; its heartbeat file, which dod-clean
 # checks, goes into `dir` too. Its bot dials only 127.0.0.1 (dod-mc-up's server), never a
 # public address (U50): the recipe exports public_targets false itself, as the log filter,
-# so a variable in the shell can't flip it (PR #78's review). No exit message: on Windows,
-# Ctrl+C reaches just and PowerShell too.
-# The user only: run the DoD checks' agent with deploy/dod/agent.toml against dod-server.
+# so a variable in the shell can't flip it (PR #78's review). It logs JSON at info through
+# scripts/dod-log.mjs into `logs`, as dod-server does (S134, U132). No exit message: on
+# Windows, Ctrl+C reaches just and PowerShell too.
+# The user only: run the DoD checks' agent with deploy/dod/agent.toml against dod-server, its logs in target/dod-run/logs/.
 [no-exit-message]
-dod-agent dir=(justfile_directory() / "target" / "dod-run" / "agent") $AFKFLEET_AGENT__CONTROL_PLANE__CA_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.crt") $AFKFLEET_AGENT__CONTROL_PLANE__CERT_FILE=(dir / "agent.crt") $AFKFLEET_AGENT__CONTROL_PLANE__KEY_FILE=(dir / "agent.key") $AFKFLEET_AGENT__RUNTIME__HEARTBEAT_FILE=(dir / "agent.alive") $AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS="false" $AFKFLEET_AGENT__LOG__FILTER="info":
-    cargo run --release -p fleet-agent --bin afkfleet-agent -- run --config deploy/dod/agent.toml
+dod-agent dir=(justfile_directory() / "target" / "dod-run" / "agent") logs=(justfile_directory() / "target" / "dod-run" / "logs") $AFKFLEET_AGENT__CONTROL_PLANE__CA_CERT_FILE=(justfile_directory() / "target" / "dod-run" / "pki" / "ca.crt") $AFKFLEET_AGENT__CONTROL_PLANE__CERT_FILE=(dir / "agent.crt") $AFKFLEET_AGENT__CONTROL_PLANE__KEY_FILE=(dir / "agent.key") $AFKFLEET_AGENT__RUNTIME__HEARTBEAT_FILE=(dir / "agent.alive") $AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS="false" $AFKFLEET_AGENT__LOG__FILTER="info" $AFKFLEET_AGENT__LOG__FORMAT="json":
+    node scripts/dod-log.mjs "{{ logs }}" agent cargo run --release -p fleet-agent --bin afkfleet-agent -- run --config deploy/dod/agent.toml
 
 # app-build first (the release exe), then the exe itself: a GUI app, so the recipe returns
 # once it starts (R125). Close every other afkfleet window first: a second start only
@@ -429,6 +434,16 @@ dod-agent dir=(justfile_directory() / "target" / "dod-run" / "agent") $AFKFLEET_
 dod-app: app-build
     @echo "Enter http://127.0.0.1:8090 as the server's address in the app."
     target/release/afkfleet-desktop.exe
+
+# The 24-hour run's verdict from the files scripts/dod-log.mjs left in `dir` (S135): it prints
+# only counts, afkfleet's own fixed messages, bot numbers and times from the first session,
+# never a value, a name or a path, then PASS or FAIL with the reasons. Run it once dod-agent
+# and dod-server are stopped, before dod-clean, which deletes the logs. No exit message: the
+# script prints its own lines.
+# The user only: check the DoD's 24-hour run by its logs in target/dod-run/logs/.
+[no-exit-message]
+dod-log-check dir=(justfile_directory() / "target" / "dod-run" / "logs"):
+    node scripts/dod-log-check.mjs "{{ dir }}"
 
 # Only this repository's target/dod-run; it refuses while dod-server or dod-agent runs, or
 # a link in the way, each saying what to do, and never touches Docker (U52). No exit

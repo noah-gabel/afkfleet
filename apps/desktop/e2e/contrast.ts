@@ -345,7 +345,10 @@ export function probe(
     return { name: nameOf(element), cells, strong: only, strongWidth: borderWidth(only) };
   };
 
-  /** The state of a Tab walk, kept on the window between its calls. */
+  /**
+   * The state of a Tab walk, kept on the window between its calls. While it's there, the window's
+   * own focus and blur reach none of the page's listeners (fixtures.ts, R260).
+   */
   interface Walk {
     readonly returnTo: Element | null;
     readonly scrolls: readonly (readonly [Element, number, number])[];

@@ -4,7 +4,7 @@ import type { FieldError } from "./FieldError";
 
 /**
  * The server's refusal: its error envelope, with the status and the wait it
- * asks for. Code that branches on [`ApiErrorDetails::code`] keeps a default
+ * asks for. Code that branches on `ApiErrorDetails::code` keeps a default
  * branch that shows the message and the request ID, since a newer server
  * may send a code this version doesn't know (ADR-0015).
  */

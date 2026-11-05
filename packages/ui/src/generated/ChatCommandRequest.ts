@@ -6,7 +6,7 @@
  */
 export type ChatCommandRequest = { 
 /**
- * The command: a line as [`ChatSendRequest::message`] takes it, which
+ * The command: a line as `ChatSendRequest::message` takes it, which
  * starts with `/` once trimmed.
  */
 message: string, };

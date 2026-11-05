@@ -12,7 +12,7 @@ export type CommandError = {
  */
 code: CommandErrorCode, 
 /**
- * The code's fixed sentence ([`CommandErrorCode::message`]).
+ * The code's fixed sentence (`CommandErrorCode::message`).
  */
 message: string, 
 /**

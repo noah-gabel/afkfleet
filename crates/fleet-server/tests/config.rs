@@ -1836,12 +1836,20 @@ fn dod_exports(recipe: &str, root: &Path) -> Vec<(String, String)> {
 
 /// `just dod-server`, `just dod-owner` and `just dod-enrollment-token` each
 /// load `deploy/dod/server.toml` with exactly their exports and nothing else from the
-/// environment; their paths go to the jail, never target/dod-run (U33).
+/// environment; their paths go to the jail, never target/dod-run (U33). Only
+/// `dod-server` exports the JSON format, and every command its recipe runs
+/// takes it: `serve`, whose lines `scripts/dod-log.mjs` keeps in
+/// target/dod-run/logs, and `pki init` when the PKI is missing, whose lines
+/// reach the terminal alone (S134). The other two print Pretty lines to the
+/// terminal.
 #[rstest]
-#[case::serve("dod-server")]
-#[case::create_owner("dod-owner")]
-#[case::enrollment_token("dod-enrollment-token")]
-fn the_dod_config_loads_with_exactly_each_dod_recipes_exports(#[case] recipe: &str) {
+#[case::serve("dod-server", LogFormat::Json)]
+#[case::create_owner("dod-owner", LogFormat::Pretty)]
+#[case::enrollment_token("dod-enrollment-token", LogFormat::Pretty)]
+fn the_dod_config_loads_with_exactly_each_dod_recipes_exports(
+    #[case] recipe: &str,
+    #[case] format: LogFormat,
+) {
     in_jail(|jail| {
         let exports = dod_exports(recipe, jail.directory());
         jail.clear_env();
@@ -1854,7 +1862,7 @@ fn the_dod_config_loads_with_exactly_each_dod_recipes_exports(#[case] recipe: &s
         assert!(!config.dev_mode);
         assert!(!config.accounts.allow_offline);
         assert_eq!(config.http.bind.to_string(), "127.0.0.1:8090");
-        assert_eq!(config.log.format, LogFormat::Pretty);
+        assert_eq!(config.log.format, format);
         assert_eq!(config.log.filter.as_str(), "info");
         assert_eq!(config.database.path, db_path(jail));
         assert_eq!(config.vault, vault_config(jail));
@@ -1866,13 +1874,17 @@ fn the_dod_config_loads_with_exactly_each_dod_recipes_exports(#[case] recipe: &s
 
 /// R126: `deploy/dod/server.toml` sets `[grpc] bind`, so every command's
 /// validation needs the PKI's four paths and the vault key; each recipe that
-/// loads it passes what `dod-server` does.
+/// loads it passes what `dod-server` does, but the JSON format, which only
+/// `dod-server` exports, for every command it runs (S134).
 #[test]
 fn every_dod_recipe_that_loads_the_server_config_exports_what_dod_server_does() {
     let root = Path::new("/dod-run");
-    let served = dod_exports("dod-server", root);
+    let mut served = dod_exports("dod-server", root);
+    let json = ("AFKFLEET_SERVER__LOG__FORMAT".to_owned(), "json".to_owned());
 
-    assert_eq!(served.len(), 7);
+    assert_eq!(served.len(), 8);
+    assert!(served.contains(&json), "{served:?}");
+    served.retain(|export| *export != json);
     assert_eq!(dod_exports("dod-owner", root), served);
     assert_eq!(dod_exports("dod-enrollment-token", root), served);
 }
