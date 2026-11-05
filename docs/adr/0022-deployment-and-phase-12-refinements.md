@@ -199,6 +199,38 @@ One read-only agent per question, each given the options neutrally.
     - The key rotation's "copy the database" becomes `backup`.
   - **Group C:** the image creates the backups' folder owned by 65532. The SFTP account reads files that are 0600 and owned by 65532.
 
+### As built (group A)
+On `p12/p12.3-start-screen-and-backups`, as planned (S1–S8, R1–R4).
+
+**The start screen** (S1, U7): while it waits, "Server settings" and "Log out on this PC", both through what exists (`navigate("/setup")`, `useLogout`). While a logout runs, every other choice on the start screen waits, "Try again" in the failed state included, so neither a navigation nor a launch run again can race it. The e2e fake's `refuseAll` now answers `logout` as the real command does: the session ends and the answer is `unconfirmed`. New baselines: "the start screen, waiting", dark and light. Red first: six Vitest tests against the old screen; the e2e story against the old fake.
+
+**`journal_size_limit = 0`** (S7): both pragma tests read -1 before; the at-rest test found the WAL at 7,906,312 bytes with the deleted chat's text after the snapshot ended; after the change it's under the test's 256 KiB bound, without the text.
+
+**The backup** (S2–S6):
+- **fleet-core's `backup`** holds the rules without IO: `BackupPolicy` (the two ranges and the 720 h product), `BackupName` (formatted and parsed from its parts, as fleet-core's chrono has no formatter), the due rule with `FUTURE_SLACK` (1 h), pruning, and `STALE_PARTIAL` (24 h).
+- **The config:** `DatabaseConfig` gains `backups: Option<BackupConfig>`, so every literal of it gained `backups: None` (28 in all, mechanical). Five problem kinds were added: `Needs`, `ParentDir`, `HoldsDatabase`, `HoldsKey` and `ProductOver`. A `..` is refused by its text too, since a Windows verbatim path keeps it as a plain name. The old test that used `backup_keep` as a later phase's key now names `[database]`'s keys.
+- **`infra::sqlite::backup`:**
+  - The copy runs on `PoolRole::Backup`, a read-only connection of its own.
+  - **R3:** sqlx's macros describe both `VACUUM INTO ?` and `PRAGMA quick_check`, so no exception to rule 8 was needed.
+  - **The stop and the bound** reach `VACUUM INTO` through sqlx's safe `set_progress_handler`, every 100 instructions. At 1,000, a small database's statements never reached the handler. A token already cancelled is seen before the copy starts.
+  - **The new file** is checked on an `immutable` connection, so nothing is opened beside it.
+  - **The sync** opens the file for writing, since Windows refuses to flush a read-only handle.
+- **The schedule:** `Retention::back_up_when_due` returns what it did (`BackupStep`), so its rules are tested directly. One task-level test checks that the loop takes a backup and stops cleanly. `serve` checks the folder at its start (`StartError::Backups`, exit 1) and warns once outside dev mode when backups are off: "backups are off: set [database] backup_dir, and copy its backups off this host".
+- **The command:** `cli::backup`. Its exit-3 test holds an older backup open so it can't be removed, which only Windows refuses, so that test runs there alone. `just dev-backup` tries it on the dev database.
+- **Red first:** fleet-core's rules ran against stubs, and the config tests against a validator that ignored the keys. The file module, the step, `serve`'s wiring, the command and the restore were each written before their tests. For those, the tests went red through temporary mutations, each caught:
+  - a rename for the hard link;
+  - no progress handler;
+  - no hour's wait after a failure;
+  - the tick not taking the backup;
+  - no `with_backups` in `serve`;
+  - the path on stderr;
+  - exit 0 for a failed prune;
+  - the temporary file left beside the backup.
+
+**The restore** (S8): `docs/runbook.md` starts, an operator's guide for any Linux host with Docker, with backups and the restore's seven steps, each saying what success looks like (U8's rule, early). `accounts::at_rest::a_restored_backup_opens_with_its_key_and_holds_only_ciphertext` covers the steps' premise. A backup of a database with a linked account holds only ciphertext, with nothing beside it. Copied alone into a fresh folder, it opens without migrating, and its token opens with the same key. Without that key, `vault status` exits 3.
+
+**Records:** README covers the start's line, the `backup` command, the keys and what backups hold. The threat model gains a desktop row, a B6 row, two accepted risks, and its "What a delete leaves" corrected. `.claude/rules/commands.md` gains `dev-backup`. `server.md`'s app list gains `backup`. P12.3 is ticked.
+
 ### Notes for later groups
 - **B (P12.4):** the endpoint (the exporter's `http-listener` feature or a route of the server's own) and its config keys are B's questions, with the metrics every P12.4 note lists and R4's backup metrics.
 - **C (P12.1, P12.2, P12.7):**

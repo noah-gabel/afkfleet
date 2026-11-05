@@ -4404,7 +4404,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - Caddy is optional, for a host where 80 and 443 are free. Otherwise the server's HTTP port is reached through the host's existing reverse proxy, and the runbook lists what that proxy must do (TLS, WebSocket upgrades, `X-Forwarded-For` with `trusted_proxies`, HSTS, no `ticket` or `q` in its logs).
   > - The production server config sets `[database] backup_dir`. The backups' folder (owned by 65532, files 0600) is readable by the operator's SFTP account, which their PC pulls from.
   > - One setup script does the one-time steps; its form is group C's.
-- [ ] **P12.3** 🔴 Backups:
+- [x] **P12.3** 🔴 Backups:
   - a scheduled `VACUUM INTO` with retention, plus a `backup` CLI
   - a restore runbook
   - Backups contain only ciphertext. **Back up the vault key separately and securely.**
@@ -4420,6 +4420,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Restoring** follows the runbook's steps.
   >
   > If sqlx's macros can't read `quick_check` or `journal_size_limit`, the work stops for the user (rule 8).
+  >
+  > *Built in group A ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), "As built (group A)"):* sqlx's macros describe both reads, so no exception was needed. fleet-core's `backup` module holds the rules; `infra::sqlite::backup` the file, `app::backup` the service, `cli::retention` the schedule, `cli::backup` the command, `just dev-backup` a try on the dev database; `docs/runbook.md` starts with backups and restoring one. The off-host copy (U3) and the compose form come with group C.
 - [ ] **P12.4** A Prometheus metrics endpoint on an internal port, with the key metrics documented.
 
   > Note (P12.4, from Phase 7, group B, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): a counter of detected refresh-token reuses belongs among the key metrics, so alerting can pick up possible token theft without anyone reading `/audit` or the logs.

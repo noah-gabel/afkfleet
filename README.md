@@ -244,7 +244,7 @@ Further reading:
 - [`Plan.md`](Plan.md): roadmap, architecture, security model, fault tolerance, appendices
 - [`docs/adr/`](docs/adr/): architecture decision records
 - [`docs/threat-model.md`](docs/threat-model.md): assets, attackers and mitigations
-- `docs/runbook.md`: operations (written in Phase 12)
+- [`docs/runbook.md`](docs/runbook.md): operations on a Linux host with Docker (started in Phase 12: backups and restoring one)
 
 ## Prerequisites (development, Windows 11)
 - Git, [PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows) (`pwsh`) and [`just`](https://github.com/casey/just)
