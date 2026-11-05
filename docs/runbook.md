@@ -24,6 +24,8 @@ The server backs up its database by itself once `[database] backup_dir` is set (
 
 **Disk:** keep room for `backup_keep` + 1 copies of the database, plus the database's write-ahead log while a backup runs. A long backup also delays the retention's next run by as long as it takes.
 
+**File system:** `backup_dir` must be on a file system with hard links, since a finished backup is published by one, which never replaces a file. Not FAT or exFAT, and not every network share: on one without them, every backup fails with `couldn't publish`.
+
 ## Restoring a backup
 
 Restore by hand, with the commands that exist (ADR-0022, S8). The paths below are the config's.

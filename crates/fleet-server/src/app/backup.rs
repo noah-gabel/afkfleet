@@ -34,7 +34,7 @@ use tracing::{info, warn};
 use crate::config::{BackupConfig, ServerConfig};
 use crate::http::error::chain;
 use crate::infra::sqlite::DatabaseOptions;
-use crate::infra::sqlite::backup::{self, BackupError, Written};
+use crate::infra::sqlite::backup::{self, BackupError, Listing, Written};
 
 /// The longest a backup may take before it's stopped: far beyond the
 /// largest database the runbook sizes for.
@@ -213,13 +213,25 @@ impl BackupService {
         now: DateTime<chrono::Utc>,
     ) -> Result<usize, BackupError> {
         let listing = backup::list(&self.config.dir).await?;
-        let finished = self.config.policy.to_prune(&listing.finished, written);
-        let stale: Vec<BackupName> = listing
-            .partial
-            .into_iter()
-            .filter(|name| *name != written && is_stale_partial(*name, now))
-            .collect();
-        backup::remove(&self.config.dir, &finished, &stale).await?;
-        Ok(finished.len())
+        let gone = Listing {
+            finished: self.config.policy.to_prune(&listing.finished, written),
+            partial: stale(listing.partial, written, now),
+            partial_journals: stale(listing.partial_journals, written, now),
+        };
+        backup::remove(&self.config.dir, &gone).await?;
+        Ok(gone.finished.len())
     }
+}
+
+/// The leftover temporary files of `names` pruning removes at `now`: those
+/// a day old, never `written`'s.
+fn stale(
+    names: Vec<BackupName>,
+    written: BackupName,
+    now: DateTime<chrono::Utc>,
+) -> Vec<BackupName> {
+    names
+        .into_iter()
+        .filter(|name| *name != written && is_stale_partial(*name, now))
+        .collect()
 }

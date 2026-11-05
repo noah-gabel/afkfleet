@@ -15,7 +15,6 @@ use fleet_core::value::Username;
 use fleet_server::cli::pki::{
     INIT_EXIT_CODES as PKI_INIT_EXIT_CODES, SERVER_CERT_EXIT_CODES as PKI_SERVER_CERT_EXIT_CODES,
 };
-use fleet_server::cli::serve;
 use fleet_server::cli::user::CREATE_OWNER_EXIT_CODES;
 use fleet_server::cli::vault::{ROTATE_KEY_EXIT_CODES, STATUS_EXIT_CODES};
 use fleet_server::cli::{HEALTHCHECK_EXIT_CODES, MIGRATE_EXIT_CODES, SERVE_EXIT_CODES};
@@ -26,9 +25,8 @@ use fleet_server::ports::store::Store as _;
 use rstest::rstest;
 
 use crate::support::{
-    AbortOnDrop, ChannelSignals, closed_port, config_body, finish, finish_beside,
-    finish_with_stdin, json_lines, lines_with, listener, path_arg, server_config, test_dir,
-    toml_path, vault_keys, vault_section, write_config,
+    closed_port, config_body, finish, finish_beside, finish_with_stdin, json_lines, lines_with,
+    path_arg, running_server, test_dir, toml_path, vault_section, write_config,
 };
 
 #[rstest]
@@ -400,18 +398,6 @@ fn a_healthcheck_with_nothing_listening_is_unhealthy_with_exit_1() {
         "{}",
         finished.stdout
     );
-}
-
-/// Starts the server in-process on a free loopback port with its database
-/// in `dir`, and returns its port and the task, aborted when dropped.
-async fn running_server(dir: &Path) -> (u16, AbortOnDrop<serve::Exit>) {
-    let (listener, address) = listener().await;
-    let config = server_config(dir, address, false);
-    let keys = vault_keys(&config);
-    let task = tokio::spawn(async move {
-        serve::run(&config, listener, None, ChannelSignals::silent(), keys).await
-    });
-    (address.port(), AbortOnDrop(task))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

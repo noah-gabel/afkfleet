@@ -18,10 +18,12 @@
 //!   modification time, so a restart neither skips nor doubles one; a name
 //!   dated more than [`FUTURE_SLACK`] ahead doesn't count.
 //! - **Pruning** ([`BackupPolicy::to_prune`]): every finished backup but the
-//!   newest `keep`, by name, and never the one just written, so a clock set
-//!   back can't delete it. A leftover temporary file goes once it's
-//!   [`STALE_PARTIAL`] old ([`is_stale_partial`]), so a backup still being
-//!   written by another process is never touched.
+//!   newest `keep`, by name, and never the one just written or one newer
+//!   than it, so neither a clock set back nor a second process backing up
+//!   into the same folder loses a newer backup to it. A leftover temporary
+//!   file, or SQLite's journal beside it, goes once it's [`STALE_PARTIAL`]
+//!   old ([`is_stale_partial`]), so a backup still being written by another
+//!   process is never touched.
 
 use chrono::{DateTime, Datelike as _, NaiveDate, TimeDelta, Timelike as _, Utc};
 
@@ -118,7 +120,9 @@ impl BackupPolicy {
     }
 
     /// The finished backups pruning deletes once `written` is done: all but
-    /// the newest `keep` by name, never `written` itself, newest first.
+    /// the newest `keep` by name, newest first, and never `written` or a
+    /// backup newer than it. A newer one, which another process wrote
+    /// meanwhile or a clock set back left, counts toward the kept.
     #[must_use]
     pub fn to_prune(&self, finished: &[BackupName], written: BackupName) -> Vec<BackupName> {
         let mut others: Vec<BackupName> = finished
@@ -132,7 +136,11 @@ impl BackupPolicy {
         let kept = usize::try_from(self.keep)
             .unwrap_or(usize::MAX)
             .saturating_sub(1);
-        others.into_iter().skip(kept).collect()
+        others
+            .into_iter()
+            .skip(kept)
+            .filter(|name| *name < written)
+            .collect()
     }
 }
 
@@ -183,6 +191,8 @@ impl BackupName {
     pub const SUFFIX: &'static str = ".db";
     /// What a temporary file's name adds after the finished name.
     pub const PARTIAL_SUFFIX: &'static str = ".partial";
+    /// What SQLite adds to a file's name for its rollback journal.
+    pub const JOURNAL_SUFFIX: &'static str = "-journal";
 
     /// The name of a backup taken at `now`, to the second; `None` for a time
     /// whose year doesn't have four digits.
@@ -245,6 +255,20 @@ impl BackupName {
     #[must_use]
     pub fn parse_partial(name: &str) -> Option<Self> {
         Self::parse(name.strip_prefix('.')?.strip_suffix(Self::PARTIAL_SUFFIX)?)
+    }
+
+    /// The rollback journal SQLite keeps beside the temporary file while it
+    /// writes it, `.afkfleet-backup-YYYYMMDDTHHMMSSZ.db.partial-journal`.
+    #[must_use]
+    pub fn partial_journal_name(&self) -> String {
+        format!("{}{}", self.partial_name(), Self::JOURNAL_SUFFIX)
+    }
+
+    /// A temporary file's journal's name read back: only one SQLite would
+    /// write beside a temporary file of this module's.
+    #[must_use]
+    pub fn parse_partial_journal(name: &str) -> Option<Self> {
+        Self::parse_partial(name.strip_suffix(Self::JOURNAL_SUFFIX)?)
     }
 }
 
@@ -328,6 +352,35 @@ mod tests {
             BackupName::parse_partial(&taken.partial_name()),
             Some(taken)
         );
+        assert_eq!(
+            BackupName::parse_partial_journal(&taken.partial_journal_name()),
+            Some(taken)
+        );
+    }
+
+    #[test]
+    fn a_temporary_files_journal_is_named_as_sqlite_names_it() {
+        let taken = name("2027-01-15T08:00:42Z");
+
+        assert_eq!(
+            taken.partial_journal_name(),
+            ".afkfleet-backup-20270115T080042Z.db.partial-journal"
+        );
+        assert_eq!(
+            taken.partial_journal_name(),
+            format!("{}-journal", taken.partial_name())
+        );
+    }
+
+    #[rstest]
+    #[case::a_finished_name("afkfleet-backup-20270115T080042Z.db")]
+    #[case::a_partial(".afkfleet-backup-20270115T080042Z.db.partial")]
+    #[case::no_dot("afkfleet-backup-20270115T080042Z.db.partial-journal")]
+    #[case::a_finished_journal(".afkfleet-backup-20270115T080042Z.db-journal")]
+    #[case::a_wal(".afkfleet-backup-20270115T080042Z.db.partial-wal")]
+    #[case::a_bad_time(".afkfleet-backup-20270115T086042Z.db.partial-journal")]
+    fn only_a_temporary_files_journal_counts_as_one(#[case] text: &str) {
+        assert_eq!(BackupName::parse_partial_journal(text), None);
     }
 
     #[rstest]
@@ -428,7 +481,7 @@ mod tests {
     }
 
     #[test]
-    fn pruning_never_takes_the_backup_just_written() {
+    fn pruning_never_takes_the_backup_just_written_or_a_newer_one() {
         let policy = BackupPolicy::try_new(24, 1).unwrap();
         // The clock was set back: the new backup is the oldest name.
         let written = name("2027-01-01T08:00:00Z");
@@ -436,7 +489,26 @@ mod tests {
 
         let gone = policy.to_prune(&finished, written);
 
-        assert_eq!(gone, [name("2027-01-14T08:00:00Z")]);
+        assert_eq!(gone, []);
+    }
+
+    /// Two processes back up into one folder (`serve` and the command):
+    /// each keeps the other's newer backup, which counts toward the kept.
+    #[test]
+    fn a_newer_backup_is_never_pruned_and_counts_toward_the_kept() {
+        let written = name("2027-01-15T08:00:00Z");
+        let newer = name("2027-01-15T08:00:05Z");
+        let older = name("2027-01-14T08:00:00Z");
+        let oldest = name("2027-01-13T08:00:00Z");
+        let finished = [oldest, newer, written, older];
+
+        let keep_one = BackupPolicy::try_new(24, 1).unwrap();
+        let keep_two = BackupPolicy::try_new(24, 2).unwrap();
+        let keep_three = BackupPolicy::try_new(24, 3).unwrap();
+
+        assert_eq!(keep_one.to_prune(&finished, written), [older, oldest]);
+        assert_eq!(keep_two.to_prune(&finished, written), [older, oldest]);
+        assert_eq!(keep_three.to_prune(&finished, written), [oldest]);
     }
 
     #[test]

@@ -15,18 +15,20 @@
 //!    name, then removes the temporary name and, on Unix, syncs the folder.
 //!
 //! Anything that fails removes the temporary file, so only a crash leaves
-//! one, which pruning removes once it's a day old. A stop, or the bound, ends
-//! `VACUUM INTO` through SQLite's progress handler.
+//! one, which pruning removes once it's a day old, with SQLite's journal
+//! beside it. A stop seen before a step ends the write there; a stop, or the
+//! bound, during the copy or the check ends its statement through SQLite's
+//! progress handler, so a stop never waits for a pass over the whole file.
 //!
 //! [`list`] reads the folder itself, never what's below it: only regular
-//! files whose whole name is one the server writes count, and links are
-//! never followed (ADR-0020, R130). [`remove`] deletes exactly the names it
-//! is given.
+//! files whose whole name is one the server writes (or SQLite's journal of
+//! one) count, and links are never followed (ADR-0020, R130). [`remove`]
+//! deletes exactly the names it is given.
 //!
 //! # Timeouts
-//! `VACUUM INTO` is bounded by the caller's bound through the progress
-//! handler. The rest is local file work on the server's own folder, with no
-//! network, as the database's own awaits are (the module docs of
+//! `VACUUM INTO` and the check are bounded by the caller's bound through the
+//! progress handler. The rest is local file work on the server's own folder,
+//! with no network, as the database's own awaits are (the module docs of
 //! [`super`]).
 
 use core::time::Duration;
@@ -34,7 +36,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use fleet_core::backup::BackupName;
-use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
 use sqlx::{ConnectOptions as _, Connection as _};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -65,6 +67,37 @@ pub struct Listing {
     pub finished: Vec<BackupName>,
     /// The temporary files of backups being written, or left by a crash.
     pub partial: Vec<BackupName>,
+    /// SQLite's journals beside temporary files, being written or left by a
+    /// crash.
+    pub partial_journals: Vec<BackupName>,
+}
+
+/// When a write ends early: at the stop, or once the bound has passed.
+#[derive(Debug, Clone)]
+struct Ends {
+    stop: CancellationToken,
+    deadline: Instant,
+}
+
+impl Ends {
+    /// The ends of a write that starts now, bounded by `bound`.
+    fn new(stop: &CancellationToken, bound: Duration) -> Self {
+        Self {
+            stop: stop.clone(),
+            deadline: Instant::now() + bound,
+        }
+    }
+
+    /// Whether the stop came: each step looks before it starts.
+    fn stopped(&self) -> bool {
+        self.stop.is_cancelled()
+    }
+
+    /// Whether the stop came or the bound passed: the progress handler looks
+    /// while a statement runs.
+    fn reached(&self) -> bool {
+        self.stopped() || Instant::now() >= self.deadline
+    }
 }
 
 /// Why a backup, or a look at the backups' folder, failed. Each names the
@@ -193,8 +226,10 @@ pub async fn check_folder(dir: &Path) -> Result<(), BackupError> {
 
 /// Checks on disk what the config checked by its words (S4): the real
 /// `dir` is neither the real folder of `database` nor one above it, and
-/// holds none of `key_files` (each read through its real folder, so a key
-/// file that doesn't exist yet counts too).
+/// holds none of `key_files`. Each file counts in both places it lies: where
+/// it's named (its real folder and its name, so a link placed in `dir`
+/// counts, and so does a key file that doesn't exist yet) and, when it
+/// exists, where it really is (every link followed, its own included).
 ///
 /// # Errors
 /// [`BackupError::HoldsDatabase`], [`BackupError::HoldsKey`], or
@@ -205,14 +240,25 @@ pub async fn check_placement(
     key_files: &[PathBuf],
 ) -> Result<(), BackupError> {
     let real_dir = real(dir).await?;
+    let holds_database = || BackupError::HoldsDatabase {
+        dir: dir.to_owned(),
+    };
     if let Some(folder) = database.parent()
         && real(folder).await?.starts_with(&real_dir)
     {
-        return Err(BackupError::HoldsDatabase {
-            dir: dir.to_owned(),
-        });
+        return Err(holds_database());
+    }
+    if resolved(database).await?.is_some_and(|file| {
+        file.parent()
+            .is_some_and(|folder| folder.starts_with(&real_dir))
+    }) {
+        return Err(holds_database());
     }
     for file in key_files {
+        let holds_key = || BackupError::HoldsKey {
+            dir: dir.to_owned(),
+            file: file.clone(),
+        };
         let (Some(folder), Some(name)) = (file.parent(), file.file_name()) else {
             continue;
         };
@@ -228,14 +274,29 @@ pub async fn check_placement(
                 });
             }
         };
-        if real_folder.join(name).starts_with(&real_dir) {
-            return Err(BackupError::HoldsKey {
-                dir: dir.to_owned(),
-                file: file.clone(),
-            });
+        if real_folder.join(name).starts_with(&real_dir)
+            || resolved(file)
+                .await?
+                .is_some_and(|real_file| real_file.starts_with(&real_dir))
+        {
+            return Err(holds_key());
         }
     }
     Ok(())
+}
+
+/// `file` with every link resolved, its own included, or `None` when it
+/// doesn't exist (yet).
+async fn resolved(file: &Path) -> Result<Option<PathBuf>, BackupError> {
+    match tokio::fs::canonicalize(file).await {
+        Ok(real_file) => Ok(Some(real_file)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(BackupError::Io {
+            action: "resolve",
+            file: file.to_owned(),
+            source,
+        }),
+    }
 }
 
 /// `path` with every link resolved.
@@ -268,8 +329,9 @@ pub async fn write(
 ) -> Result<Written, BackupError> {
     let partial = dir.join(name.partial_name());
     let file = dir.join(name.file_name());
+    let ends = Ends::new(stop, bound);
     create_partial(&partial).await?;
-    let written = fill_and_publish(database, &partial, &file, stop, bound, options).await;
+    let written = fill_and_publish(database, &partial, &file, &ends, options).await;
     if written.is_err() {
         // Gone already when the link worked; any other error is the one
         // to report.
@@ -285,16 +347,15 @@ async fn fill_and_publish(
     database: &Path,
     partial: &Path,
     file: &Path,
-    stop: &CancellationToken,
-    bound: Duration,
+    ends: &Ends,
     options: &DatabaseOptions,
 ) -> Result<u64, BackupError> {
     let target = partial.to_str().ok_or_else(|| BackupError::NotUtf8 {
         file: partial.to_owned(),
     })?;
-    copy(database, target, partial, stop, bound, options).await?;
-    sync(partial).await?;
-    check(partial, options).await?;
+    copy(database, target, partial, ends, options).await?;
+    sync(partial, ends).await?;
+    check(partial, ends, options).await?;
     match tokio::fs::hard_link(partial, file).await {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
@@ -341,23 +402,20 @@ async fn create_partial(partial: &Path) -> Result<(), BackupError> {
 }
 
 /// `VACUUM INTO` `target` from a read-only connection of its own, ended by
-/// `stop` or `bound` through the progress handler.
+/// the stop or the bound through the progress handler.
 async fn copy(
     database: &Path,
     target: &str,
     partial: &Path,
-    stop: &CancellationToken,
-    bound: Duration,
+    ends: &Ends,
     options: &DatabaseOptions,
 ) -> Result<(), BackupError> {
     let copy_failed = |source| BackupError::Copy {
         file: partial.to_owned(),
         source,
     };
-    if stop.is_cancelled() {
-        return Err(BackupError::Stopped {
-            file: partial.to_owned(),
-        });
+    if ends.stopped() {
+        return Err(stopped(partial));
     }
     let mut connection = connect_options(
         SqliteConnectOptions::new().filename(database),
@@ -367,15 +425,7 @@ async fn copy(
     .connect()
     .await
     .map_err(copy_failed)?;
-    let deadline = Instant::now() + bound;
-    let token = stop.clone();
-    let ended = move || token.is_cancelled() || Instant::now() >= deadline;
-    let handler = ended.clone();
-    let locked = connection
-        .lock_handle()
-        .await
-        .map(|mut handle| handle.set_progress_handler(PROGRESS_STEPS, move || !handler()));
-    if let Err(source) = locked {
+    if let Err(source) = bounded(&mut connection, ends).await {
         let _ = connection.close().await;
         return Err(copy_failed(source));
     }
@@ -385,41 +435,65 @@ async fn copy(
     let _ = connection.close().await;
     match result {
         Ok(_) => Ok(()),
-        Err(_) if ended() => Err(BackupError::Stopped {
-            file: partial.to_owned(),
-        }),
+        Err(_) if ends.reached() => Err(stopped(partial)),
         Err(source) => Err(copy_failed(source)),
     }
 }
 
-/// Checks the new file on an `immutable` read-only connection, so it opens
-/// nothing beside it: its migrations exactly this server's, and
-/// `quick_check` answering "ok" and nothing else.
-async fn check(partial: &Path, options: &DatabaseOptions) -> Result<(), BackupError> {
-    let pool = sqlx::sqlite::SqlitePoolOptions::new()
-        .max_connections(1)
-        .acquire_timeout(options.acquire_timeout())
-        .connect_with(
-            connect_options(
-                SqliteConnectOptions::new().filename(partial),
-                PoolRole::Backup,
-                options,
-            )
-            .immutable(true),
-        )
+/// Makes SQLite end `connection`'s statement once `ends` is reached,
+/// looking every [`PROGRESS_STEPS`] instructions.
+async fn bounded(connection: &mut SqliteConnection, ends: &Ends) -> Result<(), sqlx::Error> {
+    let ends = ends.clone();
+    connection
+        .lock_handle()
         .await
-        .map_err(|source| BackupError::Check {
-            file: partial.to_owned(),
-            source: Some(source),
-        })?;
-    let schema = match applied_migrations(&pool).await {
+        .map(|mut handle| handle.set_progress_handler(PROGRESS_STEPS, move || !ends.reached()))
+}
+
+/// [`BackupError::Stopped`] for `partial`.
+fn stopped(partial: &Path) -> BackupError {
+    BackupError::Stopped {
+        file: partial.to_owned(),
+    }
+}
+
+/// Checks the new file on one `immutable` read-only connection, so it opens
+/// nothing beside it: its migrations exactly this server's, and
+/// `quick_check` answering "ok" and nothing else. Both reads run under the
+/// progress handler, since `quick_check` reads every page: a stop or the
+/// bound ends them.
+async fn check(partial: &Path, ends: &Ends, options: &DatabaseOptions) -> Result<(), BackupError> {
+    let check_failed = |source| BackupError::Check {
+        file: partial.to_owned(),
+        source: Some(source),
+    };
+    if ends.stopped() {
+        return Err(stopped(partial));
+    }
+    let mut connection = connect_options(
+        SqliteConnectOptions::new().filename(partial),
+        PoolRole::Backup,
+        options,
+    )
+    .immutable(true)
+    .connect()
+    .await
+    .map_err(check_failed)?;
+    if let Err(source) = bounded(&mut connection, ends).await {
+        let _ = connection.close().await;
+        return Err(check_failed(source));
+    }
+    let schema = match applied_migrations(&mut connection).await {
         Ok(applied) => schema_state(&applied, &MIGRATOR),
         Err(error) => Err(error),
     };
     let quick = sqlx::query_scalar!("PRAGMA quick_check")
-        .fetch_all(&pool)
+        .fetch_all(&mut connection)
         .await;
-    pool.close().await;
+    let _ = connection.close().await;
+    if ends.reached() && (schema.is_err() || quick.is_err()) {
+        return Err(stopped(partial));
+    }
     schema.map_err(|source| BackupError::Schema {
         file: partial.to_owned(),
         source: Box::new(source),
@@ -442,8 +516,12 @@ async fn check(partial: &Path, options: &DatabaseOptions) -> Result<(), BackupEr
 }
 
 /// Syncs `file`'s content to the disk, through a handle that may write:
-/// Windows refuses to flush one that can only read.
-async fn sync(file: &Path) -> Result<(), BackupError> {
+/// Windows refuses to flush one that can only read. A stop that came during
+/// the copy, after its last look, ends the write here.
+async fn sync(file: &Path, ends: &Ends) -> Result<(), BackupError> {
+    if ends.stopped() {
+        return Err(stopped(file));
+    }
     let synced = match tokio::fs::OpenOptions::new().write(true).open(file).await {
         Ok(handle) => handle.sync_all().await,
         Err(error) => Err(error),
@@ -520,29 +598,113 @@ pub async fn list(dir: &Path) -> Result<Listing, BackupError> {
             listing.finished.push(finished);
         } else if let Some(partial) = BackupName::parse_partial(&name) {
             listing.partial.push(partial);
+        } else if let Some(journal) = BackupName::parse_partial_journal(&name) {
+            listing.partial_journals.push(journal);
         }
     }
     listing.finished.sort_unstable();
     listing.partial.sort_unstable();
+    listing.partial_journals.sort_unstable();
     Ok(listing)
 }
 
-/// Removes the finished backups `finished` and the temporary files `partial`
-/// from `dir`, exactly those names; one gone already counts as removed. It
-/// stops at the first that fails.
+/// Removes from `dir` exactly the files `gone` names: finished backups,
+/// temporary files and their journals; one gone already counts as removed.
+/// It stops at the first that fails.
 ///
 /// # Errors
 /// [`BackupError::Io`] naming the file that couldn't be removed.
-pub async fn remove(
-    dir: &Path,
-    finished: &[BackupName],
-    partial: &[BackupName],
-) -> Result<(), BackupError> {
-    for name in finished {
+pub async fn remove(dir: &Path, gone: &Listing) -> Result<(), BackupError> {
+    for name in &gone.finished {
         remove_file(&dir.join(name.file_name())).await?;
     }
-    for name in partial {
+    for name in &gone.partial {
         remove_file(&dir.join(name.partial_name())).await?;
     }
+    for name in &gone.partial_journals {
+        remove_file(&dir.join(name.partial_journal_name())).await?;
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::config::DatabaseConfig;
+    use crate::infra::sqlite::open;
+
+    /// A migrated database in a temporary folder, closed again, so a check
+    /// can open it `immutable`.
+    async fn migrated() -> (TempDir, PathBuf) {
+        let root = TempDir::new().unwrap();
+        let file = root.path().join("afkfleet.db");
+        let db = open(
+            &DatabaseConfig {
+                path: file.clone(),
+                backups: None,
+            },
+            DatabaseOptions::default(),
+        )
+        .await
+        .unwrap();
+        db.close().await;
+        (root, file)
+    }
+
+    fn running() -> Ends {
+        Ends::new(&CancellationToken::new(), Duration::from_secs(60))
+    }
+
+    fn stopped_now() -> Ends {
+        let stop = CancellationToken::new();
+        stop.cancel();
+        Ends::new(&stop, Duration::from_secs(60))
+    }
+
+    #[tokio::test]
+    async fn a_migrated_file_passes_the_check() {
+        let (_root, file) = migrated().await;
+
+        assert!(
+            check(&file, &running(), &DatabaseOptions::default())
+                .await
+                .is_ok()
+        );
+    }
+
+    /// A stop that came during the copy, after its last look, ends the write
+    /// before the sync.
+    #[tokio::test]
+    async fn a_stop_after_the_copy_ends_the_sync() {
+        let (_root, file) = migrated().await;
+
+        let result = sync(&file, &stopped_now()).await;
+
+        assert!(matches!(result, Err(BackupError::Stopped { file: f }) if f == file));
+    }
+
+    /// A stop that came during the sync ends the write before the check.
+    #[tokio::test]
+    async fn a_stop_after_the_sync_ends_the_check() {
+        let (_root, file) = migrated().await;
+
+        let result = check(&file, &stopped_now(), &DatabaseOptions::default()).await;
+
+        assert!(matches!(result, Err(BackupError::Stopped { file: f }) if f == file));
+    }
+
+    /// The check's statements run under the progress handler: past the
+    /// bound (or at a stop) SQLite ends them, so `quick_check` never reads a
+    /// whole file after the stop.
+    #[tokio::test]
+    async fn the_bound_ends_the_checks_statements() {
+        let (_root, file) = migrated().await;
+        let past = Ends::new(&CancellationToken::new(), Duration::ZERO);
+
+        let result = check(&file, &past, &DatabaseOptions::default()).await;
+
+        assert!(matches!(result, Err(BackupError::Stopped { file: f }) if f == file));
+    }
 }
