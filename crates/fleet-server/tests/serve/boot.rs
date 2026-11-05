@@ -14,9 +14,10 @@ use fleet_startup::signals::Signal;
 use chrono::DateTime;
 use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::authz::Role;
+use fleet_core::backup::BackupPolicy;
 use fleet_core::id::{AccountId, UserId};
 use fleet_core::value::Username;
-use fleet_server::config::ServerConfig;
+use fleet_server::config::{BackupConfig, ServerConfig};
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::audit::NewAuditEntry;
 use fleet_server::ports::store::Store as _;
@@ -246,4 +247,81 @@ async fn no_warning_while_offline_accounts_are_allowed_or_none_is_kept() {
 
     assert_eq!(kept_offline_lines(&allowed).await.len(), 0);
     assert_eq!(kept_offline_lines(&off).await.len(), 0);
+}
+
+// --- Backups (P12.3) ------------------------------------------------------------
+
+/// What a start outside dev mode logs when backups are off (ADR-0022, S4).
+const BACKUPS_OFF: &str =
+    "backups are off: set [database] backup_dir, and copy its backups off this host";
+
+/// Starts `config`'s server, stops it at once, and returns what it logged
+/// about backups being off.
+async fn backups_off_lines(config: &ServerConfig) -> Vec<serde_json::Value> {
+    let (listener, _) = listener().await;
+    let (logs, _guard) = capture();
+    let (sender, signals) = ChannelSignals::new();
+    sender.send(Signal::Terminate).await.unwrap();
+
+    let exit = tokio::time::timeout(
+        PATIENCE,
+        serve::run(config, listener, None, signals, vault_keys(config)),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(exit, Exit::Stopped, "{}", logs.text());
+    logs.lines_with(BACKUPS_OFF).unwrap()
+}
+
+#[tokio::test]
+async fn a_start_outside_dev_mode_warns_once_that_backups_are_off() {
+    let dir = test_dir("boot_backups_off");
+    let (_, address) = listener().await;
+    let config = server_config(&dir, address, false);
+
+    let lines = backups_off_lines(&config).await;
+
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["level"], "WARN");
+}
+
+#[tokio::test]
+async fn a_dev_mode_start_says_nothing_about_backups() {
+    let dir = test_dir("boot_backups_dev");
+    let (_, address) = listener().await;
+    let config = server_config(&dir, address, true);
+
+    let lines = backups_off_lines(&config).await;
+
+    assert_eq!(lines.len(), 0);
+}
+
+#[tokio::test]
+async fn a_start_with_backups_into_a_folder_that_isnt_there_fails() {
+    let dir = test_dir("boot_backups_missing");
+    let (listener, address) = listener().await;
+    let mut config = server_config(&dir, address, false);
+    config.database.backups = Some(BackupConfig {
+        dir: dir.join("no-backups-here"),
+        policy: BackupPolicy::default(),
+    });
+    let (logs, _guard) = capture();
+
+    let keys = vault_keys(&config);
+    // Bounded: a start that wrongly goes on would wait for a signal forever.
+    let exit = tokio::time::timeout(
+        PATIENCE,
+        serve::run(&config, listener, None, ChannelSignals::silent(), keys),
+    )
+    .await
+    .expect("the start ended");
+
+    assert_eq!(exit, Exit::StartupFailed);
+    let failed = logs.lines_with("the server can't start").unwrap();
+    assert_eq!(failed.len(), 1);
+    let error = failed[0]["error"].as_str().unwrap();
+    assert!(error.starts_with("the backups' folder can't be used: the backups' folder "));
+    assert!(error.ends_with("no-backups-here doesn't exist"), "{error}");
+    assert!(!dir.join("no-backups-here").exists());
 }

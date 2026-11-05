@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use chrono::DateTime;
+use chrono::{DateTime, TimeDelta};
 use fleet_core::backup::{BackupName, BackupPolicy, FUTURE_SLACK, is_stale_partial};
 use fleet_core::system::Clock;
 use tokio::time::Instant;
@@ -39,6 +39,11 @@ use crate::infra::sqlite::backup::{self, BackupError, Written};
 /// The longest a backup may take before it's stopped: far beyond the
 /// largest database the runbook sizes for.
 pub const BACKUP_BOUND: Duration = Duration::from_hours(1);
+
+/// How long `serve` waits after a failed backup before it tries again: a
+/// try rewrites the whole database and holds a read snapshot, so never every
+/// minute (S3).
+pub const RETRY_AFTER: TimeDelta = TimeDelta::hours(1);
 
 /// A backup taken, and what its pruning did.
 #[derive(Debug)]

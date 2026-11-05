@@ -14,6 +14,7 @@
 mod tables;
 
 mod at_rest;
+mod backups;
 mod fixtures;
 mod repository;
 mod scope;

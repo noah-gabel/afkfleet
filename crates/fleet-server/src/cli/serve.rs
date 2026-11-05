@@ -95,6 +95,7 @@ use crate::app::agents::{
 };
 use crate::app::audit::AuditService;
 use crate::app::auth::TokenService;
+use crate::app::backup::BackupService;
 use crate::app::bots::{BotService, ChatWait};
 use crate::app::challenges::Challenges;
 use crate::app::enrollment::EnrollmentService;
@@ -134,6 +135,7 @@ use crate::infra::msauth::{BuildError, ReqwestMicrosoftAuth};
 use crate::infra::pki::X509AgentNames;
 use crate::infra::pki::{AgentIssuer, CertificateAuthority, LoadedPki, PkiLoadError};
 use crate::infra::qr::SvgQr;
+use crate::infra::sqlite::backup::BackupError;
 use crate::infra::sqlite::{self, Database, DatabaseOptions, OpenError};
 use crate::infra::system::{MonotonicClock, OsRandom, SystemClock, TokioPace};
 use crate::ports::agent_connections::AgentConnections;
@@ -254,6 +256,9 @@ pub enum StartError {
     /// The gRPC port couldn't be set up with the PKI (ADR-0019).
     #[error("the gRPC port can't be set up")]
     Grpc(#[source] tonic::transport::Error),
+    /// `[database] backup_dir` can't be used on disk (ADR-0022, S4).
+    #[error("the backups' folder can't be used")]
+    Backups(#[source] BackupError),
 }
 
 /// Logs `error` with its whole chain as "the server can't start" and
@@ -707,7 +712,7 @@ fn auth_services(
 }
 
 /// The retention task over `store`, by the config's retention and session
-/// lifetimes, at its default pace.
+/// lifetimes, at its default pace, with the config's backups (ADR-0022, S3).
 fn retention(config: &ServerConfig, clock: &Arc<dyn Clock>, store: &Arc<dyn Store>) -> Retention {
     Retention::new(
         RetentionService::new(
@@ -718,6 +723,11 @@ fn retention(config: &ServerConfig, clock: &Arc<dyn Clock>, store: &Arc<dyn Stor
         ),
         RetentionTimings::default(),
     )
+    .with_backups(BackupService::from_config(
+        config,
+        Arc::clone(clock),
+        DatabaseOptions::default(),
+    ))
 }
 
 /// The housekeeping of the app's limits, lockout, login challenges, live
@@ -1104,6 +1114,9 @@ pub async fn run<S: ShutdownSignals>(
             Err(error) => return cant_start(&StartError::Passwords(error)),
         };
     warn_about_kept_offline_accounts(config, &database).await;
+    if let Err(error) = check_backups(config).await {
+        return cant_start(&StartError::Backups(error));
+    }
     let (opened, ca) = if let Some(plane) = control_plane {
         let (opened, ca) = open(plane, SystemClock.now());
         (Some(opened), Some(ca))
@@ -1198,6 +1211,24 @@ pub fn grpc_port(
         session_tokens,
         ingest,
     }))
+}
+
+/// What a start outside dev mode logs when backups are off (ADR-0022, S4).
+const BACKUPS_OFF: &str =
+    "backups are off: set [database] backup_dir, and copy its backups off this host";
+
+/// Checks the backups' folder on disk when backups are on; outside dev
+/// mode, warns once when they're off (ADR-0022, S4).
+async fn check_backups(config: &ServerConfig) -> Result<(), BackupError> {
+    if let Some(backups) =
+        BackupService::from_config(config, Arc::new(SystemClock), DatabaseOptions::default())
+    {
+        return backups.check().await;
+    }
+    if !config.dev_mode {
+        warn!("{BACKUPS_OFF}");
+    }
+    Ok(())
 }
 
 /// What a start logs while offline accounts are kept with the switch off.
@@ -1735,7 +1766,8 @@ mod tests {
     }
 
     /// serve's retention keeps what the config's three keys say, cuts
-    /// sessions by the config's absolute lifetime, and runs at S45's pace.
+    /// sessions by the config's absolute lifetime, runs at S45's pace, and
+    /// takes the config's backups (ADR-0022, S3).
     #[tokio::test]
     async fn the_retention_takes_the_configs_keys_and_lifetimes_at_the_default_pace() {
         use fleet_core::auth::SessionPolicy;
@@ -1775,7 +1807,10 @@ mod tests {
             },
             database: DatabaseConfig {
                 path,
-                backups: None,
+                backups: Some(crate::config::BackupConfig {
+                    dir: std::path::PathBuf::from("/backups"),
+                    policy: fleet_core::backup::BackupPolicy::try_new(12, 30).unwrap(),
+                }),
             },
             log: LogConfig::default(),
             auth: AuthConfig {
@@ -1808,6 +1843,12 @@ mod tests {
         assert_eq!(built.service().sessions(), sessions);
         assert_eq!(built.timings(), RetentionTimings::default());
         assert_eq!(built.service().pause(), RetentionTimings::default().pause);
+        let backups = built.backups().unwrap();
+        assert_eq!(backups.dir(), std::path::Path::new("/backups"));
+        assert_eq!(
+            backups.policy(),
+            config.database.backups.as_ref().unwrap().policy
+        );
         drop(built);
         database.close().await;
     }
