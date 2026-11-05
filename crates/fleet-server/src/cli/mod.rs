@@ -24,7 +24,8 @@
 //! - [`pki`]: `pki init` and `pki server-cert`, the control plane's CA and
 //!   the gRPC listener's certificate (P10.2).
 //!
-//! A later phase adds `backup` (P12).
+//! - [`backup`]: one backup now into `[database] backup_dir`, beside a
+//!   running `serve` (P12.3).
 
 use core::time::Duration;
 use std::ffi::OsString;
@@ -35,6 +36,7 @@ use clap::{Parser, Subcommand};
 use fleet_core::id::AgentId;
 
 pub mod agent;
+pub mod backup;
 pub mod healthcheck;
 pub mod housekeeping;
 pub mod migrate;
@@ -96,6 +98,17 @@ pub enum Command {
     Serve {
         /// The config file (TOML). `AFKFLEET_SERVER__…` environment variables
         /// override its keys.
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
+    },
+    /// Takes one backup now into `[database] backup_dir`, named and pruned
+    /// like `serve`'s scheduled ones. It never creates or migrates the
+    /// database, nor reads the vault's keys, and works while `serve` runs.
+    #[command(after_help = backup::EXIT_CODES)]
+    Backup {
+        /// The config file (TOML): the command reads `[database]`, the key
+        /// files' paths and `[log]`. `AFKFLEET_SERVER__…` environment
+        /// variables override its keys, as for `serve`.
         #[arg(long, value_name = "PATH")]
         config: PathBuf,
     },
