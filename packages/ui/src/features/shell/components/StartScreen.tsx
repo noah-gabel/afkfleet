@@ -1,8 +1,12 @@
 // The start screen (Plan.md P8.6, ADR-0017): what `/` shows when the launch leads nowhere
-// else. While the server can't be reached it waits (the banner retries). For any other
-// error it shows the error and a way out: try again, the server settings, or log out, so
-// a session the app can't use (a keychain entry it can't read) never leaves the user
-// stuck.
+// else. While the server can't be reached it waits (the banner retries) and offers the server
+// settings and a logout on this PC, so a server that moved or is gone for good never leaves
+// the user stuck (ADR-0022, S1, U7). For any other error it shows the error and a way out:
+// try again, the server settings, or log out, so a session the app can't use (a keychain
+// entry it can't read) never does either. Both logouts are `logout`, which removes the stored
+// session before it tries the server and says so when the server wasn't told. While one runs,
+// every other choice waits: its end goes to /login, which would pull the user off the server
+// settings or a launch run again.
 import { useLoaderData, useNavigate, useRouter } from "@tanstack/react-router";
 
 import { describeError } from "../../../api/describeError";
@@ -25,19 +29,36 @@ export function StartScreen() {
             <Wordmark />
           </h1>
         </div>
-        {outcome.kind === "unreachable" ? (
-          <p className="text-muted-foreground">Waiting for the server…</p>
-        ) : (
-          <Failed error={outcome.error} />
-        )}
+        {outcome.kind === "unreachable" ? <Waiting /> : <Failed error={outcome.error} />}
       </div>
     </main>
   );
 }
 
+function Waiting() {
+  const { logOut, pending } = useLogout();
+  return (
+    <>
+      <p className="text-muted-foreground">Waiting for the server…</p>
+      <div className="flex flex-wrap gap-2">
+        <ServerSettings disabled={pending} />
+        <Button
+          type="button"
+          variant="outline"
+          disabled={pending}
+          onClick={() => {
+            void logOut();
+          }}
+        >
+          Log out on this PC
+        </Button>
+      </div>
+    </>
+  );
+}
+
 function Failed({ error }: { error: CommandError }) {
   const router = useRouter();
-  const navigate = useNavigate();
   const { logOut, pending } = useLogout();
   return (
     <>
@@ -48,21 +69,14 @@ function Failed({ error }: { error: CommandError }) {
       <div className="flex flex-wrap gap-2">
         <Button
           type="button"
+          disabled={pending}
           onClick={() => {
             void router.invalidate();
           }}
         >
           Try again
         </Button>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => {
-            void navigate({ to: "/setup" });
-          }}
-        >
-          Server settings
-        </Button>
+        <ServerSettings disabled={pending} />
         <Button
           type="button"
           variant="outline"
@@ -75,5 +89,22 @@ function Failed({ error }: { error: CommandError }) {
         </Button>
       </div>
     </>
+  );
+}
+
+/** "Server settings", which opens the server setup; off while a logout runs. */
+function ServerSettings({ disabled }: { disabled: boolean }) {
+  const navigate = useNavigate();
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      disabled={disabled}
+      onClick={() => {
+        void navigate({ to: "/setup" });
+      }}
+    >
+      Server settings
+    </Button>
   );
 }
