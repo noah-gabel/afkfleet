@@ -84,7 +84,8 @@ pub enum PoolRole {
 /// the repository tests, so tests and production can't drift apart.
 ///
 /// Every connection gets `foreign_keys=ON`, `busy_timeout=5s`,
-/// `synchronous=NORMAL`, `trusted_schema=OFF` and `secure_delete=ON`, logs
+/// `synchronous=NORMAL`, `trusted_schema=OFF`, `secure_delete=ON` and
+/// `journal_size_limit=0`, logs
 /// every statement at `debug` and slow ones at `warn`, and never creates a
 /// missing file ([`super::open`] does that, with the right permissions). The
 /// write connection adds `journal_mode=WAL`; read connections add
@@ -94,6 +95,13 @@ pub enum PoolRole {
 /// pages included, so retention's deleted chat and old audit entries don't
 /// linger in the file (ADR-0020, S44); the read connections, which can't
 /// delete, get it too, so every connection holds it.
+///
+/// `journal_size_limit=0` cuts the `-wal` file back each time the WAL starts
+/// over after a checkpoint. A WAL that grew while a read snapshot held it (a
+/// backup's `VACUUM INTO`) otherwise keeps its size, and the old frames past
+/// what gets written again, deleted chat's text among them, until the server
+/// stops (ADR-0022, S7). Only the write connection checkpoints; the others get
+/// it too, so every connection holds it.
 #[must_use]
 pub fn connect_options(
     base: SqliteConnectOptions,
@@ -107,6 +115,7 @@ pub fn connect_options(
         .synchronous(SqliteSynchronous::Normal)
         .pragma("trusted_schema", "OFF")
         .pragma("secure_delete", "ON")
+        .pragma("journal_size_limit", "0")
         .log_statements(LevelFilter::Debug)
         .log_slow_statements(LevelFilter::Warn, options.slow_statement);
     match role {

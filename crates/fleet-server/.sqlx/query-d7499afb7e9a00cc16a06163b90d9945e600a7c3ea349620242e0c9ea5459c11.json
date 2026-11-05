@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "PRAGMA journal_size_limit",
+  "describe": {
+    "columns": [
+      {
+        "name": "journal_size_limit",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d7499afb7e9a00cc16a06163b90d9945e600a7c3ea349620242e0c9ea5459c11"
+}
