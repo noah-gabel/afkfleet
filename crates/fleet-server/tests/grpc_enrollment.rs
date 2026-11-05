@@ -216,6 +216,7 @@ async fn start(options: SqliteConnectOptions, settings: Settings) -> Port {
             grants: Arc::new(NoGrants),
             ingest: Arc::new(NoIngest),
             clock: Arc::new(clock.clone()),
+            metrics: fleet_server::metrics::ServerMetrics::off(),
         },
         RateLimits::new(&settings.limits, Arc::new(clock.clone())),
         RequestIds::new(Arc::new(clock.clone()), Arc::new(random.clone())),

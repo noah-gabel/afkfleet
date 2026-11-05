@@ -29,6 +29,7 @@ mod grants_review;
 mod link_flows;
 mod live_wiring;
 mod manual;
+mod metrics_wiring;
 mod msauth_fake;
 mod offline;
 mod pace_fake;

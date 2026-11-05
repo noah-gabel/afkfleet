@@ -39,6 +39,7 @@ use fleet_server::infra::crypto::tokens::Sha256Tokens;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::agent_connections::Admitted;
 use fleet_server::ports::audit::NewAuditEntry;
+use fleet_server::ports::ingest::NotTaken;
 use fleet_server::ports::login_attempts::{AttemptKeys as _, LoginAttempt};
 use fleet_server::ports::store::Store as _;
 use fleet_startup::telemetry::{NoRules, layer_with};
@@ -308,7 +309,9 @@ async fn a_run_logs_one_line_per_agent_whose_reports_session_requests_or_chat_we
         let _ = setup.registry.admit(&lease, &request);
     }
     // A chat message the ingest dropped (S70).
-    setup.registry.count_dropped_chat(&lease);
+    setup
+        .registry
+        .count_dropped_chat(&lease, NotTaken::QueueFull);
 
     let logs = setup.run_once().await;
 

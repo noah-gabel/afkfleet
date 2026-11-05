@@ -53,6 +53,7 @@ use fleet_server::infra::pki::{
 };
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::infra::system::SystemClock;
+use fleet_server::metrics::{Metrics, ServerMetrics};
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::agent_connections::{
     AdmitError, Admitted, AgentConnections, Conflict, Ended, LiveCertificate, Presented,
@@ -166,6 +167,8 @@ pub(crate) struct Port {
     pub(crate) minecraft: ScriptedSessions,
     /// The bus the ingest publishes on (S70).
     pub(crate) events: EventBus,
+    /// The port's own metrics registry, wired as serve wires its (P12.4).
+    pub(crate) metrics: Metrics,
     /// The ingest's writer, which a test ticks itself.
     ingest: tokio::sync::Mutex<IngestWriter>,
     ca: CertificateAuthority,
@@ -497,12 +500,17 @@ fn registry_of(
     clock: &ManualClock,
     settings: &Settings,
     failing_detaches: &Arc<AtomicU32>,
+    metrics: &ServerMetrics,
 ) -> (AgentRegistry, Option<(Reconciler, Hints)>) {
     let Some(timings) = settings.reconcile else {
-        return (AgentRegistry::new(Arc::new(clock.clone())), None);
+        return (
+            AgentRegistry::new(Arc::new(clock.clone())).with_metrics(metrics.clone()),
+            None,
+        );
     };
     let (hints, inbox) = hints(HINT_QUEUE);
-    let registry = AgentRegistry::with_reconcile(Arc::new(clock.clone()), Arc::new(hints.clone()));
+    let registry = AgentRegistry::with_reconcile(Arc::new(clock.clone()), Arc::new(hints.clone()))
+        .with_metrics(metrics.clone());
     let reconciler = Reconciler::new(
         registry.clone(),
         Arc::new(FlakyDetaches {
@@ -516,6 +524,30 @@ fn registry_of(
         fleet_core::chat::ChatRate::default(),
     );
     (registry, Some((reconciler, hints)))
+}
+
+/// The enrollment service over `db`, signing with `ca` for 60 days, behind
+/// its gate spending `limits`, as serve builds it.
+fn enrollment_of(
+    db: &Database,
+    clock: &ManualClock,
+    random: &SeededRandom,
+    ca: CertificateAuthority,
+    limits: &RateLimits,
+) -> listener::EnrollmentRoute {
+    let issuer = AgentIssuer::new(ca, Arc::new(random.clone()), TimeDelta::days(60));
+    enrollment_service(
+        EnrollmentService::new(
+            Arc::new(clock.clone()),
+            Arc::new(random.clone()),
+            Arc::new(db.clone()),
+            Arc::new(Sha256Tokens::new(Arc::new(random.clone()))),
+            Arc::new(issuer),
+        ),
+        limits.clone(),
+        RequestIds::new(Arc::new(clock.clone()), Arc::new(random.clone())),
+        fleet_proto::enrollment::SERVER_DEADLINE,
+    )
 }
 
 /// The port over `db` with `pki`: a fresh registry, and the reconciler
@@ -535,30 +567,23 @@ async fn serve_on(
     };
     let tls = listener::tls(&pki);
     let ca = copy(&pki.ca);
-    let issuer = AgentIssuer::new(pki.ca, Arc::new(random.clone()), TimeDelta::days(60));
-    let limits = RateLimits::new(&settings.limits, Arc::new(clock.clone()));
-    let enrollment = enrollment_service(
-        EnrollmentService::new(
-            Arc::new(clock.clone()),
-            Arc::new(random.clone()),
-            Arc::new(db.clone()),
-            Arc::new(Sha256Tokens::new(Arc::new(random.clone()))),
-            Arc::new(issuer),
-        ),
-        limits.clone(),
-        RequestIds::new(Arc::new(clock.clone()), Arc::new(random.clone())),
-        fleet_proto::enrollment::SERVER_DEADLINE,
-    );
+    // The port's own registry, wired as serve wires its (P12.4).
+    let metrics = Metrics::prometheus();
+    let recording = metrics.recording().clone();
+    let limits =
+        RateLimits::new(&settings.limits, Arc::new(clock.clone())).with_metrics(recording.clone());
+    let enrollment = enrollment_of(&db, &clock, &random, pki.ca, &limits);
     let sessions = Sessions::new(CancellationToken::new());
     let failing_detaches = Arc::new(AtomicU32::new(0));
-    let (registry, reconciler) = registry_of(&db, &clock, &settings, &failing_detaches);
+    let (registry, reconciler) = registry_of(&db, &clock, &settings, &failing_detaches, &recording);
     let losing_ends = Arc::new(AtomicU32::new(0));
     let connections: Arc<dyn AgentConnections> = Arc::new(LostEnds {
         real: AgentConnectionService::new(
             Arc::new(clock.clone()),
             Arc::new(db.clone()),
             Arc::new(X509AgentNames),
-        ),
+        )
+        .with_metrics(recording.clone()),
         losing: Arc::clone(&losing_ends),
     });
     let minecraft = ScriptedSessions::default();
@@ -570,12 +595,17 @@ async fn serve_on(
         IngestTimings::default(),
         settings.ingest,
     );
+    let ingest_writer = ingest_writer.with_metrics(recording.clone());
     let control = control_service(
         ControlPorts {
             connections: Arc::clone(&connections),
-            grants: Arc::new(grants(&db, &clock, &registry, &minecraft, &settings)),
+            grants: Arc::new(
+                grants(&db, &clock, &registry, &minecraft, &settings)
+                    .with_metrics(recording.clone()),
+            ),
             ingest: Arc::new(ingest_front),
             clock: Arc::new(clock.clone()),
+            metrics: recording,
         },
         limits,
         RequestIds::new(Arc::new(clock.clone()), Arc::new(random.clone())),
@@ -610,6 +640,7 @@ async fn serve_on(
         registry,
         minecraft,
         events,
+        metrics,
         ingest: tokio::sync::Mutex::new(ingest_writer),
         ca,
         ca_pem,
@@ -633,6 +664,16 @@ fn setup_entry(now: DateTime<Utc>) -> NewAuditEntry {
 }
 
 impl Port {
+    /// The value of the series `series` (its name and labels as the
+    /// render writes them), if it's there.
+    pub(crate) fn metric(&self, series: &str) -> Option<String> {
+        self.metrics.render().text().lines().find_map(|line| {
+            line.strip_prefix(series)?
+                .strip_prefix(' ')
+                .map(str::to_owned)
+        })
+    }
+
     /// One tick of the ingest's writer: what waits is written, or nothing.
     pub(crate) async fn ingest_tick(&self) -> Tick {
         self.ingest.lock().await.tick().await
@@ -954,6 +995,7 @@ impl Port {
             Arc::new(self.minecraft.clone()),
             allow_offline,
         )
+        .with_metrics(self.metrics.recording().clone())
     }
 
     /// The stream `agent` asks on for `bot`: its live stream's, which holds

@@ -106,6 +106,17 @@ async fn the_account_comes_from_the_assignment_and_fresh_reaches_the_token_servi
     assert_eq!(access_token.expose_secret(), TOKEN);
     assert!(*expires_at > port.clock.now());
     assert_eq!(port.minecraft.calls(), [(account, true)]);
+    assert_eq!(
+        port.metric("afkfleet_session_grants_total{kind=\"online\",fresh=\"true\"}")
+            .as_deref(),
+        Some("1"),
+        "P12.4: a grant writes no audit entry; it counts"
+    );
+    assert_eq!(
+        port.metric("afkfleet_session_grants_total{kind=\"online\",fresh=\"false\"}")
+            .as_deref(),
+        Some("0")
+    );
     port.stop().await;
 }
 
@@ -129,6 +140,12 @@ async fn a_disabled_agent_gets_a_retryable_denial_and_no_session(
 
     assert!(denied(&mut call).await.retryable);
     assert_eq!(port.minecraft.calls(), [], "no session was asked for");
+    assert_eq!(
+        port.metric("afkfleet_session_denials_total{reason=\"disabled\"}")
+            .as_deref(),
+        Some("1"),
+        "P12.4: the denial counts under its log line's reason"
+    );
     port.stop().await;
 }
 

@@ -49,6 +49,11 @@
 //!
 //! One `std` mutex guards it all, never held across an `.await`; messages are
 //! converted and measured before it's taken.
+//!
+//! **Metrics** (P12.4; [`AgentRegistry::with_metrics`]): a second stream's
+//! refused claim, every conflict found (the hour's later ones too), a
+//! dropped report, the session requests it denies before a grant, and the
+//! chat the ingest drops, totals with no agent's label (ADR-0022, S11).
 
 use core::fmt;
 use core::time::Duration;
@@ -77,10 +82,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::http::error::chain;
+use crate::metrics::{ConnectRefused, ServerMetrics, SessionDenial};
 use crate::ports::agent_connections::{
     Admitted, AgentConnections, Conflict, LiveCertificate, StreamEnd,
 };
-use crate::ports::ingest::{StickyMarks, StickyWrite};
+use crate::ports::ingest::{NotTaken, StickyMarks, StickyWrite};
 pub use crate::ports::live_agents::LatestReport;
 use crate::ports::live_agents::{
     AnswerRefused, CommandRefused, HeldBot, LiveAgents, LiveStream, PermissionEnd, SessionAnswer,
@@ -98,6 +104,7 @@ pub const CONFLICT_INTERVAL: Duration = Duration::from_hours(1);
 #[derive(Clone)]
 pub struct AgentRegistry {
     shared: Arc<Shared>,
+    metrics: ServerMetrics,
 }
 
 impl fmt::Debug for AgentRegistry {
@@ -515,7 +522,18 @@ impl AgentRegistry {
                 reconcile,
                 state: Mutex::new(State::default()),
             }),
+            metrics: ServerMetrics::off(),
         }
+    }
+
+    /// The same registry, counting in `metrics` as it happens (P12.4;
+    /// ADR-0022, S11): a second stream of a live agent refused, every
+    /// identity conflict it finds (before the once-an-hour record), a
+    /// dropped report, and the session requests it denies and the chat the
+    /// ingest drops. Clones made after it count there too.
+    #[must_use]
+    pub fn with_metrics(self, metrics: ServerMetrics) -> Self {
+        Self { metrics, ..self }
     }
 
     /// Claims `admitted`'s agent's slot.
@@ -532,6 +550,8 @@ impl AgentRegistry {
                 peer: admitted.peer,
                 at: now,
             });
+            self.metrics
+                .connect_refused(ConnectRefused::AlreadyConnected);
             return Err(AlreadyConnected);
         }
         state.generations = state.generations.saturating_add(1);
@@ -906,6 +926,8 @@ impl AgentRegistry {
         };
         live.last_seen = now;
         let conflict = slot.refused.take().and_then(|refused| {
+            // Every one found counts, the hour's later ones too (S26).
+            self.metrics.identity_conflict();
             let since = fleet_core::time::sub(now, CONFLICT_INTERVAL);
             let recent = state
                 .conflicts
@@ -941,8 +963,10 @@ impl AgentRegistry {
                 .or_insert_with(|| (slot.name.clone(), RefusedCounts::default()));
             if verdict == Verdict::Dropped {
                 counts.reports = counts.reports.saturating_add(1);
+                self.metrics.report_dropped();
             } else {
                 counts.sessions = counts.sessions.saturating_add(1);
+                self.metrics.session_denied(SessionDenial::NotAssigned);
             }
         }
         drop(guard);
@@ -958,6 +982,7 @@ impl AgentRegistry {
     /// Counts one more session request of `lease`'s stream denied before
     /// its grant was worked out: its grant queue was full (S57, R43).
     pub fn count_denied_session(&self, lease: &Lease) {
+        self.metrics.session_denied(SessionDenial::GrantQueueFull);
         let mut guard = self.state();
         let state = &mut *guard;
         let Some(slot) = state
@@ -990,9 +1015,10 @@ impl AgentRegistry {
             .collect()
     }
 
-    /// Counts one more chat message of `lease`'s stream the ingest dropped
-    /// (S70).
-    pub fn count_dropped_chat(&self, lease: &Lease) {
+    /// Counts one more chat message of `lease`'s stream the ingest dropped,
+    /// as `why` says (S70).
+    pub fn count_dropped_chat(&self, lease: &Lease, why: NotTaken) {
+        self.metrics.chat_dropped(why);
         let mut guard = self.state();
         let state = &mut *guard;
         let Some(slot) = state
@@ -3321,8 +3347,8 @@ mod tests {
         let (lease, _queued, _ended) = live(&registry, 1, 4);
         settle(&registry, &lease, &[(1, Hold::Assigned)]);
 
-        registry.count_dropped_chat(&lease);
-        registry.count_dropped_chat(&lease);
+        registry.count_dropped_chat(&lease, NotTaken::StreamFull);
+        registry.count_dropped_chat(&lease, NotTaken::QueueFull);
 
         assert_eq!(
             registry.take_refused_reports(),
@@ -3334,6 +3360,66 @@ mod tests {
                 chat_dropped: 2,
             }]
         );
+    }
+
+    /// P12.4: what the registry refuses, finds or drops counts in the
+    /// metrics as it happens: a second stream's claim, every identity
+    /// conflict (also the ones the hour doesn't record), a dropped report,
+    /// a session request denied before its grant (not assigned, or the
+    /// queue full), and chat the ingest dropped, by why.
+    #[test]
+    fn what_the_registry_refuses_finds_or_drops_counts_in_the_metrics() {
+        let metrics = crate::metrics::Metrics::prometheus();
+        let (registry, clock) = registry();
+        let registry = registry.with_metrics(metrics.recording().clone());
+        let (lease, _queued, _ended) = live(&registry, 1, 8);
+        settle(&registry, &lease, &[(1, Hold::Assigned)]);
+        clock.advance(Duration::from_secs(2));
+
+        let _ = registry.claim(&admitted(2));
+        let _ = registry.admit(&lease, &AgentMessage::Heartbeat);
+        let _ = registry.claim(&admitted(3));
+        let recorded = registry.admit(&lease, &AgentMessage::Heartbeat).1;
+        let dropped = registry.admit(&lease, &online(bot(9))).0;
+        let denied = ask(&registry, &lease, session_request(1, bot(9)));
+        registry.count_denied_session(&lease);
+        registry.count_dropped_chat(&lease, NotTaken::StreamFull);
+        registry.count_dropped_chat(&lease, NotTaken::Closed);
+
+        assert_eq!(recorded, None, "the hour records one conflict");
+        assert_eq!(dropped, Verdict::Dropped);
+        assert_eq!(denied, Verdict::DenySession(session_request(1, bot(9))));
+        let render = metrics.render().text();
+        for (series, expected) in [
+            (
+                "afkfleet_agent_connects_refused_total{reason=\"already_connected\"}",
+                "2",
+            ),
+            ("afkfleet_agent_identity_conflicts_total", "2"),
+            ("afkfleet_agent_reports_dropped_total", "1"),
+            (
+                "afkfleet_session_denials_total{reason=\"not_assigned\"}",
+                "1",
+            ),
+            (
+                "afkfleet_session_denials_total{reason=\"grant_queue_full\"}",
+                "1",
+            ),
+            (
+                "afkfleet_ingest_chat_dropped_total{reason=\"stream_full\"}",
+                "1",
+            ),
+            ("afkfleet_ingest_chat_dropped_total{reason=\"closed\"}", "1"),
+            (
+                "afkfleet_ingest_chat_dropped_total{reason=\"queue_full\"}",
+                "0",
+            ),
+        ] {
+            let value = render
+                .lines()
+                .find_map(|line| line.strip_prefix(series)?.strip_prefix(' '));
+            assert_eq!(value, Some(expected), "{series}: {render}");
+        }
     }
 
     // --- Sticky crossings (U16) ----------------------------------------------------------

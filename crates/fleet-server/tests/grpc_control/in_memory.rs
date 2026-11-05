@@ -315,6 +315,7 @@ impl Port {
                 grants: Arc::new(NoGrants),
                 ingest: Arc::new(NoIngest),
                 clock: Arc::new(clock.clone()),
+                metrics: fleet_server::metrics::ServerMetrics::off(),
             },
             limits,
             ids,

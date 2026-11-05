@@ -53,6 +53,8 @@
 //!   The trace layer logs a refused request's line at `debug`, and each
 //!   limit counts its refusals ([`RateLimits::take_refusals`]) for the
 //!   server's periodic summary, so a flood doesn't flood the log.
+//!   Each refusal also counts in the server's metrics under its limit, as it
+//!   happens ([`RateLimits::with_metrics`]; P12.4).
 //! - **The clock** is the server's `Clock` port ([`LimiterClock`]): in
 //!   production a monotonic one, so a step of the wall clock can't refuse
 //!   every client, and in tests the `ManualClock` everything else uses.
@@ -92,6 +94,7 @@ use sockets::SocketSlots;
 use super::error::ApiError;
 use super::routes::RateClass;
 use crate::config::{Rate, RateLimitConfig};
+use crate::metrics::{Limit, ServerMetrics};
 
 /// governor's clock over the server's [`Clock`] port: the time since its
 /// first reading. A reading before that (a clock that went back) counts as
@@ -260,9 +263,10 @@ struct Limiters {
     refused: Counters,
 }
 
-/// §7.4's request limits; clones share them. See the [module docs](self).
+/// §7.4's request limits; clones share them, and the metrics their
+/// refusals count in (P12.4). See the [module docs](self).
 #[derive(Clone)]
-pub struct RateLimits(Arc<Limiters>);
+pub struct RateLimits(Arc<Limiters>, ServerMetrics);
 
 impl fmt::Debug for RateLimits {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -287,25 +291,43 @@ impl RateLimits {
     #[must_use]
     pub fn new(config: &RateLimitConfig, clock: Arc<dyn Clock>) -> Self {
         let clock = LimiterClock::new(clock);
-        Self(Arc::new(Limiters {
-            per_ip: limiter(config.per_ip, &clock),
-            login: limiter(config.login, &clock),
-            refresh: limiter(config.refresh, &clock),
-            register: limiter(config.register, &clock),
-            per_user: limiter(config.per_user, &clock),
-            grants_by_name: limiter(config.grants_by_name, &clock),
-            grant_candidates: limiter(config.grant_candidates, &clock),
-            enroll: limiter(config.enroll, &clock),
-            connect: limiter(config.connect, &clock),
-            bot_actions: limiter(config.bot_actions, &clock),
-            fresh_sessions: limiter(config.fresh_sessions, &clock),
-            chat_per_user: limiter(config.chat_per_user, &clock),
-            chat_per_bot: limiter(Rate::from(config.chat_per_bot), &clock),
-            chat_interval: config.chat_per_bot.interval(),
-            sockets: SocketSlots::new(config.ws_connections_per_user),
-            refused: Counters::default(),
-            clock,
-        }))
+        Self(
+            Arc::new(Limiters {
+                per_ip: limiter(config.per_ip, &clock),
+                login: limiter(config.login, &clock),
+                refresh: limiter(config.refresh, &clock),
+                register: limiter(config.register, &clock),
+                per_user: limiter(config.per_user, &clock),
+                grants_by_name: limiter(config.grants_by_name, &clock),
+                grant_candidates: limiter(config.grant_candidates, &clock),
+                enroll: limiter(config.enroll, &clock),
+                connect: limiter(config.connect, &clock),
+                bot_actions: limiter(config.bot_actions, &clock),
+                fresh_sessions: limiter(config.fresh_sessions, &clock),
+                chat_per_user: limiter(config.chat_per_user, &clock),
+                chat_per_bot: limiter(Rate::from(config.chat_per_bot), &clock),
+                chat_interval: config.chat_per_bot.interval(),
+                sockets: SocketSlots::new(config.ws_connections_per_user),
+                refused: Counters::default(),
+                clock,
+            }),
+            ServerMetrics::off(),
+        )
+    }
+
+    /// The same limits, each refusal also counted in `metrics` under its
+    /// limit, as it happens (P12.4; ADR-0022, S11).
+    #[must_use]
+    pub fn with_metrics(self, metrics: ServerMetrics) -> Self {
+        Self(self.0, metrics)
+    }
+
+    /// `spent`, a refusal counted under `limit` too.
+    fn counted(&self, limit: Limit, spent: Result<(), Refused>) -> Result<(), Refused> {
+        if spent.is_err() {
+            self.1.rate_limit_refused(limit);
+        }
+        spent
     }
 
     /// Spends one of `ip`'s global per-IP requests.
@@ -314,11 +336,14 @@ impl RateLimits {
     /// [`Refused`] when its bucket is empty.
     pub fn check_ip(&self, ip: IpAddr) -> Result<(), Refused> {
         let limits = &self.0;
-        spend(
-            &limits.per_ip,
-            &limits.clock,
-            &limiter_key(ip),
-            &limits.refused.per_ip,
+        self.counted(
+            Limit::PerIp,
+            spend(
+                &limits.per_ip,
+                &limits.clock,
+                &limiter_key(ip),
+                &limits.refused.per_ip,
+            ),
         )
     }
 
@@ -328,13 +353,16 @@ impl RateLimits {
     /// [`Refused`] when its bucket is empty.
     pub fn check_class(&self, class: RateClass, ip: IpAddr) -> Result<(), Refused> {
         let limits = &self.0;
-        let (limiter, refused) = match class {
+        let (limiter, refused, limit) = match class {
             RateClass::Standard => return Ok(()),
-            RateClass::Login => (&limits.login, &limits.refused.login),
-            RateClass::Refresh => (&limits.refresh, &limits.refused.refresh),
-            RateClass::Register => (&limits.register, &limits.refused.register),
+            RateClass::Login => (&limits.login, &limits.refused.login, Limit::Login),
+            RateClass::Refresh => (&limits.refresh, &limits.refused.refresh, Limit::Refresh),
+            RateClass::Register => (&limits.register, &limits.refused.register, Limit::Register),
         };
-        spend(limiter, &limits.clock, &limiter_key(ip), refused)
+        self.counted(
+            limit,
+            spend(limiter, &limits.clock, &limiter_key(ip), refused),
+        )
     }
 
     /// Spends one of `user`'s grants created by a username, which the grant
@@ -345,11 +373,14 @@ impl RateLimits {
     /// [`Refused`] when their bucket is empty.
     pub fn check_grant_by_name(&self, user: UserId) -> Result<(), Refused> {
         let limits = &self.0;
-        spend(
-            &limits.grants_by_name,
-            &limits.clock,
-            &user,
-            &limits.refused.grants_by_name,
+        self.counted(
+            Limit::GrantsByName,
+            spend(
+                &limits.grants_by_name,
+                &limits.clock,
+                &user,
+                &limits.refused.grants_by_name,
+            ),
         )
     }
 
@@ -361,11 +392,14 @@ impl RateLimits {
     /// [`Refused`] when their bucket is empty.
     pub fn check_grant_candidates(&self, user: UserId) -> Result<(), Refused> {
         let limits = &self.0;
-        spend(
-            &limits.grant_candidates,
-            &limits.clock,
-            &user,
-            &limits.refused.grant_candidates,
+        self.counted(
+            Limit::GrantCandidates,
+            spend(
+                &limits.grant_candidates,
+                &limits.clock,
+                &user,
+                &limits.refused.grant_candidates,
+            ),
         )
     }
 
@@ -376,11 +410,14 @@ impl RateLimits {
     /// [`Refused`] when its bucket is empty.
     pub fn check_enroll(&self, ip: IpAddr) -> Result<(), Refused> {
         let limits = &self.0;
-        spend(
-            &limits.enroll,
-            &limits.clock,
-            &limiter_key(ip),
-            &limits.refused.enroll,
+        self.counted(
+            Limit::Enroll,
+            spend(
+                &limits.enroll,
+                &limits.clock,
+                &limiter_key(ip),
+                &limits.refused.enroll,
+            ),
         )
     }
 
@@ -392,11 +429,14 @@ impl RateLimits {
     /// [`Refused`] when its bucket is empty.
     pub fn check_connect(&self, certificate: CertFingerprint) -> Result<(), Refused> {
         let limits = &self.0;
-        spend(
-            &limits.connect,
-            &limits.clock,
-            &certificate,
-            &limits.refused.connect,
+        self.counted(
+            Limit::Connect,
+            spend(
+                &limits.connect,
+                &limits.clock,
+                &certificate,
+                &limits.refused.connect,
+            ),
         )
     }
 
@@ -407,11 +447,14 @@ impl RateLimits {
     /// [`Refused`] when its bucket is empty.
     pub fn check_bot_action(&self, bot: BotId) -> Result<(), Refused> {
         let limits = &self.0;
-        spend(
-            &limits.bot_actions,
-            &limits.clock,
-            &bot,
-            &limits.refused.bot_actions,
+        self.counted(
+            Limit::BotActions,
+            spend(
+                &limits.bot_actions,
+                &limits.clock,
+                &bot,
+                &limits.refused.bot_actions,
+            ),
         )
     }
 
@@ -423,11 +466,14 @@ impl RateLimits {
     /// [`Refused`] when its bucket is empty.
     pub fn check_fresh_session(&self, bot: BotId) -> Result<(), Refused> {
         let limits = &self.0;
-        spend(
-            &limits.fresh_sessions,
-            &limits.clock,
-            &bot,
-            &limits.refused.fresh_sessions,
+        self.counted(
+            Limit::FreshSessions,
+            spend(
+                &limits.fresh_sessions,
+                &limits.clock,
+                &bot,
+                &limits.refused.fresh_sessions,
+            ),
         )
     }
 
@@ -438,11 +484,14 @@ impl RateLimits {
     /// [`Refused`] when their bucket is empty.
     pub fn check_chat_user(&self, user: UserId) -> Result<(), Refused> {
         let limits = &self.0;
-        spend(
-            &limits.chat_per_user,
-            &limits.clock,
-            &user,
-            &limits.refused.chat_per_user,
+        self.counted(
+            Limit::ChatPerUser,
+            spend(
+                &limits.chat_per_user,
+                &limits.clock,
+                &user,
+                &limits.refused.chat_per_user,
+            ),
         )
     }
 
@@ -454,11 +503,14 @@ impl RateLimits {
     /// [`Refused`] when its bucket is empty.
     pub fn check_chat_bot(&self, bot: BotId) -> Result<(), Refused> {
         let limits = &self.0;
-        spend(
-            &limits.chat_per_bot,
-            &limits.clock,
-            &bot,
-            &limits.refused.chat_per_bot,
+        self.counted(
+            Limit::ChatPerBot,
+            spend(
+                &limits.chat_per_bot,
+                &limits.clock,
+                &bot,
+                &limits.refused.chat_per_bot,
+            ),
         )
     }
 
@@ -475,11 +527,14 @@ impl RateLimits {
     /// [`Refused`] when their bucket is empty.
     pub fn check_user(&self, user: UserId) -> Result<(), Refused> {
         let limits = &self.0;
-        spend(
-            &limits.per_user,
-            &limits.clock,
-            &user,
-            &limits.refused.per_user,
+        self.counted(
+            Limit::PerUser,
+            spend(
+                &limits.per_user,
+                &limits.clock,
+                &user,
+                &limits.refused.per_user,
+            ),
         )
     }
 
@@ -516,6 +571,7 @@ impl RateLimits {
                 .refused
                 .ws_connections
                 .fetch_add(1, Ordering::Relaxed);
+            self.1.rate_limit_refused(Limit::WsConnections);
             SocketsFull
         })
     }
@@ -1052,6 +1108,61 @@ mod tests {
             }
         );
         assert_eq!(limits.take_refusals(), Refusals::default());
+    }
+
+    /// Each refusal counts in the metrics under its own limit as it happens
+    /// (P12.4), beside the minute's summary, which taking doesn't reset.
+    #[test]
+    fn every_refusal_counts_in_the_metrics_under_its_limit() {
+        let metrics = crate::metrics::Metrics::prometheus();
+        let limits = RateLimits::new(&tight(), Arc::new(ManualClock::new(start())))
+            .with_metrics(metrics.recording().clone());
+        let client = ip("192.0.2.10");
+        for _ in 0..3 {
+            let _ = limits.check_ip(client);
+            for class in [RateClass::Login, RateClass::Refresh, RateClass::Register] {
+                let _ = limits.check_class(class, client);
+            }
+            let _ = limits.check_user(user(1));
+            let _ = limits.check_grant_by_name(user(1));
+            let _ = limits.check_grant_candidates(user(1));
+            let _ = limits.check_enroll(client);
+            let _ = limits.check_connect(fingerprint(1));
+            let _ = limits.check_bot_action(bot(1));
+            let _ = limits.check_fresh_session(bot(1));
+            let _ = limits.check_chat_user(user(1));
+        }
+        let _held = [limits.open_socket(user(1)), limits.open_socket(user(1))];
+        let _ = limits.open_socket(user(1));
+        let _ = limits.take_refusals();
+
+        let render = metrics.render().text();
+        let value = |limit: &str| {
+            let series = format!("afkfleet_rate_limit_refusals_total{{limit=\"{limit}\"}} ");
+            render
+                .lines()
+                .find_map(|line| line.strip_prefix(series.as_str()))
+                .map(str::to_owned)
+        };
+        for limit in [
+            "per_ip",
+            "login",
+            "refresh",
+            "register",
+            "per_user",
+            "grants_by_name",
+            "grant_candidates",
+            "enroll",
+            "connect",
+            "bot_actions",
+            "fresh_sessions",
+            "chat_per_user",
+            "ws_connections",
+        ] {
+            assert_eq!(value(limit).as_deref(), Some("1"), "{limit}: {render}");
+        }
+        // Never refused here: still at 0, registered from the start.
+        assert_eq!(value("chat_per_bot").as_deref(), Some("0"), "{render}");
     }
 
     #[test]

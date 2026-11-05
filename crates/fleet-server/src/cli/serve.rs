@@ -138,7 +138,7 @@ use crate::infra::qr::SvgQr;
 use crate::infra::sqlite::backup::BackupError;
 use crate::infra::sqlite::{self, Database, DatabaseOptions, OpenError};
 use crate::infra::system::{MonotonicClock, OsRandom, SystemClock, TokioPace};
-use crate::metrics::Metrics;
+use crate::metrics::{Metrics, MetricsRender, ServerMetrics};
 use crate::ports::agent_connections::AgentConnections;
 use crate::ports::live_hints::LiveHints;
 use crate::ports::msauth::MicrosoftAuthProvider;
@@ -468,10 +468,12 @@ pub fn app_with(
     let vault: Arc<dyn Vault> = Arc::new(XChaChaVault::new(keys, Arc::clone(&ports.random)));
     let (reconcile, inbox) = hint_queue(config.grpc.is_some() && ca.is_some());
     let hints = Hints::new(&reconcile, &events);
+    let metrics = ports.metrics.recording().clone();
     let shared = Shared {
         clock: &ports.clock,
         random: &ports.random,
         store: &store,
+        metrics: &metrics,
     };
     let (link_flows, accounts) = account_services(
         config,
@@ -490,11 +492,12 @@ pub fn app_with(
         },
         &hints,
     );
-    let limits = RateLimits::new(&config.rate_limits, ports.limiter_clock);
+    let limits =
+        RateLimits::new(&config.rate_limits, ports.limiter_clock).with_metrics(metrics.clone());
     let ids = RequestIds::new(Arc::clone(&ports.clock), Arc::clone(&ports.random));
     let audit = AuditService::new(Arc::clone(&ports.clock), Arc::clone(&store));
     let fleet = fleet_services(config, shared, &hints, &events, reconcile);
-    let retention = retention(config, &ports.clock, &store);
+    let retention = retention(config, &ports.clock, &store).with_metrics(metrics.clone());
     let shutdown = CancellationToken::new();
     let (sockets, live) = live_events(&auth.tickets, &events, &store, &shutdown);
     let grpc = control_plane_services(
@@ -514,6 +517,7 @@ pub fn app_with(
             shutdown: shutdown.clone(),
             bus: events.clone(),
             reconcile: ports.reconcile,
+            metrics: metrics.clone(),
         },
     );
     let state = AppState::new(Services {
@@ -534,19 +538,10 @@ pub fn app_with(
         events: live,
         audit,
     });
+    let (router, metrics) = routers(config, state, ids, ports.metrics.render());
     App {
-        metrics: metrics_router(
-            state.clone(),
-            ports.metrics.render().clone(),
-            &config.http,
-            ids.clone(),
-        ),
-        router: router(
-            state,
-            &config.http,
-            ids,
-            ApiDocs::for_dev_mode(config.dev_mode),
-        ),
+        router,
+        metrics,
         housekeeping: housekeeping(
             limits,
             auth.lockout,
@@ -562,6 +557,24 @@ pub fn app_with(
         sockets,
         shutdown,
     }
+}
+
+/// The API's router over `state`, and the metrics port's, rendering
+/// `render` (P12.4), both behind the middleware with `ids`.
+fn routers(
+    config: &ServerConfig,
+    state: AppState,
+    ids: RequestIds,
+    render: &MetricsRender,
+) -> (Router, Router) {
+    let metrics = metrics_router(state.clone(), render.clone(), &config.http, ids.clone());
+    let api = router(
+        state,
+        &config.http,
+        ids,
+        ApiDocs::for_dev_mode(config.dev_mode),
+    );
+    (api, metrics)
 }
 
 /// The live events over `tickets` and `events`, their rights read through
@@ -608,10 +621,11 @@ fn fleet_services(
         clock,
         random,
         store,
+        metrics,
     } = shared;
     let grants =
         GrantService::new(Arc::clone(clock), Arc::clone(store)).with_live_hints(hints.live());
-    let (registry, agents) = agent_services(clock, store, hints);
+    let (registry, agents) = agent_services(clock, store, hints, metrics);
     // One allowlist for both: a mode's `unlisted_command` (S68) is what the bots' mode switch
     // authorizes with (R113).
     let allowlist = &config.chat.command_allowlist;
@@ -631,12 +645,14 @@ fn fleet_services(
     }
 }
 
-/// What every service shares: the app's clock, randomness and store.
+/// What every service shares: the app's clock, randomness and store, and
+/// the server's metrics (P12.4).
 #[derive(Clone, Copy)]
 struct Shared<'a> {
     clock: &'a Arc<dyn Clock>,
     random: &'a Arc<dyn SecureRandom>,
     store: &'a Arc<dyn Store>,
+    metrics: &'a ServerMetrics,
 }
 
 impl Shared<'_> {
@@ -698,13 +714,16 @@ fn auth_services(
         clock,
         random,
         store,
+        metrics,
     } = shared;
     let (tokens, invites) = token_services(config, clock, random, store, ports.tokens);
+    let tokens = tokens.with_metrics(metrics.clone());
     let challenges = Challenges::new(Arc::clone(clock), Arc::clone(ports.tokens));
     let tickets = EventTickets::new(Arc::clone(clock), Arc::clone(ports.tokens))
         .with_per_user(config.rate_limits.ws_connections_per_user);
     let mfa = mfa_service(clock, random, store, ports.vault, &challenges);
-    let lockout = lockout_service(config, clock, store, ports.lockout_key);
+    let lockout =
+        lockout_service(config, clock, store, ports.lockout_key).with_metrics(metrics.clone());
     let users = user_service(clock, random, store, &ports.passwords, hints);
     let login = LoginService::new(
         Arc::clone(clock),
@@ -845,8 +864,10 @@ fn agent_services(
     clock: &Arc<dyn Clock>,
     store: &Arc<dyn Store>,
     hints: &Hints,
+    metrics: &ServerMetrics,
 ) -> (AgentRegistry, AgentService) {
-    let agents = AgentRegistry::with_reconcile(Arc::clone(clock), Arc::clone(&hints.reconcile));
+    let agents = AgentRegistry::with_reconcile(Arc::clone(clock), Arc::clone(&hints.reconcile))
+        .with_metrics(metrics.clone());
     let service = AgentService::new(
         Arc::clone(clock),
         Arc::clone(store),
@@ -958,6 +979,7 @@ struct EnrollmentPorts {
     shutdown: CancellationToken,
     bus: EventBus,
     reconcile: ReconcileTimings,
+    metrics: ServerMetrics,
 }
 
 /// The session-token service over `ports`' Microsoft and vault, stopping
@@ -984,7 +1006,8 @@ fn session_grants(
         Arc::new(ports.registry.clone()),
         Arc::new(tokens.clone()),
         config.accounts.allow_offline,
-    );
+    )
+    .with_metrics(ports.metrics.clone());
     (tokens, Arc::new(grants))
 }
 
@@ -1021,7 +1044,8 @@ fn control_plane_services(
             Arc::clone(&ports.store),
             Arc::new(X509AgentNames),
         )
-        .with_live_hints(Arc::new(ports.bus.clone())),
+        .with_live_hints(Arc::new(ports.bus.clone()))
+        .with_metrics(ports.metrics.clone()),
     );
     let sessions = Sessions::new(CancellationToken::new());
     let (session_tokens, grants) = session_grants(config, &ports);
@@ -1032,12 +1056,14 @@ fn control_plane_services(
         IngestTimings::default(),
         IngestBounds::default(),
     );
+    let ingest_writer = ingest_writer.with_metrics(ports.metrics.clone());
     let control = control_service(
         ControlPorts {
             connections: Arc::clone(&connections),
             grants,
             ingest: Arc::new(ingest),
             clock: Arc::clone(&ports.clock),
+            metrics: ports.metrics.clone(),
         },
         ports.limits.clone(),
         ports.ids.clone(),
@@ -1984,6 +2010,7 @@ mod tests {
             clock: &clock,
             random: &random,
             store: &store,
+            metrics: &crate::metrics::ServerMetrics::off(),
         };
 
         let services = fleet_services(&config, shared, &hints, &events, reconcile);

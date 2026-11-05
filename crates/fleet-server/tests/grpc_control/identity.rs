@@ -52,6 +52,12 @@ async fn a_call_without_a_client_certificate_is_refused_before_anything_is_read(
         status.metadata().get(REQUEST_ID).is_none(),
         "the gate checks the certificate before it mints an ID: {status:?}"
     );
+    assert_eq!(
+        port.metric("afkfleet_agent_connects_refused_total{reason=\"no_certificate\"}")
+            .as_deref(),
+        Some("1"),
+        "P12.4: counted through the port's wiring"
+    );
     port.stop().await;
 }
 

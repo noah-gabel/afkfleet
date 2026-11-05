@@ -33,7 +33,10 @@
 //!   wait bounded, and a batch that finds the database busy is dropped with
 //!   one `warn`, so the stop stays within the database's close.
 //!
-//! It logs counts and IDs, never a chat message's text or sender.
+//! It logs counts and IDs, never a chat message's text or sender. The
+//! writer counts the rows its batches stored, skipped and lost in the
+//! server's metrics ([`IngestWriter::with_metrics`]; P12.4); the front's
+//! refusals count through the registry, which hears of each.
 
 use core::fmt;
 use core::num::NonZeroUsize;
@@ -46,6 +49,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 
 use crate::app::events::{EventBus, LiveEvent, LiveEventKind};
+use crate::metrics::ServerMetrics;
 use crate::ports::chat::{ChatEntry, ChatMessageId, ChatRecord, ListedChat, NewChatMessage};
 use crate::ports::ingest::{Ingest, NotTaken, Report, Reported, StickyMarks, StreamShare};
 use crate::ports::store::{Store, StoreError, UnauditedWrite};
@@ -143,6 +147,7 @@ pub fn ingest(
             bus,
             timings,
             lost: None,
+            metrics: ServerMetrics::off(),
         },
     )
 }
@@ -311,6 +316,8 @@ pub struct IngestWriter {
     /// How many rows were lost since batches started failing; none while
     /// they don't.
     lost: Option<u64>,
+    /// Where the rows stored, skipped and lost count (P12.4).
+    metrics: ServerMetrics,
 }
 
 impl fmt::Debug for IngestWriter {
@@ -323,6 +330,14 @@ impl fmt::Debug for IngestWriter {
 }
 
 impl IngestWriter {
+    /// The same writer, counting in `metrics` the chat rows each batch
+    /// stored and skipped, and those a failed batch or the stop lost
+    /// (P12.4; ADR-0019, S70).
+    #[must_use]
+    pub fn with_metrics(self, metrics: ServerMetrics) -> Self {
+        Self { metrics, ..self }
+    }
+
     /// Writes what waits: one batch, or nothing when nothing waits.
     pub async fn tick(&mut self) -> Tick {
         let mut batch = core::mem::take(&mut self.kept);
@@ -348,6 +363,7 @@ impl IngestWriter {
                     );
                 }
                 let skipped = ids.iter().filter(|id| id.is_none()).count();
+                self.metrics.ingest_written(rows - skipped, skipped);
                 for (row, id) in batch.into_iter().zip(ids) {
                     let Some(id) = id else { continue };
                     self.bus.publish(LiveEvent {
@@ -393,6 +409,7 @@ impl IngestWriter {
                     debug!(error = %failure, rows, "the ingest couldn't write a batch; its chat messages are lost");
                 }
                 self.lost = Some(self.lost.unwrap_or(0).saturating_add(lost));
+                self.metrics.ingest_lost(rows);
                 Tick::Dropped { rows }
             }
         }
@@ -480,6 +497,7 @@ impl IngestWriter {
                 Tick::Written { .. } | Tick::Dropped { .. } => {}
                 Tick::Kept { rows } => {
                     let left = rows + self.queued.len();
+                    self.metrics.ingest_lost(left);
                     self.kept.clear();
                     while self.queued.try_recv().is_ok() {}
                     if left == 0 {

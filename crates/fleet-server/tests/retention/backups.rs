@@ -9,12 +9,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use fleet_core::auth::SessionPolicy;
-use fleet_core::backup::BackupPolicy;
+use fleet_core::backup::{BackupName, BackupPolicy};
 use fleet_server::app::backup::BackupService;
 use fleet_server::app::retention::{RetentionService, RetentionTimings};
 use fleet_server::cli::retention::{BackupStep, Retention};
 use fleet_server::config::BackupConfig;
 use fleet_server::infra::sqlite::DatabaseOptions;
+use fleet_server::metrics::Metrics;
 use fleet_testkit::system::ManualClock;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tempfile::TempDir;
@@ -188,6 +189,93 @@ async fn the_stop_ends_a_backup_and_keeps_nothing_of_it(
 
     assert_eq!(step, BackupStep::Stopped);
     assert_eq!(names(dir.path()), [] as [&str; 0]);
+}
+
+/// The value of `series` in `metrics`' render, if it's there.
+fn metric(metrics: &Metrics, series: &str) -> Option<String> {
+    metrics.render().text().lines().find_map(|line| {
+        line.strip_prefix(series)?
+            .strip_prefix(' ')
+            .map(str::to_owned)
+    })
+}
+
+/// P12.4 (ADR-0022, R4): a failed backup counts; one taken sets the time
+/// of the newest, its size and how long it took.
+#[sqlx::test(migrations = false)]
+async fn a_failure_counts_and_a_taken_backup_sets_its_time_size_and_duration(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let (store, file, dir, clock) = fleet(options).await;
+    let backups = dir.path().join("backups");
+    let metrics = Metrics::prometheus();
+    let task =
+        task(&store, &file, Some(&backups), &clock).with_metrics(metrics.recording().clone());
+    let stop = CancellationToken::new();
+
+    let failed = task.back_up_when_due(&stop).await;
+    std::fs::create_dir(&backups).unwrap();
+    clock.advance(Duration::from_hours(1));
+    let taken = task.back_up_when_due(&stop).await;
+
+    assert_eq!([failed, taken], [BackupStep::Failed, BackupStep::Taken]);
+    assert_eq!(
+        metric(&metrics, "afkfleet_backup_failures_total").as_deref(),
+        Some("1")
+    );
+    assert_eq!(
+        metric(&metrics, "afkfleet_backup_last_success_timestamp_seconds"),
+        Some(
+            (now() + chrono::TimeDelta::hours(1))
+                .timestamp()
+                .to_string()
+        )
+    );
+    let size: u64 = metric(&metrics, "afkfleet_backup_last_size_bytes")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let written = names(&backups);
+    assert_eq!(
+        size,
+        std::fs::metadata(backups.join(&written[0])).unwrap().len()
+    );
+    assert!(metric(&metrics, "afkfleet_backup_last_duration_seconds").is_some());
+    assert_eq!(
+        metric(&metrics, "afkfleet_backup_prune_failures_total").as_deref(),
+        Some("0")
+    );
+}
+
+/// The newest backup's time is read from the folder's names at the task's
+/// start, before its first run (R4): the `backup` command's counts, and one
+/// dated past the clock's slack doesn't.
+#[sqlx::test(migrations = false)]
+async fn the_newest_backup_is_read_from_the_folder_at_the_start(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let (store, file, dir, clock) = fleet(options).await;
+    let earlier = BackupName::at(now() - chrono::TimeDelta::hours(3)).unwrap();
+    let ahead = BackupName::at(now() + chrono::TimeDelta::hours(5)).unwrap();
+    for name in [earlier, ahead] {
+        std::fs::write(dir.path().join(name.file_name()), "").unwrap();
+    }
+    let metrics = Metrics::prometheus();
+    let stop = CancellationToken::new();
+    stop.cancel();
+
+    // Stopped already: only the start's read runs.
+    task(&store, &file, Some(dir.path()), &clock)
+        .with_metrics(metrics.recording().clone())
+        .run(stop)
+        .await;
+
+    assert_eq!(
+        metric(&metrics, "afkfleet_backup_last_success_timestamp_seconds"),
+        Some(earlier.stamp().timestamp().to_string())
+    );
 }
 
 /// The task itself takes the backup in its loop, after its run, and its

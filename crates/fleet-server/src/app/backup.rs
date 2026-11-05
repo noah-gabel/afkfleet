@@ -55,6 +55,18 @@ pub struct Taken {
     /// Why pruning failed, when it did: the new backup stays, and the next
     /// backup prunes again.
     pub prune_failed: Option<BackupError>,
+    /// How long writing it took.
+    pub took: Duration,
+}
+
+/// What [`BackupService::due`] read from the backups' folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Due {
+    /// Whether a backup is due now.
+    pub now: bool,
+    /// The newest finished backup that counts, if there is one: none dated
+    /// past the clock's slack.
+    pub newest: Option<BackupName>,
 }
 
 /// The server's backups; see the module docs.
@@ -147,6 +159,16 @@ impl BackupService {
     /// # Errors
     /// [`BackupError::Io`] when the folder can't be read.
     pub async fn is_due(&self) -> Result<bool, BackupError> {
+        self.due().await.map(|due| due.now)
+    }
+
+    /// Whether a backup is due now, and the newest finished backup that
+    /// counts toward it (the `backup` command's included): one listing of
+    /// the folder for both. See the module docs.
+    ///
+    /// # Errors
+    /// [`BackupError::Io`] when the folder can't be read.
+    pub async fn due(&self) -> Result<Due, BackupError> {
         let now = self.clock.now();
         let listing = backup::list(&self.config.dir).await?;
         let latest = now.checked_add_signed(FUTURE_SLACK).unwrap_or(now);
@@ -158,7 +180,15 @@ impl BackupService {
                 "a backup is dated ahead of the clock; it doesn't count toward the next one"
             );
         }
-        Ok(self.config.policy.is_due(&listing.finished, now))
+        Ok(Due {
+            now: self.config.policy.is_due(&listing.finished, now),
+            newest: listing
+                .finished
+                .iter()
+                .copied()
+                .filter(|name| name.stamp() <= latest)
+                .max(),
+        })
     }
 
     /// Takes one backup now and prunes after it; see the module docs.
@@ -180,7 +210,8 @@ impl BackupService {
             &self.options,
         )
         .await?;
-        let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let took = started.elapsed();
+        let duration_ms = u64::try_from(took.as_millis()).unwrap_or(u64::MAX);
         let (pruned, prune_failed) = match self.prune(name, now).await {
             Ok(pruned) => (pruned, None),
             Err(error) => (0, Some(error)),
@@ -202,6 +233,7 @@ impl BackupService {
             written,
             pruned,
             prune_failed,
+            took,
         })
     }
 

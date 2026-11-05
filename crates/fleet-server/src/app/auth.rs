@@ -15,7 +15,8 @@
 //!   `fleet_core::auth::refresh_decision`:
 //!   - a rotation commits without an entry ([`UnauditedWrite::SessionRotate`]);
 //!   - a reused token revokes its whole session and records
-//!     `security.refresh_token_reuse` in the same commit, and one `warn`;
+//!     `security.refresh_token_reuse` in the same commit, one `warn`, and
+//!     one more in the reuse counter of the server's metrics (P12.4);
 //!   - anything else is refused and changes nothing.
 //!
 //!   Every refusal is the same [`RefreshError::Rejected`], so the API can't
@@ -63,6 +64,7 @@ use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
 use super::audit::AuditService;
+use crate::metrics::ServerMetrics;
 use crate::ports::page::{Page, Paged};
 use crate::ports::sessions::{LiveSince, NewSession, RefreshLookup, Rotation, Session};
 use crate::ports::store::{Store, StoreError, UnauditedWrite};
@@ -270,6 +272,7 @@ pub struct TokenService {
     tokens: Arc<dyn Tokens>,
     policy: SessionPolicy,
     audit: AuditService,
+    metrics: ServerMetrics,
 }
 
 impl TokenService {
@@ -291,7 +294,15 @@ impl TokenService {
             tokens,
             policy,
             audit,
+            metrics: ServerMetrics::off(),
         }
+    }
+
+    /// The same service, each reused refresh token also counted in
+    /// `metrics` once its commit is in (P12.4; ADR-0016, ADR-0022).
+    #[must_use]
+    pub fn with_metrics(self, metrics: ServerMetrics) -> Self {
+        Self { metrics, ..self }
     }
 
     /// A new session for `user_id`: both tokens, their hashes, the session's
@@ -416,6 +427,7 @@ impl TokenService {
                     .target(AuditTarget::User(session.user_id))
                     .metadata(metadata);
                 tx.commit(entry).await?;
+                self.metrics.refresh_token_reused();
                 warn!(
                     user_id = %session.user_id,
                     session_id = %session.id,
