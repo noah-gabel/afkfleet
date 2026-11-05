@@ -27,6 +27,9 @@ ignore = [
     { id = "RUSTSEC-2023-0071", reason = "rsa via azalea: we never decrypt with RSA; chat signing uses the blinded sign_with_rng, the handshake only encrypts with the server's public key. No fix exists; re-check at every azalea bump (ADR-0012)" },
     { id = "RUSTSEC-2026-0118", reason = "hickory-proto 0.25 via azalea: the NSEC3 code needs hickory's DNSSEC features, which aren't compiled. Remove at the next azalea bump (ADR-0012)" },
     { id = "RUSTSEC-2026-0119", reason = "hickory-proto 0.25 via azalea: only encoding is quadratic, and we encode only our own one-question queries for a validated ServerAddress. Remove at the next azalea bump (ADR-0012)" },
+    # testcontainers' advisory, accepted by the user (ADR-0021): it reaches only the
+    # container tests, never a shipped binary.
+    { id = "RUSTSEC-2026-0440", reason = "astral-tokio-tar via testcontainers 0.28.0, a dev-dependency of fleet-mc's and fleet-integration's container tests, never built into a shipped binary: unmaintained, not vulnerable, no fix. Remove once a testcontainers release drops it (ADR-0021)" },
 ]
 
 [licenses]
