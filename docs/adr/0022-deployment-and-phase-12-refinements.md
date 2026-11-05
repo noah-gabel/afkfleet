@@ -95,6 +95,7 @@ Features come first, then what packages them, then the release. There is one bra
   - any change the session didn't make stops the work and goes to the user.
 
   CLAUDE.md's step 10 and `.claude/agents/Explore.md` carry it.
+- **Approved at group B's plan review** *(2026-11-05)*: S9–S12, R5–R8, U9, and PR #95's follow-ups as the group's first commits.
 - **Approved at the plan review:** the four groups, S1–S8, and group A's texts as drafted. The waiting screen's buttons are the user's own "Server settings" and "Log out on this PC". A logout the server didn't confirm shows the existing shared warning ("Logged out here. Server not told ({reason}): the session may stay valid until it expires."), and one it confirmed shows nothing. README's line on the app's start is corrected to match.
 
 ### Decided by the review agents *(approved by the user at the plan review)*
@@ -194,6 +195,57 @@ One read-only agent per question, each given the options neutrally.
     - a `restore` command: destructive, and it can't prove the server is stopped;
     - a check command: its one new check was integrity, which the backup's own check covers now.
 
+- **S9 (security). The endpoint's form** *(group B)*.
+  - **The server:** a second axum listener of `serve`'s own, serving only `GET /metrics` through the route registry:
+    - `public_route(RateClass::Standard)` on a `Routes` of its own, behind the API's middleware (the timeout, the per-IP limit, request IDs, the error envelope);
+    - never on the API's router, and never in its OpenAPI document;
+    - it renders the `PrometheusHandle` of the exporter's recorder, with no exporter features;
+    - `serve` runs it beside the API's port, so it stops gracefully within ADR-0015's deadline.
+  - **The agent:** a minimal HTTP/1.1 responder of its own over tokio's `TcpListener`, on the run's `JoinSet` with a child token. ADR-0015's health check is the precedent for minimal HTTP code of our own.
+    - **Limits:** 4 connections at once (one more is closed at once), 5 s per connection, a request head of at most 2 KiB, and a 1 s pause after an accept error that isn't one connection's.
+    - **Answers:** only `GET /metrics` gets 200 (`text/plain; version=0.0.4`). Another path is 404, another method 405, a malformed or oversized request 400, each with `Connection: close`.
+    - Nothing from a request is logged.
+  - **Rules 1 and 3** hold on the server as they do for `/health/*`: the metrics router's allowlist test, `/metrics` answering 404 on the API's port, and tests for 404, 405 and 429. With no input and no credentials, 401, 403 and 422 don't apply.
+  - *Rejected:*
+    - **The exporter's `http-listener`:** it spawns unowned tasks (its upkeep, every connection), has no header or idle timeout and no connection cap, can't stop gracefully, retries a failed accept in a hot loop, and answers on every path. It would need a new feature and an exception to the async rules.
+    - **axum in the agent:** it adds axum, axum-core and matchit.
+    - **The agent's metrics over gRPC:** standalone agents have no server.
+- **S10 (security). `[metrics] bind`, off unless set.**
+  - **The key:** both binaries gain an optional `[metrics]` section with one key, `bind`, and refuse unknown keys. The overrides are `AFKFLEET_SERVER__METRICS__BIND` and `AFKFLEET_AGENT__METRICS__BIND`, and the validated config holds `metrics: Option<SocketAddr>`.
+  - **Binding:** `main.rs` binds the listener and hands it to the run, as for `[http]` and `[grpc]`.
+  - **One `info` line at startup:** "the metrics endpoint is listening", with the address, or "metrics are off: [metrics] bind isn't set". The precedent is "the control plane is off"; it isn't a `warn`, since nothing is lost.
+  - **Validation:** a `SocketAddr` whose port isn't 0. On the server, its port also differs from `[http] bind`'s and `[grpc] bind`'s resolved port, whatever the hosts (`SamePortAs`), which catches `0.0.0.0` against `127.0.0.1` and dual-stack `[::]`. Any IP address is allowed, since containers need `0.0.0.0`.
+  - **Constants, not keys:** the path, the cap, the timeout and the head's size. No allowlist and no token.
+  - **The dev configs** gain a commented `# [metrics]` block: `127.0.0.1:9480` for the server, `9481` for agents, clear of 9090, 9091, 9093 and 9100. Compose, the Dockerfile and `deploy/dod/` are unchanged.
+  - *Rejected:*
+    - **On by default at loopback:** a container's loopback can't be reached from outside, a shared host's port may be taken, and the binaries' parallel tests would race for it.
+    - **The section's presence turning it on:** two ways to say one thing.
+    - **`[http] metrics_bind`:** the agent has no `[http]`.
+    - **Refusing `0.0.0.0`, or warning on it.**
+    - **An allowlist or a token:** either can be added later without breaking a config.
+- **S11 (security). Totals only, fixed labels, counted where each event happens.**
+  - **No per-agent, per-bot or per-user label.** The ingest note's "per agent" stays in housekeeping's minute line, which names the agent, and each agent's own endpoint is its own scrape target.
+    - *Rejected: an `agent_id` label.* It's bounded and not personal, but a disabled agent's series would stay until a restart, and every re-enrollment adds a set. ADR-0013's "no `bot_id`" is the precedent.
+    - *Rejected: an agent-name label:* text an operator typed.
+  - **Label values:** each a `&'static str` from an exhaustive match, through typed recording methods, never a `&str` argument. The sources are `ConnectRefusal::as_str`, `Unplaced::as_str` (through `reason()`), `Phase::name`, and new `Limit` and `NotTaken` names.
+  - **Every series is registered at 0** at startup, and a test pins the label keys and every value to `^[a-z][a-z0-9_]*$`.
+  - **Counting points:**
+    - rate limits at the refusal, not from the minute's summary;
+    - conflicts at every detection, before the once-an-hour filter;
+    - connect refusals before the audit cap;
+    - the fresh-session limit only as `limit="fresh_sessions"` (R43), and `undelivered` isn't a denial;
+    - a successful retention run is one with no failed phase that wasn't stopped.
+  - **Added beyond the notes:** the lockout's refusals, and S28's dropped reports.
+  - **Left out, addable later without breaking anything:** failures before `Welcome`, sticky-state writes, the token service's error kinds.
+- **S12 (security). The server injects its metrics.** `ServerMetrics` is cheap to clone, holds one handle per series, has typed methods with exhaustive matches, and registers every series at 0 in the recorder it's built over.
+  - `ServerPorts` gains `metrics`, built over its own `PrometheusBuilder::new().build_recorder()`, whose handle the metrics port renders. Nothing is installed globally.
+  - The services `serve` builds take it, and the widely tested ones gain `with_metrics`, like `with_live_hints`, defaulting to a no-op. The `backup` command gets none, so by type it records nothing.
+  - **Why:** each in-process server has its own registry, and a restart starts at 0; counts on any thread reach the test; an unregistered series can't be counted.
+  - **The agent keeps the global facade:** `main.rs` keeps the handle `install_recorder()` returns and hands it, with the bound listener, to the run. Without histograms no upkeep is needed, and `idle_timeout` is never set, since it would drop the series at 0.
+  - *Rejected:*
+    - **The global facade on the server:** counts on worker threads are invisible to a thread-local test recorder, the in-process servers would share one registry, and a missing label shows only at its first event.
+    - **A port trait with a fake:** fleet-testkit can't see fleet-server's traits, and the render would still need Prometheus.
+
 ### The plan's reconciliations of the agents' answers
 - **R1. The temporary file** is `.afkfleet-backup-YYYYMMDDTHHMMSSZ.db.partial`: a dot file, so a copier taking `afkfleet-backup-*.db` never takes it. An attempt removes only its own temporary file. Others go through pruning once their stamp is 24 h old, so `serve` never deletes a temporary file the CLI is writing at that moment. (S3 had proposed removing leftovers before each attempt.)
 - **R2. A same-second clash** is refused: the hard link fails on an existing name, and nothing is overwritten.
@@ -205,6 +257,10 @@ One read-only agent per question, each given the options neutrally.
     - Take a backup with the old server before an upgrade, since a new image refuses pending migrations.
     - The key rotation's "copy the database" becomes `backup`.
   - **Group C:** the image creates the backups' folder owned by 65532. The SFTP account reads files that are 0600 and owned by 65532.
+- **R5. Linked files** *(group B's first commit)*: a key file or the database that is itself a link is checked in both places, where it's named and where it really is, so a link inside `backup_dir` that points out of it stays refused. The review asked for the named place only when the file is missing; keeping both is strictly tighter.
+- **R6. The backups' last success** is read from the newest finished name at `serve`'s start and at each check of whether one is due, which lists the folder anyway, so a backup the CLI took shows within a minute. R4 asked only for the read at start.
+- **R7. The server's metrics port** is `axum::serve`, like the API's, with no timeout for a request head that never ends: axum 0.8 sets no timer on hyper's builder. The threat model's accepted risks record it for this port; the port is internal, never published or proxied (U1, U5).
+- **R8. Gauges** carry durations (seconds), sizes (bytes) and times (Unix seconds), each converted without a lossy `as` cast.
 
 ### As built (group A)
 On `p12/p12.3-start-screen-and-backups`, as planned (S1–S8, R1–R4).
@@ -240,13 +296,41 @@ On `p12/p12.3-start-screen-and-backups`, as planned (S1–S8, R1–R4).
 
 **Records:** README covers the start's line, the `backup` command, the keys and what backups hold. The threat model gains a desktop row, a B6 row, two accepted risks, and its "What a delete leaves" corrected. `.claude/rules/commands.md` gains `dev-backup`. `server.md`'s app list gains `backup`. P12.3 is ticked.
 
+### As built (group B)
+On `p12/p12.4-metrics`, as planned (S9–S12, R5–R8), with U9 as its first commit.
+
+**PR #95's follow-ups** (R5): a stop ends the backup's sync and check too, the check running on one `immutable` connection under the copy's progress handler; linked key files and a linked database are checked in both places; pruning removes a leftover `.afkfleet-backup-<stamp>.db.partial-journal` once a day old and never a backup newer than the one just written; the runbook names the hard links `backup_dir` needs; the `backup` command's tests cover pending migrations and a live `serve` beside it.
+- **Two existing tests changed on purpose:** they pinned the old prune rule, and now expect the newer backup kept (fleet-core's `pruning_never_takes_the_backup_just_written_or_a_newer_one`, the service's `a_backup_dated_ahead_of_the_clock_doesnt_count`).
+- **The two link tests are Unix-only,** like group A's folder-link test: this PC can't make links, so CI's Linux jobs run them.
+
+**The config** (S10): both validators ran as stubs answering "off" first; 13 server and 8 agent config tests failed on their assertions.
+
+**The server** (S9, S11, S12):
+- `crate::metrics` holds every series: `ServerMetrics` over each server's own recorder, the label enums (`Limit`, `LockoutRefusal`, `ConnectRefused`, `GrantKind`, `SessionDenial`, `NotTaken`) and `RetentionRun`. The startup render is a sorted snapshot, since the exporter writes in hash order: 83 series at 0 with their help texts.
+- The registry's `DenySession`, the plan's `registry_filter`, is counted as `reason="not_assigned"`: what it denies is a bot not assigned to the asking agent.
+- Each counting point has a test through its own harness, built with a recorder of the test's own; the security counters also through `serve`'s real wiring (`accounts::metrics_wiring`, `serve::control_plane`).
+
+**The agent** (S9, S12):
+- `metrics_endpoint` is the responder, generic over an `Incoming` source and a `Render`. Its unit tests run over in-memory pipes on paused time, so the cap, the timeout and the pause are measured exactly. The real sockets are covered through the run: standalone (`run::endpoint`), managed (`control::endpoint`) and the binary (`cli`'s `metrics` module).
+- The outbox lives in the managed watch's `ManagedTasks`, so a managed run's samples record its counts by type, and a standalone agent's three counters stay at 0.
+- tokio's `net` and `io-util` join fleet-agent's own manifest; azalea-protocol builds both already, so Cargo.lock gains no crate.
+
+**Red first.** New code ran against stubs where it was written test-first (the config, fleet-core's rules, the backup module's unit tests). Everything written before its tests went red through temporary mutations, each restored by checksum, and each caught:
+- the backup command: migrating instead of refusing; refusing while a `-wal` exists;
+- the server's module: no registration; the global recorder; a stopped run counted a success; a duplicate label;
+- the server's endpoint: no render extension; the route on the API too; the scrape logged at `info`; `main.rs` ignoring `[metrics]`;
+- the server's counts: a limit's refusal not counted; a reuse not counted; only the recorded conflicts counted; refusals counted only under the audit cap; an online grant not counted; stored rows not counted; a retention run not counted; `serve` forgetting the rate limits' metrics; `serve` forgetting the registry's;
+- the agent: any path answered with the metrics; no connection cap; no per-connection timeout (it first survived, since the silent-connection test read without a bound; the test now bounds its read); an endless head read past the limit; no pause after an accept error; the stop leaving open connections; the watch not recording the outbox; the outbox's series not registered; a standalone run not serving; a managed run not serving; `main.rs` ignoring `[metrics]`; the run's end neither stopping nor shutting down the endpoint (forgetting its `JoinSet` alone, the first try, is still ended by the run's token, as designed).
+
+**Records:** README gains `[metrics] bind` for both binaries and a Metrics section with every key metric and its labels. The runbook gains "Metrics": turning it on, never publishing the port, reading it with `curl` from the host, and what to watch. The threat model gains B8, a threats row whose tests its citations check, and an accepted risk (R7). `.claude/rules/server.md`'s layout gains the metrics module and router. P12.4 is ticked; P12.2, P12.6, P12.7, P13.1, P13.2 and P13.4 gain notes.
+
 ### Notes for later groups
-- **B (P12.4):** the endpoint (the exporter's `http-listener` feature or a route of the server's own) and its config keys are B's questions, with the metrics every P12.4 note lists and R4's backup metrics.
 - **C (P12.1, P12.2, P12.7):**
   - **Its questions:** U50 for production; the image scanner (a dependency); Caddy's image; resource limits from the measured numbers (P12.2's notes); the SFTP account's host side (U3); U8's setup script's form.
   - **U4:** its own project, network and named volumes, no host networking.
   - **U5:** both paths, each in the smoke test.
   - **The backups:** the backups' folder on a volume, `backup_dir` set in the production config, and the smoke test taking a backup across a restart.
+  - **The metrics ports** (S10, from group B): production binds `0.0.0.0:9480` for the server and `0.0.0.0:9481` for agents, on the project's network only, with no `ports:` and no `EXPOSE`. Caddy and the host's proxy route only 8080. The smoke test scrapes both from inside and checks that `/metrics` through either proxy path reaches neither.
   - Group C may be split at its plan review.
 - **D (P12.5, P12.6):**
   - **Publishing:** the release workflow and where images are published, whose CI permissions are the user's question.
@@ -257,20 +341,25 @@ On `p12/p12.3-start-screen-and-backups`, as planned (S1–S8, R1–R4).
     - generic dynamic-DNS and firewall steps (U1, U2);
     - the uninstall (U4);
     - the restore steps (S8);
+    - the metrics in compose form, with group B's alerts;
     - every P12.6 note.
   - **The first release tag** is the user's.
+- **Phase 13** (from group B): the metrics router in the authorization matrix (P13.1); a fuzz target for the agent's responder (P13.2); a scrape during the load test (P13.4).
 
 ## Consequences
 - **Easier:**
   - A server that moved or is gone no longer traps the app at its start.
   - The database can be copied off the host as plain SQLite files, bounded in number and in how long they keep deleted chat, without stopping the server.
   - A WAL that grew no longer keeps its size or its old pages until a restart.
+  - Operators can alert on a refresh-token reuse, failing backups or a retention that died, without reading logs (P12.4).
 - **Harder:**
   - The backup file's name is a contract: the copier, the runbook and the pruning depend on it.
   - A long backup delays the retention's next pass.
   - Restoring stays a manual procedure, with its security steps in the runbook.
+  - Every new count is a typed method and a series in the startup snapshot, and its label values become a contract for alerts.
+  - Two small HTTP surfaces more, each internal: the server's metrics router and the agent's own responder.
 
 ## Alternatives considered
 - **The stack (P12.1, P12.2, P12.7) as group A:** it would have put the infra questions and U50 into this planning, before the features it packages exist.
 - **Backups and metrics in one group:** about 6,000 lines, over the size target.
-- The rejected options of S1–S8, each listed with its decision above.
+- The rejected options of S1–S12, each listed with its decision above.
