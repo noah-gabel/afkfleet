@@ -40,6 +40,7 @@ use crate::managed::credentials::ManagedCredentials;
 use crate::managed::link::backoff::{self, Backoff};
 use crate::managed::link::{self, HelloParts, Link, LinkParts};
 use crate::managed::outbound::Outbox;
+use crate::metrics_endpoint;
 use crate::signals::ShutdownSignals;
 
 /// Runs a managed agent for `plane`; see the [module docs](self).
@@ -62,6 +63,7 @@ where
         anchor,
         seed,
         managed,
+        metrics,
     } = parts;
     let Built {
         fleet,
@@ -79,6 +81,9 @@ where
         }
     };
     let cancel = CancellationToken::new();
+    // Once the fleet registered its series; it serves until the run ends.
+    let mut endpoint = JoinSet::new();
+    metrics_endpoint::start(metrics, &mut endpoint, cancel.child_token());
     let mut logger = JoinSet::new();
     logger
         .spawn(events::log_fleet_events(fleet.subscribe(), cancel.child_token()).in_current_span());
@@ -88,6 +93,7 @@ where
     let mut tasks = ManagedTasks {
         conductor: JoinSet::new(),
         link: JoinSet::new(),
+        outbox,
     };
     tasks
         .conductor
@@ -125,7 +131,7 @@ where
     tasks.link.shutdown().await;
     // The aborted link may leave its stream open, and hyper would keep
     // sending its heartbeats while the bots stop: the server sees it end.
-    if let Some(generation) = outbox.close() {
+    if let Some(generation) = tasks.outbox.close() {
         credentials.link_ended(generation);
     }
     tasks.conductor.shutdown().await;
@@ -141,6 +147,7 @@ where
     .await;
     cancel.cancel();
     logger.shutdown().await;
+    endpoint.shutdown().await;
     outcome
 }
 

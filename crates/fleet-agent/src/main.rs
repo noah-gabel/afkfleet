@@ -7,7 +7,8 @@
 //!    text, and the agent exits with 1.
 //! 3. It sets up logging, installs the aws-lc-rs TLS provider, loads and
 //!    checks a managed agent's identity (P10.7), installs the Prometheus
-//!    recorder (before the fleet registers its metrics), and runs
+//!    recorder (before the fleet registers its metrics), binds `[metrics]
+//!    bind` when it's set (P12.4), and runs
 //!    the fleet on a multi-threaded tokio runtime, with fleet-mc's
 //!    `AzaleaConnector` as the connector and the diagnostics. SIGTERM and
 //!    SIGINT (Ctrl+C and Ctrl+Break on Windows) shut it down gracefully.
@@ -38,12 +39,14 @@ use fleet_agent::healthcheck;
 use fleet_agent::heartbeat::FileHeartbeat;
 use fleet_agent::managed::identity::ManagedIdentity;
 use fleet_agent::managed::link::LinkTimings;
+use fleet_agent::metrics_endpoint::Endpoint;
 use fleet_agent::run::{Exit, Managed, Outcome, RUNTIME_SHUTDOWN, RunParts, agent_span, run};
 use fleet_agent::signals::OsSignals;
 use fleet_agent::telemetry::{self, LogOutput};
 use fleet_mc::AzaleaConnector;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use rustls::pki_types::UnixTime;
+use tokio::net::TcpListener;
 use tracing::{Span, error};
 
 fn main() -> ExitCode {
@@ -165,14 +168,18 @@ fn start(config: AgentConfig, span: &Span) -> Outcome {
         AgentMode::Standalone(_) => None,
     };
     // The fleet registers its metrics in the recorder installed when it's
-    // built, so this comes first. The handle isn't kept: nothing serves it
-    // until P12.4, and without histograms the recorder needs no upkeep.
-    if let Err(error) = PrometheusBuilder::new().install_recorder() {
-        return cant_start(
-            span,
-            &format_args!("the metrics recorder can't be installed: {error}"),
-        );
-    }
+    // built, so this comes first. Its handle renders `GET /metrics` (P12.4).
+    // Without histograms the recorder needs no upkeep, and no idle timeout
+    // is set: it would drop the series still at 0.
+    let render = match PrometheusBuilder::new().install_recorder() {
+        Ok(render) => render,
+        Err(error) => {
+            return cant_start(
+                span,
+                &format_args!("the metrics recorder can't be installed: {error}"),
+            );
+        }
+    };
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -215,6 +222,16 @@ fn start(config: AgentConfig, span: &Span) -> Outcome {
                 );
             }
         };
+        // Binding a local address doesn't wait on anything remote.
+        let metrics = match config.metrics {
+            Some(bind) => match TcpListener::bind(bind).await {
+                Ok(listener) => Some(Endpoint { listener, render }),
+                Err(error) => {
+                    return cant_start(span, &format_args!("can't listen on {bind}: {error}"));
+                }
+            },
+            None => None,
+        };
         run(RunParts {
             config,
             connector: Arc::new(connector.clone()),
@@ -224,6 +241,7 @@ fn start(config: AgentConfig, span: &Span) -> Outcome {
             anchor: chrono::Utc::now(),
             seed,
             managed,
+            metrics,
         })
         .await
     });

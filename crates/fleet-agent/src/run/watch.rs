@@ -15,15 +15,18 @@ use tokio::time::MissedTickBehavior;
 use crate::diagnostics::{self, HostDiagnostics, SAMPLE_PERIOD};
 use crate::managed::link::LinkEnd;
 use crate::managed::link::ends::Refusal;
+use crate::managed::outbound::Outbox;
 use crate::signals::{ShutdownSignals, Signal};
 
-/// A managed agent's own tasks, beside the supervisor.
+/// A managed agent's own tasks, beside the supervisor, and its outbox.
 #[derive(Debug)]
 pub(crate) struct ManagedTasks {
     /// The conductor's.
     pub(crate) conductor: JoinSet<()>,
     /// The link's.
     pub(crate) link: JoinSet<LinkEnd>,
+    /// The outbox they share, whose counts each sample records (P12.4).
+    pub(crate) outbox: Outbox,
 }
 
 /// A managed agent's task.
@@ -80,7 +83,8 @@ pub(crate) enum Reason {
 /// Watches the fleet: its supervisor's task in `supervisor`, a managed
 /// agent's `managed` tasks, the stop signals, and the diagnostics, sampled
 /// at once and then every
-/// [`SAMPLE_PERIOD`](crate::diagnostics::SAMPLE_PERIOD).
+/// [`SAMPLE_PERIOD`](crate::diagnostics::SAMPLE_PERIOD), a managed agent's
+/// outbox counts with them (P12.4).
 pub(crate) async fn watch<D: HostDiagnostics, S: ShutdownSignals>(
     supervisor: &mut JoinSet<()>,
     mut managed: Option<&mut ManagedTasks>,
@@ -121,6 +125,9 @@ pub(crate) async fn watch<D: HostDiagnostics, S: ShutdownSignals>(
             _ = samples.tick() => {
                 let sample = diagnostics.sample();
                 diagnostics::record(&sample);
+                if let Some(tasks) = managed.as_deref() {
+                    diagnostics::record_outbox(&tasks.outbox.counts());
+                }
                 if sample.abandoned_threads >= limit.get() {
                     return Reason::AbandonedLimit {
                         abandoned: sample.abandoned_threads,
@@ -149,6 +156,10 @@ mod tests {
     use core::time::Duration;
     use std::sync::Mutex;
 
+    use chrono::DateTime;
+    use fleet_core::chat::{IncomingChat, PlayerChatKind};
+    use fleet_core::id::BotId;
+    use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
     use rstest::rstest;
 
     use super::*;
@@ -296,6 +307,7 @@ mod tests {
         ManagedTasks {
             conductor,
             link: tasks,
+            outbox: Outbox::new(NonZeroUsize::MIN, NonZeroUsize::MIN),
         }
     }
 
@@ -386,5 +398,65 @@ mod tests {
             [Task::Conductor.as_str(), Task::Link.as_str()],
             ["conductor", "link"]
         );
+    }
+
+    // --- A managed agent's outbox in the metrics (P12.4) ---
+
+    const DROPPED: &str = "afkfleet_outbox_chat_dropped_total";
+
+    /// The value of `DROPPED` in `handle`'s render.
+    fn dropped(handle: &PrometheusHandle) -> Option<u64> {
+        handle.render().lines().find_map(|line| {
+            line.strip_prefix(DROPPED)
+                .and_then(|rest| rest.strip_prefix(' '))
+                .map(|value| value.parse().unwrap())
+        })
+    }
+
+    /// Queues `count` chat lines for one bot, past its cap.
+    fn chat(outbox: &Outbox, count: usize) {
+        let bot = BotId::new_v7(DateTime::UNIX_EPOCH, [1; 10]).unwrap();
+        for _ in 0..count {
+            let chat = IncomingChat::player(PlayerChatKind::Chat, "Steve", None, "hi");
+            outbox.received(bot, DateTime::UNIX_EPOCH, chat);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_managed_agents_outbox_counts_are_recorded_at_each_sample() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let _recorder = metrics::set_default_local_recorder(&recorder);
+        let mut tasks = managed(core::future::pending());
+        // The same outbox: a clone shares it.
+        let outbox = tasks.outbox.clone();
+        chat(&outbox, 100);
+        let first = outbox.counts().chat_dropped;
+        let mut supervisor = running_supervisor();
+        let (_sender, mut signals) = ChannelSignals::new();
+        let diagnostics = FakeDiagnostics::abandoned(0);
+        let watching = watch(
+            &mut supervisor,
+            Some(&mut tasks),
+            &mut signals,
+            &diagnostics,
+            LIMIT,
+        );
+        tokio::pin!(watching);
+
+        // The first sample is at once.
+        let at_once = tokio::time::timeout(Duration::from_secs(1), &mut watching).await;
+        let after_first = dropped(&handle);
+        chat(&outbox, 10);
+        let before_next = tokio::time::timeout(Duration::from_secs(3), &mut watching).await;
+        let before = dropped(&handle);
+        let at_next = tokio::time::timeout(Duration::from_secs(2), &mut watching).await;
+        let after_next = dropped(&handle);
+
+        assert!(at_once.is_err() && before_next.is_err() && at_next.is_err());
+        assert!(first > 0);
+        assert_eq!(after_first, Some(first));
+        assert_eq!(before, Some(first), "only at the next sample");
+        assert_eq!(after_next, Some(first + 10));
     }
 }

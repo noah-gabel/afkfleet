@@ -13,6 +13,8 @@
 //! - [`telemetry`]: logging, with azalea's caps and a panic hook that logs
 //!   through `tracing`.
 //! - [`diagnostics`]: fleet-mc's numbers, sampled into metrics.
+//! - [`metrics_endpoint`]: `GET /metrics` on `[metrics] bind`, answered by a
+//!   responder of the agent's own (P12.4).
 //! - [`enroll`]: the `enroll` command: the agent's key, its certificate from
 //!   the server's enrollment, and both stored owner-only.
 //! - [`signals`]: the signals that stop the agent.
@@ -35,6 +37,7 @@ pub mod enroll;
 pub mod healthcheck;
 pub mod heartbeat;
 pub mod managed;
+pub mod metrics_endpoint;
 pub mod run;
 pub mod signals;
 pub mod telemetry;

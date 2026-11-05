@@ -195,6 +195,7 @@ impl Agent {
                     seed: self.seed,
                     timings: options.timings,
                 }),
+                metrics: None,
             })
             .in_current_span(),
         );

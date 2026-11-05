@@ -42,6 +42,7 @@ use fleet_core::id::{BotId, ChatRequestId};
 use fleet_proto::control::{ChatFailedReason, Hello, SessionRequest};
 use tracing::{debug, warn};
 
+pub(crate) use self::state::Counts;
 use self::state::{Caps, Chat, LaneRefusal, Notice, Pushed, State};
 pub use self::stream::Outbound;
 use crate::managed::credentials::{LinkGeneration, SessionLink, Unsent};
@@ -197,6 +198,13 @@ impl Outbox {
     #[must_use]
     pub fn overflowed(&self) -> bool {
         self.lock().state.overflowed()
+    }
+
+    /// What it dropped or refused since it was made, for the metrics
+    /// (P12.4): running totals, never chat.
+    #[must_use]
+    pub(crate) fn counts(&self) -> Counts {
+        self.lock().state.counts()
     }
 
     /// Queues a bot's status.
