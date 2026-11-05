@@ -141,6 +141,7 @@ pub(crate) fn server_config(dir: &Path, bind: SocketAddr, dev_mode: bool) -> Ser
         chat: ChatConfig::default(),
         audit: AuditConfig::default(),
         grpc: None,
+        metrics: None,
     }
 }
 

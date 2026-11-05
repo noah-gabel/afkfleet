@@ -1832,6 +1832,7 @@ mod tests {
                 retention: AuditRetention::try_new(120).unwrap(),
             },
             grpc: None,
+            metrics: None,
         };
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new(chrono::DateTime::UNIX_EPOCH));
         let store: Arc<dyn Store> = Arc::new(database.clone());
@@ -1907,6 +1908,7 @@ mod tests {
             },
             audit: AuditConfig::default(),
             grpc: None,
+            metrics: None,
         };
         let clock: Arc<dyn Clock> = Arc::new(ManualClock::new(chrono::DateTime::UNIX_EPOCH));
         let random: Arc<dyn SecureRandom> = Arc::new(SeededRandom::new(7));

@@ -583,6 +583,7 @@ fn config(
             agent_cert_lifetime: TimeDelta::days(60),
             heartbeats,
         }),
+        metrics: None,
     }
 }
 

@@ -75,6 +75,18 @@ pub(crate) struct RawConfig {
     #[serde(default)]
     #[garde(dive)]
     pub(crate) grpc: Option<RawGrpc>,
+    /// Absent means the metrics endpoint is off.
+    #[serde(default)]
+    #[garde(skip)]
+    pub(crate) metrics: Option<RawMetrics>,
+}
+
+/// `[metrics]`: its one key, `bind`, is required once the section is there;
+/// validation checks it.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, expecting = "a table of metrics settings")]
+pub(crate) struct RawMetrics {
+    pub(crate) bind: Option<String>,
 }
 
 /// `[grpc]`. The four files are required once the section is there;
@@ -714,6 +726,8 @@ mod secret_names {
             "grpc.agent_cert_lifetime_days",
             "grpc.heartbeat_interval_secs",
             "grpc.heartbeat_timeout_secs",
+            "metrics",
+            "metrics.bind",
         ] {
             assert!(keys.iter().any(|found| found == key), "{key} in {keys:?}");
         }

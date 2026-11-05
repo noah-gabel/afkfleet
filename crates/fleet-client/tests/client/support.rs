@@ -458,6 +458,7 @@ fn config(dir: &TempDir) -> ServerConfig {
         chat: ChatConfig::default(),
         audit: AuditConfig::default(),
         grpc: None,
+        metrics: None,
     }
 }
 

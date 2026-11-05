@@ -81,6 +81,17 @@ pub(crate) struct RawConfig {
     pub(crate) standalone: Option<RawStandalone>,
     #[garde(skip)]
     pub(crate) control_plane: Option<RawControlPlane>,
+    /// Absent means the metrics endpoint is off.
+    #[garde(skip)]
+    pub(crate) metrics: Option<RawMetrics>,
+}
+
+/// `[metrics]`: its one key, `bind`, is required once the section is there;
+/// validation checks it.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, expecting = "a table of metrics settings")]
+pub(crate) struct RawMetrics {
+    pub(crate) bind: Option<String>,
 }
 
 /// `[runtime]`. Missing keys take the runtime's and the adapter's defaults.

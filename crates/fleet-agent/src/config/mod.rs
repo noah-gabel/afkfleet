@@ -28,6 +28,7 @@ mod error;
 mod raw;
 mod validate;
 
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use fleet_core::bot::BotAccount;
@@ -75,6 +76,11 @@ pub struct AgentConfig {
     pub log: LogConfig,
     /// Standalone or managed.
     pub mode: AgentMode,
+    /// Where the metrics endpoint listens (`[metrics] bind`; Plan.md P12.4,
+    /// ADR-0022, S10): an IP address and a port other than 0. `None` when
+    /// the section is absent: then the agent has no metrics listener. An
+    /// internal port only: never published beyond the host.
+    pub metrics: Option<SocketAddr>,
 }
 
 /// Where the agent's bots come from.

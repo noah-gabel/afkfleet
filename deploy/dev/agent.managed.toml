@@ -15,6 +15,11 @@ name = "dev-agent"
 format = "pretty"
 filter = "info"
 
+# [metrics]                              # off unless set: GET /metrics in Prometheus' text format,
+#                                        # on an internal port only (ADR-0022, S9, S10); give a second
+#                                        # agent on this host another port than dev-agent's
+# bind = "127.0.0.1:9481"                # an IP address and a port other than 0
+
 [control_plane]
 url = "https://127.0.0.1:7443"
 # The bots may dial `just mc-up`'s server, which publishes only on 127.0.0.1:

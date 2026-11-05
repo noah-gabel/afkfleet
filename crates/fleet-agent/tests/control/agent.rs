@@ -145,6 +145,7 @@ fn config(dir: &Path, url: &str, ca: &TestCa, max_bots: usize) -> AgentConfig {
         heartbeat_file: dir.join("agent.alive"),
         log: LogConfig::default(),
         mode: AgentMode::ControlPlane(plane),
+        metrics: None,
     }
 }
 

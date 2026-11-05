@@ -177,6 +177,7 @@ impl Agent {
             heartbeat_file: self.dir.join("agent.alive"),
             log: LogConfig::default(),
             mode: AgentMode::ControlPlane(plane),
+            metrics: None,
         };
         let (signals, receiver) = mpsc::channel(4);
         let mut task = JoinSet::new();

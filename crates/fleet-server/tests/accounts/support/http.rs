@@ -160,6 +160,7 @@ fn config(
         chat: ChatConfig::default(),
         audit: AuditConfig::default(),
         grpc,
+        metrics: None,
     }
 }
 

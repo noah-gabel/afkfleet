@@ -125,8 +125,9 @@ pub enum ProblemKind {
         /// The largest product allowed.
         max: u32,
     },
-    /// A listener's port that another listener already uses
-    /// (`[grpc] bind` and `[http] bind`).
+    /// A listener's port that another listener already uses (`[grpc] bind`
+    /// and `[metrics] bind` against `[http] bind`, and `[metrics] bind`
+    /// against `[grpc] bind`).
     #[error("uses the same port as `{key}`")]
     SamePortAs {
         /// The other key, with its section.

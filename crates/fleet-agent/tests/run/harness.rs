@@ -62,6 +62,7 @@ pub(crate) fn config(bots: &[(&str, ModePreset)]) -> AgentConfig {
                 })
                 .collect(),
         ),
+        metrics: None,
     }
 }
 

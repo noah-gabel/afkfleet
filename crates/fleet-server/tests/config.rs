@@ -204,6 +204,7 @@ fn only_the_database_path_and_the_vault_are_required() {
                 chat: ChatConfig::default(),
                 audit: AuditConfig::default(),
                 grpc: None,
+                metrics: None,
             }
         );
     });
@@ -553,10 +554,13 @@ fn an_unknown_database_key_names_every_known_one() {
 #[test]
 fn an_unknown_section_names_every_known_one() {
     in_jail(|jail| {
-        let toml = format!("{}\n[metrics]\nbind = \"127.0.0.1:9100\"\n", minimal(jail));
+        let toml = format!(
+            "{}\n[monitoring]\nbind = \"127.0.0.1:9100\"\n",
+            minimal(jail)
+        );
         let error = parse_error(load_toml(jail, &toml));
 
-        assert_eq!(error.key().to_string(), "metrics");
+        assert_eq!(error.key().to_string(), "monitoring");
         assert_eq!(
             error.problem(),
             &ParseProblem::UnknownKey {
@@ -571,7 +575,8 @@ fn an_unknown_section_names_every_known_one() {
                     "accounts",
                     "chat",
                     "audit",
-                    "grpc"
+                    "grpc",
+                    "metrics"
                 ]
             }
         );
@@ -2099,6 +2104,135 @@ fn the_grpc_section_can_come_from_the_environment() {
         let config = load_toml(jail, &toml).unwrap();
 
         assert_eq!(config.grpc.unwrap().pki, pki_paths(jail));
+    });
+}
+
+// --- [metrics] (P12.4; ADR-0022, S10) ---------------------------------------------------
+
+#[test]
+fn metrics_are_off_without_a_metrics_section() {
+    in_jail(|jail| {
+        let toml = minimal(jail);
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        assert_eq!(config.metrics, None);
+    });
+}
+
+#[rstest]
+#[case::loopback("127.0.0.1:9480")]
+#[case::any_ipv4("0.0.0.0:9480")]
+#[case::any_ipv6("[::]:9480")]
+#[case::grpc_s_default_port_without_grpc("127.0.0.1:7443")]
+fn metrics_bind_takes_any_ip_address_with_its_own_fixed_port(#[case] bind: &str) {
+    in_jail(|jail| {
+        let toml = format!("{}\n[metrics]\nbind = \"{bind}\"\n", minimal(jail));
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        assert_eq!(config.metrics, Some(addr(bind)));
+    });
+}
+
+#[test]
+fn a_metrics_section_needs_its_bind() {
+    in_jail(|jail| {
+        let toml = format!("{}\n[metrics]\n", minimal(jail));
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), ["metrics.bind"]);
+        assert_eq!(kinds(&problems), [ProblemKind::Missing]);
+    });
+}
+
+/// Ports are compared whatever the hosts: `0.0.0.0` and `127.0.0.1` on one
+/// port clash on Linux and split the traffic on Windows.
+#[rstest]
+#[case::host_name("localhost:9480", ProblemKind::SocketAddress)]
+#[case::no_port("127.0.0.1", ProblemKind::SocketAddress)]
+#[case::port_zero("127.0.0.1:0", ProblemKind::PortZero)]
+#[case::http_s_port("0.0.0.0:8080", ProblemKind::SamePortAs { key: "http.bind" })]
+#[case::http_s_port_on_ipv6("[::]:8080", ProblemKind::SamePortAs { key: "http.bind" })]
+fn metrics_bind_must_be_an_ip_address_with_its_own_fixed_port(
+    #[case] bind: &str,
+    #[case] kind: ProblemKind,
+) {
+    in_jail(|jail| {
+        let toml = format!("{}\n[metrics]\nbind = \"{bind}\"\n", minimal(jail));
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), ["metrics.bind"]);
+        assert_eq!(kinds(&problems), [kind]);
+    });
+}
+
+#[rstest]
+#[case::grpc_s_default_port("", "0.0.0.0:7443")]
+#[case::grpc_s_own_port("bind = \"127.0.0.1:7500\"\n", "0.0.0.0:7500")]
+fn metrics_bind_never_takes_the_grpc_port(#[case] grpc_bind: &str, #[case] metrics_bind: &str) {
+    in_jail(|jail| {
+        let toml = format!(
+            "{}\n{}{grpc_bind}[metrics]\nbind = \"{metrics_bind}\"\n",
+            minimal(jail),
+            grpc(jail)
+        );
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), ["metrics.bind"]);
+        assert_eq!(
+            kinds(&problems),
+            [ProblemKind::SamePortAs { key: "grpc.bind" }]
+        );
+    });
+}
+
+#[test]
+fn metrics_bind_can_come_from_the_environment() {
+    in_jail(|jail| {
+        jail.set_env("AFKFLEET_SERVER__METRICS__BIND", "0.0.0.0:9480");
+        let toml = minimal(jail);
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        assert_eq!(config.metrics, Some(addr("0.0.0.0:9480")));
+    });
+}
+
+#[test]
+fn an_unknown_metrics_key_names_the_known_one() {
+    in_jail(|jail| {
+        let toml = format!(
+            "{}\n[metrics]\nbind = \"127.0.0.1:9480\"\ntoken = \"x\"\n",
+            minimal(jail)
+        );
+        let error = parse_error(load_toml(jail, &toml));
+
+        assert_eq!(error.key().to_string(), "metrics.token");
+        assert_eq!(
+            error.problem(),
+            &ParseProblem::UnknownKey {
+                expected: &["bind"]
+            }
+        );
+    });
+}
+
+#[test]
+fn the_dev_config_leaves_metrics_off() {
+    in_jail(|jail| {
+        jail.set_env("AFKFLEET_SERVER__DATABASE__PATH", db_path(jail).display());
+        jail.set_env(
+            "AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1",
+            key_path(jail, 1).display(),
+        );
+
+        let config = load(&dev_config()).unwrap();
+
+        assert_eq!(config.metrics, None);
     });
 }
 
