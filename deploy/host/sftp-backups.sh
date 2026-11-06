@@ -71,15 +71,32 @@ reload_sshd() {
 }
 
 # Whether $1 is owned by root and writable by root alone, as
-# ChrootDirectory demands of the folder and every one above it.
+# ChrootDirectory demands of the folder and every one above it. stat's %a
+# prints the mode without leading zeros (2 for 0002), so it's padded first.
 root_only() {
 	set -- "$1" "$(stat -c '%u %a' "$1")"
 	owner=${2%% *}
-	mode=${2#* }
+	mode=$(printf '%04d' "${2#* }")
 	[ "$owner" = 0 ] || return 1
 	case $mode in
-	*[2367][0-7] | *[0-7][2367]) return 1 ;;
+	??[2367]? | ???[2367]) return 1 ;;
 	esac
+	return 0
+}
+
+# Whether $1 is a folder path the backups can live in: absolute, without
+# //, . or .. parts or a trailing /, of plain characters, and inside a folder
+# of its own other than /, which becomes the account's chroot. setup.sh
+# holds AFKFLEET_BACKUPS_DIR to the same rules.
+backups_path() {
+	case $1 in
+	/*) ;;
+	*) return 1 ;;
+	esac
+	case $1 in
+	*//* | */./* | */. | */../* | */.. | */ | *[!A-Za-z0-9./_-]*) return 1 ;;
+	esac
+	[ "$(dirname "$1")" != / ] || return 1
 	return 0
 }
 
@@ -111,13 +128,8 @@ install() {
 	backups=$2
 	[ "$(id -u)" = 0 ] || refuse "run it as root: it adds an account and an sshd drop-in"
 	sshd=$(sshd_bin)
-	case $backups in
-	/*/*) ;;
-	*) refuse "the backups' folder must be an absolute path inside a folder of its own: $backups" ;;
-	esac
-	case $backups in
-	*[!A-Za-z0-9./_-]*) refuse "the backups' folder's path holds a character it can't: $backups" ;;
-	esac
+	backups_path "$backups" ||
+		refuse "the backups' folder must be an absolute path of letters, digits and ._-, without //, . or .. parts or a trailing /, inside a folder of its own other than /: $backups"
 	chroot=$(dirname "$backups")
 	start=/$(basename "$backups")
 	[ -d "$backups" ] || refuse "$backups doesn't exist: run setup.sh init first"
@@ -131,8 +143,18 @@ install() {
 	done
 	[ -f "$key" ] || refuse "there's no key file at $key"
 	[ "$(grep -c . "$key")" = 1 ] || refuse "$key must hold one public key, on one line"
-	ssh-keygen -l -f "$key" >/dev/null 2>&1 || refuse "$key isn't a public key ssh-keygen can read"
 	line=$(grep . "$key")
+	# The line starts with the key's type: an authorized_keys option before
+	# it (cert-authority, say) would come through behind `restrict`.
+	type=${line%% *}
+	case $type in
+	"" | *[!a-z0-9@.-]*) type="" ;;
+	esac
+	case $type in
+	ssh-ed25519 | ssh-rsa | ecdsa-sha2-* | sk-*) ;;
+	*) refuse "$key must hold one public key line that starts with its type (ssh-ed25519, ecdsa-sha2-…, sk-…, ssh-rsa), with nothing before it" ;;
+	esac
+	ssh-keygen -l -f "$key" >/dev/null 2>&1 || refuse "$key isn't a public key ssh-keygen can read"
 	case $line in
 	*'"'* | *"'"* | *\\*) refuse "$key holds a character a key line can't" ;;
 	esac

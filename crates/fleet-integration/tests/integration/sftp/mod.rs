@@ -88,12 +88,13 @@ fn exec_ok(script: &str) -> String {
     finished.stdout
 }
 
-/// Every file under /etc/ssh with its hash, and whether the account
-/// exists: what a refusal must leave as it was.
+/// Every file under /etc/ssh with its hash, and whether the account and its
+/// group exist: what a refusal must leave as it was.
 fn sshd_state() -> String {
     exec_ok(
         "cd /etc/ssh && find . -type f | sort | xargs sha256sum; \
-         grep -c '^afkfleet-backup:' /etc/passwd || true",
+         grep -c '^afkfleet-backup:' /etc/passwd || true; \
+         grep -c '^afkfleet-backup:' /etc/group || true",
     )
 }
 
@@ -116,21 +117,115 @@ fn sftp(batch: &str) -> Finished {
     ))
 }
 
-/// One refused install, run by `prepare` and undone by `undo`: exit 1, and
-/// nothing under /etc/ssh changed.
-fn refused(prepare: &str, undo: &str, reason: &str) {
+/// What runs after every refusal case, once its state is compared: whatever
+/// a script that didn't refuse left (the drop-in, the key file, the account,
+/// the group) goes, so the next case starts from the same host.
+const RESET: &str = "rm -f /etc/ssh/sshd_config.d/10-afkfleet-backup.conf \
+                     /etc/ssh/afkfleet-backup.authorized_keys; \
+                     userdel afkfleet-backup 2>/dev/null; groupdel afkfleet-backup 2>/dev/null; true";
+
+/// A refused install: its extra arguments, what prepares the host and what
+/// undoes that, and a part of the reason it must give.
+type Refusal = (&'static str, &'static str, &'static str, &'static str);
+
+/// Every refusal: each must exit 1 with its reason and leave sshd's files,
+/// the accounts and the groups as they were.
+const REFUSALS: [Refusal; 11] = [
+    (
+        "",
+        "cp /etc/ssh/sshd_config /root/sshd_config && sed -i '/^Include/d' /etc/ssh/sshd_config",
+        "cp /root/sshd_config /etc/ssh/sshd_config",
+        "must include /etc/ssh/sshd_config.d/*.conf",
+    ),
+    (
+        "",
+        "chmod 775 /srv/afkfleet-backups",
+        "chmod 755 /srv/afkfleet-backups",
+        "writable by root alone",
+    ),
+    // stat's %a prints 0002 as 2.
+    (
+        "",
+        "chmod 0002 /srv/afkfleet-backups",
+        "chmod 755 /srv/afkfleet-backups",
+        "writable by root alone",
+    ),
+    (
+        "",
+        "useradd --uid 65532 --no-create-home someone",
+        "userdel someone",
+        "is taken",
+    ),
+    (
+        "",
+        "touch /etc/ssh/sshd_config.d/10-afkfleet-backup.conf",
+        "rm /etc/ssh/sshd_config.d/10-afkfleet-backup.conf",
+        "exists already",
+    ),
+    (
+        "",
+        "printf 'Match all\\n\\tAllowTcpForwarding yes\\n' > /etc/ssh/sshd_config.d/05-earlier.conf",
+        "rm /etc/ssh/sshd_config.d/05-earlier.conf",
+        "an earlier setting wins",
+    ),
+    (
+        "",
+        "cp /root/pull.pub /root/one.pub && cat /root/one.pub >> /root/pull.pub",
+        "cp /root/one.pub /root/pull.pub",
+        "one public key",
+    ),
+    // An option would come through behind `restrict`.
+    (
+        "",
+        "cp /root/pull.pub /root/one.pub && sed -i 's/^/cert-authority /' /root/pull.pub",
+        "cp /root/one.pub /root/pull.pub",
+        "one public key",
+    ),
+    // A chroot of / (dirname //backups is /), and . and .. parts that lead
+    // to the real folder.
+    (
+        "--backups //backups",
+        "install -d -o 65532 -g 65532 -m 700 /backups",
+        "rmdir /backups",
+        "the backups' folder must be",
+    ),
+    (
+        "--backups /srv/./afkfleet-backups/backups",
+        "true",
+        "true",
+        "the backups' folder must be",
+    ),
+    (
+        "--backups /srv/../srv/afkfleet-backups/backups",
+        "true",
+        "true",
+        "the backups' folder must be",
+    ),
+];
+
+/// One refused install: `None` when it refused as it must, else what went
+/// wrong. The host's state is compared before [`RESET`] runs.
+fn refused((args, prepare, undo, reason): Refusal) -> Option<String> {
     let before = sshd_state();
     exec_ok(prepare);
-    let install = exec("sh /root/sftp-backups.sh install --key /root/pull.pub");
+    let install = exec(&format!(
+        "sh /root/sftp-backups.sh install --key /root/pull.pub {args}"
+    ));
     exec_ok(undo);
+    let after = sshd_state();
+    exec_ok(RESET);
 
-    assert_eq!(install.code, Some(1), "{reason}: {}", install.stderr);
-    assert!(
-        install.stderr.contains(reason),
-        "{reason}: {}",
-        install.stderr
-    );
-    assert_eq!(sshd_state(), before, "{reason}: sshd's files changed");
+    let mut problems = Vec::new();
+    if install.code != Some(1) {
+        problems.push(format!("exit {:?}", install.code));
+    }
+    if !install.stderr.contains(reason) {
+        problems.push(format!("stderr: {}", install.stderr.trim()));
+    }
+    if after != before {
+        problems.push("the host changed".to_owned());
+    }
+    (!problems.is_empty()).then(|| format!("[{args}] {reason}: {}", problems.join("; ")))
 }
 
 #[test]
@@ -182,36 +277,8 @@ fn slow_sftp_backups_account() {
     ));
     let global_before = exec_ok("sshd -T");
 
-    refused(
-        "cp /etc/ssh/sshd_config /root/sshd_config && sed -i '/^Include/d' /etc/ssh/sshd_config",
-        "cp /root/sshd_config /etc/ssh/sshd_config",
-        "must include /etc/ssh/sshd_config.d/*.conf",
-    );
-    refused(
-        "chmod 775 /srv/afkfleet-backups",
-        "chmod 755 /srv/afkfleet-backups",
-        "writable by root alone",
-    );
-    refused(
-        "useradd --uid 65532 --no-create-home someone",
-        "userdel someone",
-        "is taken",
-    );
-    refused(
-        "touch /etc/ssh/sshd_config.d/10-afkfleet-backup.conf",
-        "rm /etc/ssh/sshd_config.d/10-afkfleet-backup.conf",
-        "exists already",
-    );
-    refused(
-        "printf 'Match all\\n\\tAllowTcpForwarding yes\\n' > /etc/ssh/sshd_config.d/05-earlier.conf",
-        "rm /etc/ssh/sshd_config.d/05-earlier.conf",
-        "an earlier setting wins",
-    );
-    refused(
-        "cp /root/pull.pub /root/one.pub && cat /root/one.pub >> /root/pull.pub",
-        "cp /root/one.pub /root/pull.pub",
-        "one public key",
-    );
+    let failed: Vec<String> = REFUSALS.into_iter().filter_map(refused).collect();
+    assert!(failed.is_empty(), "{failed:#?}");
 
     exec_ok("sh /root/sftp-backups.sh install --key /root/pull.pub");
     let files_before = backups_state();
