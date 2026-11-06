@@ -9,9 +9,9 @@
 // io.github.noah-gabel.afkfleet.rehearsal, binary afkfleet-rehearsal), each with the throwaway
 // public key and a manifest on this PC's loopback, so they never touch the installed afkfleet: its
 // folder, its uninstall entry, its running-app check, its single-instance lock, its profile and its
-// Credential Manager entries all go by another name. The app turns updates on for exactly this
-// identifier in a debug build (src-tauri/src/update.rs), where the plugin also lets an http
-// endpoint through. 0.0.2 is signed through `just updater-sign`'s own functions, bound to its
+// Credential Manager entries all go by another name. The app turns updates on in a debug build
+// whose updater points only at plain http on loopback, as this one's does (src-tauri/src/update.rs,
+// `updates_on`), and the plugin lets an http endpoint through in a debug build. 0.0.2 is signed through `just updater-sign`'s own functions, bound to its
 // version, and latest.json names it. Then it serves the manifest and that installer alone on
 // 127.0.0.1 until Ctrl+C, and prints the steps.
 //
@@ -27,7 +27,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { manifest, signFile } from "./updater-sign.mjs";
 
-/** The rehearsal's identifier: the one the app's debug builds update under. */
+/** The rehearsal's identifier: its own, so it never touches the installed afkfleet. */
 export const REHEARSAL_IDENTIFIER = "io.github.noah-gabel.afkfleet.rehearsal";
 
 /** The installed version, and the one it updates to: never the real app's. */

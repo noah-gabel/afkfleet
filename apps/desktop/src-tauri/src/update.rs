@@ -3,10 +3,13 @@
 //! `install_update`, over tauri-plugin-updater, whose own commands the webview
 //! never gets.
 //!
-//! - **On only where it belongs.** Updates are on in a release build under
-//!   the released app's identifier, and in a debug build under the
-//!   rehearsal's (`just update-rehearsal`, R20). Everywhere else (`tauri dev`,
-//!   the check build, every test) a check answers `off` and asks nothing.
+//! - **On only where it belongs.** Updates are on in a release build whose
+//!   updater points at the release's manifest on GitHub alone, and in a debug
+//!   build whose updater points only at this PC's loopback (the rehearsal,
+//!   `just update-rehearsal`, R20). Everywhere else (`tauri dev`, a debug
+//!   `app-build`, the check build, every test) a check answers `off` and asks
+//!   nothing. The decision reads the build's own endpoints, never its
+//!   identifier ([`updates_on`]).
 //! - **The webview learns versions only:** never a release's notes, date or
 //!   address. A check keeps the release it found, replacing an earlier one,
 //!   and `install_update` takes no argument: it installs exactly that kept
@@ -43,12 +46,10 @@ use crate::keychain::StoreFactory;
 use crate::live::Exclusive;
 use crate::state::AppState;
 
-/// The released app's identifier: the one build whose updates are on.
-pub const RELEASE_IDENTIFIER: &str = "io.github.noah-gabel.afkfleet";
-
-/// The rehearsal's identifier: its debug builds update from a loopback
-/// server with a throwaway key (`just update-rehearsal`, R20).
-pub const REHEARSAL_IDENTIFIER: &str = "io.github.noah-gabel.afkfleet.rehearsal";
+/// Where the released app finds its updates, as `tauri.conf.json` names it:
+/// the one endpoint a release build's updates are on for.
+pub const RELEASE_ENDPOINT: &str =
+    "https://github.com/noah-gabel/afkfleet/releases/latest/download/latest.json";
 
 /// How long a check's request may take.
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
@@ -72,15 +73,39 @@ const SETTLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// The outer bounds' margin over the plugin's own timeouts.
 const SLACK: Duration = Duration::from_secs(5);
 
-/// Whether updates are on for an app with `identifier`: a release build of
-/// the released app, or a debug build of the rehearsal.
+/// Whether updates are on for an app whose updater configuration (its merged
+/// config's `plugins.updater`) is `updater`: in a release build whose one
+/// endpoint is [`RELEASE_ENDPOINT`], or in a debug build whose endpoints are
+/// all plain http to an IPv4 loopback address (the rehearsal's, R20).
+/// Anything else is off, the check build's empty list and a configuration
+/// that can't be read among them. It reads where a check would go, never the
+/// app's identifier, so no build holds the real identifier but in its own
+/// configuration, which the check exe's guard relies on (ADR-0020, U87).
 #[must_use]
-pub fn updates_on(identifier: &str, release_build: bool) -> bool {
-    if release_build {
-        identifier == RELEASE_IDENTIFIER
-    } else {
-        identifier == REHEARSAL_IDENTIFIER
+pub fn updates_on(updater: Option<&serde_json::Value>, release_build: bool) -> bool {
+    let Some(listed) = updater
+        .and_then(|config| config.get("endpoints"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return false;
+    };
+    let endpoints: Option<Vec<&str>> = listed.iter().map(serde_json::Value::as_str).collect();
+    match endpoints.as_deref() {
+        None | Some([]) => false,
+        Some(endpoints) if release_build => endpoints == [RELEASE_ENDPOINT],
+        Some(endpoints) => endpoints.iter().all(|endpoint| loopback_http(endpoint)),
     }
+}
+
+/// Whether `endpoint` is plain http to an IPv4 loopback address.
+fn loopback_http(endpoint: &str) -> bool {
+    tauri::Url::parse(endpoint).is_ok_and(|url| {
+        url.scheme() == "http"
+            && url
+                .host_str()
+                .and_then(|host| host.parse::<std::net::Ipv4Addr>().ok())
+                .is_some_and(|address| address.is_loopback())
+    })
 }
 
 /// Why an update step failed. It never carries the plugin's message.
@@ -437,6 +462,7 @@ mod tests {
 
     use fleet_client::VerifiedLink;
     use rstest::rstest;
+    use serde_json::{Value, json};
     use tempfile::TempDir;
     use tokio::sync::Notify;
 
@@ -548,20 +574,72 @@ mod tests {
         BoundedText::new(version)
     }
 
+    /// The rehearsal's endpoint (`scripts/update-rehearsal.mjs`'s overlay).
+    const REHEARSAL: &str = "http://127.0.0.1:47123/latest.json";
+
+    /// An updater configuration with `endpoints`.
+    fn updater_with(endpoints: &[&str]) -> Value {
+        json!({ "endpoints": endpoints })
+    }
+
     #[rstest]
-    #[case::the_release(RELEASE_IDENTIFIER, true, true)]
-    #[case::a_debug_build_of_the_app(RELEASE_IDENTIFIER, false, false)]
-    #[case::the_debug_rehearsal(REHEARSAL_IDENTIFIER, false, true)]
-    #[case::a_released_rehearsal(REHEARSAL_IDENTIFIER, true, false)]
-    #[case::the_check_build("io.github.noah-gabel.afkfleet.check", false, false)]
-    #[case::a_released_check_build("io.github.noah-gabel.afkfleet.check", true, false)]
-    #[case::another_app("io.example.other", true, false)]
+    #[case::the_release(&[RELEASE_ENDPOINT], true, true)]
+    #[case::a_debug_build_of_the_app(&[RELEASE_ENDPOINT], false, false)]
+    #[case::the_debug_rehearsal(&[REHEARSAL], false, true)]
+    #[case::a_released_rehearsal(&[REHEARSAL], true, false)]
+    #[case::the_check_build(&[], false, false)]
+    #[case::a_released_check_build(&[], true, false)]
+    #[case::a_release_from_elsewhere(&["https://example.com/latest.json"], true, false)]
+    #[case::a_debug_build_reaching_another_host(&["http://192.0.2.10/latest.json"], false, false)]
+    #[case::a_debug_build_by_name(&["http://localhost:47123/latest.json"], false, false)]
+    #[case::a_debug_build_over_https(&["https://127.0.0.1:47123/latest.json"], false, false)]
+    #[case::a_debug_build_with_the_release_too(&[REHEARSAL, RELEASE_ENDPOINT], false, false)]
+    #[case::the_release_twice(&[RELEASE_ENDPOINT, RELEASE_ENDPOINT], true, false)]
     fn updates_are_on_only_for_the_release_or_the_debug_rehearsal(
-        #[case] identifier: &str,
+        #[case] endpoints: &[&str],
         #[case] release_build: bool,
         #[case] expected: bool,
     ) {
-        assert_eq!(updates_on(identifier, release_build), expected);
+        assert_eq!(
+            updates_on(Some(&updater_with(endpoints)), release_build),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::no_updater_config(None)]
+    #[case::no_endpoints(Some(json!({})))]
+    #[case::endpoints_that_arent_a_list(Some(json!({ "endpoints": REHEARSAL })))]
+    #[case::an_endpoint_that_isnt_text(Some(json!({ "endpoints": [7] })))]
+    #[case::the_release_beside_one_that_isnt_text(Some(json!({ "endpoints": [RELEASE_ENDPOINT, 7] })))]
+    #[case::the_rehearsal_beside_one_that_isnt_text(Some(json!({ "endpoints": [REHEARSAL, 7] })))]
+    #[case::an_endpoint_that_isnt_a_url(Some(json!({ "endpoints": ["not a url"] })))]
+    fn a_config_it_cant_read_is_off_in_every_build(#[case] updater: Option<Value>) {
+        for release_build in [true, false] {
+            assert!(
+                !updates_on(updater.as_ref(), release_build),
+                "{release_build}"
+            );
+        }
+    }
+
+    /// The committed configuration, so the constant can't drift from it: on in
+    /// a release build alone, and off in both once the check build's overlay
+    /// is laid over it.
+    #[test]
+    fn the_committed_config_is_on_in_a_release_alone_and_off_for_the_check_build() {
+        let base: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let check: Value = serde_json::from_str(include_str!("../tauri.check.conf.json")).unwrap();
+        let updater = &base["plugins"]["updater"];
+        let mut checked = updater.clone();
+        for (key, value) in check["plugins"]["updater"].as_object().unwrap() {
+            checked[key] = value.clone();
+        }
+
+        assert!(updates_on(Some(updater), true));
+        assert!(!updates_on(Some(updater), false));
+        assert!(!updates_on(Some(&checked), true));
+        assert!(!updates_on(Some(&checked), false));
     }
 
     #[rstest]

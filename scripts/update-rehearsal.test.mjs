@@ -56,13 +56,16 @@ describe("update-rehearsal", () => {
     assert.equal(REHEARSAL_IDENTIFIER, config.identifier);
   });
 
-  it("uses the rehearsal's identifier, which the app's own policy names", () => {
-    const update = readFileSync(
-      path.join(ROOT, "apps", "desktop", "src-tauri", "src", "update.rs"),
-      "utf8",
-    );
+  it("keeps an identifier of its own and points the updater at loopback alone", () => {
+    const real = JSON.parse(
+      readFileSync(path.join(ROOT, "apps", "desktop", "src-tauri", "tauri.conf.json"), "utf8"),
+    ).identifier;
+    const config = overlay({ version: SECOND, pubkey: "a2V5", port: 50000 });
 
-    assert.ok(update.includes(`pub const REHEARSAL_IDENTIFIER: &str = "${REHEARSAL_IDENTIFIER}";`));
+    // Its own name keeps it off the installed app; plain http to 127.0.0.1 is what the app's
+    // policy turns updates on for in a debug build (src-tauri/src/update.rs, `updates_on`).
+    assert.notEqual(config.identifier, real);
+    assert.deepEqual(config.plugins.updater.endpoints, ["http://127.0.0.1:50000/latest.json"]);
   });
 
   it("rehearses an update from 0.0.1 to 0.0.2, never the real app's versions", () => {
