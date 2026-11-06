@@ -1,7 +1,15 @@
-//! `afkfleet-server vault status` and `vault rotate-key` (Plan.md P9.2,
-//! §7.5, ADR-0018): what the vault's keys seal, and re-encrypting every
-//! secret under the active key, from the server's host. There's no API for
-//! either.
+//! `afkfleet-server vault status`, `vault rotate-key` and `vault
+//! create-key` (Plan.md P9.2, §7.5, ADR-0018; P12.2, ADR-0022, S14): what
+//! the vault's keys seal, re-encrypting every secret under the active key,
+//! and making a new key file, from the server's host. There's no API for
+//! any of them.
+//!
+//! - **`create-key`** writes the file `[vault] master_key_files` names for
+//!   a key ID, the active one's by default: 32 random bytes as padded
+//!   standard base64 and a line break, owner-only, never over an existing
+//!   file. It opens no database and never prints the key, so a host with
+//!   only Docker makes its key inside the server's image, as the image's
+//!   user (`deploy/setup.sh`).
 //!
 //! - **Neither creates or migrates the database.** Both open it with
 //!   [`sqlite::open_migrated`]: a missing file, or one with pending
@@ -26,9 +34,13 @@ use std::fmt::Write as _;
 use std::io::Write;
 use std::sync::Arc;
 
-use tracing::error;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
+use fleet_core::system::{RandomError, SecureRandom};
+use tracing::{error, info};
+use zeroize::Zeroizing;
 
-use super::DATABASE_CLOSE;
+use super::{DATABASE_CLOSE, pki};
 use crate::app::vault::{
     BadEnvelope, BadReason, KeyUsage, PurposeCounts, RotateError, Rotation, VaultService,
     VaultStatus,
@@ -36,6 +48,7 @@ use crate::app::vault::{
 use crate::config::ServerConfig;
 use crate::http::error::chain;
 use crate::infra::crypto::vault::{VaultKeys, XChaChaVault};
+use crate::infra::pki::files::{self, NewFile};
 use crate::infra::sqlite::{self, Database, DatabaseOptions};
 use crate::infra::system::{OsRandom, SystemClock};
 use crate::ports::vault::Vault as _;
@@ -58,6 +71,111 @@ Exit codes:
      rotating, or the config, logging, a key file or the database failed (a
      missing database and pending migrations included)
   2  usage error";
+
+/// The exit codes of `afkfleet-server vault create-key`, shown in its help.
+pub const CREATE_KEY_EXIT_CODES: &str = "\
+Exit codes:
+  0  the key file is created
+  1  nothing was created: the file exists, its folder is missing, no key file
+     is configured for the key ID, the random source failed, or the config or
+     logging failed
+  2  usage error";
+
+/// What `vault create-key` says on stderr once the key exists.
+pub const BACK_IT_UP: &str = "back the key up separately and securely: a backup holds only \
+                              ciphertext, which nothing opens without this key";
+
+/// `afkfleet-server vault create-key`: creates the key file `[vault]
+/// master_key_files` names for key `id`, the active key's by default, from
+/// `random`; see the [module docs](self). stdout names the file alone.
+pub fn create_key(
+    config: &ServerConfig,
+    id: Option<u32>,
+    random: &dyn SecureRandom,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Exit {
+    let id = id.unwrap_or(config.vault.active_key_id);
+    let Some(path) = config.vault.key_files.get(&id) else {
+        return refuse(
+            err,
+            &format!(
+                "[vault] master_key_files names no file for key ID {id}: add \
+                 AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__{id}=<path> first"
+            ),
+        );
+    };
+    let problems = files::check(&[path.as_path()], CREATE_KEY_PREFIX);
+    if !problems.is_empty() {
+        for problem in &problems {
+            let _ = writeln!(err, "afkfleet-server: {problem}");
+        }
+        return Exit::Failed;
+    }
+    let text = match key_text(random) {
+        Ok(text) => text,
+        Err(error) => return fail(err, "the key couldn't be drawn", &error),
+    };
+    let file = NewFile { path, bytes: &text };
+    match files::publish(&[file], CREATE_KEY_PREFIX) {
+        Ok(left_over) => {
+            let _ = writeln!(out, "created {}", path.display());
+            for left in left_over {
+                let _ = writeln!(
+                    err,
+                    "afkfleet-server: {} couldn't be removed; remove it",
+                    left.display()
+                );
+            }
+        }
+        Err(error) => return fail(err, "the key file couldn't be written", &error),
+    }
+    let _ = writeln!(err, "afkfleet-server: note: {BACK_IT_UP}");
+    if let Some(note) = pki::windows_note(path) {
+        let _ = writeln!(err, "afkfleet-server: note: {note}");
+    }
+    info!(key_id = id, "a vault key is created");
+    Exit::Done
+}
+
+/// The temp file's prefix of `vault create-key`.
+const CREATE_KEY_PREFIX: &str = "vault-create-key-tmp-";
+
+/// A key's length in bytes: one XChaCha20-Poly1305 key.
+const KEY_BYTES: usize = 32;
+
+/// A key's length as padded standard base64.
+const ENCODED_BYTES: usize = 44;
+
+/// A new key file's content: [`KEY_BYTES`] from `random`, as padded
+/// standard base64 and a line break, in a buffer that zeroes itself and is
+/// never copied: its capacity holds the line break from the start.
+fn key_text(random: &dyn SecureRandom) -> Result<Zeroizing<Vec<u8>>, KeyTextError> {
+    let mut key = Zeroizing::new([0_u8; KEY_BYTES]);
+    random.fill(key.as_mut())?;
+    let mut text = Zeroizing::new(Vec::with_capacity(ENCODED_BYTES + 1));
+    text.resize(ENCODED_BYTES, 0);
+    let written = STANDARD.encode_slice(key.as_ref(), text.as_mut_slice())?;
+    if written != ENCODED_BYTES {
+        return Err(KeyTextError::Length(written));
+    }
+    text.push(b'\n');
+    Ok(text)
+}
+
+/// Why a key file's content couldn't be made.
+#[derive(Debug, thiserror::Error)]
+enum KeyTextError {
+    /// The random source failed.
+    #[error("the random source failed")]
+    Random(#[from] RandomError),
+    /// base64 couldn't encode into the buffer.
+    #[error("the key couldn't be encoded")]
+    Encode(#[from] base64::EncodeSliceError),
+    /// The encoding came out at another length than a key's.
+    #[error("the key encoded to {0} characters, not {ENCODED_BYTES}")]
+    Length(usize),
+}
 
 /// How a vault command ended, which decides the process's exit code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -300,11 +418,11 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD;
     use fleet_core::audit::AuditAction;
     use fleet_core::authz::Role;
     use fleet_core::id::UserId;
+    use fleet_core::system::RandomError;
     use fleet_core::value::Username;
     use fleet_startup::config::{LogConfig, LogFormat};
     use fleet_startup::telemetry::{NoRules, layer_with};
@@ -814,5 +932,142 @@ mod tests {
             .unwrap();
         assert_eq!(refused.len(), 2, "{}", logs.text());
         assert_eq!(refused[0]["level"], "ERROR");
+    }
+
+    /// What `create-key` did with `id` and `random` over `config`.
+    fn run_create_key(config: &ServerConfig, id: Option<u32>, random: &SeededRandom) -> Run {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let exit = create_key(config, id, random, &mut out, &mut err);
+        Run {
+            exit,
+            out: String::from_utf8(out).unwrap(),
+            err: String::from_utf8(err).unwrap(),
+        }
+    }
+
+    /// `bytes` as padded standard base64.
+    fn encoded(bytes: &[u8]) -> String {
+        let mut buffer = [0_u8; 64];
+        let len = STANDARD.encode_slice(bytes, &mut buffer).unwrap();
+        String::from_utf8(buffer[..len].to_vec()).unwrap()
+    }
+
+    /// The names in `dir`, sorted.
+    fn names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// `create-key` writes the active key's file (ADR-0022, S14): 32 bytes
+    /// from the random source as padded base64 and a line break, which the
+    /// vault loads, owner-only on Unix. stdout names the file alone; the key
+    /// reaches no output and no log line; nothing else is created, the
+    /// database neither.
+    #[test]
+    fn create_key_writes_the_active_keys_file_and_names_it_alone() {
+        let dir = TempDir::new().unwrap();
+        let config = config(dir.path(), &[1], 1);
+        let mut drawn = [0_u8; 32];
+        SeededRandom::new(5).fill(&mut drawn).unwrap();
+        let key = encoded(&drawn);
+        let (logs, guard) = capture();
+
+        let run = run_create_key(&config, None, &SeededRandom::new(5));
+        drop(guard);
+
+        let path = key_file(dir.path(), 1);
+        assert_eq!(run.exit, Exit::Done, "{}", run.err);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), format!("{key}\n"));
+        assert!(VaultKeys::load(&config.vault).is_ok());
+        assert_eq!(run.out, format!("created {}\n", path.display()));
+        assert!(run.err.contains(BACK_IT_UP), "{}", run.err);
+        for shown in [&run.out, &run.err, &logs.text()] {
+            assert!(!shown.contains(&key), "the key was shown: {shown}");
+        }
+        assert_eq!(names(dir.path()), ["vault-key-1"]);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+    }
+
+    /// `--id` names another configured key's file: a rotation's new key.
+    #[test]
+    fn create_key_with_an_id_writes_that_keys_file() {
+        let dir = TempDir::new().unwrap();
+        let config = config(dir.path(), &[1, 2], 1);
+
+        let run = run_create_key(&config, Some(2), &SeededRandom::new(6));
+
+        assert_eq!(run.exit, Exit::Done, "{}", run.err);
+        assert_eq!(names(dir.path()), ["vault-key-2"]);
+    }
+
+    /// An existing key file is never overwritten: a new key would lock every
+    /// secret it sealed away.
+    #[test]
+    fn create_key_never_overwrites_a_key_file() {
+        let dir = TempDir::new().unwrap();
+        let config = config(dir.path(), &[1], 1);
+        write_key(dir.path(), 1);
+        let before = std::fs::read(key_file(dir.path(), 1)).unwrap();
+
+        let run = run_create_key(&config, None, &SeededRandom::new(7));
+
+        assert_eq!(run.exit, Exit::Failed);
+        assert!(run.err.contains("exists already"), "{}", run.err);
+        assert_eq!(std::fs::read(key_file(dir.path(), 1)).unwrap(), before);
+        assert_eq!(run.out, "");
+    }
+
+    #[test]
+    fn create_key_refuses_a_key_id_without_a_file() {
+        let dir = TempDir::new().unwrap();
+        let config = config(dir.path(), &[1], 1);
+
+        let run = run_create_key(&config, Some(3), &SeededRandom::new(8));
+
+        assert_eq!(run.exit, Exit::Failed);
+        assert!(
+            run.err.contains("names no file for key ID 3"),
+            "{}",
+            run.err
+        );
+        assert_eq!(names(dir.path()), Vec::<String>::new());
+    }
+
+    /// A missing folder is named and never created: on a host it means a
+    /// volume isn't mounted.
+    #[test]
+    fn create_key_refuses_a_missing_folder_and_creates_none() {
+        let dir = TempDir::new().unwrap();
+        let config = config(&dir.path().join("missing"), &[1], 1);
+
+        let run = run_create_key(&config, None, &SeededRandom::new(9));
+
+        assert_eq!(run.exit, Exit::Failed);
+        assert!(run.err.contains("doesn't exist"), "{}", run.err);
+        assert_eq!(names(dir.path()), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_failing_random_source_writes_no_key() {
+        let dir = TempDir::new().unwrap();
+        let config = config(dir.path(), &[1], 1);
+        let random = SeededRandom::new(10);
+        random.fail_next(RandomError::Unavailable);
+
+        let run = run_create_key(&config, None, &random);
+
+        assert_eq!(run.exit, Exit::Failed);
+        assert!(run.err.contains("the key couldn't be drawn"), "{}", run.err);
+        assert_eq!(names(dir.path()), Vec::<String>::new());
     }
 }

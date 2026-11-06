@@ -16,7 +16,7 @@ use fleet_server::cli::pki::{
     INIT_EXIT_CODES as PKI_INIT_EXIT_CODES, SERVER_CERT_EXIT_CODES as PKI_SERVER_CERT_EXIT_CODES,
 };
 use fleet_server::cli::user::CREATE_OWNER_EXIT_CODES;
-use fleet_server::cli::vault::{ROTATE_KEY_EXIT_CODES, STATUS_EXIT_CODES};
+use fleet_server::cli::vault::{CREATE_KEY_EXIT_CODES, ROTATE_KEY_EXIT_CODES, STATUS_EXIT_CODES};
 use fleet_server::cli::{HEALTHCHECK_EXIT_CODES, MIGRATE_EXIT_CODES, SERVE_EXIT_CODES};
 use fleet_server::config::DatabaseConfig;
 use fleet_server::infra::sqlite::{self, DatabaseOptions};
@@ -211,6 +211,7 @@ fn serve_with_a_bad_vault_key_file_logs_the_file_and_exits_1() {
 #[rstest]
 #[case::status("status", STATUS_EXIT_CODES)]
 #[case::rotate_key("rotate-key", ROTATE_KEY_EXIT_CODES)]
+#[case::create_key("create-key", CREATE_KEY_EXIT_CODES)]
 fn each_vault_commands_help_lists_its_exit_codes(#[case] command: &str, #[case] codes: &str) {
     let finished = finish(&["vault", command, "--help"]);
 
@@ -221,6 +222,7 @@ fn each_vault_commands_help_lists_its_exit_codes(#[case] command: &str, #[case] 
 #[rstest]
 #[case::status("status")]
 #[case::rotate_key("rotate-key")]
+#[case::create_key("create-key")]
 fn a_vault_command_with_a_missing_config_exits_1(#[case] command: &str) {
     let missing = test_dir(&format!("vault_missing_config_{command}")).join("missing.toml");
 
@@ -237,6 +239,7 @@ fn a_vault_command_with_a_missing_config_exits_1(#[case] command: &str) {
 #[rstest]
 #[case::status("status")]
 #[case::rotate_key("rotate-key")]
+#[case::create_key("create-key")]
 fn a_vault_command_without_a_config_is_a_usage_error(#[case] command: &str) {
     let finished = finish(&["vault", command]);
 
@@ -272,6 +275,38 @@ fn the_vault_commands_report_a_fresh_database_and_exit_0() {
         "{}",
         rotate.stdout
     );
+}
+
+/// The binary's `vault create-key` (ADR-0022, S14): the key file the
+/// config names, once; stdout names it alone, the log goes to stderr, and
+/// the database is never opened. A second run refuses the file.
+#[test]
+fn vault_create_key_writes_the_configured_key_file_once() {
+    let dir = test_dir("vault_create_key");
+    let key = dir.join("vault-key-1");
+    let body = format!(
+        "[http]\nbind = \"{}\"\n[database]\npath = {}\n[log]\nformat = \"json\"\n[vault]\nmaster_key_files = {{ 1 = {} }}\nactive_key_id = 1\n",
+        closed_port(),
+        toml_path(&dir.join("afkfleet.db")),
+        toml_path(&key)
+    );
+    let config = write_config(&dir, &body);
+
+    let created = finish(&["vault", "create-key", "--config", path_arg(&config)]);
+    let again = finish(&["vault", "create-key", "--config", path_arg(&config)]);
+
+    assert_eq!(created.status.code(), Some(0), "{}", created.stderr);
+    assert_eq!(created.stdout, format!("created {}\n", key.display()));
+    assert_eq!(std::fs::metadata(&key).unwrap().len(), 45);
+    assert_eq!(
+        lines_with(&json_lines(&created.stderr), "a vault key is created").len(),
+        1,
+        "{}",
+        created.stderr
+    );
+    assert_eq!(again.status.code(), Some(1));
+    assert!(again.stderr.contains("exists already"), "{}", again.stderr);
+    assert!(!dir.join("afkfleet.db").exists(), "nothing was opened");
 }
 
 #[test]
