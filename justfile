@@ -391,6 +391,14 @@ app-build *args:
 app-installer:
     node scripts/app-installer.mjs
 
+# The user only; the AI never runs it. Signs a release's installer for the updater on the
+# maintainer's PC: the key by its path, outside the repository; the password typed hidden and
+# handed to the CLI in its environment alone; the signature bound to the version. Prints only the
+# signature file's path, latest.json beside it, in target/updater-sign/v<version>/ (ADR-0022,
+# S24, U1; docs/releasing.md).
+updater-sign key installer sha256 version:
+    node scripts/updater-sign.mjs "{{ key }}" "{{ installer }}" "{{ sha256 }}" "{{ version }}"
+
 # The debug exe the AI launches, under its own identifier from its very first launch, so it can
 # never reach the user's running app, its single-instance lock, its profile or its Credential
 # Manager entries (ADR-0020, U87). The config's path is absolute, as the CLI may change folders.

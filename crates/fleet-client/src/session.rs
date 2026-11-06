@@ -445,6 +445,15 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         cleared.map_err(ClientError::Store)
     }
 
+    /// Waits until no refresh runs: a refresh holds the refresh lock from
+    /// before its request until its rotated token is saved and adopted, in a
+    /// task of its own, so once the lock is free the stored token is the
+    /// newest (ADR-0022, S27). Bounded by that refresh's request and store
+    /// timeouts.
+    pub(crate) async fn settle(&self) {
+        drop(self.refresh_lock.lock().await);
+    }
+
     pub(crate) async fn logout(&self) -> Result<(), ClientError> {
         let (access, refresh, refresh_out) = {
             let _gate = self.gate.lock().await;
@@ -2695,6 +2704,49 @@ mod tests {
             core.transport.bearers(ME),
             [Some("afk_at_0".to_owned()), Some("afk_at_1".to_owned())]
         );
+    }
+
+    /// Settling waits for a refresh in flight until its rotated token is
+    /// saved, so an app that exits next for an update keeps the newest token
+    /// (ADR-0022, S27): the next start would otherwise present the replaced
+    /// one, and the server would take it for a stolen token.
+    #[tokio::test]
+    async fn settling_waits_for_a_running_refresh_to_save_its_token() {
+        let store = TestStore::holding("afk_rt_0").await;
+        let core = core(&store);
+        give_access(&core, "afk_at_0", 1);
+        core.transport.on(ME, Ok(refusal(401, "unauthorized")));
+        let held = core.transport.held(REFRESH, tokens(1));
+        core.transport.on(ME, Ok(profile()));
+        let caller = tokio::spawn({
+            let core = Arc::clone(&core);
+            async move { core.me().await.is_ok() }
+        });
+        timeout(WAIT, held.arrived.notified()).await.unwrap();
+
+        let mut settling = std::pin::pin!(core.settle());
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(
+            settling.as_mut().poll(&mut context).is_pending(),
+            "it didn't wait for the refresh"
+        );
+        held.release.notify_one();
+        timeout(WAIT, settling).await.unwrap();
+
+        assert_eq!(store.token().await.as_deref(), Some("afk_rt_1"));
+        assert!(timeout(WAIT, caller).await.unwrap().unwrap());
+    }
+
+    #[tokio::test]
+    async fn settling_without_a_refresh_returns_at_once() {
+        let store = TestStore::holding("afk_rt_0").await;
+        let core = core(&store);
+
+        let mut settling = std::pin::pin!(core.settle());
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+
+        assert!(settling.as_mut().poll(&mut context).is_ready());
+        assert_eq!(store.token().await.as_deref(), Some("afk_rt_0"));
     }
 
     #[tokio::test]
