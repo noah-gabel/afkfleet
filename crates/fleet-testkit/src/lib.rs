@@ -17,6 +17,11 @@
 //!   that load a config with exactly a recipe's exports (ADR-0020, R124).
 //! - [`dockerfile`]: a reader of the Dockerfiles' instructions and stages,
 //!   for the tests that pin both images (ADR-0022, S13).
+//! - [`compose`]: a line reader of the compose files, for the tests that pin
+//!   them (ADR-0022, S14–S17).
+//! - [`docker`]: `docker` and `docker compose` with deadlines, a project's
+//!   cleanup and a log follower, for the slow tests that run containers
+//!   (ADR-0014; ADR-0022, U24).
 //! - [`system`]: a [`Clock`](fleet_core::system::Clock) that only moves when
 //!   the test moves it, and a seeded
 //!   [`SecureRandom`](fleet_core::system::SecureRandom), which is why this
@@ -25,6 +30,8 @@
 //! Fakes are preferred over mocks; `mockall` is only for checking interactions
 //! (CLAUDE.md, testing conventions).
 
+pub mod compose;
+pub mod docker;
 pub mod dockerfile;
 pub mod jail;
 pub mod justfile;

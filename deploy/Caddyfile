@@ -1,0 +1,60 @@
+# afkfleet's own Caddy (Plan.md P12.2; ADR-0022, S16, U1, U5): HTTPS for the
+# app on ports 80 and 443, for a host where both are free. compose.caddy.yaml
+# runs it. The host's .env gives AFKFLEET_DOMAIN (a name that points at the
+# host), AFKFLEET_TLS (letsencrypt; internal only for tests) and, for Let's
+# Encrypt, AFKFLEET_ACME_EMAIL. None of them is ever in the repository.
+#
+# Only the server's API port is ever proxied (8080), and only the routes the
+# app calls; the metrics ports never are (S10).
+{
+	admin off
+	persist_config off
+	skip_install_trust
+	# A request cut at a stop could be a refresh the client then repeats,
+	# which counts as reuse: compose's stop_grace_period (25 s) outlasts this.
+	grace_period 20s
+	servers {
+		protocols h1 h2
+	}
+	# Caddy's own log, JSON on stderr. Its error lines hold a request's URI
+	# (a 502 while the server restarts, say), so the live events' ticket and
+	# the share search's q are deleted from every URI it logs (ADR-0020, S28,
+	# S127). There is no access log.
+	log default {
+		output stderr
+		format json
+	}
+}
+
+# Let's Encrypt alone, over HTTP-01 on port 80: an email given to a plain
+# `tls` would add another CA as a fallback (U1).
+(tls_letsencrypt) {
+	tls {
+		issuer acme {
+			dir https://acme-v02.api.letsencrypt.org/directory
+			email {$AFKFLEET_ACME_EMAIL}
+		}
+	}
+}
+
+# Caddy's own CA: the smoke test's, which never talks to Let's Encrypt.
+(tls_internal) {
+	tls internal
+}
+
+{$AFKFLEET_DOMAIN} {
+	import tls_{$AFKFLEET_TLS}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	# The app's routes: the API, its live events socket included, and the
+	# health checks it asks when it starts and when its server changes.
+	@app path /api/v1/* /health/live /health/ready
+	handle @app {
+		reverse_proxy server:8080
+	}
+	handle {
+		respond 404
+	}
+}

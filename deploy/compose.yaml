@@ -1,0 +1,138 @@
+# afkfleet's production compose project (Plan.md P12.2; ADR-0022, S14-S17,
+# U4, U18, U19). It installs beside the host's other services: a project of
+# its own, with its own networks and named volumes, no host networking, and
+# nothing published by this file. Run it from this folder; the host's .env
+# picks the proxy path through COMPOSE_FILE (env.example lists them):
+#   compose.yaml:compose.edge.yaml:compose.caddy.yaml   afkfleet's own Caddy on 80 and 443
+#   compose.yaml:compose.edge.yaml                      an existing proxy in a container
+#   compose.yaml:compose.loopback.yaml                  an existing proxy on the host
+#   …:compose.grpc.yaml                                 remote agents: publishes 7443
+#
+# Never edit a file here on the host: an update replaces them. Every setting
+# is a line in .env (U18). Never run `docker compose down --volumes`: the
+# volumes hold the database, the vault key and the CA, and nothing else does.
+# deploy/setup.sh runs the one-time steps.
+name: afkfleet
+
+# Every long-running service: the image's nonroot user, a read-only root,
+# no capabilities, no new privileges, restarted unless stopped, and logs
+# Docker rotates.
+x-hardened: &hardened
+  user: "65532:65532"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "5"
+
+services:
+  server:
+    <<: *hardened
+    image: ${AFKFLEET_SERVER_IMAGE:?set AFKFLEET_SERVER_IMAGE in .env}
+    # The binaries' own settings, AFKFLEET_SERVER__… lines; an unknown key
+    # stops the start (U18).
+    environment:
+      # The metrics port only on the fleet network (U19): never .env's.
+      AFKFLEET_SERVER__METRICS__BIND: 0.0.0.0:9480
+    volumes:
+      - ./prod/server.toml:/etc/afkfleet/server.toml:ro
+      - data:/data
+      - keys:/keys:ro
+      - ca:/ca:ro
+      - tls:/tls:ro
+      # The backups' host folder, 65532's, which the SFTP account reads (U3,
+      # S15). Never created by Docker: a missing folder stops `up`.
+      - type: bind
+        source: ${AFKFLEET_BACKUPS_DIR:-/srv/afkfleet-backups/backups}
+        target: /backups
+        bind:
+          create_host_path: false
+    tmpfs:
+      # SQLite's temporary files stay off the disk.
+      - /tmp:size=64m,noexec,nosuid,nodev
+    networks:
+      fleet:
+        ipv4_address: ${AFKFLEET_SERVER_FLEET_ADDRESS:-172.30.0.10}
+    # Over request_timeout_secs' largest 19 s + 5 s + 1 s (ADR-0015).
+    stop_grace_period: 30s
+    mem_limit: ${AFKFLEET_SERVER_MEMORY:-512m}
+    memswap_limit: ${AFKFLEET_SERVER_MEMORY:-512m}
+    cpus: ${AFKFLEET_SERVER_CPUS:-1.0}
+    pids_limit: ${AFKFLEET_SERVER_PIDS:-256}
+
+  agent:
+    <<: *hardened
+    image: ${AFKFLEET_AGENT_IMAGE:?set AFKFLEET_AGENT_IMAGE in .env}
+    environment:
+      # U50 for production (ADR-0022, U10): true unless .env says false.
+      AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS: ${AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS:-true}
+    volumes:
+      - ./prod/agent.toml:/etc/afkfleet/agent.toml:ro
+      - agent-data:/data
+      - ca:/ca:ro
+    tmpfs:
+      # The heartbeat file.
+      - /tmp:size=1m,noexec,nosuid,nodev
+    networks: [fleet]
+    depends_on:
+      server:
+        condition: service_healthy
+    # Over shutdown_timeout_secs (10 s) + the 5 s reply + the 1 s runtime
+    # shutdown (ADR-0014).
+    stop_grace_period: 20s
+    mem_limit: ${AFKFLEET_AGENT_MEMORY:-512m}
+    memswap_limit: ${AFKFLEET_AGENT_MEMORY:-512m}
+    cpus: ${AFKFLEET_AGENT_CPUS:-1.0}
+    pids_limit: ${AFKFLEET_AGENT_PIDS:-512}
+
+  # The one-time steps, run only by `docker compose run --rm setup …`
+  # (deploy/setup.sh): the vault key and the PKI, made by the server's image
+  # as its own user, into the volumes they live on (S14). No network.
+  setup:
+    <<: *hardened
+    image: ${AFKFLEET_SERVER_IMAGE:?set AFKFLEET_SERVER_IMAGE in .env}
+    profiles: [setup]
+    restart: "no"
+    network_mode: none
+    command: ["--help"]
+    healthcheck:
+      disable: true
+    volumes:
+      - ./prod/server.toml:/etc/afkfleet/server.toml:ro
+      - keys:/keys
+      - ca:/ca
+      - tls:/tls
+    tmpfs:
+      - /tmp:size=1m,noexec,nosuid,nodev
+
+  # Reads a metrics port from inside the fleet network (R17):
+  #   docker compose run --rm probe                              the server's
+  #   docker compose run --rm probe http://agent:9481/metrics    the agent's
+  probe:
+    <<: *hardened
+    image: caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5
+    profiles: [probe]
+    restart: "no"
+    entrypoint: ["wget", "-q", "-O", "-", "-T", "5"]
+    command: ["http://server:9480/metrics"]
+    networks: [fleet]
+
+networks:
+  fleet:
+    ipam:
+      config:
+        - subnet: ${AFKFLEET_FLEET_SUBNET:-172.30.0.0/24}
+          gateway: ${AFKFLEET_FLEET_GATEWAY:-172.30.0.1}
+          ip_range: ${AFKFLEET_FLEET_RANGE:-172.30.0.128/25}
+
+volumes:
+  data:
+  keys:
+  ca:
+  tls:
+  agent-data:

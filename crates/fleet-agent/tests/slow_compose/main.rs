@@ -174,7 +174,7 @@ impl Scenario {
         Self {
             started,
             limit: slow_limit(NEXTEST),
-            follower: LogFollower::start("agent"),
+            follower: crate::docker::follow("agent"),
             bots: bots.iter().map(|bot| bot.username.to_string()).collect(),
             policy: config.retry,
             circuit: config.circuit,

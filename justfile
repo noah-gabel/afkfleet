@@ -172,6 +172,14 @@ images:
     docker build --file deploy/docker/server.Dockerfile --tag afkfleet-server:dev .
     docker build --file deploy/docker/agent.Dockerfile --tag afkfleet-agent:dev .
 
+# The images are built first, so no build eats into a timed test, and
+# AFKFLEET_SMOKE_IMAGES_BUILT tells the tests they're this source's. Every project
+# is the tests' own (afkfleet-smoke-*, afkfleet-sftp-test); nothing else is touched.
+# CI's Stack workflow sets AFKFLEET_SMOKE_SETUP=host to run deploy/setup.sh itself.
+# The stack's smoke tests and the SFTP account's test (needs Docker; ADR-0022, S15, S19).
+test-stack $AFKFLEET_SMOKE_IMAGES_BUILT="1": images
+    cargo nextest run -p fleet-integration --profile slow -E "test(/slow_(smoke|sftp)_/)"
+
 # The weekly audit's image scan (ADR-0022, U12): each image saved to a file Grype reads,
 # so Grype never talks to Docker. The first pass lists every finding into
 # target/image-scan/, for the job's summary; the second fails on a HIGH or CRITICAL one

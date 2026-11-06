@@ -32,4 +32,5 @@ mod harness;
 mod loopback;
 mod managed_check;
 mod slow_on_respawn;
+mod smoke;
 mod timing;

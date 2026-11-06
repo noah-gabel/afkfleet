@@ -1,0 +1,9 @@
+# Remote agents (ADR-0019, S13; ADR-0022, S16): the agents' gRPC port
+# published, which compose.yaml alone never does. The port is mTLS end to
+# end and never goes through a proxy (CLAUDE.md, rule 9). The server's
+# certificate must name what remote agents dial: AFKFLEET_GRPC_NAMES in .env,
+# given to `pki init` by setup.sh, or later to `pki server-cert`.
+services:
+  server:
+    ports:
+      - "${AFKFLEET_GRPC_PUBLISH:-7443}:7443"
