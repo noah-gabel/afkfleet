@@ -27,7 +27,7 @@ The server backs up its database by itself once `[database] backup_dir` is set (
 **File system:** `backup_dir` must be on a file system with hard links, since a finished backup is published by one, which never replaces a file. Not FAT or exFAT, and not every network share: on one without them, every backup fails with `couldn't publish`.
 
 **In the compose project** (`deploy/compose.yaml`; ADR-0022, S14, S15):
-- `backup_dir` is `/backups` in the server's container: a folder on the host, `AFKFLEET_BACKUPS_DIR` in `.env` (`/srv/afkfleet-backups/backups` by default). It belongs to the server's user, 65532, with mode 700, inside a folder only root can change (root, 755). `sh setup.sh init` creates it when run with `sudo`, or prints the two commands that do.
+- `backup_dir` is `/backups` in the server's container: a folder on the host, `AFKFLEET_BACKUPS_DIR` in `.env` (`/srv/afkfleet-backups/backups` by default). It belongs to the server's user, 65532, with mode 700, inside a folder only root can change (root, 755), and its path has no `//`, `.` or `..` parts. `sudo sh setup.sh init` creates it, and its parent when that's missing, or without `sudo` prints the commands that do. An existing parent must already be root's and writable by root alone: `init` never changes it.
 - The database stays on its own volume (`data`), and the vault key and the CA's key on another (`keys`): no backup and no copy of `data` holds the key that opens it.
 - **Taking one now:**
   ```sh
@@ -45,7 +45,8 @@ sudo sh host/sftp-backups.sh install --key /path/to/your_key.pub
 ```
 - It adds the account `afkfleet-backup`: the server's user's uid and gid (65532), the only ones that can read its owner-only backups; no shell, no home, no password. Your key goes into `/etc/ssh/afkfleet-backup.authorized_keys`, marked `restrict`.
 - It adds the drop-in `/etc/ssh/sshd_config.d/10-afkfleet-backup.conf`: for that account alone, keys only, confined to the backups' folder's parent (`ChrootDirectory`), read-only SFTP (`internal-sftp -R`), no TTY and no forwarding. It never edits `sshd_config`.
-- It refuses (exit 1, saying why, changing nothing) when `sshd_config` doesn't include `/etc/ssh/sshd_config.d/*.conf` above every `Match` block, when the backups' folder or a folder above it isn't root's alone, when the name, uid or gid is taken, when the drop-in or the key file exists already, or when the key file holds more than one key. If the drop-in fails `sshd -t`, if an earlier setting would win over one of its values, or if it would change sshd's settings for anyone else, it removes the drop-in again and doesn't reload sshd.
+- It refuses (exit 1, saying why, changing nothing) when a tool it needs or a way to reload sshd (systemctl or rc-service) is missing, when `sshd_config` doesn't include `/etc/ssh/sshd_config.d/*.conf` above every `Match` block, when the backups' folder or a folder above it isn't root's alone, when the name, uid or gid is taken, when the drop-in or the key file exists already, or when the key file holds anything but one key line that starts with its type (no options before it).
+- If a step fails after it has written something (the drop-in fails `sshd -t`, an earlier setting would win over one of its values, sshd's settings would change for anyone else, adding the account or reloading sshd fails), it removes exactly what it added and exits 1, so the host is as it was.
 - A backups' folder other than the default is given with `--backups /path/to/backups`.
 - Success: `ok: the account afkfleet-backup reads … over SFTP, read-only`, then this host's key fingerprint. Keep your own SSH session open until a new login works.
 
@@ -59,7 +60,7 @@ sftp> get afkfleet-backup-20261101T000000Z.db
 - `ls` shows the backups, and `get` copies one. Never copy a `.….db.partial` dot file: that backup is still being written. Everything else (writing, deleting, renaming, a shell, a tunnel) is refused.
 - Keep the copies as private as the backups (see [Backups](#backups)).
 
-**Removing it:** `sudo sh host/sftp-backups.sh uninstall` removes the drop-in, the key file and the account, reloads sshd, and keeps the folders and the backups.
+**Removing it:** `sudo sh host/sftp-backups.sh uninstall` removes the account first, then the drop-in and the key file, reloads sshd, and keeps the folders and the backups. When the account can't be removed (it's logged in, say), it says so, removes nothing and exits 1: end its sessions and run it again.
 
 ## Restoring a backup
 
