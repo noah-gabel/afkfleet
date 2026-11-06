@@ -268,7 +268,7 @@ async fn another_keys_signature_fails_the_downloads_checks() {
 async fn a_version_raised_in_the_manifest_after_signing_fails_the_downloads_checks() {
     let release = Release::new();
     release.serve("latest.json", |manifest| {
-        manifest["version"] = json!("0.9.1")
+        manifest["version"] = json!("0.9.1");
     });
 
     assert_eq!(
@@ -292,7 +292,7 @@ async fn a_signature_without_a_version_fails_the_downloads_checks() {
 async fn the_apps_own_version_is_no_update() {
     let release = Release::new();
     release.serve("latest.json", |manifest| {
-        manifest["version"] = json!("0.1.0")
+        manifest["version"] = json!("0.1.0");
     });
 
     assert!(check(&release.updates()).await.unwrap().is_none());
