@@ -1,0 +1,22 @@
+# The proxy's network (ADR-0022, S16): the server joins `edge`, where a
+# reverse proxy reaches it at server:8080 (or afkfleet-server:8080) and
+# nothing else of afkfleet's. Caddy's path adds compose.caddy.yaml on top;
+# an existing proxy in a container joins afkfleet_edge itself at
+# AFKFLEET_PROXY_ADDRESS, the one address the server trusts for
+# X-Forwarded-For. Automatic addresses stay in the range's upper half, so
+# they never take that one.
+services:
+  server:
+    networks:
+      edge:
+        aliases: [afkfleet-server]
+    environment:
+      AFKFLEET_SERVER__HTTP__TRUSTED_PROXIES: '["${AFKFLEET_PROXY_ADDRESS:-172.30.1.2}/32"]'
+
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: ${AFKFLEET_EDGE_SUBNET:-172.30.1.0/24}
+          gateway: ${AFKFLEET_EDGE_GATEWAY:-172.30.1.1}
+          ip_range: ${AFKFLEET_EDGE_RANGE:-172.30.1.128/25}

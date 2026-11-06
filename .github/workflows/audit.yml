@@ -1,4 +1,5 @@
-# Weekly check for newly published advisories, even when nothing is pushed.
+# Weekly check for newly published advisories, even when nothing is pushed: the crates,
+# the npm packages, and the images' OS packages.
 # There's no Dependabot or Renovate: dependency updates are manual pull requests.
 name: Audit
 
@@ -45,3 +46,46 @@ jobs:
         with:
           tool: just@${{ env.JUST_VERSION }}
       - run: just ui-audit
+
+  # OS-level CVEs in the pinned base images (ADR-0014; ADR-0022, S13, U12): both images built on
+  # each architecture and scanned by Grype, pinned to its newest release at least 7 days old and
+  # checked against its SHA-256 (GitHub's immutable-release digest, cross-checked with the
+  # project's checksums file). It writes nothing; a digest bump stays a pull request of its own.
+  # An ignore needs the user's approval and an ADR note.
+  images:
+    name: image scan (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04-arm, ubuntu-24.04]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+        with:
+          tool: just@${{ env.JUST_VERSION }}
+      - name: Install Grype v0.121.0, checked against its SHA-256
+        run: |
+          case "$(uname -m)" in
+            x86_64) arch=amd64; sum=64e07133d3486115de647a66581461dccf5c732748a0a3119077395565f15519 ;;
+            aarch64) arch=arm64; sum=86f570f75ca947ea3dd6486309232bcff6d78e44ba081ae75ab14eab72be3dae ;;
+            *) echo "no Grype pin for $(uname -m)"; exit 1 ;;
+          esac
+          mkdir -p "$RUNNER_TEMP/grype"
+          curl -fsSL -o "$RUNNER_TEMP/grype/grype.tar.gz" \
+            "https://github.com/anchore/grype/releases/download/v0.121.0/grype_0.121.0_linux_${arch}.tar.gz"
+          echo "${sum}  $RUNNER_TEMP/grype/grype.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/grype/grype.tar.gz" -C "$RUNNER_TEMP/grype" grype
+          echo "$RUNNER_TEMP/grype" >> "$GITHUB_PATH"
+      - run: just images
+      - run: just image-scan
+      - name: Every finding, in the job's summary
+        if: always()
+        run: |
+          for report in target/image-scan/*.txt; do
+            [ -f "$report" ] || continue
+            { echo "### $(basename "$report" .txt)"; echo '```'; cat "$report"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          done

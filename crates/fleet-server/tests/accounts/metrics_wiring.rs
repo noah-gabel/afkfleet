@@ -2,7 +2,8 @@
 //! `app_with` hands the server's own registry to every service that counts.
 //! Each test makes its event through serve's router and reads the app's
 //! own render; taking that service's `with_metrics` out of `cli/serve.rs`
-//! turns its test red. The control plane's are `tests/serve/metrics.rs`'.
+//! turns its test red. The control plane's (connect refusals, grants,
+//! denials and the ingest's rows) are `tests/serve/control_plane.rs`'.
 
 use core::num::NonZeroU32;
 

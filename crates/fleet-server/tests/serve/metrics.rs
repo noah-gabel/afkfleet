@@ -158,6 +158,92 @@ async fn another_method_on_the_metrics_route_is_405() {
     assert_eq!(serving.stop().await, Exit::Stopped);
 }
 
+/// The status line and whether the body holds the series, for `method`
+/// and `target` on the metrics port at `address`.
+async fn answered(address: SocketAddr, method: &str, target: &str) -> (String, bool) {
+    let answer = exchange(
+        address,
+        &format!("{method} {target} HTTP/1.1\r\nHost: metrics\r\nConnection: close\r\n\r\n"),
+    )
+    .await;
+    let (head, body) = answer.split_once("\r\n\r\n").unwrap_or((&answer, ""));
+    let status = head.lines().next().unwrap_or_default().to_owned();
+    (status, body.contains("afkfleet_refresh_token_reuses_total"))
+}
+
+/// A query or a fragment on `/metrics` is ignored, as the agent's
+/// responder ignores it (ADR-0022, S20; PR #96's review): Prometheus'
+/// `params` may add one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_query_on_the_metrics_route_is_ignored() {
+    let serving = serving("metrics_query", |_| {}).await;
+
+    let mut found = Vec::new();
+    for (method, target) in [
+        ("GET", "/metrics?x=1"),
+        ("GET", "/metrics?"),
+        ("GET", "/metrics#x"),
+        ("POST", "/metrics?x=1"),
+    ] {
+        found.push((target, answered(serving.metrics, method, target).await));
+    }
+
+    assert_eq!(
+        found,
+        [
+            ("/metrics?x=1", ("HTTP/1.1 200 OK".to_owned(), true)),
+            ("/metrics?", ("HTTP/1.1 200 OK".to_owned(), true)),
+            ("/metrics#x", ("HTTP/1.1 200 OK".to_owned(), true)),
+            (
+                "/metrics?x=1",
+                ("HTTP/1.1 405 Method Not Allowed".to_owned(), false)
+            ),
+        ]
+    );
+    assert_eq!(serving.stop().await, Exit::Stopped);
+}
+
+/// Only the exact path is the metrics route: a trailing slash, a doubled
+/// slash or `/metrics` inside another path's query is 404 (S20).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_the_exact_path_is_the_metrics_route() {
+    let serving = serving("metrics_exact", |_| {}).await;
+
+    let mut found = Vec::new();
+    for target in ["/metrics/", "//metrics", "/x?y=/metrics"] {
+        found.push((target, answered(serving.metrics, "GET", target).await));
+    }
+
+    let not_found = ("HTTP/1.1 404 Not Found".to_owned(), false);
+    assert_eq!(
+        found,
+        [
+            ("/metrics/", not_found.clone()),
+            ("//metrics", not_found.clone()),
+            ("/x?y=/metrics", not_found),
+        ]
+    );
+    assert_eq!(serving.stop().await, Exit::Stopped);
+}
+
+/// `HEAD /metrics` answers 200 with the head alone, as the agent's
+/// responder does (ADR-0022, U23).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn head_on_the_metrics_route_answers_without_a_body() {
+    let serving = serving("metrics_head", |_| {}).await;
+
+    let answer = exchange(
+        serving.metrics,
+        "HEAD /metrics HTTP/1.1\r\nHost: metrics\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+
+    let (head, body) = answer.split_once("\r\n\r\n").unwrap();
+    assert!(head.starts_with("HTTP/1.1 200 OK\r\n"), "{head}");
+    assert_eq!(body, "");
+    assert_eq!(serving.stop().await, Exit::Stopped);
+}
+
 /// The metrics port spends the per-IP limit, as every request does: a
 /// scraper that floods it is refused (rule 3).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -1,7 +1,10 @@
 # The slow tests against local Minecraft containers (`just test-slow`), weekly
 # and on demand. They need Docker, take about ten minutes and contact Mojang's
-# session server, so they aren't a required check (ADR-0011). Third-party
-# actions are pinned to full commit SHAs (version in the comment), as in ci.yml.
+# session server, so they aren't a required check (ADR-0011). Since Phase 12 they
+# also build both production images, cold, for the stack's smoke tests and run
+# those and the SFTP account's test (ADR-0022, S19), hence the longer timeout.
+# Third-party actions are pinned to full commit SHAs (version in the comment), as
+# in ci.yml.
 name: Slow tests
 
 on:
@@ -25,7 +28,7 @@ jobs:
   slow-tests:
     name: slow-tests
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

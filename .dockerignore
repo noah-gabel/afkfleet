@@ -1,8 +1,9 @@
-# The Docker build context is the repository root (deploy/docker/agent.Dockerfile).
+# The Docker build context of both images is the repository root
+# (deploy/docker/server.Dockerfile, deploy/docker/agent.Dockerfile).
 # This is an allowlist: only what the Rust build needs gets in, so nothing
 # secret (secrets/, .env files, keys, databases) can enter the context, even a
 # file added later (ADR-0014). The desktop app's Rust side is a workspace member, so
-# cargo needs it to load the workspace, though the agent never builds it (ADR-0017).
+# cargo needs it to load the workspace, though neither image builds it (ADR-0017).
 *
 !Cargo.toml
 !Cargo.lock

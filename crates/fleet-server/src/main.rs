@@ -90,6 +90,9 @@ fn main() -> ExitCode {
         Command::Vault {
             command: VaultCommand::RotateKey { config },
         } => run_vault(&config, VaultRun::RotateKey),
+        Command::Vault {
+            command: VaultCommand::CreateKey { config, id },
+        } => create_vault_key(&config, id),
         Command::Pki {
             command: PkiCommand::Init { config, dns, ip },
         } => run_pki(&config, PkiRun::Init, &dns, &ip),
@@ -431,6 +434,21 @@ fn run_pki(path: &Path, command: PkiRun, dns: &[String], ips: &[IpAddr]) -> Exit
         &mut io::stdout(),
         &mut io::stderr(),
     );
+    ExitCode::from(exit.code())
+}
+
+/// `afkfleet-server vault create-key`, with the OS's randomness: plain file
+/// work, so no runtime.
+fn create_vault_key(path: &Path, id: Option<u32>) -> ExitCode {
+    let config = match config::load(path) {
+        Ok(config) => config,
+        Err(error) => return fail_early(&error),
+    };
+    // Logs to stderr: stdout names the new file alone.
+    if let Err(error) = init_on(&config.log, &NoRules, LogOutput::Stderr) {
+        return fail_early(&error);
+    }
+    let exit = vault::create_key(&config, id, &OsRandom, &mut io::stdout(), &mut io::stderr());
     ExitCode::from(exit.code())
 }
 

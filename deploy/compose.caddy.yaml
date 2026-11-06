@@ -1,0 +1,55 @@
+# afkfleet's own Caddy on ports 80 and 443, for a host where both are free
+# (ADR-0022, S16, U5; COMPOSE_FILE adds it after compose.edge.yaml). It gets
+# HTTPS from Let's Encrypt for AFKFLEET_DOMAIN, which must point at this
+# host, and proxies only the app's routes to the server (Caddyfile). It runs
+# as the nonroot user with every capability dropped but NET_BIND_SERVICE in
+# its bounding set (ADR-0022, S21): 2.11.7's binary carries that capability
+# as a file capability (+ep), and without it in the bounding set the binary
+# can't even be executed. It's the one capability Caddy holds (the smoke test
+# checks), and all it allows is binding ports below 1024, which Docker lets
+# any user in a container do anyway. From Caddy 2.11.8 on, the cap_add can
+# go.
+services:
+  caddy:
+    image: caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      AFKFLEET_DOMAIN: ${AFKFLEET_DOMAIN:?set AFKFLEET_DOMAIN in .env}
+      AFKFLEET_TLS: ${AFKFLEET_TLS:?set AFKFLEET_TLS in .env to letsencrypt}
+      AFKFLEET_ACME_EMAIL: ${AFKFLEET_ACME_EMAIL:?set AFKFLEET_ACME_EMAIL in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Its certificates and ACME account.
+      - caddy-data:/data
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid,nodev
+      - /config:size=1m,uid=65532,gid=65532,mode=0700,noexec,nosuid,nodev
+    networks:
+      edge:
+        ipv4_address: ${AFKFLEET_PROXY_ADDRESS:-172.30.1.2}
+    depends_on:
+      server:
+        condition: service_healthy
+    # Over the Caddyfile's grace_period of 20 s.
+    stop_grace_period: 25s
+    mem_limit: ${AFKFLEET_CADDY_MEMORY:-256m}
+    memswap_limit: ${AFKFLEET_CADDY_MEMORY:-256m}
+    cpus: ${AFKFLEET_CADDY_CPUS:-0.5}
+    pids_limit: ${AFKFLEET_CADDY_PIDS:-128}
+
+volumes:
+  caddy-data:

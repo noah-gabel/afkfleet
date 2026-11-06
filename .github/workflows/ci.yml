@@ -271,12 +271,15 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      # ShellCheck 0.11.0 for `just sh-check`, checked by its SHA-256 from the action's
+      # manifest (ADR-0022, U15).
       - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
         with:
-          tool: just@${{ env.JUST_VERSION }}
+          tool: just@${{ env.JUST_VERSION }},shellcheck@0.11.0
       - run: pnpm install --frozen-lockfile
       - run: just ui-check
       - run: just scripts-test
+      - run: just sh-check
       - run: just ui-audit
 
   e2e:

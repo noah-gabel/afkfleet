@@ -17,7 +17,7 @@ Server module layout:
 ```
 fleet-server/src/
   main.rs  lib.rs  config.rs  metrics.rs   # metrics.rs: ServerMetrics, every series and its fixed labels (P12.4)
-  cli/        # serve, migrate, healthcheck, user create-owner, vault status, vault rotate-key, pki init, pki server-cert, agent create-enrollment-token, agent list, agent disable, agent release, backup
+  cli/        # serve, migrate, healthcheck, user create-owner, vault status, vault rotate-key, vault create-key, pki init, pki server-cert, agent create-enrollment-token, agent list, agent disable, agent release, backup
   app/        # services: auth, users, accounts, backup, bots, modes, server_settings, agents, enrollment, audit, events, event_tickets, retention, vault
   ports/      # repository and provider traits
   infra/      # sqlite/ (sqlx repos), crypto/ (vault, tokens, passwords), msauth/ (Microsoft's account flows over HTTP), pki/ (the CA, certificates, CSRs)

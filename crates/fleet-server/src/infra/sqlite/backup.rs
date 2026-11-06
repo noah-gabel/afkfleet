@@ -463,6 +463,17 @@ fn stopped(partial: &Path) -> BackupError {
 /// progress handler, since `quick_check` reads every page: a stop or the
 /// bound ends them.
 async fn check(partial: &Path, ends: &Ends, options: &DatabaseOptions) -> Result<(), BackupError> {
+    check_with(partial, ends, options, || ()).await
+}
+
+/// [`check`], calling `between` after the schema read and before
+/// `quick_check`: a test's way to stop the write right there.
+async fn check_with(
+    partial: &Path,
+    ends: &Ends,
+    options: &DatabaseOptions,
+    between: impl FnOnce(),
+) -> Result<(), BackupError> {
     let check_failed = |source| BackupError::Check {
         file: partial.to_owned(),
         source: Some(source),
@@ -487,6 +498,7 @@ async fn check(partial: &Path, ends: &Ends, options: &DatabaseOptions) -> Result
         Ok(applied) => schema_state(&applied, &MIGRATOR),
         Err(error) => Err(error),
     };
+    between();
     let quick = sqlx::query_scalar!("PRAGMA quick_check")
         .fetch_all(&mut connection)
         .await;
@@ -704,6 +716,20 @@ mod tests {
         let past = Ends::new(&CancellationToken::new(), Duration::ZERO);
 
         let result = check(&file, &past, &DatabaseOptions::default()).await;
+
+        assert!(matches!(result, Err(BackupError::Stopped { file: f }) if f == file));
+    }
+
+    /// `quick_check` runs under the progress handler too, not only the
+    /// schema read before it (PR #96's review): a stop that comes between
+    /// the two ends `quick_check`, and the write reads as stopped.
+    #[tokio::test]
+    async fn a_stop_after_the_schema_read_ends_quick_check() {
+        let (_root, file) = migrated().await;
+        let stop = CancellationToken::new();
+        let ends = Ends::new(&stop, Duration::from_secs(60));
+
+        let result = check_with(&file, &ends, &DatabaseOptions::default(), || stop.cancel()).await;
 
         assert!(matches!(result, Err(BackupError::Stopped { file: f }) if f == file));
     }

@@ -1,0 +1,34 @@
+# The stand-in for an operator's own reverse proxy (ADR-0022, S16, S19):
+# what the runbook asks of one, nothing more. TLS (here Caddy's internal CA,
+# for localhost), WebSocket upgrades, X-Forwarded-For replaced with the real
+# client (Caddy's default for a peer it doesn't trust), HSTS, only the app's
+# routes to afkfleet's server, and no ticket or q in any log line.
+{
+	admin off
+	persist_config off
+	skip_install_trust
+	log default {
+		output stderr
+		format filter {
+			wrap json
+			fields {
+				request>uri query {
+					delete ticket
+					delete q
+				}
+			}
+		}
+	}
+}
+
+{$AFKFLEET_DOMAIN} {
+	tls internal
+	header Strict-Transport-Security "max-age=31536000"
+	@app path /api/v1/* /health/live /health/ready
+	handle @app {
+		reverse_proxy afkfleet-server:8080
+	}
+	handle {
+		respond 404
+	}
+}

@@ -315,6 +315,22 @@ pub enum VaultCommand {
         #[arg(long, value_name = "PATH")]
         config: PathBuf,
     },
+    /// Creates a new vault key in the file `[vault] master_key_files` names
+    /// for its ID: 32 random bytes, owner-only. It never overwrites a file,
+    /// never prints the key, and never opens the database. Back the key up
+    /// separately: a backup holds only ciphertext.
+    #[command(after_help = vault::CREATE_KEY_EXIT_CODES)]
+    CreateKey {
+        /// The config file (TOML): the command reads `[vault]` and `[log]`.
+        /// `AFKFLEET_SERVER__…` environment variables override its keys, as
+        /// for `serve`.
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
+        /// The key's ID; `[vault] active_key_id` when left out. A rotation
+        /// names the new key's.
+        #[arg(long, value_name = "ID")]
+        id: Option<u32>,
+    },
 }
 
 /// The exit code for a command line clap refused, or for `--help` and
@@ -476,6 +492,35 @@ mod tests {
                 .unwrap();
 
         assert_eq!(cli.command, Command::Vault { command: expected });
+    }
+
+    #[rstest]
+    #[case::the_active_key(&[], None)]
+    #[case::another_key(&["--id", "2"], Some(2))]
+    fn create_key_takes_the_config_and_an_optional_id(
+        #[case] extra: &[&str],
+        #[case] id: Option<u32>,
+    ) {
+        let mut args = vec![
+            "afkfleet-server",
+            "vault",
+            "create-key",
+            "--config",
+            "server.toml",
+        ];
+        args.extend_from_slice(extra);
+
+        let cli = Cli::try_parse_from(args).unwrap();
+
+        assert_eq!(
+            cli.command,
+            Command::Vault {
+                command: VaultCommand::CreateKey {
+                    config: PathBuf::from("server.toml"),
+                    id,
+                },
+            }
+        );
     }
 
     #[rstest]

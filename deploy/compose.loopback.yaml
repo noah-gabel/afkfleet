@@ -1,0 +1,12 @@
+# The path for a reverse proxy installed on the host itself (ADR-0022, S16):
+# the server's API on 127.0.0.1 only, never another interface. Docker hands
+# such a connection to the server from the fleet network's gateway, the one
+# address the server trusts for X-Forwarded-For. Any process on the host can
+# connect there too (the threat model's accepted risk). The proxy connects
+# to 127.0.0.1, not localhost, which may be ::1.
+services:
+  server:
+    ports:
+      - "127.0.0.1:${AFKFLEET_HTTP_PORT:-8080}:8080"
+    environment:
+      AFKFLEET_SERVER__HTTP__TRUSTED_PROXIES: '["${AFKFLEET_FLEET_GATEWAY:-172.30.0.1}/32"]'

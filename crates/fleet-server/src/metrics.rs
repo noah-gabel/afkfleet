@@ -208,17 +208,15 @@ pub enum ConnectRefused {
 }
 
 impl ConnectRefused {
-    /// Every reason.
-    pub const ALL: [Self; 8] = [
-        Self::Refused(ConnectRefusal::Revoked),
-        Self::Refused(ConnectRefusal::Expired),
-        Self::Refused(ConnectRefusal::Disabled),
-        Self::Refused(ConnectRefusal::SanMismatch),
-        Self::Refused(ConnectRefusal::NameMismatch),
-        Self::UnknownCertificate,
-        Self::NoCertificate,
-        Self::AlreadyConnected,
-    ];
+    /// Every reason: each of fleet-core's [`ConnectRefusal::ALL`], so a new
+    /// one there counts from 0 here too, then the server's own.
+    pub fn all() -> impl Iterator<Item = Self> {
+        ConnectRefusal::ALL.into_iter().map(Self::Refused).chain([
+            Self::UnknownCertificate,
+            Self::NoCertificate,
+            Self::AlreadyConnected,
+        ])
+    }
 
     /// The `reason` label: the audit entry's for a refused certificate.
     #[must_use]
@@ -289,31 +287,25 @@ pub enum SessionDenial {
 }
 
 impl SessionDenial {
-    /// Every reason.
-    pub const ALL: [Self; 22] = [
-        Self::UnknownCertificate,
-        Self::NotAdmitted(ConnectRefusal::Revoked),
-        Self::NotAdmitted(ConnectRefusal::Expired),
-        Self::NotAdmitted(ConnectRefusal::Disabled),
-        Self::NotAdmitted(ConnectRefusal::SanMismatch),
-        Self::NotAdmitted(ConnectRefusal::NameMismatch),
-        Self::NoBot,
-        Self::AssignedElsewhere,
-        Self::Unplaced(Unplaced::NoServer),
-        Self::Unplaced(Unplaced::Stopped),
-        Self::Unplaced(Unplaced::OwnerDisabled),
-        Self::Unplaced(Unplaced::Pending),
-        Self::Unplaced(Unplaced::ReauthRequired),
-        Self::Unplaced(Unplaced::Refused),
-        Self::Unplaced(Unplaced::OfflineNotAllowed),
-        Self::AccountChanged,
-        Self::NotHeld,
-        Self::Store,
-        Self::SessionToken,
-        Self::Unsendable,
-        Self::NotAssigned,
-        Self::GrantQueueFull,
-    ];
+    /// Every reason: fleet-core's [`ConnectRefusal::ALL`] and
+    /// [`Unplaced::ALL`], so a new one there counts from 0 here too, beside
+    /// the server's own.
+    pub fn all() -> impl Iterator<Item = Self> {
+        [Self::UnknownCertificate]
+            .into_iter()
+            .chain(ConnectRefusal::ALL.into_iter().map(Self::NotAdmitted))
+            .chain([Self::NoBot, Self::AssignedElsewhere])
+            .chain(Unplaced::ALL.into_iter().map(Self::Unplaced))
+            .chain([
+                Self::AccountChanged,
+                Self::NotHeld,
+                Self::Store,
+                Self::SessionToken,
+                Self::Unsendable,
+                Self::NotAssigned,
+                Self::GrantQueueFull,
+            ])
+    }
 
     /// The `reason` label: the denial's log line's for the grant service's
     /// own reasons.
@@ -567,7 +559,7 @@ fn register() {
         CONNECTS_REFUSED,
         "Agent connections refused for their certificate, by reason, past the audit log's daily cap too."
     );
-    for why in ConnectRefused::ALL {
+    for why in ConnectRefused::all() {
         counter!(CONNECTS_REFUSED, "reason" => why.label()).increment(0);
     }
     describe_counter!(
@@ -594,7 +586,7 @@ fn register() {
         SESSION_DENIALS,
         "Session requests denied, by reason; the fresh-session limit's refusals are rate_limit_refusals with limit=\"fresh_sessions\"."
     );
-    for why in SessionDenial::ALL {
+    for why in SessionDenial::all() {
         counter!(SESSION_DENIALS, "reason" => why.label()).increment(0);
     }
     describe_counter!(
@@ -834,6 +826,25 @@ mod tests {
         insta::assert_snapshot!(sorted(&render));
     }
 
+    /// Every reason fleet-core names, a new one too, is a series at 0 from
+    /// the start (PR #96's review): the refusals and denials are built from
+    /// [`ConnectRefusal::ALL`] and [`Unplaced::ALL`], never copied by hand.
+    #[test]
+    fn every_reason_fleet_core_names_starts_at_zero() {
+        let render = Metrics::prometheus().render().text();
+
+        for refusal in ConnectRefusal::ALL.map(ConnectRefusal::as_str) {
+            for name in [CONNECTS_REFUSED, SESSION_DENIALS] {
+                let series = format!("{name}{{reason=\"{refusal}\"}}");
+                assert_eq!(value(&render, &series).as_deref(), Some("0"), "{series}");
+            }
+        }
+        for why in Unplaced::ALL.map(Unplaced::as_str) {
+            let series = format!("{SESSION_DENIALS}{{reason=\"{why}\"}}");
+            assert_eq!(value(&render, &series).as_deref(), Some("0"), "{series}");
+        }
+    }
+
     /// No label holds anything but a fixed name of the server's (S11): the
     /// keys from one short list, the values lowercase words.
     #[test]
@@ -875,10 +886,10 @@ mod tests {
             LockoutRefusal::ALL.map(LockoutRefusal::label).into()
         ));
         assert!(distinct(
-            ConnectRefused::ALL.map(ConnectRefused::label).into()
+            ConnectRefused::all().map(ConnectRefused::label).collect()
         ));
         assert!(distinct(
-            SessionDenial::ALL.map(SessionDenial::label).into()
+            SessionDenial::all().map(SessionDenial::label).collect()
         ));
         assert!(distinct(NOT_TAKEN.map(not_taken_label).into()));
     }

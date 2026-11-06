@@ -62,8 +62,8 @@ Where things are:
     Every subagent brief repeats "Stay in this repository". Library and crate sources are read on docs.rs or the crate's own repository on the web, never from the cargo registry, the toolchain folders or any other folder on this PC outside this repository.
 
     **Every subagent is read-only, and checked** (the user's rule, ADR-0022, U9):
-    - Its brief says so: it creates, edits, moves or deletes no file, and runs no command that writes or changes git state.
-    - Before it starts, note `git status --short` with the untracked files. After it finishes, compare them.
+    - Its brief says so: it creates, edits, moves or deletes no file, and runs no command that writes, installs, builds or changes git state.
+    - Before it starts, run `node scripts/tree-fingerprint.mjs` and keep its output; after it finishes, run it again and compare. With several subagents in flight, compare after each. It hashes git's HEAD, refs, index with its flags, hooks and stash, tracked changes and every untracked file by content, and the ignored paths outside `target/` and `node_modules/` by path, size and mtime, never opening them; it can't see changes inside those two folders.
     - Any change you didn't make stops the work and goes to the user.
 
 ## Git & GitHub rules

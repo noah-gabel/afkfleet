@@ -1,0 +1,57 @@
+# A remote agent's compose project, for a host other than the server's
+# (Plan.md P12.2; ADR-0022, S17): the managed agent alone, which dials the
+# server's published gRPC port (compose.grpc.yaml on the server's host). Run
+# it from this folder with its own .env beside it:
+#   AFKFLEET_AGENT_IMAGE                      the agent's image
+#   AFKFLEET_AGENT__NAME                      its name, unique among the agents
+#   AFKFLEET_AGENT__CONTROL_PLANE__URL        https://<a name the server's certificate names>:7443
+#   AFKFLEET_CA_CERT_FILE                     the server's CA certificate (ca.crt), copied here
+# and, as env.example explains them, AFKFLEET_AGENT_MEMORY, AFKFLEET_AGENT_CPUS,
+# AFKFLEET_AGENT_PIDS and AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS.
+# The CA certificate is a compose secret from a file on this host, which
+# must belong to 65532 with mode 600: root once (`sudo chown 65532:65532
+# ca.crt` and `sudo chmod 600 ca.crt`), since the agent reads it as its own
+# user and refuses a file others can read. The identity `enroll` writes lives
+# on the agent-data volume. Never `docker compose down --volumes`.
+name: afkfleet-agent
+
+services:
+  agent:
+    image: ${AFKFLEET_AGENT_IMAGE:?set AFKFLEET_AGENT_IMAGE in .env}
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      # U50 for production (ADR-0022, U10): true unless .env says false.
+      AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS: ${AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS:-true}
+    volumes:
+      - ./prod/agent.remote.toml:/etc/afkfleet/agent.toml:ro
+      - agent-data:/data
+    secrets:
+      - source: fleet_ca_cert
+        target: fleet_ca_cert
+    tmpfs:
+      - /tmp:size=1m,noexec,nosuid,nodev
+    stop_grace_period: 20s
+    mem_limit: ${AFKFLEET_AGENT_MEMORY:-512m}
+    memswap_limit: ${AFKFLEET_AGENT_MEMORY:-512m}
+    cpus: ${AFKFLEET_AGENT_CPUS:-1.0}
+    pids_limit: ${AFKFLEET_AGENT_PIDS:-512}
+
+secrets:
+  fleet_ca_cert:
+    file: ${AFKFLEET_CA_CERT_FILE:-./ca.crt}
+
+volumes:
+  agent-data:

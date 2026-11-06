@@ -1,0 +1,53 @@
+# The server's production config, for deploy/compose.yaml (Plan.md P12.2;
+# ADR-0022, S14, U18). Compose mounts it read-only at
+# /etc/afkfleet/server.toml, where the image's CMD and HEALTHCHECK read it.
+#
+# Don't edit this file on the host: an update replaces it. Every setting you
+# change goes into the host's .env as an AFKFLEET_SERVER__… line, which
+# compose hands the server and which overrides the key here, e.g.
+#   AFKFLEET_SERVER__DATABASE__BACKUP_KEEP=30
+# deploy/env.example lists the ones the runbook names. Unknown keys stop the
+# start, so a typo is reported, not ignored.
+#
+# Every path below is a folder compose mounts a volume at (S14): /data the
+# database, /backups the backups' host folder, /keys the vault key and the
+# CA key, /ca the CA certificate, /tls the server's certificate and key.
+
+dev_mode = false
+
+[http]
+bind = "0.0.0.0:8080"                    # inside the container; each proxy path's compose file
+                                         # says who reaches it, and sets trusted_proxies (S16)
+request_timeout_secs = 15                # 1–19; compose's stop_grace_period (30 s) outlasts
+                                         # 19 + 5 + 1 s whatever .env sets here
+
+[grpc]                                   # the agents' port; published only with compose.grpc.yaml
+bind = "0.0.0.0:7443"
+ca_cert_file = "/ca/ca.crt"
+ca_key_file = "/keys/ca.key"
+server_cert_file = "/tls/server.crt"
+server_key_file = "/tls/server.key"
+
+# [metrics] is set by compose alone: AFKFLEET_SERVER__METRICS__BIND binds
+# 9480 to the server's own address on the project's fleet network, so
+# nothing on the proxy's network reaches it (ADR-0022, S10, U19).
+
+[database]
+path = "/data/afkfleet.db"
+backup_dir = "/backups"                  # copied off the host by the SFTP pull (U3)
+backup_interval_hours = 24
+backup_keep = 14
+
+[vault]
+active_key_id = 1                        # a rotation adds AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__2
+                                         # and AFKFLEET_SERVER__VAULT__ACTIVE_KEY_ID=2 to .env
+
+[vault.master_key_files]
+1 = "/keys/vault-key-1"
+
+[accounts]
+allow_offline = false                    # real Microsoft accounts only
+
+[log]
+format = "json"
+filter = "info"                          # chat is logged only at debug

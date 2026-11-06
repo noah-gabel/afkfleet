@@ -1,0 +1,34 @@
+# The local agent's production config, for deploy/compose.yaml (Plan.md
+# P12.2; ADR-0022, S17, U10, U18): the managed agent beside the server.
+# Compose mounts it read-only at /etc/afkfleet/agent.toml, where the image's
+# CMD and HEALTHCHECK read it.
+#
+# Don't edit this file on the host: an update replaces it. Every setting you
+# change goes into the host's .env as an AFKFLEET_AGENT__… line, which
+# compose hands the agent and which overrides the key here, e.g.
+#   AFKFLEET_AGENT__RUNTIME__MAX_BOTS=20
+# deploy/env.example lists the ones the runbook names. Unknown keys stop the
+# start, so a typo is reported, not ignored.
+
+name = "local"                           # the name it enrolls under; another agent may not take it
+
+[log]
+format = "json"
+filter = "info"                          # chat is logged only at debug
+
+[metrics]                                # on the project's fleet network only, never published (S10)
+bind = "0.0.0.0:9481"
+
+[control_plane]
+url = "https://server:7443"              # the server's service name, which its certificate names
+ca_cert_file = "/ca/ca.crt"              # the server's CA certificate, from the ca volume, read-only
+cert_file = "/data/agent.crt"            # the identity `enroll` writes once, on the agent-data volume
+key_file = "/data/agent.key"
+# No private network: the bots never dial the host's own networks or the
+# services beside afkfleet (ADR-0022, U4, U10).
+private_targets = []
+# U50 for production (ADR-0022, U10, the user's decision of 2026-11-06): the
+# bots may dial public Minecraft servers. The switch is .env's
+# AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS: false stops all public
+# dialling at the agent's next start (`docker compose up -d agent`).
+public_targets = true

@@ -2,10 +2,12 @@
 //! /metrics` on `[metrics] bind`, in Prometheus' text format, answered by a
 //! responder of the agent's own that speaks just enough HTTP/1.1.
 //!
-//! - **Only `GET /metrics`** gets the metrics. Another path is 404, another
-//!   method 405, a request head that isn't one, or that's larger than
-//!   [`Limits::head_bytes`], 400. Every answer closes its connection, and a
-//!   client that closes before a whole head gets none.
+//! - **Only `GET /metrics`** gets the metrics, a query or a fragment on it
+//!   ignored, as the server's router does (ADR-0022, S20); `HEAD /metrics`
+//!   gets the same head without the series (U23). Another path is 404,
+//!   another method 405, a request head that isn't one, or that's larger
+//!   than [`Limits::head_bytes`], 400. Every answer closes its connection,
+//!   and a client that closes before a whole head gets none.
 //! - **Bounded:** at most [`Limits::connections`] connections at once (one
 //!   more is closed at once, unanswered), each within [`Limits::timeout`] of
 //!   its accept, its request and its answer together. An accept that fails
@@ -226,8 +228,13 @@ enum Head {
     Cut,
 }
 
+/// The blank line that ends a request head.
+const HEAD_END: &[u8] = b"\r\n\r\n";
+
 /// Reads `stream` until the blank line that ends a request head, at most
-/// `limit` bytes of it.
+/// `limit` bytes of it. However the blank line's bytes are split across
+/// reads, a head of `limit` bytes is complete: the reading stops only once
+/// no blank line can end the head within the limit any more.
 async fn read_head<S: AsyncRead + Unpin>(stream: &mut S, limit: usize) -> io::Result<Head> {
     let mut head = Vec::with_capacity(limit.min(512));
     let mut chunk = [0_u8; 512];
@@ -237,14 +244,19 @@ async fn read_head<S: AsyncRead + Unpin>(stream: &mut S, limit: usize) -> io::Re
             return Ok(Head::Cut);
         }
         head.extend_from_slice(chunk.get(..read).unwrap_or_default());
-        if let Some(end) = head.windows(4).position(|window| window == b"\r\n\r\n") {
+        if let Some(end) = head
+            .windows(HEAD_END.len())
+            .position(|window| window == HEAD_END)
+        {
             if end > limit {
                 return Ok(Head::TooLarge);
             }
             head.truncate(end);
             return Ok(Head::Complete(head));
         }
-        if head.len() > limit {
+        // A blank line still to come would start at the last three bytes at
+        // the earliest, so past the limit once those lie beyond it.
+        if head.len() > limit.saturating_add(HEAD_END.len() - 1) {
             return Ok(Head::TooLarge);
         }
     }
@@ -255,6 +267,8 @@ async fn read_head<S: AsyncRead + Unpin>(stream: &mut S, limit: usize) -> io::Re
 enum Route {
     /// `GET /metrics`.
     Metrics,
+    /// `HEAD /metrics`: the metrics' head alone.
+    MetricsHead,
     /// Another path.
     NotFound,
     /// Another method on [`PATH`].
@@ -284,12 +298,17 @@ fn route(head: &[u8]) -> Route {
     if !is_method || !is_target || !matches!(version, "HTTP/1.1" | "HTTP/1.0") {
         return Route::BadRequest;
     }
-    if target != PATH {
-        Route::NotFound
-    } else if method == "GET" {
-        Route::Metrics
-    } else {
-        Route::MethodNotAllowed
+    // The path alone, as the http crate splits a target: a query or a
+    // fragment doesn't make it another path.
+    let path = target
+        .find(['?', '#'])
+        .and_then(|end| target.get(..end))
+        .unwrap_or(target);
+    match (path == PATH, method) {
+        (false, _) => Route::NotFound,
+        (true, "GET") => Route::Metrics,
+        (true, "HEAD") => Route::MetricsHead,
+        (true, _) => Route::MethodNotAllowed,
     }
 }
 
@@ -302,11 +321,18 @@ fn reply<R: Render>(head: &Head, render: &R) -> Option<Vec<u8>> {
     };
     Some(match route {
         Route::Metrics => response("200 OK", TEXT_FORMAT, &[], &render.render()),
+        Route::MetricsHead => {
+            // The head a GET would get, its Content-Length included.
+            let series = render.render();
+            let mut head = response("200 OK", TEXT_FORMAT, &[], &series);
+            head.truncate(head.len().saturating_sub(series.len()));
+            head
+        }
         Route::NotFound => response("404 Not Found", PLAIN, &[], "not found\n"),
         Route::MethodNotAllowed => response(
             "405 Method Not Allowed",
             PLAIN,
-            &[("Allow", "GET")],
+            &[("Allow", "GET, HEAD")],
             "method not allowed\n",
         ),
         Route::BadRequest => response("400 Bad Request", PLAIN, &[], "bad request\n"),
@@ -433,10 +459,17 @@ mod tests {
     #[case::http_1_0("GET /metrics HTTP/1.0", Route::Metrics)]
     #[case::with_headers("GET /metrics HTTP/1.1\r\nHost: agent\r\nAccept: */*", Route::Metrics)]
     #[case::another_path("GET /health HTTP/1.1", Route::NotFound)]
-    #[case::a_query("GET /metrics?x=1 HTTP/1.1", Route::NotFound)]
+    #[case::a_query("GET /metrics?x=1 HTTP/1.1", Route::Metrics)]
+    #[case::an_empty_query("GET /metrics? HTTP/1.1", Route::Metrics)]
+    #[case::a_fragment("GET /metrics#x HTTP/1.1", Route::Metrics)]
     #[case::a_longer_path("GET /metrics/x HTTP/1.1", Route::NotFound)]
+    #[case::a_trailing_slash("GET /metrics/ HTTP/1.1", Route::NotFound)]
+    #[case::a_double_slash("GET //metrics HTTP/1.1", Route::NotFound)]
+    #[case::a_query_elsewhere("GET /x?y=/metrics HTTP/1.1", Route::NotFound)]
     #[case::post("POST /metrics HTTP/1.1", Route::MethodNotAllowed)]
-    #[case::head("HEAD /metrics HTTP/1.1", Route::MethodNotAllowed)]
+    #[case::post_with_a_query("POST /metrics?x=1 HTTP/1.1", Route::MethodNotAllowed)]
+    #[case::head("HEAD /metrics HTTP/1.1", Route::MetricsHead)]
+    #[case::head_with_a_query("HEAD /metrics?x=1 HTTP/1.1", Route::MetricsHead)]
     #[case::a_post_elsewhere("POST /x HTTP/1.1", Route::NotFound)]
     #[case::http_2("GET /metrics HTTP/2", Route::BadRequest)]
     #[case::no_version("GET /metrics", Route::BadRequest)]
@@ -503,13 +536,32 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_405_says_get_is_allowed() {
+    async fn a_405_says_get_and_head_are_allowed() {
         let running = Running::start(Limits::default());
         let mut client = running.connect().await;
 
         let answer = exchange(&mut client, "DELETE /metrics HTTP/1.1\r\n\r\n").await;
 
-        assert!(answer.contains("\r\nAllow: GET\r\n"), "{answer}");
+        assert!(answer.contains("\r\nAllow: GET, HEAD\r\n"), "{answer}");
+        running.stop().await;
+    }
+
+    /// `HEAD /metrics` gets what `GET` gets but the series (ADR-0022, U23):
+    /// the same status and headers, its Content-Length the series' length.
+    #[tokio::test(start_paused = true)]
+    async fn head_metrics_answers_the_head_without_the_series() {
+        let running = Running::start(Limits::default());
+        let mut client = running.connect().await;
+
+        let answer = exchange(&mut client, "HEAD /metrics HTTP/1.1\r\n\r\n").await;
+
+        assert_eq!(
+            answer,
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {TEXT_FORMAT}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+                SERIES.len()
+            )
+        );
         running.stop().await;
     }
 
@@ -549,6 +601,46 @@ mod tests {
         assert!(
             answer.starts_with("HTTP/1.1 400 Bad Request\r\n"),
             "{answer}"
+        );
+        running.stop().await;
+    }
+
+    /// A head of exactly the limit is answered however the bytes of the blank
+    /// line that ends it are split across reads, and one byte more is
+    /// refused however they are (PR #96's review).
+    #[rstest]
+    #[tokio::test(start_paused = true)]
+    async fn the_heads_limit_holds_however_its_end_is_split(
+        #[values(0, 1, 2, 3, 4)] split: usize,
+        #[values(0, 1)] over: usize,
+    ) {
+        let limits = Limits {
+            head_bytes: 64,
+            ..Limits::default()
+        };
+        let running = Running::start(limits);
+        let mut client = running.connect().await;
+        let line = "GET /metrics HTTP/1.1\r\nX-Pad: ";
+        let pad = "a".repeat(limits.head_bytes + over - line.len());
+        let head = format!("{line}{pad}");
+        let (first, rest) = b"\r\n\r\n".split_at(split);
+
+        client.write_all(head.as_bytes()).await.unwrap();
+        client.write_all(first).await.unwrap();
+        settle().await;
+        // A refused head may be answered and closed before the rest.
+        let _ = client.write_all(rest).await;
+        let answer = read_all(&mut client).await;
+
+        let expected = if over == 0 {
+            "HTTP/1.1 200 OK\r\n"
+        } else {
+            "HTTP/1.1 400 Bad Request\r\n"
+        };
+        assert_eq!(head.len(), limits.head_bytes + over);
+        assert!(
+            answer.starts_with(expected),
+            "split {split}, over {over}: {answer}"
         );
         running.stop().await;
     }

@@ -39,6 +39,11 @@ COPY .cargo ./.cargo
 COPY crates ./crates
 COPY apps/desktop/src-tauri ./apps/desktop/src-tauri
 RUN cargo build --release --locked --package fleet-agent --bin afkfleet-agent
+# The folder a managed agent's identity volume mounts at, owner-only
+# (ADR-0019, S1; ADR-0022, S14): a new named volume takes its owner and mode,
+# so the agent (65532) owns it, and `enroll` writes its key and certificate
+# there. There's no VOLUME: a forgotten mount must fail, not vanish.
+RUN mkdir -m 0700 /folders /folders/data
 
 # --- runtime: glibc and libgcc only, no shell, the nonroot user (65532) ---
 FROM gcr.io/distroless/cc-debian13:nonroot@sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2
@@ -46,7 +51,9 @@ LABEL org.opencontainers.image.title="afkfleet-agent" \
       org.opencontainers.image.description="The afkfleet agent: runs Minecraft Java AFK bots." \
       org.opencontainers.image.source="https://github.com/noah-gabel/afkfleet" \
       org.opencontainers.image.licenses="GPL-3.0-or-later"
+COPY --from=builder --chown=65532:65532 /folders/ /
 COPY --from=builder /build/target/release/afkfleet-agent /usr/local/bin/afkfleet-agent
+USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/afkfleet-agent"]
 # The config belongs at /etc/afkfleet/agent.toml. A deployment that runs the
 # agent with another --config path must override HEALTHCHECK with the same

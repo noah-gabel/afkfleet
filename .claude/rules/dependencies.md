@@ -15,6 +15,7 @@ Moved from `CLAUDE.md` word for word; it points here. CLAUDE.md keeps the rule: 
 - Add dependencies only in `[workspace.dependencies]`; members use `dep.workspace = true`. Declare a crate there when the first member uses it, with the version and feature constraints from Plan.md §5. Cargo warns about unused workspace dependencies.
 - **Default features in `fleet-core`:** disable them and enable only what you need. Some crates pull in IO or tokio by default (for example `backon` with its tokio sleeper). `cargo tree -p fleet-core` must show no tokio and no IO crates.
 - Every crate inherits `license` (`GPL-3.0-or-later`) and `publish = false` from `[workspace.package]` (`license.workspace = true`, `publish.workspace = true`).
+- **Container images and CI tools** (base images, Caddy, Grype, ShellCheck, the SFTP test image's package) are listed in Plan.md §5's "Tools & infrastructure", each pinned by digest or SHA-256 where it's named. The user chose Grype's and Caddy's versions as the newest release at least 7 days old (ADR-0022, U12, U13): offer that option for the next one too, with what newer releases fixed.
 - **npm packages are at least 3 days old.** `pnpm-workspace.yaml` sets `minimumReleaseAge: 4320` (minutes), so pnpm refuses any younger release when it resolves, transitive ones included, and also checks the whole lockfile at every install. A fix that can't wait goes into `minimumReleaseAgeExclude`, with a comment saying why and the user's approval; nothing else goes there (ADR-0017).
 
 **Rust crates**

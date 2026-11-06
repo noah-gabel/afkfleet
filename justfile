@@ -32,7 +32,7 @@ default:
 check: fmt-check clippy docs test doctest db-check gen-check testkit-check tauri-check scripts-test ui-check e2e
 
 # Everything CI runs.
-ci: fmt-check clippy docs test-ci db-check migrations-check gen-check testkit-check tauri-check scripts-test cov cov-desktop deny stable-check ui-check ui-audit e2e
+ci: fmt-check clippy docs test-ci db-check migrations-check gen-check testkit-check tauri-check scripts-test sh-check cov cov-desktop deny stable-check ui-check ui-audit e2e
 
 # Run nextest for the workspace, or for one crate: `just test fleet-core`.
 test crate="":
@@ -41,9 +41,10 @@ test crate="":
 # They need fleet-mc's test-only `fault-injection` feature (ADR-0011). The server
 # image is pulled and the agent's image built first, so neither eats into a timed
 # test; AFKFLEET_E2E_IMAGE_BUILT tells the compose e2e test that the image is
-# this source's (ADR-0014).
+# this source's (ADR-0014). `images` builds both production images for the stack's
+# smoke tests, which AFKFLEET_SMOKE_IMAGES_BUILT tells (ADR-0022, S19).
 # Slow tests: containers and a real Minecraft server (needs Docker), one at a time.
-test-slow $AFKFLEET_E2E_IMAGE_BUILT="1":
+test-slow $AFKFLEET_E2E_IMAGE_BUILT="1" $AFKFLEET_SMOKE_IMAGES_BUILT="1": images
     docker compose --file deploy/compose.dev.yaml pull minecraft
     docker compose --file deploy/compose.dev.yaml build agent
     cargo nextest run --workspace {{ linux_exclude }} --profile slow --no-tests=warn --features fleet-mc/fault-injection
@@ -164,6 +165,49 @@ stack-up:
 # Stop the local stack (the server and the agent) and delete the server's world.
 mc-down:
     docker compose --file deploy/compose.dev.yaml down --volumes
+
+# Both Dockerfiles build natively for this machine and share their chef and planner
+# stages, so the second build reuses those layers (ADR-0022, S13). Nothing is pushed.
+# Build the server's and the agent's images as afkfleet-server:dev and afkfleet-agent:dev (needs Docker).
+images:
+    docker build --file deploy/docker/server.Dockerfile --tag afkfleet-server:dev .
+    docker build --file deploy/docker/agent.Dockerfile --tag afkfleet-agent:dev .
+
+# The images are built first, so no build eats into a timed test, and
+# AFKFLEET_SMOKE_IMAGES_BUILT tells the tests they're this source's. Every project
+# is the tests' own (afkfleet-smoke-*, afkfleet-sftp-test); nothing else is touched.
+# CI's Stack workflow sets AFKFLEET_SMOKE_SETUP=host to run deploy/setup.sh itself.
+# The stack's smoke tests and the SFTP account's test (needs Docker; ADR-0022, S15, S19).
+test-stack $AFKFLEET_SMOKE_IMAGES_BUILT="1": images
+    cargo nextest run -p fleet-integration --profile slow -E "test(/slow_(smoke|sftp)_/)"
+
+# The weekly audit's image scan (ADR-0022, U12, U13): each image saved to a file Grype reads,
+# so Grype never talks to Docker: afkfleet's two, and Caddy's pinned one, which
+# deploy/compose.caddy.yaml and the probe run (fleet-server's tests/compose.rs keeps this
+# pin equal to theirs). The first pass lists every finding into target/image-scan/, for the
+# job's summary; the second fails on a HIGH or CRITICAL one that a newer package fixes,
+# which a digest bump can take in. Needs `just images` first and Grype on PATH (CI
+# installs v0.121.0 by its SHA-256).
+# Scan both images and Caddy's with Grype (needs Docker and Grype).
+image-scan:
+    node -e "require('node:fs').mkdirSync('target/image-scan', { recursive: true })"
+    docker pull caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5
+    docker save --output target/image-scan/server.tar afkfleet-server:dev
+    docker save --output target/image-scan/agent.tar afkfleet-agent:dev
+    docker save --output target/image-scan/caddy.tar caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5
+    grype docker-archive:target/image-scan/server.tar --output table --file target/image-scan/server.txt
+    grype docker-archive:target/image-scan/agent.tar --output table --file target/image-scan/agent.txt
+    grype docker-archive:target/image-scan/caddy.tar --output table --file target/image-scan/caddy.txt
+    grype docker-archive:target/image-scan/server.tar --only-fixed --fail-on high
+    grype docker-archive:target/image-scan/agent.tar --only-fixed --fail-on high
+    grype docker-archive:target/image-scan/caddy.tar --only-fixed --fail-on high
+
+# The scripts an operator runs on the host are POSIX sh, as dash and busybox run them
+# (ADR-0022, S18, U15). Part of `ci` and CI's frontend job, which installs ShellCheck
+# 0.11.0 by its SHA-256; not of `check`, since this PC has no ShellCheck.
+# Check the host's shell scripts with ShellCheck (needs ShellCheck).
+sh-check:
+    shellcheck --shell=sh deploy/setup.sh deploy/host/sftp-backups.sh
 
 # The database path, the vault key's path and the PKI's four paths must be absolute, which
 # a committed config can't hold for every machine, so the recipe passes them:
