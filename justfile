@@ -20,6 +20,12 @@ linux_exclude := if os() == "linux" { "--exclude " + desktop } else { "" }
 stable := "1.99.0"
 stable_crates := "-p fleet-core -p fleet-testkit -p fleet-runtime -p fleet-startup -p fleet-proto -p fleet-server -p fleet-api-types -p fleet-client" +(if os() == "linux" { "" } else { " -p " + desktop })
 
+# The release's image labels (ADR-0022, S22, R24): the release workflow sets them for the whole
+# image job, so `just images` and `just test-stack`'s own build make the same image; empty here.
+release_version := env_var_or_default("AFKFLEET_IMAGE_VERSION", "")
+release_revision := env_var_or_default("AFKFLEET_IMAGE_REVISION", "")
+release_created := env_var_or_default("AFKFLEET_IMAGE_CREATED", "")
+
 # The throwaway database `cargo sqlx prepare` checks queries against. Absolute,
 # because rustc runs the query macros in the workspace root, not in the crate.
 sqlx_db := "sqlite:" + justfile_directory() / "target" / "sqlx-prepare.db"
@@ -170,8 +176,8 @@ mc-down:
 # stages, so the second build reuses those layers (ADR-0022, S13). Nothing is pushed.
 # Build the server's and the agent's images as afkfleet-server:dev and afkfleet-agent:dev (needs Docker).
 images:
-    docker build --file deploy/docker/server.Dockerfile --tag afkfleet-server:dev .
-    docker build --file deploy/docker/agent.Dockerfile --tag afkfleet-agent:dev .
+    docker build --file deploy/docker/server.Dockerfile --tag afkfleet-server:dev --build-arg "VERSION={{ release_version }}" --build-arg "REVISION={{ release_revision }}" --build-arg "CREATED={{ release_created }}" .
+    docker build --file deploy/docker/agent.Dockerfile --tag afkfleet-agent:dev --build-arg "VERSION={{ release_version }}" --build-arg "REVISION={{ release_revision }}" --build-arg "CREATED={{ release_created }}" .
 
 # The images are built first, so no build eats into a timed test, and
 # AFKFLEET_SMOKE_IMAGES_BUILT tells the tests they're this source's. Every project

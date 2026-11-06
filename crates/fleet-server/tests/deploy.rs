@@ -229,6 +229,71 @@ fn the_labels_name_the_repositorys_source_and_licence() {
     }
 }
 
+/// The release's labels (`version`, `revision`, `created`) come from build
+/// args declared in the last stage alone, so the chef and planner stages
+/// stay word for word and a release's build reuses their layers (ADR-0022,
+/// S22, R24).
+#[test]
+fn the_release_labels_come_from_build_args_in_the_last_stage_alone() {
+    for (text, title) in [(SERVER, "afkfleet-server"), (AGENT, "afkfleet-agent")] {
+        assert_eq!(
+            fleet_testkit::dockerfile::every(text, "ARG"),
+            ["ARG VERSION", "ARG REVISION", "ARG CREATED"],
+            "{title}"
+        );
+        let last = fleet_testkit::dockerfile::final_stage(text).unwrap();
+        for arg in ["ARG VERSION", "ARG REVISION", "ARG CREATED"] {
+            assert!(last.iter().any(|line| line == arg), "{title}: {arg}");
+        }
+        let label = one(text, title, "LABEL");
+        for expected in [
+            r#"org.opencontainers.image.version="${VERSION}""#,
+            r#"org.opencontainers.image.revision="${REVISION}""#,
+            r#"org.opencontainers.image.created="${CREATED}""#,
+        ] {
+            assert!(label.contains(expected), "{title}: {label}");
+        }
+    }
+}
+
+/// `just images` hands both builds the release's labels from the
+/// environment, empty outside a release, so the release workflow's own
+/// `just test-stack` rebuilds the very images it then pushes (R24).
+#[test]
+fn just_images_passes_the_release_labels_from_the_environment() {
+    let justfile = include_str!("../../../justfile");
+    for (variable, name) in [
+        ("release_version", "AFKFLEET_IMAGE_VERSION"),
+        ("release_revision", "AFKFLEET_IMAGE_REVISION"),
+        ("release_created", "AFKFLEET_IMAGE_CREATED"),
+    ] {
+        assert!(
+            justfile.contains(&format!(
+                r#"{variable} := env_var_or_default("{name}", "")"#
+            )),
+            "{variable}"
+        );
+    }
+    let builds: Vec<&str> = justfile
+        .lines()
+        .filter(|line| {
+            line.trim_start()
+                .starts_with("docker build --file deploy/docker/")
+        })
+        .filter(|line| !line.contains("shots"))
+        .collect();
+    assert_eq!(builds.len(), 2, "{builds:?}");
+    for build in builds {
+        for arg in [
+            r#"--build-arg "VERSION={{ release_version }}""#,
+            r#"--build-arg "REVISION={{ release_revision }}""#,
+            r#"--build-arg "CREATED={{ release_created }}""#,
+        ] {
+            assert!(build.contains(arg), "{build}");
+        }
+    }
+}
+
 /// The folders the image makes are exactly those the production config
 /// puts its files in, each the nonroot user's and owner-only, so a new
 /// named volume takes that owner (S14); the image runs as that user, and

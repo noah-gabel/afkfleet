@@ -1,0 +1,264 @@
+# The release (Plan.md P12.5; ADR-0022, S22, U31). A tag vX.Y.Z pushed on a commit of main runs it,
+# and it ends in a draft release that the maintainer finishes by hand (docs/releasing.md): nothing
+# here signs, publishes or holds a key, and no repository secret is used, only the job token.
+#
+# - guard: the tag is vX.Y.Z, equal to the workspace's version, on main, and CI succeeded on that
+#   exact commit (scripts/release.mjs guard). Every other job needs it.
+# - image (arm64 and amd64, each on its native runner): both images built and tested exactly as
+#   the Stack workflow does; then, only after every build and test, one step logs in, pushes
+#   X.Y.Z-<arch> (never over a tag that exists) and logs out, and the digests go on.
+# - merge: each X.Y.Z index made from those digests, never from the per-architecture tags, and
+#   checked; then the draft's body.
+# - installer: the NSIS installer, built with no signing key (`just app-installer`), its SHA-256
+#   in the log and the job's summary. No cache: a release is built from scratch.
+# - release: the only job that can write to the repository, and it runs no repository code: the
+#   installer and SHA256SUMS into a new draft release.
+#
+# No tag is ever `latest` or `X.Y`, and none is overwritten: when a job failed, re-run the failed
+# jobs alone (docs/releasing.md). Third-party actions are pinned to full commit SHAs (version in
+# the comment), as in ci.yml; the artifact actions are approved for this workflow alone.
+# scripts/release-workflow.test.mjs pins all of this.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+# One release at a time, and none cancelled halfway.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  JUST_VERSION: "1.58.0"
+
+jobs:
+  guard:
+    name: guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.guard.outputs.version }}
+      revision: ${{ steps.guard.outputs.revision }}
+      created: ${{ steps.guard.outputs.created }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      # Main's whole history, for "the tag's commit is on main"; the refspec creates origin/main.
+      - name: Fetch main
+        run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - id: guard
+        name: The tag, the version, main and CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: node scripts/release.mjs guard "$GITHUB_REF"
+
+  image:
+    name: image (${{ matrix.arch }})
+    needs: guard
+    strategy:
+      # Each finishes on its own: when one fails, re-running it alone completes the release.
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+          - runner: ubuntu-24.04
+            arch: amd64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      packages: write
+    # The labels' build args for every build in the job, so test-stack's own `just images` comes
+    # from the cache and the tested image is the one pushed (R24). No default attestations: each
+    # push is one platform's image, which the merge job checks.
+    env:
+      AFKFLEET_IMAGE_VERSION: ${{ needs.guard.outputs.version }}
+      AFKFLEET_IMAGE_REVISION: ${{ needs.guard.outputs.revision }}
+      AFKFLEET_IMAGE_CREATED: ${{ needs.guard.outputs.created }}
+      BUILDX_NO_DEFAULT_ATTESTATIONS: "1"
+    steps:
+      # From here to test-stack: the Stack workflow's steps, word for word (U31).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain
+        run: rustup install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+        with:
+          tool: just@${{ env.JUST_VERSION }},cargo-nextest@0.9.146
+      - run: just images
+      # `test-stack` builds the images again from Docker's cache, a few seconds.
+      - run: just test-stack
+        env:
+          AFKFLEET_SMOKE_SETUP: host
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      # The registry's credential exists in this step alone, after every build and test (U31):
+      # the login, release.mjs push (the checks, the tags, the pushes, the digests), the logout.
+      - name: Push by architecture (log in, push, log out)
+        env:
+          REGISTRY_TOKEN: ${{ github.token }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir "$RUNNER_TEMP/digests"
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          node scripts/release.mjs push "$ARCH" "$RUNNER_TEMP/digests"
+          docker logout ghcr.io
+      - name: Log out, whatever happened
+        if: always()
+        run: docker logout ghcr.io
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/digests-${{ matrix.arch }}.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  merge:
+    name: merge
+    needs: [guard, image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      server_digest: ${{ steps.merge.outputs.server_digest }}
+      agent_digest: ${{ steps.merge.outputs.agent_digest }}
+    env:
+      AFKFLEET_IMAGE_VERSION: ${{ needs.guard.outputs.version }}
+      AFKFLEET_IMAGE_REVISION: ${{ needs.guard.outputs.revision }}
+      AFKFLEET_IMAGE_CREATED: ${{ needs.guard.outputs.created }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: digests-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+      # Each index from the image jobs' digests (name@sha256:…), never from their tags, checked
+      # before and after (scripts/release.mjs merge); a warning while the packages are private.
+      - id: merge
+        name: The indexes, from the digests (log in, create and check, log out)
+        env:
+          REGISTRY_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          node scripts/release.mjs merge "$RUNNER_TEMP/digests"
+          docker logout ghcr.io
+      - name: Log out, whatever happened
+        if: always()
+        run: docker logout ghcr.io
+      - name: The release's body
+        env:
+          SERVER_DIGEST: ${{ steps.merge.outputs.server_digest }}
+          AGENT_DIGEST: ${{ steps.merge.outputs.agent_digest }}
+        run: |
+          mkdir "$RUNNER_TEMP/notes"
+          node scripts/release.mjs notes "$AFKFLEET_IMAGE_VERSION" "$SERVER_DIGEST" "$AGENT_DIGEST" > "$RUNNER_TEMP/notes/notes.md"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: notes
+          path: ${{ runner.temp }}/notes/notes.md
+          if-no-files-found: error
+          retention-days: 7
+
+  # As CI's tauri-build job builds it on every pull request, but from scratch: no Rust or pnpm
+  # cache reaches a release. app-installer refuses any signing key's variable and prints the
+  # installer's SHA-256, which the maintainer checks before signing (docs/releasing.md).
+  installer:
+    name: installer
+    needs: guard
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install NASM (aws-lc-rs; prebuilt objects are disabled in .cargo/config.toml)
+        uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1.5.2
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+        with:
+          tool: just@${{ env.JUST_VERSION }}
+      - name: Install the pinned toolchain
+        run: rustup install
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - run: pnpm install --frozen-lockfile
+      - run: just app-installer
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installer
+          path: target/release/bundle/nsis/afkfleet_${{ needs.guard.outputs.version }}_x64-setup.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  # The one job that can write to the repository: no checkout, no repository code, only the
+  # files the other jobs built and GitHub's own CLI. The maintainer adds the updater's signature
+  # and latest.json to the draft, then publishes it (docs/releasing.md).
+  release:
+    name: release
+    needs: [guard, merge, installer]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: installer
+          path: ${{ runner.temp }}/files
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: notes
+          path: ${{ runner.temp }}/notes
+      - name: SHA256SUMS
+        working-directory: ${{ runner.temp }}/files
+        run: |
+          test "$(ls -A)" = "afkfleet_${VERSION}_x64-setup.exe"
+          sha256sum -- "afkfleet_${VERSION}_x64-setup.exe" > SHA256SUMS
+          cat SHA256SUMS
+          cat SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+      # gh release list shows drafts too (the token can write), so a second run never adds a
+      # second draft for the same tag.
+      - name: The draft release, never over one that exists
+        working-directory: ${{ runner.temp }}/files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tags="$(gh release list --limit 1000 --json tagName --jq '.[].tagName')"
+          if printf '%s\n' "$tags" | grep -Fqx "v$VERSION"; then
+            echo "::error::A release v$VERSION exists already, published or draft: nothing is overwritten."
+            exit 1
+          fi
+          gh release create "v$VERSION" --draft --verify-tag --notes-file "$RUNNER_TEMP/notes/notes.md" "afkfleet_${VERSION}_x64-setup.exe" SHA256SUMS

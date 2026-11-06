@@ -52,10 +52,19 @@ RUN mkdir -m 0700 /folders /folders/data /folders/backups /folders/keys /folders
 # distroless/cc carries /etc/ssl/certs/ca-certificates.crt, which reqwest's
 # platform verifier reads for the Microsoft accounts' calls (ADR-0018).
 FROM gcr.io/distroless/cc-debian13:nonroot@sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2
+# The release's labels, from build args the release workflow sets (`just images`
+# reads them from the environment; empty outside a release). Declared here alone,
+# so the shared stages stay word for word (ADR-0022, S22, R24).
+ARG VERSION
+ARG REVISION
+ARG CREATED
 LABEL org.opencontainers.image.title="afkfleet-server" \
       org.opencontainers.image.description="The afkfleet server: the API, the agents' control plane and the database." \
       org.opencontainers.image.source="https://github.com/noah-gabel/afkfleet" \
-      org.opencontainers.image.licenses="GPL-3.0-or-later"
+      org.opencontainers.image.licenses="GPL-3.0-or-later" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.created="${CREATED}"
 COPY --from=builder --chown=65532:65532 /folders/ /
 COPY --from=builder /build/target/release/afkfleet-server /usr/local/bin/afkfleet-server
 USER 65532:65532
