@@ -197,6 +197,9 @@ export function validated(client: ApiClient): ApiClient {
     leaveAccount: async (id) => client.leaveAccount(check(schemas.id, id, "id")),
     setWindowTheme: async (theme) =>
       client.setWindowTheme(check(schemas.windowTheme, theme, "theme")),
+    // Neither takes an input: nothing to check (ADR-0022, S27).
+    checkUpdate: async () => client.checkUpdate(),
+    installUpdate: async () => client.installUpdate(),
   };
 }
 

@@ -78,6 +78,7 @@ import type { ServerSettingsPage } from "@afkfleet/ui/generated/ServerSettingsPa
 import type { ServerSettingsResponse } from "@afkfleet/ui/generated/ServerSettingsResponse";
 import type { SessionPage } from "@afkfleet/ui/generated/SessionPage";
 import type { SetupStepResponse } from "@afkfleet/ui/generated/SetupStepResponse";
+import type { UpdateCheck } from "@afkfleet/ui/generated/UpdateCheck";
 import type { UserPage } from "@afkfleet/ui/generated/UserPage";
 import type { UserResponse } from "@afkfleet/ui/generated/UserResponse";
 import type { UserRole } from "@afkfleet/ui/generated/UserRole";
@@ -171,6 +172,8 @@ export const COMMANDS = [
   "shared_accounts",
   "leave_account",
   "set_window_theme",
+  "check_update",
+  "install_update",
 ] as const;
 
 /** One command. */
@@ -188,6 +191,12 @@ const MESSAGES: Partial<Record<CommandErrorCode, string>> = {
   no_pending_step: "No login or 2FA step is pending. Start again.",
   already_logged_in: "You're already logged in. Log out first.",
   no_verification_link: "There's no Microsoft page to open.",
+  update_unreachable: "GitHub can't be reached to get the update.",
+  update_manifest: "The update information from GitHub couldn't be read.",
+  update_invalid: "The download couldn't be verified.",
+  update_install: "The installer couldn't be started.",
+  no_update: "There's no update to install. Check again.",
+  update_busy: "An update check or install is already running.",
 };
 
 /** The server's messages (fleet-api-types' `ErrorCode::message`). */
@@ -724,6 +733,10 @@ export class FakeBackend {
   lastSend: { readonly request: string; readonly line: ChatLine } | null = null;
 
   #refusing: CommandErrorCode | null = null;
+  /** What `check_update` answers: up to date unless a spec says otherwise (ADR-0022, S27). */
+  #update: UpdateCheck | CommandErrorCode = { state: "up_to_date", current: "0.1.0" };
+  /** What `install_update` refuses with; `null`: it starts, as far as the fake goes. */
+  #install: CommandErrorCode | null = null;
   readonly #held = new Set<string>();
   readonly #called = new Map<string, number>();
   readonly #refuseNext = new Map<string, Outcome>();
@@ -824,8 +837,15 @@ export class FakeBackend {
     if (lasting !== undefined) {
       return lasting;
     }
-    // Not the theme's, which reaches no server, nor the profile, which only the app holds.
-    if (this.#refusing !== null && command !== "set_window_theme" && command !== "server_profile") {
+    // Not the theme's, which reaches no server, nor the profile, which only the app holds,
+    // nor the updater's, which ask GitHub (ADR-0022, S27).
+    if (
+      this.#refusing !== null &&
+      command !== "set_window_theme" &&
+      command !== "server_profile" &&
+      command !== "check_update" &&
+      command !== "install_update"
+    ) {
       // The real logout ends the session in the app whatever the server does, and answers
       // that the server wasn't told (ADR-0022, S1).
       if (command === "logout") {
@@ -881,6 +901,16 @@ export class FakeBackend {
   /** Every command but the profile's and the theme's fails as `code`, until `null` (S96). */
   refuseAll(code: CommandErrorCode | null): void {
     this.#refusing = code;
+  }
+
+  /** What `check_update` answers from now on: a check, or a refusal's code (ADR-0022, S27). */
+  answerUpdate(answer: UpdateCheck | CommandErrorCode): void {
+    this.#update = answer;
+  }
+
+  /** What `install_update` answers from now on: `null` starts it, a code refuses it. */
+  answerInstall(code: CommandErrorCode | null): void {
+    this.#install = code;
   }
 
   /** `command` waits unanswered, for a screen's loading state, until `release` (S96). */
@@ -2294,6 +2324,10 @@ export class FakeBackend {
         return this.#linkStatus(args.id);
       case "set_window_theme":
         return value();
+      case "check_update":
+        return typeof this.#update === "string" ? refused(this.#update) : value(this.#update);
+      case "install_update":
+        return this.#install === null ? value() : refused(this.#install);
       case "open_verification_link":
         if (this.#flow === null) {
           return refused("no_verification_link");

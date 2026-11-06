@@ -54,6 +54,7 @@ import type { ServerSettingsResponse } from "../generated/ServerSettingsResponse
 import type { SessionPage } from "../generated/SessionPage";
 import type { SetupStepResponse } from "../generated/SetupStepResponse";
 import type { StepUpRequest } from "../generated/StepUpRequest";
+import type { UpdateCheck } from "../generated/UpdateCheck";
 import type { UpdateModeRequest } from "../generated/UpdateModeRequest";
 import type { UpdateServerSettingsRequest } from "../generated/UpdateServerSettingsRequest";
 import type { UserPage } from "../generated/UserPage";
@@ -232,6 +233,16 @@ export interface ApiClient {
   leaveAccount(id: string): Promise<void>;
   /** The native window follows the theme `theme` chose (ADR-0020, U85). Reaches no server. */
   setWindowTheme(theme: WindowTheme): Promise<void>;
+  /**
+   * This app's version, and whether a newer signed release waits (ADR-0022, U27, S27). It asks
+   * GitHub, never the server, and answers `off` in a build whose updates are off.
+   */
+  checkUpdate(): Promise<UpdateCheck>;
+  /**
+   * Installs the release the last `checkUpdate` found: the app closes, the installer shows its
+   * progress, and the app starts again (ADR-0022, U27, U28, S27).
+   */
+  installUpdate(): Promise<void>;
 }
 
 /** A method of the API. */
@@ -307,4 +318,6 @@ export const API_METHODS = [
   "sharedAccounts",
   "leaveAccount",
   "setWindowTheme",
+  "checkUpdate",
+  "installUpdate",
 ] as const satisfies readonly ApiMethod[];

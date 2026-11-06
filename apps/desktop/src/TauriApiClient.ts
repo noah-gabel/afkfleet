@@ -58,6 +58,7 @@ import type { ServerSettingsResponse } from "@afkfleet/ui/generated/ServerSettin
 import type { SessionPage } from "@afkfleet/ui/generated/SessionPage";
 import type { SetupStepResponse } from "@afkfleet/ui/generated/SetupStepResponse";
 import type { StepUpRequest } from "@afkfleet/ui/generated/StepUpRequest";
+import type { UpdateCheck } from "@afkfleet/ui/generated/UpdateCheck";
 import type { UpdateModeRequest } from "@afkfleet/ui/generated/UpdateModeRequest";
 import type { UpdateServerSettingsRequest } from "@afkfleet/ui/generated/UpdateServerSettingsRequest";
 import type { UserPage } from "@afkfleet/ui/generated/UserPage";
@@ -375,6 +376,14 @@ export class TauriApiClient implements ApiClient {
 
   setWindowTheme(theme: WindowTheme): Promise<void> {
     return this.#call("set_window_theme", { theme });
+  }
+
+  checkUpdate(): Promise<UpdateCheck> {
+    return this.#call("check_update");
+  }
+
+  installUpdate(): Promise<void> {
+    return this.#call("install_update");
   }
 
   async watchEvents(onUpdate: (update: LiveUpdateMessage) => void): Promise<void> {

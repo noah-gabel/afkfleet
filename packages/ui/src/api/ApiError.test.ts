@@ -34,6 +34,19 @@ describe("isCommandError", () => {
     ).toBe(true);
   });
 
+  it("accepts the updater's codes (ADR-0022, S27)", () => {
+    for (const code of [
+      "update_unreachable",
+      "update_manifest",
+      "update_invalid",
+      "update_install",
+      "no_update",
+      "update_busy",
+    ] as const) {
+      expect(isCommandError({ code, message: "x" })).toBe(true);
+    }
+  });
+
   it("accepts a server code only a newer server knows", () => {
     const newer = { ...refusal, api: { ...refusal.api, code: "from_a_newer_server" } };
 

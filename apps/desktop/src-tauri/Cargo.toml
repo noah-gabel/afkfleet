@@ -47,7 +47,12 @@ tauri-plugin-single-instance.workspace = true
 # `open_verification_link`, on a link fleet-client's `VerifiedLink` checked. The plugin
 # isn't registered, so the webview gets none of its commands (ADR-0018).
 tauri-plugin-opener.workspace = true
+# The signed updates: Rust checks and installs, behind two commands of the app's own; none of
+# the plugin's commands is granted (ADR-0022, S27).
+tauri-plugin-updater.workspace = true
 thiserror.workspace = true
+# Tauri's own runtime: the updater's outer timeouts (`time`) and its one-at-a-time lock.
+tokio = { workspace = true, features = ["sync", "time"] }
 
 [dev-dependencies]
 # ManualClock's times for the TOTP codes.

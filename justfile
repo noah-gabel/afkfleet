@@ -406,7 +406,7 @@ updater-sign key installer sha256 version:
 # real identifier, so the second line copies this one to target/app-check/afkfleet-check.exe, the
 # only file the AI launches, and refuses any other identifier (S99).
 app-build-check:
-    pnpm --filter @afkfleet/desktop tauri build --debug --config "{{ justfile_directory() }}/apps/desktop/src-tauri/tauri.check.conf.json"
+    pnpm --filter @afkfleet/desktop tauri build --debug --no-bundle --config "{{ justfile_directory() }}/apps/desktop/src-tauri/tauri.check.conf.json"
     node scripts/app-check.mjs
 
 # Render the desktop app's icon.ico from apps/desktop/src-tauri/icons/ at every Windows size (needs pnpm install).

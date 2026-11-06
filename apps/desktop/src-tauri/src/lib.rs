@@ -20,6 +20,11 @@
 //! after fleet-client's `VerifiedLink` passed it. The plugin isn't
 //! registered, so the webview gets none of its commands.
 //!
+//! Updates (P12.5, ADR-0022) come from tauri-plugin-updater, signed with the
+//! maintainer's offline key: two commands of the app's own check and install
+//! ([`update`]). The plugin is registered, but no capability grants its
+//! commands.
+//!
 //! The window starts hidden and shows once it has its colour, and its colours follow the
 //! user's theme (`window_theme`; P11.10, ADR-0020).
 
@@ -33,6 +38,7 @@ mod navigation;
 pub mod profile;
 pub mod startup;
 pub mod state;
+pub mod update;
 mod window_theme;
 
 use std::sync::Arc;
@@ -44,17 +50,21 @@ use crate::keychain::KeychainFactory;
 use crate::profile::PROFILE_FILE;
 use crate::startup::StartError;
 use crate::state::{AppState, LinkOpener, OpenError};
+use crate::update::{PluginUpdates, Updater};
 
 /// The main window's label, as `tauri.conf.json` names it.
 const MAIN_WINDOW: &str = "main";
 
 /// Registers the app's commands on `builder`: exactly the ones build.rs lists, each
-/// still refused until the `main` capability grants it. Also reveals the hidden main
-/// window at setup, and repaints it when its theme changes. The caller manages an
-/// [`AppState`] on the built app before any command runs.
+/// still refused until the `main` capability grants it, and the updater plugin, whose
+/// own commands no capability grants. Also reveals the hidden main window at setup, and
+/// repaints it when its theme changes. The caller manages an [`AppState`] and the
+/// updates ([`manage_updates`]) on the built app before any command runs.
 #[must_use]
 pub fn configure<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     builder
+        // Rust's alone: no capability grants any of its commands (ADR-0022, S27).
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
                 app.manage(window_theme::reveal_main_window(&window));
@@ -139,7 +149,21 @@ pub fn configure<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
             commands::users::shared_accounts,
             commands::grants::leave_account,
             commands::window::set_window_theme,
+            commands::update::check_update,
+            commands::update::install_update,
         ])
+}
+
+/// Manages the [`Updater`] the update commands use on `app`, as [`configure`] built it:
+/// on only for a release build of the released app, or the rehearsal's debug build
+/// ([`update::updates_on`]), at the app's own version.
+pub fn manage_updates<R: Runtime>(app: &tauri::App<R>) {
+    let on = update::updates_on(&app.config().identifier, !cfg!(debug_assertions));
+    app.manage(Updater::new(
+        PluginUpdates::new(app.handle().clone()),
+        on,
+        &app.package_info().version.to_string(),
+    ));
 }
 
 /// Builds the app from its configuration and runs it until its window closes. The
@@ -162,6 +186,7 @@ pub fn run() -> Result<(), StartError> {
             .plugin(navigation::guard()?),
     )
     .build(tauri::generate_context!())?;
+    manage_updates(&app);
     let store = windows_native_keyring_store::Store::new().map_err(|_| StartError::Keychain)?;
     let factory = KeychainFactory::windows(store, &app.config().identifier);
     let profile_path = app.path().app_local_data_dir()?.join(PROFILE_FILE);

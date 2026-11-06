@@ -3,6 +3,8 @@
 //! - no command reaches the app, and no core command runs, unless a capability grants it
 //! - tauri-plugin-opener's own commands don't exist for the webview: the app calls only
 //!   its free `open_url`, from Rust (ADR-0018)
+//! - tauri-plugin-updater is registered, but none of its commands is granted: only the
+//!   app's own `check_update` and `install_update` reach it, from Rust (ADR-0022, S27)
 //! - every command the app registers and grants answers exactly as
 //!   `tests/ipc-contract.json` says, with the arguments `TauriApiClient` sends
 // Integration tests are test code, but clippy only applies the test allowances
@@ -16,7 +18,7 @@ use std::sync::{Arc, mpsc};
 use afkfleet_desktop::keychain::KeychainFactory;
 use afkfleet_desktop::profile::PROFILE_FILE;
 use afkfleet_desktop::state::{AppState, LinkOpener, OpenError};
-use fleet_api_types::app::{CommandError, LogoutResponse, ServerProfileState};
+use fleet_api_types::app::{CommandError, LogoutResponse, ServerProfileState, UpdateCheck};
 use fleet_client::VerifiedLink;
 use rstest::rstest;
 use serde_json::Value;
@@ -60,13 +62,15 @@ impl LinkOpener for NeverOpens {
     }
 }
 
-/// The app as `run` builds it, with the real commands, over a profile path in `dir`
+/// The app as `run` builds it, with the real commands and the updates (off in a test
+/// build), over a profile path in `dir`
 /// (no file there: no server is set up), keyring-core's in-memory mock store and an
 /// opener that must never be called, and its main window.
 fn app_window(dir: &TempDir) -> WebviewWindow<MockRuntime> {
     let app = afkfleet_desktop::configure(mock_builder())
         .build(tauri::generate_context!(test = true))
         .unwrap();
+    afkfleet_desktop::manage_updates(&app);
     let factory =
         KeychainFactory::new(keyring_core::mock::Store::new().unwrap(), "io.example.test");
     app.manage(AppState::load(
@@ -165,6 +169,21 @@ fn the_opener_plugins_command_is_refused() {
     assert_eq!(rejection_kind(&error), "the ACL refused it", "{error}");
 }
 
+#[rstest]
+#[case::check("plugin:updater|check")]
+#[case::download("plugin:updater|download")]
+#[case::install("plugin:updater|install")]
+#[case::download_and_install("plugin:updater|download_and_install")]
+fn the_updater_plugins_commands_are_refused(#[case] command: &str) {
+    let dir = TempDir::new().unwrap();
+    let window = app_window(&dir);
+
+    let answer = invoke(&window, command, serde_json::json!({}));
+
+    let error = answer.expect_err("the updater plugin's command ran");
+    assert_eq!(rejection_kind(&error), "the ACL refused it", "{error}");
+}
+
 #[test]
 fn every_contract_command_passes_the_acl_and_answers_as_the_contract_says() {
     let dir = TempDir::new().unwrap();
@@ -194,7 +213,7 @@ fn every_contract_command_passes_the_acl_and_answers_as_the_contract_says() {
             (_, _, answer) => panic!("{command}: unexpected answer {answer:?}"),
         }
     }
-    assert_eq!(entries.len(), 68);
+    assert_eq!(entries.len(), 70);
 }
 
 /// An Ok answer must parse as `command`'s own response type and equal the expected
@@ -209,6 +228,11 @@ fn assert_ok(command: &str, expected: &Value, value: &Value) {
         "logout" => assert_eq!(
             serde_json::from_value::<LogoutResponse>(value.clone()).unwrap(),
             serde_json::from_value::<LogoutResponse>(expected.clone()).unwrap(),
+            "{command}"
+        ),
+        "check_update" => assert_eq!(
+            serde_json::from_value::<UpdateCheck>(value.clone()).unwrap(),
+            serde_json::from_value::<UpdateCheck>(expected.clone()).unwrap(),
             "{command}"
         ),
         other => panic!("{other}: the contract expects no Ok answer from it"),

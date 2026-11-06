@@ -43,6 +43,15 @@ describe("describeError", () => {
     );
   });
 
+  it("shows the updater's own sentences as they came (ADR-0022, U33)", () => {
+    expect(
+      describeError({ code: "update_invalid", message: "The download couldn't be verified." }),
+    ).toBe("The download couldn't be verified.");
+    expect(
+      describeError({ code: "no_update", message: "There's no update to install. Check again." }),
+    ).toBe("There's no update to install. Check again.");
+  });
+
   it("falls back to the fixed sentence for api without details", () => {
     expect(describeError({ code: "api", message: "The server refused the request." })).toBe(
       "The server refused the request.",

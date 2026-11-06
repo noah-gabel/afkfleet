@@ -28,6 +28,14 @@
       "capabilities": ["main"]
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQyQzZDRUIyNUY5RjJDQjAKUldTd0xKOWZzczdHMHZGQWVwOUtWMGk2bVMvakdOSkM4aFFCcGJiSGExNjRNclFYeFNxemlHVDIK",
+      "endpoints": ["https://github.com/noah-gabel/afkfleet/releases/latest/download/latest.json"],
+      "requireSignedVersion": true,
+      "windows": { "installMode": "passive" }
+    }
+  },
   "bundle": {
     "active": false,
     "icon": ["icons/icon.ico"],
