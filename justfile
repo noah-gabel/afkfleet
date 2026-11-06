@@ -165,6 +165,28 @@ stack-up:
 mc-down:
     docker compose --file deploy/compose.dev.yaml down --volumes
 
+# Both Dockerfiles build natively for this machine and share their chef and planner
+# stages, so the second build reuses those layers (ADR-0022, S13). Nothing is pushed.
+# Build the server's and the agent's images as afkfleet-server:dev and afkfleet-agent:dev (needs Docker).
+images:
+    docker build --file deploy/docker/server.Dockerfile --tag afkfleet-server:dev .
+    docker build --file deploy/docker/agent.Dockerfile --tag afkfleet-agent:dev .
+
+# The weekly audit's image scan (ADR-0022, U12): each image saved to a file Grype reads,
+# so Grype never talks to Docker. The first pass lists every finding into
+# target/image-scan/, for the job's summary; the second fails on a HIGH or CRITICAL one
+# that a newer package fixes, which a digest bump can take in. Needs `just images` first
+# and Grype on PATH (CI installs v0.121.0 by its SHA-256).
+# Scan both images with Grype (needs Docker and Grype).
+image-scan:
+    node -e "require('node:fs').mkdirSync('target/image-scan', { recursive: true })"
+    docker save --output target/image-scan/server.tar afkfleet-server:dev
+    docker save --output target/image-scan/agent.tar afkfleet-agent:dev
+    grype docker-archive:target/image-scan/server.tar --output table --file target/image-scan/server.txt
+    grype docker-archive:target/image-scan/agent.tar --output table --file target/image-scan/agent.txt
+    grype docker-archive:target/image-scan/server.tar --only-fixed --fail-on high
+    grype docker-archive:target/image-scan/agent.tar --only-fixed --fail-on high
+
 # The database path, the vault key's path and the PKI's four paths must be absolute, which
 # a committed config can't hold for every machine, so the recipe passes them:
 # target/dev-server/afkfleet.db, target/dev-server/vault-key-1 and target/dev-server/pki/

@@ -15,6 +15,8 @@
 //! - [`jail`]: figment's `Jail`, for the tests that load configs.
 //! - [`justfile`]: a strict reader of the justfile's recipes, for the tests
 //!   that load a config with exactly a recipe's exports (ADR-0020, R124).
+//! - [`dockerfile`]: a reader of the Dockerfiles' instructions and stages,
+//!   for the tests that pin both images (ADR-0022, S13).
 //! - [`system`]: a [`Clock`](fleet_core::system::Clock) that only moves when
 //!   the test moves it, and a seeded
 //!   [`SecureRandom`](fleet_core::system::SecureRandom), which is why this
@@ -23,6 +25,7 @@
 //! Fakes are preferred over mocks; `mockall` is only for checking interactions
 //! (CLAUDE.md, testing conventions).
 
+pub mod dockerfile;
 pub mod jail;
 pub mod justfile;
 pub mod log_buffer;

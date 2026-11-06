@@ -308,9 +308,12 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 - **Frontend tooling:** pnpm 12.9.1 (`packageManager`) and Biome 2.5.15 from P0.8; every other package is pinned in the phase that introduces it, exactly (no `^`), with `pnpm-lock.yaml` as the lock. From P8.6 `pnpm-workspace.yaml` sets `minimumReleaseAge: 4320`: pnpm resolves no release younger than 3 days and checks the whole lockfile at every install; exceptions only in `minimumReleaseAgeExclude`, with a comment and the user's approval. The Tauri CLI is `@tauri-apps/cli` 2.12.2, a dev-dependency of `apps/desktop` (approved in P8.2, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 - **Runtime & hosting:**
   - Docker + Docker Compose
-  - Caddy 2 (TLS for the public API)
+  - Caddy 2 (TLS for the public API): the official `caddy:2.11.7-alpine`, pinned by multi-arch index digest in the compose files, the newest release at least 7 days old when chosen (P12.2; ADR-0022, U13); it serves the `probe` service's busybox `wget` and the smoke test's stand-in proxy too
   - `itzg/minecraft-server` (test server)
-  - the agent image's base images (P5.6), pinned by multi-arch index digest in `deploy/docker/agent.Dockerfile`: `rust:1.99.0-slim-trixie` (builder) and `gcr.io/distroless/cc-debian13:nonroot` (runtime)
+  - the images' base images (P5.6, P12.1), pinned by multi-arch index digest in `deploy/docker/agent.Dockerfile` and `server.Dockerfile`, the same in both (a test holds them equal): `rust:1.99.0-slim-trixie` (builder) and `gcr.io/distroless/cc-debian13:nonroot` (runtime)
+  - the SFTP account's throwaway test image (P12.2, test-only): `rust:1.99.0-slim-trixie` again, with Debian 13's `openssh-server` from apt ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U14)
+  - **Grype** v0.121.0 (Apache-2.0), the weekly audit's image scanner, installed in CI as its release binary checked against its SHA-256, the newest release at least 7 days old when chosen (P12.1; ADR-0022, U12)
+  - **ShellCheck** 0.11.0 (GPL-3.0) for `deploy/`'s POSIX sh scripts, in CI through `taiki-e/install-action` (P12.2; ADR-0022, U15)
   - the screenshot baselines' image (P11.11, group L4), pinned by multi-arch index digest in `deploy/docker/shots.Dockerfile`, the one place it's named: `mcr.microsoft.com/playwright:v1.64.0-noble`, its tag always `@playwright/test`'s exact version, so a Playwright bump moves the tag and the digest together and renews the baselines (`scripts/shots.test.mjs` holds the two equal; [ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U97, S130)
 - **Windows build dependencies:** MSVC Build Tools ("Desktop development with C++"), NASM (for aws-lc-rs). CMake isn't needed for non-FIPS builds.
 - **Automation:** GitHub Actions (CI). No Dependabot or Renovate: `cargo deny` and `pnpm audit` flag vulnerable dependencies in CI (also on a weekly schedule), and dependency updates are done by hand in their own PR.
@@ -4344,7 +4347,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >
 > *Planned in group A ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S1, U7):* "Log out on this PC" reuses `logout`, which clears the stored session before it tries the server, asks nothing first, and disables "Server settings" while it runs; the texts were approved as drafted.
 
-- [ ] **P12.1** Dockerfiles for the server and the agent:
+- [x] **P12.1** Dockerfiles for the server and the agent:
   - multi-stage with cargo-chef
   - pinned nightly builder
   - distroless non-root runtime
@@ -4358,6 +4361,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Labels.** The agent image has static OCI labels (source, licenses, title, description). `created`, `revision` and `version` change with every build, so they come through build args once CI publishes the image.
 
   > Note (P12.1, from Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the agent image runs `enroll` too.** `afkfleet-agent enroll --config …` reads the bundle from stdin (`docker run -i`), writes its key and certificate into the folder of `[control_plane] key_file` and `cert_file`, which must exist (the `/data` volume, S1), and never replaces them. The server image's `pki init` likewise needs its four folders to exist.
+
+  > Note (P12.1, Phase 12's group C) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S13, S14, U12, U16): **as built.**
+  > - **`deploy/docker/server.Dockerfile`** follows the agent's: the same pinned bases and its chef and planner stages word for word, so `just images` builds both and the second reuses those layers. The image makes the folders compose mounts at, `/data`, `/backups`, `/keys`, `/ca` and `/tls`, owner-only and the nonroot user's, so a new named volume takes that owner; it has no `VOLUME`, runs as `USER 65532:65532`, exposes 8080 and 7443 (never a metrics port) and checks its health through `healthcheck` on the config path of its `CMD`. distroless carries the CA certificates reqwest needs. The agent's image gains `/data` (a managed agent's identity) and the same `USER`.
+  > - **The vault key** is made inside the server's image by the new `afkfleet-server vault create-key` (S14), so a host needs only Docker.
+  > - **Labels:** the four static OCI labels in both images; `created`, `revision` and `version` come with D's publishing.
+  > - **CI:** the Stack workflow builds both images natively on `ubuntu-24.04-arm` and `ubuntu-24.04`, nightly, on demand and on the pull requests that touch `deploy/`, `.dockerignore`, `Cargo.lock` or `rust-toolchain.toml` (U16); the weekly audit scans both with Grype v0.121.0, failing on a HIGH or CRITICAL finding a newer package fixes (U12).
+  > - **Tests:** `crates/fleet-server/tests/deploy.rs` and fleet-agent's pin both Dockerfiles against each other and against `deploy/prod/`'s configs, through `fleet_testkit::dockerfile`.
 - [ ] **P12.2** `deploy/compose.yaml`:
   - **Caddy:** ports 80/443, Let's Encrypt, HSTS; proxies `/api` and WebSockets to `server:8080`.
   - **Server:** on the internal network. Port 7443 is published only when remote agents exist.

@@ -24,7 +24,8 @@ use std::time::Duration;
 
 use fleet_agent::config::{AgentConfig, AgentMode, LogFormat, StandaloneBot, load};
 use fleet_agent::run::RUNTIME_SHUTDOWN;
-use fleet_core::net::AddressClass;
+use fleet_core::net::{AddressClass, PrivateTargets};
+use fleet_testkit::dockerfile;
 use fleet_testkit::jail::in_jail;
 use stack_checks::{expected_restart_errors, expected_warnings, millis, stack_checks};
 
@@ -103,34 +104,15 @@ fn stop_grace_period(name: &str) -> Duration {
         )
 }
 
-/// The Dockerfile's instructions, each on one line, without comments.
-fn dockerfile_instructions() -> Vec<String> {
-    let mut instructions = Vec::new();
-    let mut current = String::new();
-    for line in DOCKERFILE.lines().map(str::trim) {
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if let Some(continued) = line.strip_suffix('\\') {
-            current.push_str(continued.trim_end());
-            current.push(' ');
-        } else {
-            current.push_str(line);
-            instructions.push(core::mem::take(&mut current));
-        }
-    }
-    instructions
-}
-
-/// The Dockerfile's one instruction starting with `keyword`.
+/// The Dockerfile's one instruction starting with `keyword`, read through
+/// fleet-testkit's reader, which fleet-server's image tests share.
 fn instruction(keyword: &str) -> String {
-    let prefix = format!("{keyword} ");
-    let found: Vec<String> = dockerfile_instructions()
-        .into_iter()
-        .filter(|instruction| instruction.starts_with(&prefix))
-        .collect();
-    assert_eq!(found.len(), 1, "one {keyword} expected: {found:#?}");
-    found.into_iter().next().unwrap()
+    dockerfile::only(DOCKERFILE, keyword).unwrap_or_else(|| {
+        panic!(
+            "one {keyword} expected: {:#?}",
+            dockerfile::every(DOCKERFILE, keyword)
+        )
+    })
 }
 
 /// stack-checks.json's `retry_windows`, as (attempt, (min, max)).
@@ -517,4 +499,108 @@ fn the_dod_agent_refuses_public_addresses_whatever_the_shell_says() {
         panic!("a managed config");
     };
     assert!(!plane.public_targets);
+}
+
+#[test]
+fn the_agent_image_makes_its_data_folder_and_runs_as_the_nonroot_user() {
+    let builder = dockerfile::stage(DOCKERFILE, "builder").expect("a builder stage");
+    let runtime = dockerfile::final_stage(DOCKERFILE).expect("a runtime stage");
+
+    assert!(
+        builder.contains(&"RUN mkdir -m 0700 /folders /folders/data".to_owned()),
+        "{builder:#?}"
+    );
+    assert!(
+        runtime.contains(&"COPY --from=builder --chown=65532:65532 /folders/ /".to_owned()),
+        "{runtime:#?}"
+    );
+    assert_eq!(instruction("USER"), "USER 65532:65532");
+    assert_eq!(
+        dockerfile::every(DOCKERFILE, "VOLUME"),
+        Vec::<String>::new()
+    );
+}
+
+// --- deploy/prod/agent.toml (ADR-0022, S14, S17, U10) ---
+
+/// The production agent's config as written.
+const PROD: &str = include_str!("../../../deploy/prod/agent.toml");
+
+/// `deploy/prod/agent.toml` loaded with no environment but `extra`, and its
+/// three files moved into the jail: its `/ca` and `/data` paths aren't
+/// absolute on Windows. Everything else is the file's own.
+fn load_prod_config(extra: &[(&str, &str)]) -> AgentConfig {
+    let path = repo("deploy/prod/agent.toml");
+    let mut loaded = None;
+    in_jail(|jail| {
+        let dir = jail.directory().to_owned();
+        jail.clear_env();
+        for (key, file) in [
+            ("CA_CERT_FILE", "ca.crt"),
+            ("CERT_FILE", "agent.crt"),
+            ("KEY_FILE", "agent.key"),
+        ] {
+            jail.set_env(
+                format!("AFKFLEET_AGENT__CONTROL_PLANE__{key}"),
+                dir.join(file).display(),
+            );
+        }
+        for (key, value) in extra {
+            jail.set_env(key, value);
+        }
+        loaded = Some(load(&path));
+    });
+    loaded
+        .unwrap()
+        .unwrap_or_else(|error| panic!("deploy/prod/agent.toml should load: {error}"))
+}
+
+/// U50 for production (the user's decision, ADR-0022, U10): with no `.env`
+/// line, the production agent's bots may dial public servers, and no
+/// private network at all, so never the host's own or a service's beside
+/// afkfleet (U4). It dials the server by its service name and serves its
+/// metrics on the project's network.
+#[test]
+fn the_production_agent_dials_public_servers_and_no_private_network() {
+    let config = load_prod_config(&[]);
+
+    let AgentMode::ControlPlane(plane) = &config.mode else {
+        panic!("a managed config");
+    };
+    assert!(plane.public_targets);
+    assert_eq!(plane.private_targets, PrivateTargets::default());
+    assert_eq!(plane.url, "https://server:7443");
+    assert_eq!(config.metrics, Some("0.0.0.0:9481".parse().unwrap()));
+}
+
+/// The operator's switch (U10): `.env`'s line, which compose hands the
+/// agent, stops all public dialling at the agent's next start.
+#[test]
+fn the_env_line_stops_all_public_dialling() {
+    let config = load_prod_config(&[("AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS", "false")]);
+
+    let AgentMode::ControlPlane(plane) = &config.mode else {
+        panic!("a managed config");
+    };
+    assert!(!plane.public_targets);
+}
+
+/// The file's own paths are the volumes' folders (S14): the CA certificate
+/// from the server's `ca` volume, the identity on the agent's own.
+#[test]
+fn the_production_agent_reads_its_ca_and_identity_from_the_volumes() {
+    let lines: Vec<&str> = PROD
+        .lines()
+        .map(|line| line.split('#').next().unwrap_or_default().trim())
+        .collect();
+
+    for expected in [
+        r#"ca_cert_file = "/ca/ca.crt""#,
+        r#"cert_file = "/data/agent.crt""#,
+        r#"key_file = "/data/agent.key""#,
+        "public_targets = true",
+        "private_targets = []",
+    ] {
+        assert!(lines.contains(&expected), "{expected}");
+    }
 }
