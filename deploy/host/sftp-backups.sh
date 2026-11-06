@@ -55,20 +55,83 @@ sshd_bin() {
 	elif [ -x /usr/sbin/sshd ]; then
 		printf '%s' /usr/sbin/sshd
 	else
-		refuse "sshd isn't installed here"
+		refuse "sshd isn't installed here; nothing was changed"
 	fi
 }
 
-# Reloads sshd through the init system it finds; open sessions stay.
-reload_sshd() {
+# Refuses, before anything is written, when one of the tools $@ is missing:
+# a step that fails halfway (exit 127) must never be what tells.
+need() {
+	for tool in "$@"; do
+		command -v "$tool" >/dev/null 2>&1 ||
+			refuse "$tool isn't installed here, or isn't on root's PATH; nothing was changed"
+	done
+}
+
+# The command that reloads sshd here, in RELOAD: systemctl or rc-service.
+find_reload() {
 	if command -v systemctl >/dev/null 2>&1; then
-		systemctl reload ssh 2>/dev/null || systemctl reload sshd || return 1
+		RELOAD=systemctl
 	elif command -v rc-service >/dev/null 2>&1; then
-		rc-service sshd reload || return 1
+		RELOAD=rc-service
 	else
-		return 1
+		refuse "neither systemctl nor rc-service is here to reload sshd with; nothing was changed"
 	fi
 }
+
+# Reloads sshd through RELOAD; open sessions stay.
+reload_sshd() {
+	case $RELOAD in
+	systemctl) systemctl reload ssh 2>/dev/null || systemctl reload sshd ;;
+	rc-service) rc-service sshd reload ;;
+	*) return 1 ;;
+	esac
+}
+
+# What this run added, in order: keys, dropin, group, account. A failure
+# removes exactly these again, so it leaves the host as it found it.
+ADDED=""
+
+# Removes what this run added, newest first, and names in LEFTOVER what it
+# couldn't remove.
+cleanup() {
+	LEFTOVER=""
+	case " $ADDED " in
+	*" account "*) userdel "$ACCOUNT" >/dev/null 2>&1 || LEFTOVER="$LEFTOVER the account $ACCOUNT" ;;
+	esac
+	case " $ADDED " in
+	*" group "*) groupdel "$ACCOUNT" >/dev/null 2>&1 || LEFTOVER="$LEFTOVER the group $ACCOUNT" ;;
+	esac
+	case " $ADDED " in
+	*" dropin "*) rm -f "$DROPIN" || LEFTOVER="$LEFTOVER $DROPIN" ;;
+	esac
+	case " $ADDED " in
+	*" keys "*) rm -f "$KEYS" || LEFTOVER="$LEFTOVER $KEYS" ;;
+	esac
+	ADDED=""
+}
+
+# Refuses after something was written: removes it again first.
+fail() {
+	cleanup
+	if [ -n "$LEFTOVER" ]; then
+		refuse "$*; what this run added was removed again, except$LEFTOVER: remove those by hand"
+	fi
+	refuse "$*; what this run added was removed again, nothing changed"
+}
+
+# A step that fails where none was expected (set -e) still removes what this
+# run added, and exits 1 saying so.
+on_exit() {
+	status=$?
+	if [ -n "$ADDED" ]; then
+		cleanup
+		printf 'afkfleet sftp: a step failed (exit %s); what this run added was removed again%s\n' \
+			"$status" "${LEFTOVER:+, except$LEFTOVER}" >&2
+		exit 1
+	fi
+}
+trap on_exit EXIT
 
 # Whether $1 is owned by root and writable by root alone, as
 # ChrootDirectory demands of the folder and every one above it. stat's %a
@@ -100,12 +163,13 @@ backups_path() {
 	return 0
 }
 
-# Whether the account's name, uid or gid is taken.
+# Whether the account's name, uid or gid is taken, in any of the host's
+# account databases.
 taken() {
-	grep -q "^$ACCOUNT:" /etc/passwd && return 0
-	grep -q "^[^:]*:[^:]*:$ACCOUNT_ID:" /etc/passwd && return 0
-	grep -q "^$ACCOUNT:" /etc/group && return 0
-	grep -q "^[^:]*:[^:]*:$ACCOUNT_ID:" /etc/group && return 0
+	getent passwd "$ACCOUNT" >/dev/null && return 0
+	getent passwd "$ACCOUNT_ID" >/dev/null && return 0
+	getent group "$ACCOUNT" >/dev/null && return 0
+	getent group "$ACCOUNT_ID" >/dev/null && return 0
 	return 1
 }
 
@@ -127,7 +191,9 @@ install() {
 	key=$1
 	backups=$2
 	[ "$(id -u)" = 0 ] || refuse "run it as root: it adds an account and an sshd drop-in"
+	need getent groupadd useradd usermod userdel groupdel ssh-keygen stat awk grep
 	sshd=$(sshd_bin)
+	find_reload
 	backups_path "$backups" ||
 		refuse "the backups' folder must be an absolute path of letters, digits and ._-, without //, . or .. parts or a trailing /, inside a folder of its own other than /: $backups"
 	chroot=$(dirname "$backups")
@@ -171,9 +237,63 @@ install() {
 	"$sshd" -t || refuse "sshd's config fails sshd -t already: fix it first"
 	before=$("$sshd" -T)
 
-	printf 'restrict %s\n' "$line" >"$KEYS"
-	chmod 644 "$KEYS"
-	cat >"$DROPIN" <<EOF
+	# Neither file existed (checked above), so what a failure removes is ours.
+	ADDED="$ADDED keys"
+	{ printf 'restrict %s\n' "$line" >"$KEYS" && chmod 644 "$KEYS"; } || fail "$KEYS couldn't be written"
+	ADDED="$ADDED dropin"
+	write_dropin || fail "$DROPIN couldn't be written"
+	"$sshd" -t || fail "the drop-in fails sshd -t"
+	got=$("$sshd" -T -C "user=$ACCOUNT,host=example.com,addr=192.0.2.10") || fail "sshd -T for the account failed"
+	missing=""
+	for setting in "chrootdirectory $chroot" "forcecommand internal-sftp -R -d $start"; do
+		printf '%s\n' "$got" | grep -qxF "$setting" || missing="$missing [$setting]"
+	done
+	while IFS= read -r setting; do
+		printf '%s\n' "$got" | grep -qxF "$setting" || missing="$missing [$setting]"
+	done <<EOF
+$EXPECTED
+EOF
+	if printf '%s\n' "$got" | grep -qE '^(allowusers|allowgroups) '; then
+		allowed=$(printf '%s\n' "$got" | grep -E '^(allowusers|allowgroups) ')
+		case $allowed in
+		*"$ACCOUNT"*) ;;
+		*) missing="$missing [AllowUsers or AllowGroups leaves the account out]" ;;
+		esac
+	fi
+	after=$("$sshd" -T) || fail "sshd -T failed"
+	[ "$after" = "$before" ] || missing="$missing [it changed sshd's settings for everyone else]"
+	[ -z "$missing" ] || fail "an earlier setting wins over the drop-in:$missing"
+
+	# The name, uid and gid were free (checked above), so a group or an
+	# account of that name now is this run's, even after a failed step.
+	if ! groupadd --gid "$ACCOUNT_ID" "$ACCOUNT"; then
+		! getent group "$ACCOUNT" >/dev/null || ADDED="$ADDED group"
+		fail "groupadd couldn't add the group $ACCOUNT"
+	fi
+	ADDED="$ADDED group"
+	if ! useradd --uid "$ACCOUNT_ID" --gid "$ACCOUNT_ID" --home-dir /nonexistent --no-create-home \
+		--shell /usr/sbin/nologin "$ACCOUNT"; then
+		! getent passwd "$ACCOUNT" >/dev/null || ADDED="$ADDED account"
+		fail "useradd couldn't add the account $ACCOUNT"
+	fi
+	ADDED="$ADDED account"
+	# `*`, not `!`: a key login works, and no password ever does.
+	usermod --password '*' "$ACCOUNT" || fail "usermod couldn't set the account's password field to *"
+	reload_sshd || fail "sshd couldn't be reloaded with $RELOAD"
+	ADDED=""
+	say "ok: the account $ACCOUNT reads $backups over SFTP, read-only"
+	for hostkey in /etc/ssh/ssh_host_ed25519_key.pub /etc/ssh/ssh_host_ecdsa_key.pub; do
+		if [ -f "$hostkey" ]; then
+			say "this host's key, to compare at your PC's first connection: $(ssh-keygen -l -f "$hostkey")"
+			break
+		fi
+	done
+	say "pull with: sftp -i <your key> $ACCOUNT@<this host> (start a new login before closing your own)"
+}
+
+# Writes the drop-in for the account: chroot $chroot, start folder $start.
+write_dropin() {
+	cat >"$DROPIN" <<EOF || return 1
 # afkfleet's backups account (deploy/host/sftp-backups.sh): read-only SFTP
 # in the backups' folder, nothing else. Removed by its uninstall.
 Match User $ACCOUNT
@@ -196,68 +316,29 @@ Match User $ACCOUNT
 	PermitOpen none
 EOF
 	chmod 644 "$DROPIN"
-	if ! "$sshd" -t; then
-		rm -f "$DROPIN" "$KEYS"
-		refuse "the drop-in fails sshd -t: removed again, nothing changed"
-	fi
-	got=$("$sshd" -T -C "user=$ACCOUNT,host=example.com,addr=192.0.2.10")
-	missing=""
-	for setting in "chrootdirectory $chroot" "forcecommand internal-sftp -R -d $start"; do
-		printf '%s\n' "$got" | grep -qxF "$setting" || missing="$missing [$setting]"
-	done
-	while IFS= read -r setting; do
-		printf '%s\n' "$got" | grep -qxF "$setting" || missing="$missing [$setting]"
-	done <<EOF
-$EXPECTED
-EOF
-	if printf '%s\n' "$got" | grep -qE '^(allowusers|allowgroups) '; then
-		allowed=$(printf '%s\n' "$got" | grep -E '^(allowusers|allowgroups) ')
-		case $allowed in
-		*"$ACCOUNT"*) ;;
-		*) missing="$missing [AllowUsers or AllowGroups leaves the account out]" ;;
-		esac
-	fi
-	after=$("$sshd" -T)
-	[ "$after" = "$before" ] || missing="$missing [it changed sshd's settings for everyone else]"
-	if [ -n "$missing" ]; then
-		rm -f "$DROPIN" "$KEYS"
-		refuse "an earlier setting wins over the drop-in, so it's removed again and nothing changed:$missing"
-	fi
-
-	groupadd --gid "$ACCOUNT_ID" "$ACCOUNT"
-	useradd --uid "$ACCOUNT_ID" --gid "$ACCOUNT_ID" --home-dir /nonexistent --no-create-home \
-		--shell /usr/sbin/nologin "$ACCOUNT"
-	# `*`, not `!`: a key login works, and no password ever does.
-	usermod --password '*' "$ACCOUNT"
-	if ! reload_sshd; then
-		say "sshd wasn't reloaded: reload it with your init system (the drop-in is checked and in place)"
-		exit 1
-	fi
-	say "ok: the account $ACCOUNT reads $backups over SFTP, read-only"
-	for hostkey in /etc/ssh/ssh_host_ed25519_key.pub /etc/ssh/ssh_host_ecdsa_key.pub; do
-		if [ -f "$hostkey" ]; then
-			say "this host's key, to compare at your PC's first connection: $(ssh-keygen -l -f "$hostkey")"
-			break
-		fi
-	done
-	say "pull with: sftp -i <your key> $ACCOUNT@<this host> (start a new login before closing your own)"
 }
 
 uninstall() {
 	[ "$(id -u)" = 0 ] || refuse "run it as root: it removes an account and an sshd drop-in"
+	need getent userdel groupdel
 	sshd=$(sshd_bin)
+	find_reload
+	# The account goes first: once it's gone, nothing logs in with the key,
+	# and when it can't go (it's logged in, say) everything stays as it was.
+	if getent passwd "$ACCOUNT" >/dev/null; then
+		userdel "$ACCOUNT" ||
+			refuse "userdel couldn't remove the account $ACCOUNT (is it logged in? end its sessions and run uninstall again); nothing was removed"
+	fi
+	if getent group "$ACCOUNT" >/dev/null; then
+		groupdel "$ACCOUNT" ||
+			refuse "groupdel couldn't remove the group $ACCOUNT; the account is gone, the drop-in and the key file stay: run uninstall again"
+	fi
 	if [ -e "$DROPIN" ]; then
 		rm -f "$DROPIN"
-		"$sshd" -t || refuse "sshd's config fails sshd -t without the drop-in: fix it before reloading"
-		reload_sshd || say "sshd wasn't reloaded: reload it with your init system"
+		"$sshd" -t || refuse "sshd's config fails sshd -t without the drop-in: fix it, then reload sshd"
+		reload_sshd || refuse "sshd couldn't be reloaded with $RELOAD: reload it yourself; the account and the drop-in are gone"
 	fi
 	rm -f "$KEYS"
-	if grep -q "^$ACCOUNT:" /etc/passwd; then
-		userdel "$ACCOUNT"
-	fi
-	if grep -q "^$ACCOUNT:" /etc/group; then
-		groupdel "$ACCOUNT"
-	fi
 	say "ok: the account, its key and the drop-in are gone; the backups' folders stay"
 }
 

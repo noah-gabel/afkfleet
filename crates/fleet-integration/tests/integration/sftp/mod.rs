@@ -130,7 +130,37 @@ type Refusal = (&'static str, &'static str, &'static str, &'static str);
 
 /// Every refusal: each must exit 1 with its reason and leave sshd's files,
 /// the accounts and the groups as they were.
-const REFUSALS: [Refusal; 11] = [
+const REFUSALS: [Refusal; 15] = [
+    // A tool that's missing is found before anything is written, never
+    // exit 127 halfway: groupadd, or anything to reload sshd with (Debian's
+    // openssh-server brings a real systemctl beside the test's stub).
+    (
+        "",
+        "mv /usr/sbin/groupadd /root/groupadd.off",
+        "mv /root/groupadd.off /usr/sbin/groupadd",
+        "groupadd",
+    ),
+    (
+        "",
+        "mv /usr/local/sbin/systemctl /root/systemctl.off && mv /usr/bin/systemctl /root/systemctl.real",
+        "mv /root/systemctl.real /usr/bin/systemctl && mv /root/systemctl.off /usr/local/sbin/systemctl",
+        "to reload sshd",
+    ),
+    // A step that fails after the first write: everything this run added
+    // goes again (the drop-in, the key file, the group, the account). The
+    // real systemctl fails here, with no systemd running.
+    (
+        "",
+        "mv /usr/local/sbin/systemctl /root/systemctl.off",
+        "mv /root/systemctl.off /usr/local/sbin/systemctl",
+        "couldn't be reloaded",
+    ),
+    (
+        "",
+        "printf '#!/bin/sh\\nexit 1\\n' > /usr/local/sbin/useradd && chmod 755 /usr/local/sbin/useradd",
+        "rm /usr/local/sbin/useradd",
+        "useradd",
+    ),
     (
         "",
         "cp /etc/ssh/sshd_config /root/sshd_config && sed -i '/^Include/d' /etc/ssh/sshd_config",
@@ -277,8 +307,8 @@ fn slow_sftp_backups_account() {
     ));
     let global_before = exec_ok("sshd -T");
 
-    let failed: Vec<String> = REFUSALS.into_iter().filter_map(refused).collect();
-    assert!(failed.is_empty(), "{failed:#?}");
+    // Checked at the end, with the stuck uninstall's, so a run shows them all.
+    let mut failed: Vec<String> = REFUSALS.into_iter().filter_map(refused).collect();
 
     exec_ok("sh /root/sftp-backups.sh install --key /root/pull.pub");
     let files_before = backups_state();
@@ -367,6 +397,26 @@ fn slow_sftp_backups_account() {
         methods.stderr
     );
 
+    // An uninstall whose userdel fails (the account logged in, say) says
+    // so and removes nothing, rather than half of it.
+    let installed = sshd_state();
+    exec_ok(
+        "printf '#!/bin/sh\\necho \"userdel: user afkfleet-backup is currently used\" >&2\\nexit 8\\n' \
+         > /usr/local/sbin/userdel && chmod 755 /usr/local/sbin/userdel",
+    );
+    let stuck = exec("sh /root/sftp-backups.sh uninstall");
+    exec_ok("rm /usr/local/sbin/userdel");
+    if stuck.code != Some(1) || !stuck.stderr.contains("userdel") {
+        failed.push(format!(
+            "uninstall with a failing userdel: exit {:?}: {}",
+            stuck.code,
+            stuck.stderr.trim()
+        ));
+    }
+    if sshd_state() != installed {
+        failed.push("uninstall with a failing userdel removed a part".to_owned());
+    }
+
     exec_ok("sh /root/sftp-backups.sh uninstall");
 
     assert_eq!(exec_ok("sshd -T"), global_before);
@@ -380,6 +430,7 @@ fn slow_sftp_backups_account() {
         files_before,
         "uninstall touched the backups"
     );
+    assert!(failed.is_empty(), "{failed:#?}");
 }
 
 /// The test image's base is the builder image both Dockerfiles pin, so the
