@@ -9,8 +9,9 @@
 //! - creates the Owner with `user create-owner --password-stdin` and logs in
 //!   through fleet-client with the full 2FA flow;
 //! - finds the client's real address in the audit log, never the proxy's,
-//!   and a forged `X-Forwarded-For` ignored, or, on the host path, honoured
-//!   from the fleet network's gateway (`trusted_proxies`);
+//!   and a forged `X-Forwarded-For` replaced by exactly the address the
+//!   proxy saw, or, on the host path, honoured from the fleet network's
+//!   gateway (`trusted_proxies`);
 //! - scrapes both metrics ports from inside the project's network, and
 //!   finds `/metrics` through the proxy reaching neither, nor the edge
 //!   network reaching the server's metrics address (U19);
@@ -24,7 +25,8 @@
 //! and finds the database, the backup and the agent's identity intact on
 //! their mounts; measures memory and pids under 75 % of the limits through
 //! eight logins at once (never CPU, U21); stops the stack with every exit
-//! 0; and runs the server's image alone, read-only, which refuses to start.
+//! 0; and runs the server's image alone, read-only, under a name of its own,
+//! which refuses to start and leaves nothing behind.
 //!
 //! Every wait is bounded and wakes on an event: compose's `--wait`, a
 //! service's next log line, or a socket's own timeout (ADR-0014's form).
@@ -43,7 +45,7 @@ use fleet_api_types::accounts::CreateOfflineAccountRequest;
 use fleet_api_types::audit::{AuditEntryResponse, AuditPageQuery};
 use fleet_api_types::auth::LoginRequest;
 use fleet_client::{Client, ClientConfig, CustomCa, LoginStep, MemoryStore, ServerUrl, Trust};
-use fleet_testkit::docker::{Compose, ContainerState};
+use fleet_testkit::docker::{Compose, ContainerState, docker};
 use totp_rs::Totp;
 
 use self::checks::{capabilities, mounts, series, stats};
@@ -304,10 +306,12 @@ async fn check_real_address(stack: &mut Stack, owner: &Client<MemoryStore>, prox
         logged_in.iter().all(|ip| *ip != stack.net.proxy_address()),
         "the server recorded the proxy, not the client: {logged_in:?}"
     );
+    // Over IPv4 (`-4`), so the client the proxy sees is exactly 127.0.0.1.
     let forged = proxy_curl(
         stack,
         proxy,
         &[
+            "-4",
             "-H",
             &format!("X-Forwarded-For: {FORGED}"),
             "-H",
@@ -318,11 +322,13 @@ async fn check_real_address(stack: &mut Stack, owner: &Client<MemoryStore>, prox
         ],
     );
     assert!(forged.ends_with("401"), "{forged}");
+    // Exactly the client's address as the proxy saw it: neither the forged
+    // one nor the proxy's own, nor anything else (PR #97's review).
     let failed = login_ips(owner, "failure").await;
-    assert_ne!(failed.len(), 0);
-    assert!(
-        failed.iter().all(|ip| ip != FORGED),
-        "a forged X-Forwarded-For was taken: {failed:?}"
+    assert_eq!(
+        failed.first().map(String::as_str),
+        Some("127.0.0.1"),
+        "the forged login wasn't recorded from the client's address: {failed:?}"
     );
 }
 
@@ -647,20 +653,46 @@ async fn check_limits(stack: &mut Stack, url: &str, ca: &CustomCa) {
     }
 }
 
+/// The image-alone check's container, by a name of the test's own, so a run
+/// that times out or panics can't leave it behind unnamed (PR #97's review).
+const ALONE: &str = "afkfleet-smoke-image-alone";
+
+/// Removes the container `self.0` when dropped, also when a check panics.
+struct RemovedOnDrop(&'static str);
+
+impl Drop for RemovedOnDrop {
+    fn drop(&mut self) {
+        let _ = docker(&stack::repo(), &["rm", "--force", self.0], QUICK);
+    }
+}
+
 /// The server's image alone, read-only, with its config and nothing else
-/// mounted, refuses to start: no volume, no key, no database.
+/// mounted, refuses to start: no volume, no key, no database. Nothing of it
+/// is left afterwards.
 fn check_the_image_alone_refuses_to_start(stack: &mut Stack) {
     let config = stack.dir().join("prod").join("server.toml");
     let mount = format!("{}:{SERVER_CONFIG}:ro", config.display());
+    let _ = stack.docker(&["rm", "--force", ALONE]);
+    let _removed = RemovedOnDrop(ALONE);
     let finished = stack.docker(&[
         "run",
         "--rm",
+        "--name",
+        ALONE,
         "--read-only",
         "-v",
         &mount,
         stack::SERVER_IMAGE,
     ]);
     assert_eq!(finished.code, Some(1), "{}", finished.stderr);
+    let left = stack.docker(&[
+        "ps",
+        "--all",
+        "--quiet",
+        "--filter",
+        &format!("name=^{ALONE}$"),
+    ]);
+    assert_eq!(left.stdout.trim(), "", "the image-alone container was left");
 }
 
 /// `stop` ends every service with exit 0, never Docker's kill (137), and

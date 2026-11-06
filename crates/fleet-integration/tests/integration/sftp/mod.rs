@@ -7,10 +7,13 @@
 //!
 //! `slow_sftp_backups_account` checks, in order:
 //! - **every refusal leaves sshd untouched:** an `sshd_config` without the
-//!   drop-ins' `Include`, a chroot folder others may write, a taken uid, a
-//!   drop-in that exists, an earlier `Match all` that would win, a key file
-//!   of two lines; after each, every file under /etc/ssh is byte-identical
-//!   and there's no account;
+//!   drop-ins' `Include`, a chroot folder others may write or root doesn't
+//!   own, a backups' folder that isn't 65532's with mode 700, a taken name,
+//!   uid, group name or gid, a drop-in that exists, an earlier `Match all`
+//!   or `AllowUsers` that would win, a drop-in `sshd -t` fails, settings
+//!   that change for everyone else, a key file of two lines, one ssh-keygen
+//!   can't read or one with a quote or a backslash; after each, every file
+//!   under /etc/ssh is byte-identical and there's no account;
 //! - **the account reads:** `ls` lists the backups and `get` copies one,
 //!   byte for byte, and the chroot shows nothing but the backups' folder;
 //! - **the account changes nothing:** `put`, `rm`, `rename`, `mkdir`,
@@ -128,9 +131,24 @@ const RESET: &str = "rm -f /etc/ssh/sshd_config.d/10-afkfleet-backup.conf \
 /// undoes that, and a part of the reason it must give.
 type Refusal = (&'static str, &'static str, &'static str, &'static str);
 
+/// A stand-in for sshd, first on root's PATH, that calls the real one but
+/// answers `sshd -t` with an error once the drop-in exists: a drop-in that
+/// fails the check only after it was written.
+const SSHD_FAILS_THE_DROPIN: &str = "printf '#!/bin/sh\\n\
+    if [ \"$1\" = -t ] && [ -e /etc/ssh/sshd_config.d/10-afkfleet-backup.conf ]; \
+    then echo bad >&2; exit 255; fi\\nexec /usr/sbin/sshd \"$@\"\\n' \
+    > /usr/local/sbin/sshd && chmod 755 /usr/local/sbin/sshd";
+
+/// A stand-in for sshd whose plain `sshd -T` prints one setting more once
+/// the drop-in exists: a drop-in that would change everyone's settings.
+const SSHD_CHANGES_FOR_EVERYONE: &str = "printf '#!/bin/sh\\n\
+    if [ $# -eq 1 ] && [ \"$1\" = -T ] && [ -e /etc/ssh/sshd_config.d/10-afkfleet-backup.conf ]; \
+    then /usr/sbin/sshd -T; echo maxsessions 99; exit 0; fi\\nexec /usr/sbin/sshd \"$@\"\\n' \
+    > /usr/local/sbin/sshd && chmod 755 /usr/local/sbin/sshd";
+
 /// Every refusal: each must exit 1 with its reason and leave sshd's files,
 /// the accounts and the groups as they were.
-const REFUSALS: [Refusal; 15] = [
+const REFUSALS: [Refusal; 27] = [
     // A tool that's missing is found before anything is written, never
     // exit 127 halfway: groupadd, or anything to reload sshd with (Debian's
     // openssh-server brings a real systemctl beside the test's stub).
@@ -173,6 +191,26 @@ const REFUSALS: [Refusal; 15] = [
         "chmod 755 /srv/afkfleet-backups",
         "writable by root alone",
     ),
+    // root_only's owner half: root's mode, another owner (PR #97's review).
+    (
+        "",
+        "chown 65532 /srv/afkfleet-backups",
+        "chown 0 /srv/afkfleet-backups",
+        "must belong to root",
+    ),
+    // The backups' folder itself: the server's user's, owner-only.
+    (
+        "",
+        "chmod 750 /srv/afkfleet-backups/backups",
+        "chmod 700 /srv/afkfleet-backups/backups",
+        "must belong to 65532:65532 with mode 700",
+    ),
+    (
+        "",
+        "chown 65532:0 /srv/afkfleet-backups/backups",
+        "chown 65532:65532 /srv/afkfleet-backups/backups",
+        "must belong to 65532:65532 with mode 700",
+    ),
     // stat's %a prints 0002 as 2.
     (
         "",
@@ -184,6 +222,27 @@ const REFUSALS: [Refusal; 15] = [
         "",
         "useradd --uid 65532 --no-create-home someone",
         "userdel someone",
+        "is taken",
+    ),
+    // taken's other halves: the name, the group's name, the gid. A script
+    // that didn't refuse may have removed the prepared one itself, so the
+    // undo tolerates its absence; the state comparison still sees the rest.
+    (
+        "",
+        "useradd --uid 4000 --no-user-group --no-create-home afkfleet-backup",
+        "userdel afkfleet-backup 2>/dev/null; true",
+        "is taken",
+    ),
+    (
+        "",
+        "groupadd --gid 4001 afkfleet-backup",
+        "groupdel afkfleet-backup 2>/dev/null; true",
+        "is taken",
+    ),
+    (
+        "",
+        "groupadd --gid 65532 somegroup",
+        "groupdel somegroup",
         "is taken",
     ),
     (
@@ -198,6 +257,27 @@ const REFUSALS: [Refusal; 15] = [
         "rm /etc/ssh/sshd_config.d/05-earlier.conf",
         "an earlier setting wins",
     ),
+    // An earlier AllowUsers that leaves the account out: it could never log in.
+    (
+        "",
+        "printf 'AllowUsers root\\n' > /etc/ssh/sshd_config.d/05-allow.conf",
+        "rm /etc/ssh/sshd_config.d/05-allow.conf",
+        "leaves the account out",
+    ),
+    // The checks after the drop-in is written: `sshd -t`, and sshd's
+    // settings for everyone else unchanged.
+    (
+        "",
+        SSHD_FAILS_THE_DROPIN,
+        "rm /usr/local/sbin/sshd",
+        "the drop-in fails sshd -t",
+    ),
+    (
+        "",
+        SSHD_CHANGES_FOR_EVERYONE,
+        "rm /usr/local/sbin/sshd",
+        "for everyone else",
+    ),
     (
         "",
         "cp /root/pull.pub /root/one.pub && cat /root/one.pub >> /root/pull.pub",
@@ -210,6 +290,26 @@ const REFUSALS: [Refusal; 15] = [
         "cp /root/pull.pub /root/one.pub && sed -i 's/^/cert-authority /' /root/pull.pub",
         "cp /root/one.pub /root/pull.pub",
         "one public key",
+    ),
+    // A line with the right type that isn't a key, and a key whose comment
+    // holds a quote or a backslash (PR #97's review).
+    (
+        "",
+        "cp /root/pull.pub /root/one.pub && printf 'ssh-ed25519 AAAAnotakey comment\\n' > /root/pull.pub",
+        "cp /root/one.pub /root/pull.pub",
+        "ssh-keygen can read",
+    ),
+    (
+        "",
+        "cp /root/pull.pub /root/one.pub && sed -i 's/$/ \"quoted\"/' /root/pull.pub",
+        "cp /root/one.pub /root/pull.pub",
+        "a character a key line can't",
+    ),
+    (
+        "",
+        "cp /root/pull.pub /root/one.pub && sed -i 's/$/ back\\\\slash/' /root/pull.pub",
+        "cp /root/one.pub /root/pull.pub",
+        "a character a key line can't",
     ),
     // A chroot of / (dirname //backups is /), and . and .. parts that lead
     // to the real folder.
