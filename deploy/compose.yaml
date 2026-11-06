@@ -36,9 +36,12 @@ services:
     image: ${AFKFLEET_SERVER_IMAGE:?set AFKFLEET_SERVER_IMAGE in .env}
     # The binaries' own settings, AFKFLEET_SERVER__… lines; an unknown key
     # stops the start (U18).
+    env_file:
+      - path: .env
+        required: true
     environment:
       # The metrics port only on the fleet network (U19): never .env's.
-      AFKFLEET_SERVER__METRICS__BIND: 0.0.0.0:9480
+      AFKFLEET_SERVER__METRICS__BIND: ${AFKFLEET_SERVER_FLEET_ADDRESS:-172.30.0.10}:9480
     volumes:
       - ./prod/server.toml:/etc/afkfleet/server.toml:ro
       - data:/data
@@ -68,6 +71,9 @@ services:
   agent:
     <<: *hardened
     image: ${AFKFLEET_AGENT_IMAGE:?set AFKFLEET_AGENT_IMAGE in .env}
+    env_file:
+      - path: .env
+        required: true
     environment:
       # U50 for production (ADR-0022, U10): true unless .env says false.
       AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS: ${AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS:-true}
@@ -99,6 +105,9 @@ services:
     profiles: [setup]
     restart: "no"
     network_mode: none
+    env_file:
+      - path: .env
+        required: true
     command: ["--help"]
     healthcheck:
       disable: true

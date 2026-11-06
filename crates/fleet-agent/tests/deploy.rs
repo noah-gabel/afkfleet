@@ -10,6 +10,11 @@
 //!   compose e2e test and the demo assume
 //! - the definition-of-done checks' agent config loads with exactly `just dod-agent`'s and
 //!   `just dod-enroll`'s exports and dials only its container (ADR-0020, S72)
+//! - the production image and agents (Plan.md P12.1, P12.2; ADR-0022, S13,
+//!   S14, S17, U10, U18): the image's data folder and user; the local and
+//!   the remote agent's config, mounts and grace period; public servers
+//!   only, which `.env` can stop; every agent setting `env.example` names
+//!   loads
 //!
 //! The configs are loaded inside `figment::Jail` with an empty environment,
 //! so a developer's own `AFKFLEET_AGENT__…` variables can't change them.
@@ -25,8 +30,8 @@ use std::time::Duration;
 use fleet_agent::config::{AgentConfig, AgentMode, LogFormat, StandaloneBot, load};
 use fleet_agent::run::RUNTIME_SHUTDOWN;
 use fleet_core::net::{AddressClass, PrivateTargets};
-use fleet_testkit::dockerfile;
 use fleet_testkit::jail::in_jail;
+use fleet_testkit::{compose, dockerfile};
 use stack_checks::{expected_restart_errors, expected_warnings, millis, stack_checks};
 
 #[path = "common/stack_checks.rs"]
@@ -603,4 +608,138 @@ fn the_production_agent_reads_its_ca_and_identity_from_the_volumes() {
     ] {
         assert!(lines.contains(&expected), "{expected}");
     }
+}
+
+// --- deploy/compose.yaml's agent and deploy/compose.agent.yaml (ADR-0022, S17) ---
+
+/// The production compose files as written.
+const PROD_COMPOSE: &str = include_str!("../../../deploy/compose.yaml");
+const REMOTE_COMPOSE: &str = include_str!("../../../deploy/compose.agent.yaml");
+const REMOTE: &str = include_str!("../../../deploy/prod/agent.remote.toml");
+
+/// Both production agents mount their config where the image reads it, the
+/// local one with the CA from the server's `ca` volume, read-only, and its
+/// identity on its own volume; the heartbeat lives in a small tmpfs.
+#[test]
+fn the_production_agents_mount_their_config_where_the_image_reads_it() {
+    let local = compose::service(PROD_COMPOSE, "agent");
+    let remote = compose::service(REMOTE_COMPOSE, "agent");
+
+    assert_eq!(
+        compose::list(&local, "volumes"),
+        [
+            format!("./prod/agent.toml:{CONFIG_IN_IMAGE}:ro").as_str(),
+            "agent-data:/data",
+            "ca:/ca:ro",
+        ]
+    );
+    assert_eq!(
+        compose::list(&remote, "volumes"),
+        [
+            format!("./prod/agent.remote.toml:{CONFIG_IN_IMAGE}:ro").as_str(),
+            "agent-data:/data",
+        ]
+    );
+    for lines in [&local, &remote] {
+        assert_eq!(
+            compose::list(lines, "tmpfs"),
+            ["/tmp:size=1m,noexec,nosuid,nodev"]
+        );
+    }
+}
+
+/// Docker's grace period outlasts the production agent's worst-case
+/// shutdown, as the dev compose agent's does (ADR-0014).
+#[test]
+fn dockers_grace_period_outlasts_the_production_agents_worst_case_shutdown() {
+    let config = load_prod_config(&[]);
+    let worst = config.runtime.shutdown_timeout + config.runtime.reply_timeout + RUNTIME_SHUTDOWN;
+
+    for file in [PROD_COMPOSE, REMOTE_COMPOSE] {
+        let grace = compose::value(&compose::service(file, "agent"), "stop_grace_period")
+            .and_then(|value| value.strip_suffix('s'))
+            .and_then(|secs| secs.parse().ok())
+            .map(Duration::from_secs)
+            .expect("stop_grace_period in seconds");
+        assert!(grace > worst, "{grace:?} <= {worst:?}");
+    }
+}
+
+/// The remote agent's CA certificate is the compose secret its config reads,
+/// and its name and URL come from its host's `.env`; it dials public servers
+/// and no private network, as the local one does (U10).
+#[test]
+fn the_remote_agent_reads_its_ca_from_the_secret_and_the_rest_from_env() {
+    let remote = compose::service(REMOTE_COMPOSE, "agent");
+    assert!(
+        remote
+            .iter()
+            .any(|line| line.trim() == "target: fleet_ca_cert"),
+        "{remote:#?}"
+    );
+    assert!(
+        REMOTE
+            .lines()
+            .any(|line| line.starts_with("ca_cert_file = \"/run/secrets/fleet_ca_cert\""))
+    );
+    let path = repo("deploy/prod/agent.remote.toml");
+    let mut loaded = None;
+    in_jail(|jail| {
+        let dir = jail.directory().to_owned();
+        jail.clear_env();
+        jail.set_env("AFKFLEET_AGENT__NAME", "remote-1");
+        jail.set_env(
+            "AFKFLEET_AGENT__CONTROL_PLANE__URL",
+            "https://fleet.example.com:7443",
+        );
+        for (key, file) in [
+            ("CA_CERT_FILE", "ca.crt"),
+            ("CERT_FILE", "agent.crt"),
+            ("KEY_FILE", "agent.key"),
+        ] {
+            jail.set_env(
+                format!("AFKFLEET_AGENT__CONTROL_PLANE__{key}"),
+                dir.join(file).display(),
+            );
+        }
+        loaded = Some(load(&path));
+    });
+
+    let config = loaded.unwrap().unwrap();
+
+    let AgentMode::ControlPlane(plane) = &config.mode else {
+        panic!("a managed config");
+    };
+    assert!(plane.public_targets);
+    assert_eq!(plane.private_targets, PrivateTargets::default());
+    assert_eq!(plane.url, "https://fleet.example.com:7443");
+}
+
+/// Every agent setting `env.example` names loads with the production config,
+/// each with its example's value, a placeholder made real: an unknown key
+/// would stop the agent's start (U18).
+#[test]
+fn every_agent_setting_env_example_names_loads() {
+    let settings: Vec<(&str, &str)> = include_str!("../../../deploy/env.example")
+        .lines()
+        .map(|line| line.strip_prefix('#').unwrap_or(line))
+        .filter(|line| line.starts_with("AFKFLEET_AGENT__"))
+        .map(|line| line.split_once('=').unwrap())
+        .map(|(name, value)| {
+            let value = if value.contains('<') {
+                r#"["10.213.0.0/24"]"#
+            } else {
+                value
+            };
+            (name, value)
+        })
+        .collect();
+
+    let config = load_prod_config(&settings);
+
+    assert!(settings.len() >= 3, "{settings:?}");
+    let AgentMode::ControlPlane(plane) = &config.mode else {
+        panic!("a managed config");
+    };
+    assert_ne!(plane.private_targets, PrivateTargets::default());
 }

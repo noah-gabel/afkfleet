@@ -1,0 +1,27 @@
+# A remote agent's production config, for deploy/compose.agent.yaml
+# (Plan.md P12.2; ADR-0022, S17, U10, U18): a managed agent on another host
+# than the server's. Compose mounts it read-only at /etc/afkfleet/agent.toml.
+#
+# Don't edit this file on the host: an update replaces it. Its host's .env
+# sets what's this agent's own: AFKFLEET_AGENT__NAME and
+# AFKFLEET_AGENT__CONTROL_PLANE__URL, which have no default here, and any
+# other AFKFLEET_AGENT__… key.
+
+[log]
+format = "json"
+filter = "info"                          # chat is logged only at debug
+
+[metrics]                                # on this project's network only, never published (S10)
+bind = "0.0.0.0:9481"
+
+[control_plane]
+ca_cert_file = "/run/secrets/fleet_ca_cert"   # the server's CA certificate, a compose secret
+cert_file = "/data/agent.crt"            # the identity `enroll` writes once, on the agent-data volume
+key_file = "/data/agent.key"
+# No private network: the bots never dial this host's own networks or its
+# other services (ADR-0022, U4, U10).
+private_targets = []
+# U50 for production (ADR-0022, U10, the user's decision of 2026-11-06): the
+# bots may dial public Minecraft servers. The switch is .env's
+# AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS.
+public_targets = true

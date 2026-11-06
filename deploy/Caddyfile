@@ -22,7 +22,15 @@
 	# S127). There is no access log.
 	log default {
 		output stderr
-		format json
+		format filter {
+			wrap json
+			fields {
+				request>uri query {
+					delete ticket
+					delete q
+				}
+			}
+		}
 	}
 }
 

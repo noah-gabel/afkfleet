@@ -10,6 +10,8 @@ services:
     networks:
       edge:
         aliases: [afkfleet-server]
+    environment:
+      AFKFLEET_SERVER__HTTP__TRUSTED_PROXIES: '["${AFKFLEET_PROXY_ADDRESS:-172.30.1.2}/32"]'
 
 networks:
   edge:

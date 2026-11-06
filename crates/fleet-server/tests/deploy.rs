@@ -12,7 +12,8 @@
 //!   names, owner-only and the nonroot user's; it runs as that user and has
 //!   no VOLUME, so a forgotten mount can't go unnoticed
 //! - `deploy/prod/server.toml` holds what compose relies on, and loads (on
-//!   Unix, where its container paths are absolute; CI's Linux jobs)
+//!   Unix, where its container paths are absolute; CI's Linux jobs), and
+//!   with every server setting `env.example` names (U18)
 // Integration tests are test code, but clippy only applies the test allowances
 // of clippy.toml (unwrap, panic, …) inside `#[cfg(test)]`; without this, the
 // helper functions below would count as library code.
@@ -318,4 +319,61 @@ fn the_production_config_loads() {
     assert_eq!(config.metrics, None);
     assert!(!config.accounts.allow_offline);
     assert!(config.grpc.is_some());
+}
+
+/// `env.example`'s server lines (`AFKFLEET_SERVER__…`), set or commented
+/// out, as (name, value).
+fn env_example_settings(prefix: &str) -> Vec<(String, String)> {
+    include_str!("../../../deploy/env.example")
+        .lines()
+        .map(|line| line.strip_prefix('#').unwrap_or(line))
+        .filter(|line| line.starts_with(prefix))
+        .map(|line| {
+            let (name, value) = line.split_once('=').unwrap();
+            (name.to_owned(), value.to_owned())
+        })
+        .collect()
+}
+
+/// Every server setting `env.example` names loads with the production
+/// config, each with its example's value: an unknown key would stop the
+/// start (U18). The container paths point into the jail, so it runs here
+/// on Windows too.
+#[test]
+fn every_server_setting_env_example_names_loads() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/prod/server.toml");
+    let settings = env_example_settings("AFKFLEET_SERVER__");
+    let mut loaded = None;
+    fleet_testkit::jail::in_jail(|jail| {
+        let dir = jail.directory().to_owned();
+        jail.clear_env();
+        for key in [
+            "DATABASE__PATH",
+            "DATABASE__BACKUP_DIR",
+            "VAULT__MASTER_KEY_FILES__1",
+            "GRPC__CA_CERT_FILE",
+            "GRPC__CA_KEY_FILE",
+            "GRPC__SERVER_CERT_FILE",
+            "GRPC__SERVER_KEY_FILE",
+        ] {
+            jail.set_env(format!("AFKFLEET_SERVER__{key}"), dir.join(key).display());
+        }
+        for (name, value) in &settings {
+            let value = if value.starts_with('/') {
+                dir.join(name).display().to_string()
+            } else {
+                value.clone()
+            };
+            jail.set_env(name, value);
+        }
+        loaded = Some(fleet_server::config::load(&path));
+    });
+
+    let config = loaded
+        .unwrap()
+        .unwrap_or_else(|error| panic!("env.example's settings should load: {error}"));
+
+    assert!(settings.len() >= 6, "{settings:?}");
+    assert_eq!(config.vault.active_key_id, 2);
+    assert_eq!(config.vault.key_files.len(), 2);
 }
