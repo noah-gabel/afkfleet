@@ -367,15 +367,21 @@ fn nothing_is_published_but_each_paths_own_port() {
 }
 
 /// Caddy is one pinned image everywhere it runs: the probe, afkfleet's own
-/// Caddy and the smoke test's stand-in (U13).
+/// Caddy and the smoke test's stand-in, and the weekly audit scans that one
+/// (U12, U13).
 #[test]
 fn caddy_is_pinned_the_same_everywhere() {
     let probe = value(&service(COMPOSE, "probe"), "image").unwrap();
     let caddy = value(&service(CADDY, "caddy"), "image").unwrap();
     let stand_in = value(&service(STAND_IN, "proxy"), "image").unwrap();
+    let scanned: Vec<&str> = include_str!("../../../justfile")
+        .split_whitespace()
+        .filter(|word| word.starts_with("caddy:"))
+        .collect();
 
     assert_eq!(caddy, probe);
     assert_eq!(stand_in, probe);
+    assert_eq!(scanned, [probe, probe], "image-scan pulls and saves it");
     let (tag, digest) = probe.split_once("@sha256:").unwrap();
     assert_eq!(tag, "caddy:2.11.7-alpine");
     assert!(digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()));

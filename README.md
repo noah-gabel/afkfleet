@@ -244,7 +244,7 @@ Further reading:
 - [`Plan.md`](Plan.md): roadmap, architecture, security model, fault tolerance, appendices
 - [`docs/adr/`](docs/adr/): architecture decision records
 - [`docs/threat-model.md`](docs/threat-model.md): assets, attackers and mitigations
-- [`docs/runbook.md`](docs/runbook.md): operations on a Linux host with Docker (started in Phase 12: backups, restoring one, and reading the metrics)
+- [`docs/runbook.md`](docs/runbook.md): operations on a Linux host with Docker (started in Phase 12: backups, pulling them off the host over SFTP, restoring one, and reading the metrics)
 
 ## Prerequisites (development, Windows 11)
 - Git, [PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows) (`pwsh`) and [`just`](https://github.com/casey/just)
@@ -428,9 +428,20 @@ afkfleet-server agent create-enrollment-token --config server.toml   # a token f
 
 The HTTP API has no TLS of its own: Caddy fronts it (Phase 12). The agents' gRPC port uses the server certificate of `pki init`.
 
+### Running it all with Docker Compose
+[`deploy/compose.yaml`](deploy/compose.yaml) is the production project (P12.2, [ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md)): the server and a managed agent, from the two images, as a project of its own beside whatever else the host runs. The runbook's install steps come with P12.6; what's there now:
+- **The proxy path** is picked by `COMPOSE_FILE` in the host's `.env`: afkfleet's own Caddy on 80 and 443 (`compose.edge.yaml` with `compose.caddy.yaml`, a Let's Encrypt certificate for `AFKFLEET_DOMAIN`), an existing reverse proxy in a container (`compose.edge.yaml`, the proxy joining the `afkfleet_edge` network at `AFKFLEET_PROXY_ADDRESS`), or one on the host (`compose.loopback.yaml`, `127.0.0.1:8080`). `compose.grpc.yaml` publishes 7443 for agents on other hosts, which run [`deploy/compose.agent.yaml`](deploy/compose.agent.yaml). The server trusts `X-Forwarded-For` from that path's proxy alone.
+- **Every setting lives in the host's `.env`,** copied from [`deploy/env.example`](deploy/env.example), which lists them all: the images, the domain, the backups' folder, the subnets, the limits, and any `AFKFLEET_SERVER__…` or `AFKFLEET_AGENT__…` key for the configs in [`deploy/prod/`](deploy/prod/). An update never replaces `.env`; never edit a file of the release.
+- **The one-time steps:** `sh setup.sh check` says which path fits and changes nothing; `sudo sh setup.sh init` (root only to create the backups' folder) checks Docker, `.env`, the ports and that nothing of the project exists yet, makes the vault key and the PKI inside the server's image, starts the server, enrolls the local agent and starts the rest. It never prints a key and never overwrites anything; on a failure it names what it created. `sh setup.sh update` takes a backup with the running server, pulls the new images and starts the server before the rest.
+- **The keys** (vault key, CA key, CA certificate, server certificate) live on volumes of their own, made by the server's image as its user (65532) and mounted read-only; the database on another. Back the vault key and the CA's key up apart from the backups.
+- **The backups** go to a host folder (`AFKFLEET_BACKUPS_DIR`), which `sudo sh host/sftp-backups.sh install --key <your key.pub>` opens to an SFTP account that can only read it, for your PC to pull them (the runbook's [Keeping backups off the host](docs/runbook.md#keeping-backups-off-the-host)).
+- **Hardening:** every service runs as the nonroot user with a read-only root, no capabilities (Caddy keeps the one that lets its binary start), `no-new-privileges`, memory and pids limits without swap, rotated logs and `restart: unless-stopped`. Nothing is published but the path's own ports, and the metrics ports only on the project's network: `docker compose run --rm probe` reads the server's (the runbook's Metrics).
+- **Production bots** may dial public Minecraft servers; `AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS=false` in `.env`, then `docker compose up -d agent`, stops that. They never dial the host's own networks.
+- **Tests:** `just test-stack` builds both images and runs the smoke tests (every proxy path brought up from a copy of `deploy/`, logged into with 2FA, and checked for the real client address, secrets in logs, the metrics ports, a restart and the limits) and the SFTP account's test, in containers of their own; the Stack workflow runs them nightly on arm64 and amd64.
+
 ### Metrics
 With `[metrics] bind` set, the server and the agent each answer `GET /metrics` on a port of its own, in Prometheus' text format (P12.4, [ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md)). Without it, metrics are off, and the binary says so once at startup.
-- **Internal only.** The port asks for no login, so publish it to no one and never route it through Caddy or another proxy. On a host install, bind it to loopback; in Docker, to the container's network, for a scraper on that network (Phase 12's production stack). How to read it from the host: [`docs/runbook.md`](docs/runbook.md).
+- **Internal only.** The port asks for no login, so publish it to no one and never route it through Caddy or another proxy. On a host install, bind it to loopback; in Docker, to the container's network, for a scraper on that network (the production project binds the server's to its address on the `fleet` network alone, which no proxy joins). How to read it from the host: [`docs/runbook.md`](docs/runbook.md).
 - **Counts only.** No label holds a username, an account or player name, an address, an ID, a token or chat, and none is per user, per bot or per agent; every label's values are fixed. Every series is there from the start, at 0.
 - **The server's port** serves only `/metrics`: another path is 404 and another method 405, with the API's per-IP limit and request timeout. The API's own port answers 404 at `/metrics`.
 - **The agent's port** has a small responder of the agent's own: at most 4 connections at once, 5 s each, and a request head of at most 2 KiB. Another path is 404, another method 405, a malformed or oversized request 400. Nothing from a request is logged.
@@ -478,7 +489,9 @@ just dev-enroll # enroll a dev agent with dev-server, the bundle on stdin: $bund
 just dev-managed-agent # run that agent with deploy/dev/agent.managed.toml against dev-server
 just dev-bots alice # a console for dev-server's bot endpoints, the password and codes typed hidden
 just stack-up  # build the agent's image and run the server and the agent in Docker
-just test-slow # pull the server image, build the agent's image, then the slow tests one at a time (needs Docker)
+just test-slow # pull the server image, build both images, then the slow tests one at a time (needs Docker)
+just images   # build afkfleet-server:dev and afkfleet-agent:dev for this machine (needs Docker)
+just test-stack # both images, then the stack's smoke tests and the SFTP account's test (needs Docker)
 just demo-agent # the Phase 5 demo: the Docker agent's five bots for an hour with one server restart
 just test-real-account # the real-account check: you only (see below)
 just test-ms-account # the Microsoft check with your own account: you only (see below)

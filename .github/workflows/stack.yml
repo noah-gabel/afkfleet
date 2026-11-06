@@ -1,10 +1,14 @@
-# The stack (Plan.md P12.1, P12.2, P12.7; ADR-0022, S13, S19, U16): both images built natively
-# on GitHub's linux/arm64 runner, production's architecture, and on linux/amd64. It runs nightly,
-# on demand, and on the pull requests that touch what the images and the compose project are built
-# from (never crates/ alone, which nearly every pull request touches; ADR-0014's rule is that no
-# job builds the images on every pull request). Nothing is pushed or published, and it's never a
-# required check, so a pull request it doesn't run on is never blocked. Third-party actions are
-# pinned to full commit SHAs (version in the comment), as in ci.yml.
+# The stack (Plan.md P12.1, P12.2, P12.7; ADR-0022, S13, S15, S19, U16): both images built
+# natively on GitHub's linux/arm64 runner, production's architecture, and on linux/amd64, then the
+# smoke tests of every proxy path and the SFTP account's test (`just test-stack`). Here, on a
+# throwaway runner, the smoke tests run deploy/setup.sh init themselves (AFKFLEET_SMOKE_SETUP=host),
+# with sudo only for the backups' temporary folder; nothing else in the repository runs the script
+# outside its stubs. It runs nightly, on demand, and on the pull requests that touch what the images
+# and the compose project are built from (never crates/ alone, which nearly every pull request
+# touches; ADR-0014's rule is that no job builds the images on every pull request). Nothing is
+# pushed or published, and it's never a required check, so a pull request it doesn't run on is
+# never blocked. Third-party actions are pinned to full commit SHAs (version in the comment), as in
+# ci.yml.
 name: Stack
 
 on:
@@ -27,6 +31,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
   JUST_VERSION: "1.58.0"
 
 jobs:
@@ -38,13 +44,20 @@ jobs:
       matrix:
         runner: [ubuntu-24.04-arm, ubuntu-24.04]
     runs-on: ${{ matrix.runner }}
-    # Both images build cold: no cache crosses runs.
-    timeout-minutes: 90
+    # Both images build cold (no Docker cache crosses runs), then the tests' own build.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install the pinned toolchain
+        run: rustup install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
         with:
-          tool: just@${{ env.JUST_VERSION }}
+          tool: just@${{ env.JUST_VERSION }},cargo-nextest@0.9.146
       - run: just images
+      # `test-stack` builds the images again from Docker's cache, a few seconds.
+      - run: just test-stack
+        env:
+          AFKFLEET_SMOKE_SETUP: host

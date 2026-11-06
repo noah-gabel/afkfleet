@@ -19,11 +19,18 @@
 //!   `just test-slow` runs it.
 //! - [`timing`]: the timing contracts between the agent and the server,
 //!   over their constants.
+//! - [`smoke`]: P12.7's smoke tests (ADR-0022, S19): the production compose
+//!   project from a copy of `deploy/`, on each proxy path, with both images;
+//!   `just test-stack` and `just test-slow` run them, and the Stack
+//!   workflow nightly.
+//! - [`sftp`]: the backups' SFTP account (ADR-0022, S15), installed by
+//!   `deploy/host/sftp-backups.sh` in a throwaway sshd container.
 //!
 //! Every loopback case runs on real time on one thread: the sockets, TLS
 //! and SQLite need it, and every task of the server and of the agents logs
 //! into the test's subscriber. Waits are bounded by
-//! [`harness::logs::PATIENCE`].
+//! [`harness::logs::PATIENCE`]. The smoke and SFTP tests run on real time
+//! too, against Docker, each wait bounded and woken by an event.
 #![cfg(test)]
 
 mod dod_kit;

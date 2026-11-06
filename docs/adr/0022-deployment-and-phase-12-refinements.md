@@ -371,6 +371,47 @@ Group C (P12.1, P12.2, P12.7) was planned after group B's merge. Eight read-only
 - **R17.** The `probe` service stays in `compose.yaml` under its profile: the runbook's way to read the metrics on the project's network (P12.6's note).
 - **R18.** No `pipefail` (dash lacks it): the enrollment pipeline's status is `enroll`'s, and a failed token command leaves it without a bundle.
 
+### As built (group C)
+On `p12/p12-stack`, one pull request (U17), in nine commits, the plan's ten with the images and their CI in one: PR #96's follow-ups, U9's fingerprint (U11), `vault create-key`, the images and their CI, the smoke tests red against a skeleton, the compose project, the setup script, the SFTP account, then CI and the records.
+
+**The compose project (P12.2)** was built feature by feature against the smoke tests, each feature added after its red run:
+- each path's `trusted_proxies` (red: the audit recorded the proxy's own address, or the `fleet` gateway's in the host form);
+- the server's metrics bound to its `fleet` address (U19; red: Caddy's container reached `server:9480`);
+- `env_file: .env` (U18; red: the test's `.env` setting wasn't in the server's environment);
+- the Caddyfile's log filter (red: a forced 502's ticket was in Caddy's log).
+
+U18's pins on `env.example` (every compose variable listed, the runbook's settings, placeholders only, no tracked `compose.override.yaml`, and every setting it names loading in both production configs) are Rust tests in `tests/compose.rs` and both crates' `tests/deploy.rs`, not in the setup script's node test S18 named: they're about compose and the configs, and that test reads the scripts.
+
+**Decided during the build** *(for the user's review)*:
+- **S21 (security, low). Caddy keeps `cap_drop: [ALL]` and adds back `NET_BIND_SERVICE` alone** *(decided by a read-only review agent, the tree's fingerprint unchanged before and after; it corrects R11's premise)*. The pinned 2.11.7 image's binary carries `cap_net_bind_service=+ep`; the `+p` R11 read arrived only with 2.11.8. With every capability dropped, Docker can't execute it at all ("exec /usr/bin/caddy: operation not permitted", exit 255), which the smoke test found. So `deploy/compose.caddy.yaml` and the smoke test's stand-in add `cap_add: [NET_BIND_SERVICE]` beside `cap_drop: [ALL]`, user 65532, `read_only` and `no-new-privileges`, and a static test keeps `cap_add` off every other service. Caddy then holds that one capability, permitted and effective (the smoke test reads `/proc/1/status`: inherited and ambient empty, permitted, effective and bounding `0x400`); it allows binding ports below 1024, which Docker lets any process in a container do anyway. From Caddy 2.11.8 on the binary runs with nothing added, so the line goes when the pin moves. *The review agent expected `no-new-privileges` to keep the permitted and effective sets empty; the smoke run showed them holding the capability, so the check and the comments say what Caddy really holds; the decision stands.*
+  - *Rejected:* an image of our own whose binary has no file capability (a third image to build on every host or to publish, for one bit); unprivileged ports inside the container (the binary fails before it reads any config); no `cap_drop` (Docker's 14 default capabilities); moving the pin to 2.11.8 (U13's, the user's: 2.11.8 is 7 days old from 2026-11-11).
+  - *For the user, found by the same agent:* U13's comparison missed two 2.11.8 fixes that touch our Caddyfile: the `query` log filter (caddy#8255, parameters after a `#`) and hop-by-hop headers on 1xx responses. Neither changes what our app sends, but both argue for the pin's next move.
+
+**Deviations from the plan:**
+- **`init` runs no `migrate`:** `serve` runs every pending migration at its start, `setup` never mounts `data` (S14), and a `run` of the server would clash with its fixed `fleet` address (U19).
+- **No restore in compose form yet.** Restoring into the `data` volume means copying into a stopped container (`docker compose cp`, with `-a` for the owner) and removing a leftover `-wal` without a shell in the image, which no test proves yet; the runbook says it follows, and D writes and proves it (below).
+- **`just test-slow` builds both images** and so runs the smoke tests too: the weekly Slow tests job's timeout goes from 60 to 120 minutes. The Stack workflow's goes from 90 to 120, since it now installs the toolchain and builds the tests, with the already-pinned rust-cache and nextest.
+- **The audit's image scan covers Caddy's pinned image** beside ours (U13's "scanned weekly"); a test keeps the justfile's pin equal to the compose files'.
+- **The SFTP test's container has no network:** sshd and the client meet on its loopback.
+- **ShellCheck found one thing,** SC1003 on the key line's backslash pattern in `sftp-backups.sh`, rewritten as `*\\*` and checked under dash and busybox.
+- **The threat model's metrics risk** had split azalea's accepted risk from its two sub-bullets since group B; it moved below them.
+
+**Red first.** New code ran against stubs with its real signature; what existed before its tests went red through temporary mutations, each restored by checksum:
+- the follow-ups: each wiring count red with its `with_metrics`, or `ControlPorts`' `metrics`, taken out of `cli/serve.rs`; the responder's head refused a split of its end (1/3, 2/2, 3/1);
+- the fingerprint: 13 of 14 tests against a stub with the real exports (the 14th is Unix-only);
+- `vault create-key`: six unit tests against a stub that did nothing, the binary's with `main.rs` answering 0;
+- the images: the nine server deploy tests against stub files; the agent's through mutations (`public_targets = false`, no `USER`);
+- the smoke tests: against the skeleton, then once more before each feature above;
+- `env.example`'s pins: a misspelt server key and agent key, a removed variable and a non-placeholder domain;
+- the setup script: 15 of 16 against a stub exiting 0 (the 16th, a self-test of the syntax rules, was red on its own regex, then fixed);
+- the SFTP account: against a stub exiting 0 (red at the first refusal); its image's `FROM` pin through a changed digest; the justfile's Caddy pin the same way.
+
+**Where it ran:**
+- **On the PC:** the three smoke tests (the test's own steps, the backups on a named volume), the SFTP test, the setup script's stub runs under dash in a throwaway container (the screenshot image, no network, `scripts/` and `deploy/` read-only), ShellCheck 0.11.0 (its release binary, checked against install-action's manifest's SHA-256, in a throwaway container), and the static tests.
+- **Only in CI:** the smoke tests running `deploy/setup.sh init` itself (`AFKFLEET_SMOKE_SETUP=host`, `sudo` for the backups' folder alone), and everything on arm64.
+
+**Records:** the runbook gains the backups in the compose project, the SFTP pull (host and PC), and the metrics through `probe`. The threat model gains a row for the deployment (B1, B6, B8), Caddy's image in the supply chain, and four accepted risks: Caddy's capability (S21), the host proxy path's trust, the SFTP account's reach, the shared uid. Plan.md ticks P12.2 and P12.7 with their notes and corrects P12.2's routes, Appendix A's `trusted_proxies` and P12.2's Caddy-log note.
+
 ### Notes for later groups
 - **C (P12.1, P12.2, P12.7):**
   - **Its questions:** U50 for production; the image scanner (a dependency); Caddy's image; resource limits from the measured numbers (P12.2's notes); the SFTP account's host side (U3); U8's setup script's form.
@@ -390,6 +431,16 @@ Group C (P12.1, P12.2, P12.7) was planned after group B's merge. Eight read-only
     - the restore steps (S8);
     - the metrics in compose form, with group B's alerts;
     - every P12.6 note.
+  - **From group C** *(2026-11-06)*:
+    - **The settings (U18):** every setting the runbook tells an operator to change is a line of the host's `.env` (`deploy/env.example` lists them, with their defaults), or a host-only `compose.override.yaml` the operator adds to `COMPOSE_FILE`; never an edit of a tracked file, which an update replaces.
+    - **The keys' backup (U22):** how the operator copies the vault key and the CA's key from the `keys` volume into a root-only file on the host, never printed to a terminal or put on a command line (check first that `docker compose cp` reads a volume's path, and keeps the owner with `-a`). The SFTP pull deliberately doesn't carry them, and losing the volume without a copy loses every linked account.
+    - **The restore in compose form,** proven by a test before the runbook gives it: the backup copied into the stopped server's `data` volume as 65532, 0600, and a leftover `-wal` removed without a shell in the image.
+    - **The install** in about ten commands: copy `deploy/` to the host, `cp env.example .env` and fill it in, `sudo sh setup.sh init`, the Owner (`docker compose exec server … user create-owner`), the SFTP account, the app. **The update** in two: `sh setup.sh update` after the new release's files.
+    - **`Restarting (5)`:** an agent refused for good loops at Docker's backoff (S17): stop it, read `refusal` in its log, fix it, start it.
+    - **A remote agent** (`deploy/compose.agent.yaml`): the server's `ca.crt` copied to that host, then `chown 65532:65532` and `chmod 600` as root once, and `compose.grpc.yaml` on the server's host; the server certificate's names from `AFKFLEET_GRPC_NAMES` at `init`.
+    - **The host:** Compose v2.24 or newer (`setup.sh` checks it); IPv4 only, so the domain's A record; rootless Docker refused.
+    - **An existing proxy's duties:** TLS, WebSocket upgrades, `X-Forwarded-For` set (never passed on from the client), only `/api/v1/*`, `/health/live` and `/health/ready` routed, never a metrics port, and no `ticket` or `q` in its logs; from a container, it joins `afkfleet_edge` at `AFKFLEET_PROXY_ADDRESS`.
+    - **Caddy's pin moves** when the user decides (U13): 2.11.8 is 7 days old from 2026-11-11, drops S21's `cap_add`, and fixes the `query` log filter and 1xx hop-by-hop headers.
   - **The first release tag** is the user's.
 - **Phase 13** (from group B): the metrics router in the authorization matrix (P13.1); a fuzz target for the agent's responder (P13.2); a scrape during the load test (P13.4).
 
@@ -399,7 +450,10 @@ Group C (P12.1, P12.2, P12.7) was planned after group B's merge. Eight read-only
   - The database can be copied off the host as plain SQLite files, bounded in number and in how long they keep deleted chat, without stopping the server.
   - A WAL that grew no longer keeps its size or its old pages until a restart.
   - Operators can alert on a refresh-token reuse, failing backups or a retention that died, without reading logs (P12.4).
+  - A host with only Docker runs afkfleet beside its other services, behind its own Caddy or an existing proxy, with its settings in a `.env` no update replaces, and its backups pulled off by an account that can only read them (group C).
 - **Harder:**
+  - The deploy files' shape is pinned by static tests and the smoke tests, so a compose change updates both; the smoke tests need both images built and Docker (group C).
+  - Caddy's and Grype's pins move by hand, each to a release at least 7 days old (U12, U13).
   - The backup file's name is a contract: the copier, the runbook and the pruning depend on it.
   - A long backup delays the retention's next pass.
   - Restoring stays a manual procedure, with its security steps in the runbook.

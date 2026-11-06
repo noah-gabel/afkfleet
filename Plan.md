@@ -4368,8 +4368,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Labels:** the four static OCI labels in both images; `created`, `revision` and `version` come with D's publishing.
   > - **CI:** the Stack workflow builds both images natively on `ubuntu-24.04-arm` and `ubuntu-24.04`, nightly, on demand and on the pull requests that touch `deploy/`, `.dockerignore`, `Cargo.lock` or `rust-toolchain.toml` (U16); the weekly audit scans both with Grype v0.121.0, failing on a HIGH or CRITICAL finding a newer package fixes (U12).
   > - **Tests:** `crates/fleet-server/tests/deploy.rs` and fleet-agent's pin both Dockerfiles against each other and against `deploy/prod/`'s configs, through `fleet_testkit::dockerfile`.
-- [ ] **P12.2** `deploy/compose.yaml`:
-  - **Caddy:** ports 80/443, Let's Encrypt, HSTS; proxies `/api` and WebSockets to `server:8080`.
+- [x] **P12.2** `deploy/compose.yaml`:
+  - **Caddy:** ports 80/443, Let's Encrypt, HSTS; proxies `/api` and WebSockets to `server:8080` (as built: `/api/v1/*`, `/health/live` and `/health/ready`; the note below).
   - **Server:** on the internal network. Port 7443 is published only when remote agents exist.
   - **Agents.**
   - **Docker secrets:** vault key, CA key/cert.
@@ -4416,6 +4416,22 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - One setup script does the one-time steps; its form is group C's.
 
   > Note (P12.2, from Phase 12, group B) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S10, U1, U5): **the metrics ports.** The production configs set `[metrics] bind = "0.0.0.0:9480"` for the server and `"0.0.0.0:9481"` for agents, reachable only on the project's own network: no `ports:` and no `EXPOSE` for either. Caddy and the host's existing proxy route only the server's 8080, never a metrics port.
+  > Note (P12.2, Phase 12's group C) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S14–S18, S21, U10, U18–U20, R16): **as built.**
+  > - **The project:** `deploy/compose.yaml` (the server, the managed agent, and the `setup` and `probe` services under profiles of their own), plus one file per proxy path, picked by `COMPOSE_FILE` in the host's `.env`: `compose.edge.yaml` with `compose.caddy.yaml` (afkfleet's Caddy on 80 and 443) or alone (an existing proxy in a container), `compose.loopback.yaml` (a proxy on the host, at `127.0.0.1:8080`), and `compose.grpc.yaml` for remote agents, whose own project is `compose.agent.yaml`. The configs are `deploy/prod/`'s, the Caddyfile `deploy/Caddyfile`, and `deploy/setup.sh check|init|update` does the one-time steps (S18).
+  > - **Settings in `.env`** (U18): `deploy/env.example` (not `.env.example`, R16) lists every one; compose passes `.env` to the server, the agent and `setup`, and an update never replaces it.
+  > - **Deviations:**
+  >   - **No Docker secrets** (S14): the vault key and the CA's key live on the `keys` volume, the CA certificate on `ca`, the server's pair on `tls`, each made inside the server's image as 65532 by `setup.sh init` (`vault create-key`, `pki init`) and mounted read-only into the server. A remote agent's CA certificate is a compose secret from a host file.
+  >   - **Caddy's routes** are `/api/v1/*` (WebSockets included), `/health/live` and `/health/ready`; everything else is 404 (S16).
+  >   - **`trusted_proxies`** is each path's proxy's own `/32` (S16), not a network; Appendix A's example reads so.
+  >   - **The server's metrics port** binds the server's fixed address on `fleet` (`AFKFLEET_SERVER_FLEET_ADDRESS`), not `0.0.0.0` as group B's note says, so no proxy reaches it (U19).
+  >   - **Caddy adds back `NET_BIND_SERVICE`** beside `cap_drop: [ALL]`: its pinned binary can't start without it (S21).
+  >   - **The agent restarts `unless-stopped`,** like every service: an exit 5 loops at Docker's backoff, at most once a minute (S17).
+  >   - **`setup.sh init` runs no `migrate`:** `serve` migrates at its start.
+  >   - Caddy's error logger logs a 5xx's URI even without an access log, so the Caddyfile's filter, which deletes `ticket` and `q`, is on its global log (S16; the notes from Phase 11 above).
+  > - **Limits** (`.env` settings, no swap): the server 512m, 1 CPU, 256 pids; the agent 512m, 1 CPU, 512 pids (50 bots from ADR-0008's numbers, about 1.9× headroom); Caddy 256m, 0.5 CPU, 128 pids. Grace periods: the server 30 s, the agent 20 s, Caddy 25 s.
+  > - **The backups' host side:** the folder (`AFKFLEET_BACKUPS_DIR`, 65532, 700, in a root-owned folder) and `deploy/host/sftp-backups.sh` for the read-only SFTP account (S15), tested in a throwaway sshd container.
+  > - **Production bots** dial public servers from the first start, and no private network (U10).
+  > - **Tests:** `crates/fleet-server/tests/compose.rs` and both crates' `tests/deploy.rs` pin the files; P12.7's smoke tests run them.
 - [x] **P12.3** 🔴 Backups:
   - a scheduled `VACUUM INTO` with retention, plus a `backup` CLI
   - a restore runbook
@@ -4516,7 +4532,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > *Group A starts the runbook with "Backups and restore".*
 
   > Note (P12.6, from Phase 12, group B) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S10): **the metrics** in the finished runbook: the compose form of reading them (from a container on the project's network, never through a published port), and the alerts group B's "Metrics" section starts with.
-- [ ] **P12.7** 🔴 Compose smoke test in CI, run nightly:
+- [x] **P12.7** 🔴 Compose smoke test in CI, run nightly:
   1. `up`
   2. health checks pass
   3. create the Owner
@@ -4532,6 +4548,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P12.7, from Phase 12's planning, the user's decision) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U5): **both proxy paths** are smoke-tested: afkfleet's own Caddy, and afkfleet behind a stand-in for an existing reverse proxy.
 
   > Note (P12.7, from Phase 12, group B) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S9, S10): the smoke test scrapes both metrics endpoints from inside the project's network, and checks that `/metrics` through Caddy and through the other proxy path reaches neither.
+
+  > Note (P12.7, Phase 12's group C) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S19, U5, U20, U21): **as built.** fleet-integration's `slow_smoke_with_caddy`, `slow_smoke_behind_a_container_proxy` and `slow_smoke_behind_a_host_proxy` bring the production project up from a copy of `deploy/`, with a `.env` and an override of their own (offline accounts allowed there alone, U20), under project names of their own. Beyond the five steps (the Owner created with `--password-stdin`, the login through fleet-client with the full 2FA flow), they check the client's real address and a forged `X-Forwarded-For`; no `ticket`, `q`, password, TOTP secret or recovery code in any log after forced 502s; both metrics ports from inside and neither through any path; `.env`'s settings in the server's environment; the database and a backup across a recreate; memory and pids under 75 % of the limits (U21); Caddy's one capability; the image alone refusing to start; and every exit clean. The Stack workflow runs them nightly on arm64 and amd64, with `deploy/setup.sh init` doing the setup there; `just test-stack` and `just test-slow` run them elsewhere, the test doing the same steps itself.
 
 **DoD:**
 - A clean afkfleet install (no earlier afkfleet state) on an existing Linux host that keeps its other services, following only the runbook.
@@ -4694,7 +4712,7 @@ dev_mode = false
 
 [http]
 bind = "0.0.0.0:8080"
-trusted_proxies = ["172.30.0.0/24"]     # Caddy network; X-Forwarded-For is only trusted from here
+trusted_proxies = ["172.30.1.2/32"]     # the proxy's own address, set per proxy path by compose (ADR-0022, S16)
 request_timeout_secs = 15                # 1–19: below the desktop client's 20 s
 max_body_bytes = 65536
 

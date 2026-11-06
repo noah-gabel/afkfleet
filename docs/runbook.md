@@ -2,7 +2,7 @@
 
 An operator's guide to running afkfleet on a Linux host with Docker, beside whatever else the host runs. It names no hosting provider: where a step depends on yours, it says so in general terms.
 
-> **Work in progress (Phase 12).** This guide grows with Phase 12's groups ([ADR-0022](adr/0022-deployment-and-phase-12-refinements.md)): this first part covers backups, restoring one and the metrics, for the binaries. The install with Docker Compose, keeping a backup off the host, updates, the uninstall and the rest of operations follow, and P12.6 finishes it.
+> **Work in progress (Phase 12).** This guide grows with Phase 12's groups ([ADR-0022](adr/0022-deployment-and-phase-12-refinements.md)). So far it covers backups (also in the compose project, and pulled off the host over SFTP), restoring one on a host install, and the metrics, also read inside the compose project. The install with Docker Compose (`deploy/setup.sh`), updates, a restore in the compose project, the uninstall and the rest of operations follow, and P12.6 finishes it.
 
 ## Backups
 
@@ -26,6 +26,41 @@ The server backs up its database by itself once `[database] backup_dir` is set (
 
 **File system:** `backup_dir` must be on a file system with hard links, since a finished backup is published by one, which never replaces a file. Not FAT or exFAT, and not every network share: on one without them, every backup fails with `couldn't publish`.
 
+**In the compose project** (`deploy/compose.yaml`; ADR-0022, S14, S15):
+- `backup_dir` is `/backups` in the server's container: a folder on the host, `AFKFLEET_BACKUPS_DIR` in `.env` (`/srv/afkfleet-backups/backups` by default). It belongs to the server's user, 65532, with mode 700, inside a folder only root can change (root, 755). `sh setup.sh init` creates it when run with `sudo`, or prints the two commands that do.
+- The database stays on its own volume (`data`), and the vault key and the CA's key on another (`keys`): no backup and no copy of `data` holds the key that opens it.
+- **Taking one now:**
+  ```sh
+  docker compose exec -T server /usr/local/bin/afkfleet-server backup --config /etc/afkfleet/server.toml
+  ```
+  It prints the backup's path inside the container, `/backups/afkfleet-backup-….db`: the file of that name in the host's folder.
+
+## Keeping backups off the host
+
+Your PC pulls the backups over SFTP, through an account on the host that can list and read them and do nothing else (ADR-0022, U3, S15). Nothing on the host holds a credential for anywhere else, and no third party is involved. The pull deliberately doesn't carry the vault key or the CA's key: keep those apart (see [Backups](#backups)).
+
+**On the host,** once, as root, from the folder that holds `compose.yaml`, with your PC's public key copied over (one line, e.g. `id_ed25519.pub`):
+```sh
+sudo sh host/sftp-backups.sh install --key /path/to/your_key.pub
+```
+- It adds the account `afkfleet-backup`: the server's user's uid and gid (65532), the only ones that can read its owner-only backups; no shell, no home, no password. Your key goes into `/etc/ssh/afkfleet-backup.authorized_keys`, marked `restrict`.
+- It adds the drop-in `/etc/ssh/sshd_config.d/10-afkfleet-backup.conf`: for that account alone, keys only, confined to the backups' folder's parent (`ChrootDirectory`), read-only SFTP (`internal-sftp -R`), no TTY and no forwarding. It never edits `sshd_config`.
+- It refuses (exit 1, saying why, changing nothing) when `sshd_config` doesn't include `/etc/ssh/sshd_config.d/*.conf` above every `Match` block, when the backups' folder or a folder above it isn't root's alone, when the name, uid or gid is taken, when the drop-in or the key file exists already, or when the key file holds more than one key. If the drop-in fails `sshd -t`, if an earlier setting would win over one of its values, or if it would change sshd's settings for anyone else, it removes the drop-in again and doesn't reload sshd.
+- A backups' folder other than the default is given with `--backups /path/to/backups`.
+- Success: `ok: the account afkfleet-backup reads … over SFTP, read-only`, then this host's key fingerprint. Keep your own SSH session open until a new login works.
+
+**On your PC** (Windows' built-in OpenSSH client, or any other):
+```sh
+sftp -i ~/.ssh/your_key afkfleet-backup@<your host>
+sftp> ls
+sftp> get afkfleet-backup-20261101T000000Z.db
+```
+- At the first connection, compare the host key's fingerprint with the one `install` printed.
+- `ls` shows the backups, and `get` copies one. Never copy a `.….db.partial` dot file: that backup is still being written. Everything else (writing, deleting, renaming, a shell, a tunnel) is refused.
+- Keep the copies as private as the backups (see [Backups](#backups)).
+
+**Removing it:** `sudo sh host/sftp-backups.sh uninstall` removes the drop-in, the key file and the account, reloads sshd, and keeps the folders and the backups.
+
 ## Restoring a backup
 
 Restore by hand, with the commands that exist (ADR-0022, S8). The paths below are the config's.
@@ -46,13 +81,20 @@ The server and each agent answer `GET /metrics` in Prometheus' text format once 
 
 **Turning it on:** set `[metrics] bind` in the config, or `AFKFLEET_SERVER__METRICS__BIND` (`AFKFLEET_AGENT__METRICS__BIND` for an agent) in the environment, and restart. On a host install, use loopback: `127.0.0.1:9480` for the server, `127.0.0.1:9481` for an agent. Success: the start logs `the metrics endpoint is listening` with the address. Without the key it logs `metrics are off: [metrics] bind isn't set`, and a port that's taken stops the start with exit 1.
 
-**Never publish the port.** It asks for no login. Don't open it in the host's firewall or your provider's, don't publish it with Docker's `ports:`, and don't route it through Caddy or any other proxy. A scraper reads it from the host itself, or from the containers' own network; the compose form comes with the production stack.
+**Never publish the port.** It asks for no login. Don't open it in the host's firewall or your provider's, don't publish it with Docker's `ports:`, and don't route it through Caddy or any other proxy. A scraper reads it from the host itself, or from the containers' own network (the compose project's form is below).
 
 **Reading it from the host:**
 ```sh
 curl -s http://127.0.0.1:9480/metrics
 ```
 Success looks like `# HELP afkfleet_…` and `# TYPE …` lines, then one line per series, such as `afkfleet_refresh_token_reuses_total 0`. Every series is there from the start, at 0, and starts again from 0 when the process restarts. Another path answers 404.
+
+**In the compose project,** nothing publishes either port, and only the project's `fleet` network reaches them (ADR-0022, S16, U19): the server's at its fixed address there (`AFKFLEET_SERVER_FLEET_ADDRESS`, `172.30.0.10` by default) on 9480, so a proxy on the `edge` network can't reach it, and the agent's on 9481. The `probe` service (Caddy's pinned image, its `wget`, as the nonroot user) reads them from inside:
+```sh
+docker compose run --rm probe                                # the server's
+docker compose run --rm probe http://agent:9481/metrics      # the agent's
+```
+Success looks the same as above. A scraper of your own joins the `fleet` network the same way; never give it `edge`.
 
 **What to watch,** as examples for alerts:
 - **Any refresh-token reuse** (`afkfleet_refresh_token_reuses_total` above 0): a refresh token came back after its rotation, and its session was revoked. It may have been stolen: the audit log's `security.refresh_token_reuse` entry shows whose.
