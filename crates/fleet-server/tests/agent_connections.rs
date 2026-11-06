@@ -29,6 +29,7 @@ use fleet_server::app::agents::{AgentConnectionService, AgentService, Disabler};
 use fleet_server::grpc::registry::AgentRegistry;
 use fleet_server::infra::pki::{CertificateAuthority, Ed25519Key, X509AgentNames, fingerprint};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
+use fleet_server::metrics::Metrics;
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::agent_connections::{
     AdmitError, Admitted, AgentConnections as _, Conflict, Ended, LiveCertificate, Presented,
@@ -64,6 +65,7 @@ struct Setup {
     db: Database,
     clock: ManualClock,
     connections: AgentConnectionService,
+    metrics: Metrics,
     heard: Arc<Heard>,
     ca: CertificateAuthority,
     random: SeededRandom,
@@ -129,16 +131,19 @@ async fn setup_with(options: SqliteConnectOptions, db_options: DatabaseOptions) 
     let random = SeededRandom::new(21);
     let (ca, _) = CertificateAuthority::create(&random, at(T0)).unwrap();
     let heard = Arc::new(Heard::new(&db));
+    let metrics = Metrics::prometheus();
     let connections = AgentConnectionService::new(
         Arc::new(clock.clone()),
         Arc::new(db.clone()),
         Arc::new(X509AgentNames),
     )
-    .with_live_hints(Arc::clone(&heard) as Arc<dyn LiveHints>);
+    .with_live_hints(Arc::clone(&heard) as Arc<dyn LiveHints>)
+    .with_metrics(metrics.recording().clone());
     Setup {
         db,
         clock,
         connections,
+        metrics,
         heard,
         ca,
         random,
@@ -558,6 +563,57 @@ async fn an_agents_refusals_are_recorded_ten_times_a_day_and_then_only_logged(
         11,
         "the first one is a day old"
     );
+}
+
+/// P12.4: every refusal counts in the metrics by its reason, also past the
+/// audit log's daily cap, which is what the counter is for (S30); a
+/// certificate the CA signed that no agent holds counts as unknown.
+#[sqlx::test(migrations = false)]
+async fn every_refusal_counts_in_the_metrics_past_the_audit_cap_too(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let revoked = setup.enroll(1, "agent-1").await;
+    setup.revoke(revoked.id).await;
+    let key = Ed25519Key::generate(&setup.random).unwrap();
+    let stranger = AgentId::new_v7(at(T0), [9; 10]).unwrap();
+    let issued = setup
+        .ca
+        .issue_agent(&key, stranger, TimeDelta::days(60), &setup.random, at(T0))
+        .unwrap();
+
+    for _ in 0..12 {
+        refused(&setup.admit(&revoked).await);
+    }
+    refused(
+        &setup
+            .admit(&Enrolled {
+                id: stranger,
+                name: AgentName::try_from("stranger").unwrap(),
+                der: issued.der.to_vec(),
+                fingerprint: fingerprint(&issued.der),
+                not_after: issued.validity.not_after,
+            })
+            .await,
+    );
+
+    assert_eq!(setup.entries().await.len(), 10, "the cap records ten");
+    let render = setup.metrics.render().text();
+    let value = |reason: &str| {
+        let series = format!("afkfleet_agent_connects_refused_total{{reason=\"{reason}\"}} ");
+        render
+            .lines()
+            .find_map(|line| line.strip_prefix(series.as_str()))
+            .map(str::to_owned)
+    };
+    assert_eq!(value("revoked").as_deref(), Some("12"), "{render}");
+    assert_eq!(
+        value("unknown_certificate").as_deref(),
+        Some("1"),
+        "{render}"
+    );
+    assert_eq!(value("disabled").as_deref(), Some("0"), "{render}");
 }
 
 #[sqlx::test(migrations = false)]

@@ -87,7 +87,7 @@ pub use self::connect::{
 pub use self::store::SqliteWriteTx;
 use crate::config::DatabaseConfig;
 use sqlx::migrate::{MigrateError, Migrator};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection, SqlitePool, SqlitePoolOptions};
 
 /// Every migration under `crates/fleet-server/migrations/`, embedded in the
 /// binary. A merged migration is never edited: sqlx records each one's
@@ -306,9 +306,12 @@ pub async fn open_migrated(
     file::check_existing(&config.path).await?;
     let base = SqliteConnectOptions::new().filename(&config.path);
     let read = read_pool(base.clone(), &options).await?;
-    let checked = match applied_migrations(&read).await {
-        Ok(applied) => schema_state(&applied, &MIGRATOR),
-        Err(error) => Err(error),
+    let checked = match read.acquire().await {
+        Ok(mut connection) => match applied_migrations(&mut connection).await {
+            Ok(applied) => schema_state(&applied, &MIGRATOR),
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(OpenError::Connect(error)),
     };
     if let Err(error) = checked {
         read.close().await;
@@ -353,13 +356,14 @@ async fn read_pool(
 
 /// The rows of `_sqlx_migrations`, read without writing: none when the table
 /// doesn't exist yet, as in an empty file. sqlx's own `run` would create the
-/// table first.
-async fn applied_migrations(read: &SqlitePool) -> Result<Vec<Applied>, OpenError> {
+/// table first. One connection, so the backup's check can bound both reads
+/// with its progress handler.
+async fn applied_migrations(read: &mut SqliteConnection) -> Result<Vec<Applied>, OpenError> {
     let tables = sqlx::query_scalar!(
         r#"SELECT COUNT(*) AS "count!: i64" FROM sqlite_schema WHERE type = 'table' AND name = ?"#,
         "_sqlx_migrations"
     )
-    .fetch_one(read)
+    .fetch_one(&mut *read)
     .await
     .map_err(OpenError::Connect)?;
     if tables == 0 {

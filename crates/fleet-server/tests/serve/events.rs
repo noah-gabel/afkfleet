@@ -115,7 +115,7 @@ async fn an_open_socket_gets_its_1001_before_the_database_closes() {
     let keys = vault_keys(&config);
     let server = tokio::spawn({
         let config = config.clone();
-        async move { serve::run(&config, listener, None, signals, keys).await }
+        async move { serve::run(&config, listener, None, None, signals, keys).await }
     });
     healthcheck::get(address, "/health/ready", PATIENCE)
         .await

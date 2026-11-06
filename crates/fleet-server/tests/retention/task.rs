@@ -13,6 +13,7 @@ use fleet_core::id::BotId;
 use fleet_server::app::retention::{RetentionTimings, STOP_WAIT};
 use fleet_server::cli::retention::Retention;
 use fleet_server::infra::sqlite::Database;
+use fleet_server::metrics::Metrics;
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord};
 use fleet_server::ports::store::Store;
 use fleet_testkit::log_capture;
@@ -186,6 +187,119 @@ async fn a_summary_that_fails_keeps_its_counts_for_the_next_try(
     let entries = summaries(&db).await;
     assert_eq!(entries.len(), 1, "{entries:?}");
     assert_eq!(int(&entries[0], "chat_by_size"), 50);
+    db.close().await;
+}
+
+/// The value of `series` in `metrics`' render, if it's there.
+fn metric(metrics: &Metrics, series: &str) -> Option<String> {
+    metrics.render().text().lines().find_map(|line| {
+        line.strip_prefix(series)?
+            .strip_prefix(' ')
+            .map(str::to_owned)
+    })
+}
+
+/// Waits, within [`PATIENCE`], until `series` reads `value`, checking at
+/// each turn of the runtime: the metrics move after a run's last commit.
+async fn until_metric(metrics: &Metrics, series: &str, value: &str) {
+    timeout(PATIENCE, async {
+        while metric(metrics, series).as_deref() != Some(value) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{series} never read {value}"));
+}
+
+/// P12.4 (ADR-0020, S45): each run counts the rows it deleted by kind, how
+/// it ended and the batches it committed; a run with no failed phase sets
+/// the time of the last success, which an alert reads.
+#[sqlx::test(migrations = false)]
+async fn a_run_counts_its_rows_its_end_and_the_time_of_its_success(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let (store, _) = fleet(&db).await;
+    let metrics = Metrics::prometheus();
+    let stop = CancellationToken::new();
+
+    let running = tokio::spawn(
+        task(&store, 60)
+            .with_metrics(metrics.recording().clone())
+            .run(stop.clone()),
+    );
+    until_metric(
+        &metrics,
+        "afkfleet_retention_rows_deleted_total{kind=\"chat_by_size\"}",
+        "50",
+    )
+    .await;
+    stop.cancel();
+    timeout(PATIENCE, running).await.unwrap().unwrap();
+
+    assert_eq!(
+        metric(
+            &metrics,
+            "afkfleet_retention_runs_total{outcome=\"failed\"}"
+        )
+        .as_deref(),
+        Some("0")
+    );
+    assert_ne!(
+        metric(
+            &metrics,
+            "afkfleet_retention_runs_total{outcome=\"success\"}"
+        )
+        .as_deref(),
+        Some("0")
+    );
+    assert_eq!(
+        metric(
+            &metrics,
+            "afkfleet_retention_last_success_timestamp_seconds"
+        ),
+        Some(now().timestamp().to_string()),
+        "the service's clock"
+    );
+    db.close().await;
+}
+
+/// A run whose phase fails counts as failed, the phase by its name, and
+/// leaves the time of the last success where it was.
+#[sqlx::test(migrations = false)]
+async fn a_failed_phase_counts_and_the_run_isnt_a_success(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let (store, _) = fleet(&db).await;
+    store.fail_write(1, Failure::Backend);
+    let metrics = Metrics::prometheus();
+    let stop = CancellationToken::new();
+
+    let running = tokio::spawn(
+        task(&store, 60)
+            .with_metrics(metrics.recording().clone())
+            .run(stop.clone()),
+    );
+    until_metric(
+        &metrics,
+        "afkfleet_retention_runs_total{outcome=\"failed\"}",
+        "1",
+    )
+    .await;
+    stop.cancel();
+    timeout(PATIENCE, running).await.unwrap().unwrap();
+
+    assert_eq!(
+        metric(
+            &metrics,
+            "afkfleet_retention_phase_failures_total{phase=\"sessions\"}"
+        )
+        .as_deref(),
+        Some("1")
+    );
     db.close().await;
 }
 

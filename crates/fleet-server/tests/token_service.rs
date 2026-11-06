@@ -29,6 +29,7 @@ use fleet_server::app::auth::{
 };
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
+use fleet_server::metrics::Metrics;
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
 use fleet_server::ports::sessions::{RefreshLookup, SessionWithUser};
 use fleet_server::ports::store::Store as _;
@@ -51,6 +52,7 @@ const DAY: Duration = Duration::from_hours(24);
 
 struct Setup {
     service: TokenService,
+    metrics: Metrics,
     clock: ManualClock,
     random: SeededRandom,
     tokens: Sha256Tokens,
@@ -69,13 +71,15 @@ async fn setup(options: SqliteConnectOptions) -> Setup {
     let clock = ManualClock::new(start());
     let random = SeededRandom::new(17);
     let tokens = Sha256Tokens::new(Arc::new(random.clone()));
+    let metrics = Metrics::prometheus();
     let service = TokenService::new(
         Arc::new(clock.clone()),
         Arc::new(random.clone()),
         Arc::new(db.clone()),
         Arc::new(tokens.clone()),
         SessionPolicy::default(),
-    );
+    )
+    .with_metrics(metrics.recording().clone());
     let user = UserId::new_v7(start(), [1; 10]).unwrap();
     let mut tx = db.write().await.unwrap();
     tx.users()
@@ -91,6 +95,7 @@ async fn setup(options: SqliteConnectOptions) -> Setup {
     tx.commit(setup_entry()).await.unwrap();
     Setup {
         service,
+        metrics,
         clock,
         random,
         tokens,
@@ -344,6 +349,37 @@ async fn reusing_a_replaced_refresh_token_revokes_the_session_and_records_it(
             ),
         ]
     );
+}
+
+/// P12.4 (ADR-0016's note): each reuse that revoked a session counts once,
+/// for alerting; a replay in a session already revoked or expired is a
+/// plain rejection and counts nothing more.
+#[sqlx::test(migrations = false)]
+async fn a_reuse_counts_once_and_a_replay_after_it_or_its_expiry_doesnt(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let reuses = || {
+        let render = setup.metrics.render().text();
+        render
+            .lines()
+            .find_map(|line| line.strip_prefix("afkfleet_refresh_token_reuses_total "))
+            .map(str::to_owned)
+    };
+    let first = setup.login().await;
+    setup.refresh(&first.refresh_token).await.unwrap();
+    assert_eq!(reuses().as_deref(), Some("0"), "a rotation isn't a reuse");
+
+    assert!(setup.refresh(&first.refresh_token).await.is_err());
+    assert_eq!(reuses().as_deref(), Some("1"));
+    assert!(setup.refresh(&first.refresh_token).await.is_err());
+    let other = setup.login().await;
+    setup.refresh(&other.refresh_token).await.unwrap();
+    setup.clock.advance(7 * DAY);
+    assert!(setup.refresh(&other.refresh_token).await.is_err());
+
+    assert_eq!(reuses().as_deref(), Some("1"));
 }
 
 #[sqlx::test(migrations = false)]

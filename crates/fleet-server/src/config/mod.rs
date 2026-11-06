@@ -92,6 +92,12 @@ pub struct ServerConfig {
     /// The agents' control plane (`[grpc]`), or `None` when the section is
     /// absent: then serve has no gRPC listener and reads no PKI file.
     pub grpc: Option<GrpcConfig>,
+    /// Where the metrics endpoint listens (`[metrics] bind`; Plan.md P12.4,
+    /// ADR-0022, S10): an IP address and a port other than 0 and other than
+    /// `[http] bind`'s and `[grpc] bind`'s. `None` when the section is
+    /// absent: then serve has no metrics listener. An internal port only:
+    /// never published beyond the host, never behind a proxy.
+    pub metrics: Option<SocketAddr>,
 }
 
 /// `[grpc]`: the agents' control plane, its listener and its PKI (Plan.md

@@ -233,6 +233,40 @@ async fn on_disk_the_backups_folder_holds_neither_the_database_nor_a_key() {
     ));
 }
 
+/// A key file that is a link to a file inside the backups' folder lives
+/// there, wherever it's named.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_key_file_linked_into_the_backups_folder_is_refused() {
+    let setup = setup().await;
+    let inside = setup.backups.join("hidden-key");
+    std::fs::write(&inside, "").unwrap();
+    let key = setup.root.path().join("vault-key-1");
+    std::os::unix::fs::symlink(&inside, &key).unwrap();
+
+    let result =
+        check_placement(&setup.backups, &setup.database, core::slice::from_ref(&key)).await;
+
+    assert!(matches!(result, Err(BackupError::HoldsKey { file, .. }) if file == key));
+}
+
+/// A `[database] path` that is a link to a file inside the backups' folder:
+/// the database lives there, and its backups would sit beside it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_database_linked_into_the_backups_folder_is_refused() {
+    let setup = setup().await;
+    let elsewhere = setup.root.path().join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    let linked = elsewhere.join("afkfleet.db");
+    std::os::unix::fs::symlink(setup.backups.join("afkfleet.db"), &linked).unwrap();
+    std::fs::write(setup.backups.join("afkfleet.db"), "").unwrap();
+
+    let result = check_placement(&setup.backups, &linked, &[]).await;
+
+    assert!(matches!(result, Err(BackupError::HoldsDatabase { .. })));
+}
+
 #[tokio::test]
 async fn the_listing_counts_only_the_servers_own_regular_files() {
     let setup = setup().await;
@@ -241,6 +275,8 @@ async fn the_listing_counts_only_the_servers_own_regular_files() {
         "afkfleet-backup-20270115T080000Z.db",
         "afkfleet-backup-20270114T080000Z.db",
         ".afkfleet-backup-20270115T090000Z.db.partial",
+        ".afkfleet-backup-20270113T090000Z.db.partial-journal",
+        ".afkfleet-backup-20270113T090000Z.db-journal",
         "afkfleet-backup-20270115T080000Z.db.bak",
         "notes.txt",
     ] {
@@ -261,6 +297,7 @@ async fn the_listing_counts_only_the_servers_own_regular_files() {
         Listing {
             finished: vec![name("2027-01-14T08:00:00Z"), name("2027-01-15T08:00:00Z")],
             partial: vec![name("2027-01-15T09:00:00Z")],
+            partial_journals: vec![name("2027-01-13T09:00:00Z")],
         }
     );
 }
@@ -274,14 +311,19 @@ async fn removing_takes_exactly_the_names_given() {
         "afkfleet-backup-20270114T080000Z.db",
         ".afkfleet-backup-20270114T090000Z.db.partial",
         ".afkfleet-backup-20270115T090000Z.db.partial",
+        ".afkfleet-backup-20270114T090000Z.db.partial-journal",
+        ".afkfleet-backup-20270115T090000Z.db.partial-journal",
     ] {
         std::fs::write(dir.join(file), "").unwrap();
     }
 
     remove(
         dir,
-        &[name("2027-01-13T08:00:00Z"), name("2027-01-01T00:00:00Z")],
-        &[name("2027-01-14T09:00:00Z")],
+        &Listing {
+            finished: vec![name("2027-01-13T08:00:00Z"), name("2027-01-01T00:00:00Z")],
+            partial: vec![name("2027-01-14T09:00:00Z")],
+            partial_journals: vec![name("2027-01-14T09:00:00Z")],
+        },
     )
     .await
     .unwrap();
@@ -290,6 +332,7 @@ async fn removing_takes_exactly_the_names_given() {
         names(dir),
         [
             ".afkfleet-backup-20270115T090000Z.db.partial",
+            ".afkfleet-backup-20270115T090000Z.db.partial-journal",
             "afkfleet-backup-20270114T080000Z.db",
         ]
     );

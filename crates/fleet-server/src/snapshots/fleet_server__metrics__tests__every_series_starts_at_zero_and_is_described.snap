@@ -1,0 +1,149 @@
+---
+source: crates/fleet-server/src/metrics.rs
+expression: sorted(&render)
+---
+# HELP afkfleet_agent_connects_refused_total Agent connections refused for their certificate, by reason, past the audit log's daily cap too.
+# TYPE afkfleet_agent_connects_refused_total counter
+afkfleet_agent_connects_refused_total{reason="already_connected"} 0
+afkfleet_agent_connects_refused_total{reason="disabled"} 0
+afkfleet_agent_connects_refused_total{reason="expired"} 0
+afkfleet_agent_connects_refused_total{reason="name_mismatch"} 0
+afkfleet_agent_connects_refused_total{reason="no_certificate"} 0
+afkfleet_agent_connects_refused_total{reason="revoked"} 0
+afkfleet_agent_connects_refused_total{reason="san_mismatch"} 0
+afkfleet_agent_connects_refused_total{reason="unknown_certificate"} 0
+
+# HELP afkfleet_agent_identity_conflicts_total Times two processes were found holding one agent's identity.
+# TYPE afkfleet_agent_identity_conflicts_total counter
+afkfleet_agent_identity_conflicts_total 0
+
+# HELP afkfleet_agent_reports_dropped_total Agent reports about bots the agent doesn't hold, dropped.
+# TYPE afkfleet_agent_reports_dropped_total counter
+afkfleet_agent_reports_dropped_total 0
+
+# HELP afkfleet_backup_failures_total Scheduled backups that failed, or whose folder couldn't be read.
+# TYPE afkfleet_backup_failures_total counter
+afkfleet_backup_failures_total 0
+
+# HELP afkfleet_backup_last_duration_seconds How long the last scheduled backup took, in seconds.
+# TYPE afkfleet_backup_last_duration_seconds gauge
+afkfleet_backup_last_duration_seconds 0
+
+# HELP afkfleet_backup_last_size_bytes How large the last scheduled backup is, in bytes.
+# TYPE afkfleet_backup_last_size_bytes gauge
+afkfleet_backup_last_size_bytes 0
+
+# HELP afkfleet_backup_last_success_timestamp_seconds When the newest finished backup in [database] backup_dir was taken, in Unix seconds, the backup command's included; 0 without one.
+# TYPE afkfleet_backup_last_success_timestamp_seconds gauge
+afkfleet_backup_last_success_timestamp_seconds 0
+
+# HELP afkfleet_backup_prune_failures_total Scheduled backups written whose pruning of older backups failed.
+# TYPE afkfleet_backup_prune_failures_total counter
+afkfleet_backup_prune_failures_total 0
+
+# HELP afkfleet_ingest_chat_dropped_total Chat lines from agents the ingest didn't take, by reason.
+# TYPE afkfleet_ingest_chat_dropped_total counter
+afkfleet_ingest_chat_dropped_total{reason="closed"} 0
+afkfleet_ingest_chat_dropped_total{reason="queue_full"} 0
+afkfleet_ingest_chat_dropped_total{reason="stream_full"} 0
+
+# HELP afkfleet_ingest_rows_total Chat rows the ingest's batches stored, skipped (their bot is assigned elsewhere) or lost (a batch that failed).
+# TYPE afkfleet_ingest_rows_total counter
+afkfleet_ingest_rows_total{outcome="lost"} 0
+afkfleet_ingest_rows_total{outcome="skipped"} 0
+afkfleet_ingest_rows_total{outcome="stored"} 0
+
+# HELP afkfleet_login_lockout_refusals_total Logins the per-username lockout refused, by reason.
+# TYPE afkfleet_login_lockout_refusals_total counter
+afkfleet_login_lockout_refusals_total{reason="in_flight"} 0
+afkfleet_login_lockout_refusals_total{reason="locked"} 0
+
+# HELP afkfleet_rate_limit_refusals_total Requests a rate limit refused, by limit.
+# TYPE afkfleet_rate_limit_refusals_total counter
+afkfleet_rate_limit_refusals_total{limit="bot_actions"} 0
+afkfleet_rate_limit_refusals_total{limit="chat_per_bot"} 0
+afkfleet_rate_limit_refusals_total{limit="chat_per_user"} 0
+afkfleet_rate_limit_refusals_total{limit="connect"} 0
+afkfleet_rate_limit_refusals_total{limit="enroll"} 0
+afkfleet_rate_limit_refusals_total{limit="fresh_sessions"} 0
+afkfleet_rate_limit_refusals_total{limit="grant_candidates"} 0
+afkfleet_rate_limit_refusals_total{limit="grants_by_name"} 0
+afkfleet_rate_limit_refusals_total{limit="login"} 0
+afkfleet_rate_limit_refusals_total{limit="per_ip"} 0
+afkfleet_rate_limit_refusals_total{limit="per_user"} 0
+afkfleet_rate_limit_refusals_total{limit="refresh"} 0
+afkfleet_rate_limit_refusals_total{limit="register"} 0
+afkfleet_rate_limit_refusals_total{limit="ws_connections"} 0
+
+# HELP afkfleet_refresh_token_reuses_total Refresh tokens presented again after their rotation: each revoked its session. Any is a possible token theft.
+# TYPE afkfleet_refresh_token_reuses_total counter
+afkfleet_refresh_token_reuses_total 0
+
+# HELP afkfleet_retention_last_run_batches How many batches the last retention run committed.
+# TYPE afkfleet_retention_last_run_batches gauge
+afkfleet_retention_last_run_batches 0
+
+# HELP afkfleet_retention_last_run_duration_seconds How long the last retention run took, in seconds.
+# TYPE afkfleet_retention_last_run_duration_seconds gauge
+afkfleet_retention_last_run_duration_seconds 0
+
+# HELP afkfleet_retention_last_success_timestamp_seconds When the last successful retention run ended, in Unix seconds; 0 until the first. The retention isn't watched: an old value means it died or fails every run.
+# TYPE afkfleet_retention_last_success_timestamp_seconds gauge
+afkfleet_retention_last_success_timestamp_seconds 0
+
+# HELP afkfleet_retention_phase_failures_total Retention phases that failed, by phase.
+# TYPE afkfleet_retention_phase_failures_total counter
+afkfleet_retention_phase_failures_total{phase="audit"} 0
+afkfleet_retention_phase_failures_total{phase="chat_by_age"} 0
+afkfleet_retention_phase_failures_total{phase="chat_by_size"} 0
+afkfleet_retention_phase_failures_total{phase="enrollment_tokens"} 0
+afkfleet_retention_phase_failures_total{phase="invites"} 0
+afkfleet_retention_phase_failures_total{phase="sessions"} 0
+
+# HELP afkfleet_retention_rows_deleted_total Rows the retention deleted, by kind.
+# TYPE afkfleet_retention_rows_deleted_total counter
+afkfleet_retention_rows_deleted_total{kind="audit_entries"} 0
+afkfleet_retention_rows_deleted_total{kind="chat_by_age"} 0
+afkfleet_retention_rows_deleted_total{kind="chat_by_size"} 0
+afkfleet_retention_rows_deleted_total{kind="enrollments"} 0
+afkfleet_retention_rows_deleted_total{kind="invites"} 0
+afkfleet_retention_rows_deleted_total{kind="rotations"} 0
+afkfleet_retention_rows_deleted_total{kind="sessions"} 0
+
+# HELP afkfleet_retention_runs_total Retention runs, by outcome: success (no phase failed, not stopped), failed or stopped.
+# TYPE afkfleet_retention_runs_total counter
+afkfleet_retention_runs_total{outcome="failed"} 0
+afkfleet_retention_runs_total{outcome="stopped"} 0
+afkfleet_retention_runs_total{outcome="success"} 0
+
+# HELP afkfleet_session_denials_total Session requests denied, by reason; the fresh-session limit's refusals are rate_limit_refusals with limit="fresh_sessions".
+# TYPE afkfleet_session_denials_total counter
+afkfleet_session_denials_total{reason="account_changed"} 0
+afkfleet_session_denials_total{reason="assigned_elsewhere"} 0
+afkfleet_session_denials_total{reason="disabled"} 0
+afkfleet_session_denials_total{reason="expired"} 0
+afkfleet_session_denials_total{reason="grant_queue_full"} 0
+afkfleet_session_denials_total{reason="name_mismatch"} 0
+afkfleet_session_denials_total{reason="no_bot"} 0
+afkfleet_session_denials_total{reason="no_server"} 0
+afkfleet_session_denials_total{reason="not_assigned"} 0
+afkfleet_session_denials_total{reason="not_held"} 0
+afkfleet_session_denials_total{reason="offline_not_allowed"} 0
+afkfleet_session_denials_total{reason="owner_disabled"} 0
+afkfleet_session_denials_total{reason="pending"} 0
+afkfleet_session_denials_total{reason="reauth_required"} 0
+afkfleet_session_denials_total{reason="refused"} 0
+afkfleet_session_denials_total{reason="revoked"} 0
+afkfleet_session_denials_total{reason="san_mismatch"} 0
+afkfleet_session_denials_total{reason="session_token"} 0
+afkfleet_session_denials_total{reason="stopped"} 0
+afkfleet_session_denials_total{reason="store"} 0
+afkfleet_session_denials_total{reason="unknown_certificate"} 0
+afkfleet_session_denials_total{reason="unsendable"} 0
+
+# HELP afkfleet_session_grants_total Minecraft sessions granted to agents, by kind and whether a fresh one was asked for.
+# TYPE afkfleet_session_grants_total counter
+afkfleet_session_grants_total{kind="offline",fresh="false"} 0
+afkfleet_session_grants_total{kind="offline",fresh="true"} 0
+afkfleet_session_grants_total{kind="online",fresh="false"} 0
+afkfleet_session_grants_total{kind="online",fresh="true"} 0

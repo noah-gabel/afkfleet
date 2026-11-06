@@ -25,7 +25,8 @@
 //!   transaction committed with [`UnauditedWrite::LoginAttemptsPurge`], until
 //!   a batch comes back short or the server stops.
 //! - **Refusals are counted** ([`LockoutService::take_refusals`]) for the
-//!   housekeeping's summary, like the rate limits'.
+//!   housekeeping's summary, like the rate limits', and in the server's
+//!   metrics as they happen ([`LockoutService::with_metrics`]; P12.4).
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::time::Duration;
@@ -45,6 +46,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use super::audit::AuditService;
+use crate::metrics::{LockoutRefusal, ServerMetrics};
 use crate::ports::login_attempts::{AttemptKey, AttemptKeys, LoginAttempt};
 use crate::ports::store::{Store, StoreError, UnauditedWrite, WriteTx};
 
@@ -132,6 +134,7 @@ pub struct LockoutService {
     policy: LockoutPolicy,
     audit: AuditService,
     shared: Arc<Shared>,
+    metrics: ServerMetrics,
 }
 
 /// One attempt for a username, in flight until it's dropped.
@@ -160,7 +163,15 @@ impl LockoutService {
             policy,
             audit,
             shared: Arc::default(),
+            metrics: ServerMetrics::off(),
         }
+    }
+
+    /// The same lockout, each refusal also counted in `metrics` as it
+    /// happens (P12.4; ADR-0022, S11).
+    #[must_use]
+    pub fn with_metrics(self, metrics: ServerMetrics) -> Self {
+        Self { metrics, ..self }
     }
 
     /// Starts an attempt for `username`, before its password is checked;
@@ -175,6 +186,7 @@ impl LockoutService {
             self.shared
                 .refused_in_flight
                 .fetch_add(1, Ordering::Relaxed);
+            self.metrics.lockout_refused(LockoutRefusal::InFlight);
             return Err(LockoutError::InFlight);
         }
         // The attempt holds the name from here on; dropping it, on any return,
@@ -186,6 +198,7 @@ impl LockoutService {
         let found = self.store.login_attempts().find(&key).await?;
         if let Err(locked) = check_lock(found.map(streak).as_ref(), self.clock.now()) {
             self.shared.locked.fetch_add(1, Ordering::Relaxed);
+            self.metrics.lockout_refused(LockoutRefusal::Locked);
             return Err(LockoutError::Locked {
                 retry_after: locked.remaining,
             });

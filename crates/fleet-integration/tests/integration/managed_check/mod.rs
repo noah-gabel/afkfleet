@@ -481,6 +481,7 @@ async fn start_agent(
             seed,
             timings: LinkTimings::default(),
         }),
+        metrics: None,
     }));
     Ok(RunningAgent { signals, task })
 }

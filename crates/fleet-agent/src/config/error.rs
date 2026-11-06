@@ -35,6 +35,12 @@ pub enum ProblemKind {
     /// A path that must be absolute isn't.
     #[error("must be an absolute path")]
     NotAbsolute,
+    /// Not an IP address with a port.
+    #[error("must be an IP address and a port, like 127.0.0.1:9481")]
+    SocketAddress,
+    /// Port 0, which would make the OS pick a port.
+    #[error("port 0 isn't allowed: the agent needs a fixed port")]
+    PortZero,
     /// `[control_plane] url` isn't the server's gRPC port as
     /// `https://host:port`.
     #[error("must be https://host:port, without credentials, a path or a query")]

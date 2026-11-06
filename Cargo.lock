@@ -2733,6 +2733,8 @@ dependencies = [
  "insta",
  "ipnet",
  "log",
+ "metrics",
+ "metrics-exporter-prometheus",
  "proptest",
  "qrcodegen",
  "rcgen",

@@ -43,6 +43,7 @@ use fleet_server::infra::crypto::vault::{DerivedKey, VaultKeys};
 use fleet_server::infra::msauth::ReqwestMicrosoftAuth;
 use fleet_server::infra::sqlite::{self, Database, DatabaseOptions};
 use fleet_server::infra::system::TokioPace;
+use fleet_server::metrics::Metrics;
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::agents::NewAgent;
 use fleet_server::ports::audit::NewAuditEntry;
@@ -138,6 +139,7 @@ impl Server {
             microsoft: Arc::new(ReqwestMicrosoftAuth::new(Arc::new(clock.clone())).unwrap()),
             pace: Arc::new(TokioPace),
             reconcile: ReconcileTimings::default(),
+            metrics: Metrics::prometheus(),
         };
         let app = app_with(
             &config,
@@ -153,8 +155,9 @@ impl Server {
         let url = ServerUrl::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
         let (stop, signals) = ChannelSignals::new();
         let mut running = JoinSet::new();
-        running
-            .spawn(async move { serve(listener, None, app, &database, signals, SHUTDOWN).await });
+        running.spawn(async move {
+            serve(listener, None, None, app, &database, signals, SHUTDOWN).await
+        });
         Self {
             url,
             clock,
@@ -624,6 +627,7 @@ fn config(dir: &TempDir) -> ServerConfig {
         chat: ChatConfig::default(),
         audit: AuditConfig::default(),
         grpc: None,
+        metrics: None,
     }
 }
 

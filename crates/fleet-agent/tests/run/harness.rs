@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use fleet_agent::config::{AgentConfig, AgentMode, LogConfig, LogFilter, LogFormat, StandaloneBot};
+use fleet_agent::metrics_endpoint::Endpoint;
 use fleet_agent::run::{Outcome, RunParts, run};
 use fleet_agent::signals::Signal;
 use fleet_agent::telemetry::layer;
@@ -62,6 +63,7 @@ pub(crate) fn config(bots: &[(&str, ModePreset)]) -> AgentConfig {
                 })
                 .collect(),
         ),
+        metrics: None,
     }
 }
 
@@ -132,6 +134,16 @@ impl Agent {
     /// Runs the agent with `config`, with `early` already sent before it
     /// starts, and lets it start.
     pub(crate) async fn start_with(config: AgentConfig, early: Option<Signal>) -> Self {
+        Self::launch(config, early, None).await
+    }
+
+    /// Runs the agent with `config`, serving its metrics on `endpoint`, and
+    /// lets it start.
+    pub(crate) async fn serving(config: AgentConfig, endpoint: Endpoint) -> Self {
+        Self::launch(config, None, Some(endpoint)).await
+    }
+
+    async fn launch(config: AgentConfig, early: Option<Signal>, metrics: Option<Endpoint>) -> Self {
         let (capture, logs) = capture_logs();
         let fake = FakeConnector::new();
         let diagnostics = FakeDiagnostics::default();
@@ -149,6 +161,7 @@ impl Agent {
             anchor: anchor(),
             seed: 1,
             managed: None,
+            metrics,
         }));
         settle().await;
         Self {

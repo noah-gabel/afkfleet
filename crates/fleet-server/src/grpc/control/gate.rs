@@ -19,20 +19,33 @@ use crate::http::error::{chain, whole_seconds};
 use crate::http::middleware::RequestIds;
 use crate::http::rate_limit::RateLimits;
 use crate::infra::pki::fingerprint;
+use crate::metrics::{ConnectRefused, ServerMetrics};
 
 /// The gate in front of `Connect`.
 #[derive(Debug, Clone)]
 pub struct ControlGate {
     limits: RateLimits,
     ids: RequestIds,
+    metrics: ServerMetrics,
 }
 
 impl ControlGate {
     /// The gate spending `limits`' connections, minting request IDs from
     /// `ids`.
     #[must_use]
-    pub const fn new(limits: RateLimits, ids: RequestIds) -> Self {
-        Self { limits, ids }
+    pub fn new(limits: RateLimits, ids: RequestIds) -> Self {
+        Self {
+            limits,
+            ids,
+            metrics: ServerMetrics::off(),
+        }
+    }
+
+    /// The same gate, counting each call without a client certificate in
+    /// `metrics` (P12.4); a rate-limited call counts with its limit.
+    #[must_use]
+    pub fn with_metrics(self, metrics: ServerMetrics) -> Self {
+        Self { metrics, ..self }
     }
 }
 
@@ -71,6 +84,7 @@ impl Interceptor for ControlGate {
             // certificate costs this line and nothing else (S24). Any
             // number of them may come, so it's at `debug`.
             debug!("a connect call without a client certificate was refused");
+            self.metrics.connect_refused(ConnectRefused::NoCertificate);
             return Err(Status::unauthenticated(CERTIFICATE_REQUIRED));
         };
         let id = match self.ids.mint() {
@@ -170,5 +184,20 @@ mod tests {
         assert_eq!(refused.code(), Code::Unauthenticated);
         assert_eq!(refused.message(), CERTIFICATE_REQUIRED);
         assert!(refused.metadata().get(REQUEST_ID).is_none());
+    }
+
+    #[test]
+    fn a_call_without_a_certificate_counts_in_the_metrics() {
+        let metrics = crate::metrics::Metrics::prometheus();
+        let mut gate = gate().with_metrics(metrics.recording().clone());
+
+        let _ = gate.call(Request::new(()));
+        let _ = gate.call(Request::new(()));
+
+        let render = metrics.render().text();
+        assert!(
+            render.contains("afkfleet_agent_connects_refused_total{reason=\"no_certificate\"} 2"),
+            "{render}"
+        );
     }
 }

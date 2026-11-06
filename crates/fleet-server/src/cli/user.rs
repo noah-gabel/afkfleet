@@ -441,6 +441,7 @@ mod tests {
             chat: ChatConfig::default(),
             audit: AuditConfig::default(),
             grpc: None,
+            metrics: None,
         }
     }
 

@@ -27,6 +27,7 @@ use fleet_server::app::lockout::{LockoutError, LockoutRefusals, LockoutService, 
 use fleet_server::http::error::ApiError;
 use fleet_server::infra::crypto::attempt_keys::HmacAttemptKeys;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
+use fleet_server::metrics::Metrics;
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
 use fleet_server::ports::login_attempts::{AttemptKeys as _, LoginAttempt};
 use fleet_server::ports::store::{Store as _, StoreError, UnauditedWrite};
@@ -65,6 +66,7 @@ fn keys() -> HmacAttemptKeys {
 
 struct Setup {
     service: LockoutService,
+    metrics: Metrics,
     clock: ManualClock,
     db: Database,
     alice: UserId,
@@ -75,12 +77,14 @@ async fn setup(options: SqliteConnectOptions) -> Setup {
         .await
         .unwrap();
     let clock = ManualClock::new(start());
+    let metrics = Metrics::prometheus();
     let service = LockoutService::new(
         Arc::new(clock.clone()),
         Arc::new(db.clone()),
         Arc::new(keys()),
         LockoutPolicy::default(),
-    );
+    )
+    .with_metrics(metrics.recording().clone());
     let alice = UserId::new_v7(start(), [1; 10]).unwrap();
     let mut tx = db.write().await.unwrap();
     tx.users()
@@ -96,6 +100,7 @@ async fn setup(options: SqliteConnectOptions) -> Setup {
     tx.commit(test_entry()).await.unwrap();
     Setup {
         service,
+        metrics,
         clock,
         db,
         alice,
@@ -376,6 +381,34 @@ async fn a_second_attempt_for_a_name_in_flight_is_refused(
     );
     drop(first);
     assert!(setup.refusal("alice").await.is_none(), "released on drop");
+}
+
+/// P12.4: each refusal counts in the metrics under its reason as it
+/// happens, beside the minute's summary, which taking doesn't reset.
+#[sqlx::test(migrations = false)]
+async fn each_refusal_counts_in_the_metrics_under_its_reason(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let first = setup.service.begin(&name("alice")).await.unwrap();
+    assert!(setup.refusal("alice").await.is_some());
+    drop(first);
+    setup.fail_times("alice", Some(setup.alice), 5).await;
+    assert!(setup.refusal("alice").await.is_some());
+    assert!(setup.refusal("alice").await.is_some());
+    let _ = setup.service.take_refusals();
+
+    let render = setup.metrics.render().text();
+    let value = |reason: &str| {
+        let series = format!("afkfleet_login_lockout_refusals_total{{reason=\"{reason}\"}} ");
+        render
+            .lines()
+            .find_map(|line| line.strip_prefix(series.as_str()))
+            .map(str::to_owned)
+    };
+    assert_eq!(value("in_flight").as_deref(), Some("1"), "{render}");
+    assert_eq!(value("locked").as_deref(), Some("2"), "{render}");
 }
 
 #[sqlx::test(migrations = false)]

@@ -196,6 +196,8 @@ pub struct Run {
     pub failed: Vec<Phase>,
     /// Whether the stop ended it before its last phase.
     pub stopped: bool,
+    /// The batches it committed (P12.4's metric).
+    pub batches: u64,
 }
 
 /// The runs since the last summary entry (U20).
@@ -343,6 +345,8 @@ impl Delete {
 struct Drained {
     /// The rows they deleted.
     deleted: u64,
+    /// The batches they committed.
+    batches: u64,
     /// The highest audit ID they deleted.
     through: Option<AuditEntryId>,
     /// Why they ended: a batch came back short, the stop came, or a batch
@@ -426,6 +430,7 @@ impl RetentionService {
             audit_through: None,
             failed: Vec::new(),
             stopped: false,
+            batches: 0,
         };
         for phase in Phase::ORDER {
             if stop.is_cancelled() {
@@ -555,6 +560,7 @@ impl RetentionService {
         let drained = self.batches(stop, delete).await;
         let count = delete.count(&mut run.deleted);
         *count = count.saturating_add(drained.deleted);
+        run.batches = run.batches.saturating_add(drained.batches);
         if drained.through.is_some() {
             run.audit_through = drained.through;
         }
@@ -565,6 +571,7 @@ impl RetentionService {
     async fn batches(&self, stop: &CancellationToken, delete: Delete) -> Drained {
         let mut drained = Drained {
             deleted: 0,
+            batches: 0,
             through: None,
             ended: Ended::Done,
         };
@@ -594,6 +601,7 @@ impl RetentionService {
             }
             // Counted once committed: a batch that failed deleted nothing.
             drained.deleted = drained.deleted.saturating_add(purged.count);
+            drained.batches = drained.batches.saturating_add(1);
             drained.through = purged.through.or(drained.through);
             tokio::select! {
                 biased;
@@ -754,6 +762,7 @@ mod tests {
             audit_through: (chat > 0).then(|| AuditEntryId::new(i64::try_from(chat).unwrap())),
             failed,
             stopped: false,
+            batches: 1,
         }
     }
 

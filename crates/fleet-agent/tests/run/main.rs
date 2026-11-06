@@ -12,14 +12,20 @@
 //! - `signals` covers the graceful shutdown on a signal.
 //! - `heartbeat` covers when the run beats: from the start of its run until
 //!   its shutdown starts.
+//! - `endpoint` covers the metrics endpoint in the run: its startup line, and
+//!   the run's own series on a real socket, on real time; `scrape`, shared
+//!   with the managed run's tests, asks for them.
 // Integration tests are test code, but clippy only applies the test allowances
 // of clippy.toml (unwrap, panic, …) inside `#[cfg(test)]`; without this, the
 // helper functions would count as library code.
 #![cfg(test)]
 
+mod endpoint;
 mod fakes;
 mod harness;
 mod heartbeat;
 mod sampling;
+#[path = "../common/scrape.rs"]
+mod scrape;
 mod signals;
 mod startup;

@@ -43,6 +43,7 @@ use fleet_server::infra::crypto::tokens::Sha256Tokens;
 use fleet_server::infra::crypto::vault::{DerivedKey, VaultKeys};
 use fleet_server::infra::pki::CertificateAuthority;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
+use fleet_server::metrics::{Metrics, MetricsRender};
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord};
 use fleet_server::ports::grants::AccountGrant;
@@ -160,6 +161,7 @@ fn config(
         chat: ChatConfig::default(),
         audit: AuditConfig::default(),
         grpc,
+        metrics: None,
     }
 }
 
@@ -174,6 +176,8 @@ pub(crate) struct Server {
     /// The app as `serve` takes it, until a test takes it.
     pub(crate) app: Option<App>,
     tokens: TokenService,
+    /// What the app's own metrics registry renders (P12.4).
+    metrics: MetricsRender,
 }
 
 impl Server {
@@ -213,6 +217,7 @@ impl Server {
             .await
             .unwrap();
         let grpc = ca.as_ref().map(|_| control_plane());
+        let metrics = ports.metrics.render().clone();
         let app = app_with(
             &config(limits, accounts, grpc),
             &db,
@@ -238,7 +243,18 @@ impl Server {
             app: Some(app),
             db,
             tokens,
+            metrics,
         }
+    }
+
+    /// The value of the series `series` in the app's metrics, as the
+    /// render writes its name and labels, if it's there.
+    pub(crate) fn metric(&self, series: &str) -> Option<String> {
+        self.metrics.text().lines().find_map(|line| {
+            line.strip_prefix(series)?
+                .strip_prefix(' ')
+                .map(str::to_owned)
+        })
     }
 
     /// Adds `user<n>` with `role`.
@@ -256,6 +272,38 @@ impl Server {
                 username: Username::try_from(name).unwrap(),
                 password_hash: PasswordHash::new(SecretString::from(PHC)).unwrap(),
                 role,
+                created_at: at(T0),
+            })
+            .await
+            .unwrap();
+        tx.commit(setup_entry()).await.unwrap();
+        id
+    }
+
+    /// Adds `name`, whose ID comes from `n`, a Member whose password is
+    /// `password`, hashed for real, so a login checks it as serve does.
+    pub(crate) async fn add_user_with_password(&self, n: u8, name: &str, password: &str) -> UserId {
+        let passwords = Argon2Passwords::new(
+            Argon2Params::default(),
+            Arc::new(fleet_testkit::system::SeededRandom::new(u64::from(n))),
+        )
+        .await
+        .unwrap();
+        let username = Username::try_from(name).unwrap();
+        let new_password =
+            fleet_core::auth::NewPassword::try_from(SecretString::from(password)).unwrap();
+        let hash =
+            fleet_server::ports::passwords::Passwords::hash(&passwords, &new_password, &username)
+                .await
+                .unwrap();
+        let id = UserId::new_v7(at(T0), [n; 10]).unwrap();
+        let mut tx = self.db.write().await.unwrap();
+        tx.users()
+            .insert(&NewUser {
+                id,
+                username,
+                password_hash: hash,
+                role: Role::Member,
                 created_at: at(T0),
             })
             .await
@@ -574,6 +622,7 @@ impl HttpSetup {
             microsoft: fake.clone(),
             pace: pace.clone(),
             reconcile: ReconcileTimings::default(),
+            metrics: Metrics::prometheus(),
         };
         Self {
             server: Server::start_with(

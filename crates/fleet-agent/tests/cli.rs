@@ -528,3 +528,104 @@ fn a_managed_run_before_enroll_exits_1_naming_the_key_and_enroll() {
     assert!(said.contains("agent.key"), "{said}");
     assert!(said.contains("afkfleet-agent enroll"), "{said}");
 }
+
+/// `[metrics] bind` in the real binary (Plan.md P12.4; ADR-0022, S9, S10).
+mod metrics {
+    use std::io::{BufRead as _, BufReader, Write as _};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
+
+    use fleet_agent::metrics_endpoint::{METRICS_LISTENING, METRICS_OFF};
+    use serde_json::Value;
+
+    use super::*;
+
+    /// How many free ports the test tries: another process can take the
+    /// one it found before the agent binds it.
+    const ATTEMPTS: usize = 3;
+
+    /// A loopback address whose port was free a moment ago.
+    fn free_address() -> SocketAddr {
+        TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+    }
+
+    /// The real agent with `[metrics] bind` on a port that was free a
+    /// moment ago, and that address; `None` when the port was taken by the
+    /// time the agent bound it.
+    fn start(attempt: usize) -> Option<(Running, SocketAddr)> {
+        let dir = test_dir(&format!("metrics_{attempt}"));
+        let address = free_address();
+        let config = write_config(&dir, &format!("{ONE_BOT}[metrics]\nbind = \"{address}\"\n"));
+        let mut child = agent(&["run", "--config", path_arg(&config)])
+            .spawn()
+            .unwrap();
+        let stdout = BufReader::new(child.stdout.take().unwrap());
+        let stderr = drain(child.stderr.take().unwrap());
+        let running = Running(Some(child));
+        let (lines, seen) = mpsc::sync_channel(256);
+        thread::spawn(move || {
+            for line in stdout.lines() {
+                let Ok(line) = line else { break };
+                if lines.send(line).is_err() {
+                    return;
+                }
+            }
+        });
+        loop {
+            let Ok(line) = seen.recv_timeout(DEADLINE) else {
+                let text = stderr.recv_timeout(DEADLINE).unwrap_or_default();
+                panic!("the agent ended before its metrics listened: {text}");
+            };
+            let line: Value = serde_json::from_str(&line).unwrap_or_default();
+            if line["message"] == "the agent can't start"
+                && line["error"]
+                    .as_str()
+                    .is_some_and(|error| error.starts_with("can't listen on "))
+            {
+                return None;
+            }
+            if line["message"] == METRICS_LISTENING {
+                assert_eq!(line["address"], address.to_string());
+                return Some((running, address));
+            }
+            assert_ne!(
+                line["message"], METRICS_OFF,
+                "the binary didn't bind [metrics] bind"
+            );
+        }
+    }
+
+    /// `main.rs` binds `[metrics] bind` and hands it to the run, with the
+    /// handle of the recorder it installed.
+    #[test]
+    fn the_binary_serves_its_metrics_on_its_port() {
+        let (running, address) = (1..=ATTEMPTS)
+            .find_map(start)
+            .expect("free ports within the attempts");
+        let mut stream = TcpStream::connect(address).unwrap();
+        stream.set_read_timeout(Some(DEADLINE)).unwrap();
+        stream.set_write_timeout(Some(DEADLINE)).unwrap();
+
+        stream
+            .write_all(b"GET /metrics HTTP/1.1\r\nHost: agent\r\n\r\n")
+            .unwrap();
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).unwrap();
+
+        assert!(answer.starts_with("HTTP/1.1 200 OK\r\n"), "{answer}");
+        let body = answer.split_once("\r\n\r\n").unwrap().1;
+        assert!(
+            body.lines()
+                .any(|line| line == "afkfleet_outbox_refused_total 0"),
+            "{body}"
+        );
+        assert!(
+            body.lines()
+                .any(|line| line.starts_with("afkfleet_bots{state=")),
+            "{body}"
+        );
+        drop(running);
+    }
+}

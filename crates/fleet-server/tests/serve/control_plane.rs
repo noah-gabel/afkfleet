@@ -47,6 +47,7 @@ use fleet_server::infra::crypto::vault::{DerivedKey, XChaChaVault};
 use fleet_server::infra::pki::{CertificateAuthority, Ed25519Key, LoadedPki, ServerNames};
 use fleet_server::infra::sqlite::{self, DatabaseOptions};
 use fleet_server::infra::system::{MonotonicClock, OsRandom, SystemClock, TokioPace};
+use fleet_server::metrics::Metrics;
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::audit::NewAuditEntry;
 use fleet_server::ports::bots::NewBot;
@@ -156,7 +157,7 @@ async fn an_agent_enrolls_over_the_grpc_port_beside_the_api_and_both_stop_at_one
             listener: grpc,
             pki,
         };
-        async move { serve::run(&config, http, Some(plane), signals, keys).await }
+        async move { serve::run(&config, http, Some(plane), None, signals, keys).await }
     });
     let ready = healthcheck::get(http_address, "/health/ready", PATIENCE)
         .await
@@ -332,7 +333,7 @@ async fn an_enrolled_agent_connects_and_one_signal_ends_its_stream_and_the_serve
             listener: grpc,
             pki,
         };
-        async move { serve::run(&config, http, Some(plane), signals, keys).await }
+        async move { serve::run(&config, http, Some(plane), None, signals, keys).await }
     });
     let ready = healthcheck::get(http_address, "/health/ready", PATIENCE)
         .await
@@ -445,7 +446,7 @@ async fn a_refresh_in_flight_at_the_signal_is_left_at_the_drain_and_the_server_s
     };
     let server = tokio::spawn({
         let database = database.clone();
-        async move { serve::serve(http, Some(port), app, &database, signals, timeouts).await }
+        async move { serve::serve(http, Some(port), None, app, &database, signals, timeouts).await }
     });
     let token = host_token(&database, fingerprint).await;
     let (agent, mut answers) = connected_agent(grpc_address, &ca_pem, token).await;
@@ -492,6 +493,79 @@ async fn a_refresh_in_flight_at_the_signal_is_left_at_the_drain_and_the_server_s
     assert!(!dir.join("afkfleet.db-wal").exists(), "closed cleanly");
 }
 
+/// serve's wiring of the control plane's counters (P12.4; ADR-0022, S12):
+/// a session request for a bot the stream doesn't hold is denied by the
+/// registry `app_with` built, and the denial reads in the app's own `GET
+/// /metrics`, whose router serve serves on `[metrics] bind`.
+#[tokio::test]
+async fn a_denied_session_request_counts_in_the_apps_own_metrics() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let dir = test_dir("control_plane_metrics");
+    let (http, http_address) = listener().await;
+    let grpc = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let grpc_address = grpc.local_addr().unwrap();
+    let config = with_grpc(server_config(&dir, http_address, false), &dir, grpc_address);
+    let pki = pki(SystemClock.now());
+    let ca_pem = String::from_utf8(pki.ca_cert_pem.clone()).unwrap();
+    let fingerprint = pki.ca.fingerprint();
+    let database = sqlite::open(&config.database, DatabaseOptions::default())
+        .await
+        .unwrap();
+    let microsoft = Arc::new(HangingRefresh::default());
+    let (app, port) = app_and_port(&config, &database, pki, grpc, microsoft).await;
+    let metrics = app
+        .metrics
+        .clone()
+        .layer(MockConnectInfo(std::net::SocketAddr::from((
+            [127, 0, 0, 1],
+            9,
+        ))));
+    let (sender, signals) = ChannelSignals::new();
+    let server = tokio::spawn({
+        let database = database.clone();
+        let timeouts = ShutdownTimeouts::of(&config.http);
+        async move { serve::serve(http, Some(port), None, app, &database, signals, timeouts).await }
+    });
+    let token = host_token(&database, fingerprint).await;
+    let (agent, mut answers) = connected_agent(grpc_address, &ca_pem, token).await;
+
+    let stranger = BotId::new_v7(SystemClock.now(), [9; 10]).unwrap();
+    agent.send(session_request(stranger)).await.unwrap();
+    let denied = tokio::time::timeout(PATIENCE, async {
+        loop {
+            let message = answers.message().await.unwrap().unwrap();
+            if let Ok(ServerMessage::SessionDenied(denied)) = ServerMessage::try_from(message) {
+                return denied;
+            }
+        }
+    })
+    .await
+    .expect("the denial should come");
+    let scraped = metrics
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(scraped.into_body(), usize::MAX).await.unwrap();
+    let render = String::from_utf8(body.to_vec()).unwrap();
+
+    assert!(denied.retryable);
+    assert!(
+        render.contains("afkfleet_session_denials_total{reason=\"not_assigned\"} 1"),
+        "{render}"
+    );
+    sender.send(Signal::Terminate).await.unwrap();
+    let exit = tokio::time::timeout(PATIENCE, server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(exit, Exit::Stopped);
+}
+
 /// serve's ingest over a real port and database (P10.8; ADR-0019, S70): a
 /// chat message the server admitted before the signal is in the database
 /// once serve has returned, whether a tick or the final flush wrote it.
@@ -521,6 +595,7 @@ async fn chat_admitted_before_the_signal_is_stored_before_the_database_closes() 
             serve::serve(
                 http,
                 Some(port),
+                None,
                 app,
                 &database,
                 signals,
@@ -639,6 +714,7 @@ async fn a_chat_lines_wait_follows_the_configured_request_timeout() {
             serve::serve(
                 http,
                 Some(port),
+                None,
                 app,
                 &database,
                 signals,
@@ -788,6 +864,7 @@ async fn app_and_port(
         microsoft,
         pace: Arc::new(TokioPace),
         reconcile: ReconcileTimings::default(),
+        metrics: Metrics::prometheus(),
     };
     let mut app = serve::app_with(
         config,
@@ -997,7 +1074,7 @@ async fn start_and_stop(
 
     let exit = tokio::time::timeout(
         PATIENCE,
-        serve::run(config, listener, plane, signals, vault_keys(config)),
+        serve::run(config, listener, plane, None, signals, vault_keys(config)),
     )
     .await
     .unwrap();

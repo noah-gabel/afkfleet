@@ -6,6 +6,7 @@
 //! check that depends on a key with a problem of its own is skipped, so each
 //! mistake is reported once.
 
+use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -20,7 +21,9 @@ use fleet_mc::McConfig;
 use fleet_runtime::RuntimeConfig;
 use tonic::transport::Uri;
 
-use super::raw::{RawBot, RawConfig, RawControlPlane, RawLog, RawRetry, RawRuntime, RawStandalone};
+use super::raw::{
+    RawBot, RawConfig, RawControlPlane, RawLog, RawMetrics, RawRetry, RawRuntime, RawStandalone,
+};
 use super::{
     AgentConfig, AgentMode, ConfigError, ControlPlaneConfig, DEFAULT_HEARTBEAT_FILE_NAME, KeyPath,
     LogConfig, LogFilter, LogFormat, ProblemKind, Problems, StandaloneBot,
@@ -53,15 +56,26 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<AgentConfig, ConfigError> {
     let policies = policies(&raw.retry, &mut problems);
     let log = log_config(&raw.log, &mut problems);
     let mode = mode(raw, &mut problems);
+    let metrics = metrics(raw.metrics.as_ref(), &mut problems);
 
-    let (true, Some(name), Some(heartbeat_file), Some((retry, circuit)), Some(log), Some(mode)) = (
+    let (
+        true,
+        Some(name),
+        Some(heartbeat_file),
+        Some((retry, circuit)),
+        Some(log),
+        Some(mode),
+        Ok(metrics),
+    ) = (
         problems.is_empty(),
         name,
         heartbeat_file,
         policies,
         log,
         mode,
-    ) else {
+        metrics,
+    )
+    else {
         return Err(ConfigError::Invalid(problems.sorted()));
     };
     Ok(AgentConfig {
@@ -73,7 +87,39 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<AgentConfig, ConfigError> {
         heartbeat_file,
         log,
         mode,
+        metrics,
     })
+}
+
+/// A section with problems, each already reported.
+struct Invalid;
+
+/// `[metrics]`: absent is `Ok(None)`, the endpoint off. Present, its `bind`
+/// is required: an IP address and a port other than 0 (ADR-0022, S10).
+/// [`Invalid`] when anything is wrong.
+fn metrics(
+    raw: Option<&RawMetrics>,
+    problems: &mut Problems,
+) -> Result<Option<SocketAddr>, Invalid> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let key = KeyPath::root().key("metrics").key("bind");
+    let Some(text) = raw.bind.as_deref() else {
+        problems.push(key, ProblemKind::Missing);
+        return Err(Invalid);
+    };
+    match text.parse::<SocketAddr>() {
+        Ok(address) if address.port() != 0 => Ok(Some(address)),
+        Ok(_) => {
+            problems.push(key, ProblemKind::PortZero);
+            Err(Invalid)
+        }
+        Err(_) => {
+            problems.push(key, ProblemKind::SocketAddress);
+            Err(Invalid)
+        }
+    }
 }
 
 /// `[log]`: a missing key takes its default.

@@ -61,6 +61,11 @@ Where things are:
 
     Every subagent brief repeats "Stay in this repository". Library and crate sources are read on docs.rs or the crate's own repository on the web, never from the cargo registry, the toolchain folders or any other folder on this PC outside this repository.
 
+    **Every subagent is read-only, and checked** (the user's rule, ADR-0022, U9):
+    - Its brief says so: it creates, edits, moves or deletes no file, and runs no command that writes or changes git state.
+    - Before it starts, note `git status --short` with the untracked files. After it finishes, compare them.
+    - Any change you didn't make stops the work and goes to the user.
+
 ## Git & GitHub rules
 - **Never:** merge a PR, push to `main`, force-push, or rewrite history that's already pushed. The ruleset on `main` blocks most of this anyway; don't try to work around a rejection.
 - **Allowed `gh` commands:** `gh pr create`, `gh pr view`, `gh pr diff`, `gh pr checks`, `gh run list`, `gh run view` (including `--log-failed`). Nothing else: no `gh pr merge`, `gh api`, `gh repo …`, `gh secret`, `gh auth`, `gh workflow`, `gh release`, `gh gist`.

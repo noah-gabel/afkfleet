@@ -130,8 +130,36 @@ async fn a_leftover_partial_goes_once_a_day_old_and_a_fresh_one_stays() {
     );
 }
 
+/// SQLite's journal beside a temporary file, left by a crash, goes as its
+/// temporary file does: once a day old, never a fresh one.
+#[tokio::test]
+async fn a_leftover_journal_goes_once_a_day_old_and_a_fresh_one_stays() {
+    let setup = setup().await;
+    let clock = Arc::new(ManualClock::new(at("2027-01-15T08:00:00Z")));
+    for file in [
+        ".afkfleet-backup-20270114T070000Z.db.partial-journal",
+        ".afkfleet-backup-20270115T070000Z.db.partial-journal",
+    ] {
+        std::fs::write(setup.backups.join(file), "").unwrap();
+    }
+
+    service(&setup, &clock, 14)
+        .take(&CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        names(&setup.backups),
+        [
+            ".afkfleet-backup-20270115T070000Z.db.partial-journal",
+            "afkfleet-backup-20270115T080000Z.db",
+        ]
+    );
+}
+
 /// A clock set back: a backup dated beyond the slack doesn't count, so one
-/// is due, and the new one is never pruned for it.
+/// is due; neither is pruned for the other, since pruning never takes a
+/// backup newer than the one just written.
 #[tokio::test]
 async fn a_backup_dated_ahead_of_the_clock_doesnt_count() {
     let setup = setup().await;
@@ -147,10 +175,55 @@ async fn a_backup_dated_ahead_of_the_clock_doesnt_count() {
     let taken = backups.take(&CancellationToken::new()).await.unwrap();
 
     assert!(due);
-    assert_eq!(taken.pruned, 1);
+    assert_eq!(taken.pruned, 0);
     assert_eq!(
         names(&setup.backups),
-        ["afkfleet-backup-20270115T080000Z.db"]
+        [
+            "afkfleet-backup-20270115T080000Z.db",
+            "afkfleet-backup-20270115T100000Z.db",
+        ]
+    );
+}
+
+/// `serve` and the `backup` command share the folder: whichever writes
+/// first, the one that writes the older name never deletes the newer one,
+/// even with one backup kept.
+#[tokio::test]
+async fn two_processes_never_prune_each_others_newer_backup() {
+    let setup = setup().await;
+    let earlier = Arc::new(ManualClock::new(at("2027-01-15T08:00:00Z")));
+    let later = Arc::new(ManualClock::new(at("2027-01-15T08:00:05Z")));
+
+    // The later name is written first; the earlier one's prune sees it.
+    let later_first = service(&setup, &later, 1)
+        .take(&CancellationToken::new())
+        .await
+        .unwrap();
+    let earlier_second = service(&setup, &earlier, 1)
+        .take(&CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert_eq!((later_first.pruned, earlier_second.pruned), (0, 0));
+    assert_eq!(
+        names(&setup.backups),
+        [
+            "afkfleet-backup-20270115T080000Z.db",
+            "afkfleet-backup-20270115T080005Z.db",
+        ]
+    );
+
+    // The next backup, newer than both, prunes to one.
+    later.advance(24 * HOUR);
+    let next = service(&setup, &later, 1)
+        .take(&CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert_eq!(next.pruned, 2);
+    assert_eq!(
+        names(&setup.backups),
+        ["afkfleet-backup-20270116T080005Z.db"]
     );
 }
 

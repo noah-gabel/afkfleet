@@ -453,6 +453,89 @@ fn a_file_in_a_parent_directory_is_never_used() {
     });
 }
 
+// --- [metrics] (P12.4; ADR-0022, S10) ---
+
+#[test]
+fn metrics_are_off_without_a_metrics_section() {
+    in_jail(|jail| {
+        let config = load_toml(jail, MINIMAL).unwrap();
+
+        assert_eq!(config.metrics, None);
+    });
+}
+
+#[rstest]
+#[case::loopback("127.0.0.1:9481")]
+#[case::any_ipv4("0.0.0.0:9481")]
+#[case::any_ipv6("[::]:9481")]
+fn metrics_bind_takes_any_ip_address_with_a_fixed_port(#[case] bind: &str) {
+    in_jail(|jail| {
+        let toml = format!("{MINIMAL}\n[metrics]\nbind = \"{bind}\"\n");
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        assert_eq!(config.metrics, Some(bind.parse().unwrap()));
+    });
+}
+
+#[rstest]
+#[case::no_bind("", ProblemKind::Missing)]
+#[case::host_name("bind = \"localhost:9481\"\n", ProblemKind::SocketAddress)]
+#[case::no_port("bind = \"127.0.0.1\"\n", ProblemKind::SocketAddress)]
+#[case::port_zero("bind = \"127.0.0.1:0\"\n", ProblemKind::PortZero)]
+fn metrics_bind_must_be_an_ip_address_with_a_fixed_port(
+    #[case] keys_toml: &str,
+    #[case] kind: ProblemKind,
+) {
+    in_jail(|jail| {
+        let toml = format!("{MINIMAL}\n[metrics]\n{keys_toml}");
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), ["metrics.bind"]);
+        assert_eq!(kinds(&problems), [kind]);
+    });
+}
+
+#[test]
+fn metrics_bind_can_come_from_the_environment() {
+    in_jail(|jail| {
+        jail.set_env("AFKFLEET_AGENT__METRICS__BIND", "0.0.0.0:9481");
+
+        let config = load_toml(jail, MINIMAL).unwrap();
+
+        assert_eq!(config.metrics, Some("0.0.0.0:9481".parse().unwrap()));
+    });
+}
+
+#[test]
+fn an_unknown_metrics_key_names_the_known_one() {
+    in_jail(|jail| {
+        let toml = format!("{MINIMAL}\n[metrics]\nbind = \"127.0.0.1:9481\"\ntoken = \"x\"\n");
+        let error = parse_error(load_toml(jail, &toml));
+
+        assert_eq!(error.key().to_string(), "metrics.token");
+        assert_eq!(
+            error.problem(),
+            &ParseProblem::UnknownKey {
+                expected: &["bind"]
+            }
+        );
+    });
+}
+
+#[test]
+fn the_metrics_problems_say_what_s_wrong_without_the_value() {
+    assert_eq!(
+        ProblemKind::PortZero.to_string(),
+        "port 0 isn't allowed: the agent needs a fixed port"
+    );
+    assert_eq!(
+        ProblemKind::SocketAddress.to_string(),
+        "must be an IP address and a port, like 127.0.0.1:9481"
+    );
+}
+
 #[test]
 fn a_misspelled_key_in_the_file_names_the_key_and_the_file() {
     in_jail(|jail| {

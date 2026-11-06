@@ -10,7 +10,7 @@ use std::time::Duration;
 use chrono::TimeDelta;
 
 use super::raw::{
-    RawAccounts, RawAudit, RawAuth, RawChat, RawConfig, RawDatabase, RawGrpc, RawLog,
+    RawAccounts, RawAudit, RawAuth, RawChat, RawConfig, RawDatabase, RawGrpc, RawLog, RawMetrics,
     RawRateLimits, RawVault,
 };
 use super::{
@@ -52,12 +52,12 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
     }
 
     let bind = bind(raw.http.bind.as_deref(), &mut problems);
+    let http = http(raw, bind, &mut problems);
     let path = database_path(raw.database.path.as_deref(), &mut problems);
     let log = log_config(&raw.log, &mut problems);
     let argon2 = argon2(&raw.auth, &mut problems);
     let sessions = sessions(&raw.auth, &mut problems);
     let vault = vault(&raw.vault, &mut problems);
-    let trusted_proxies = trusted_proxies(&raw.http.trusted_proxies, &mut problems);
     let lockout = lockout(&raw.auth, &mut problems);
     let invites = invites(&raw.auth, &mut problems);
     let rate_limits = rate_limits(&raw.rate_limits);
@@ -65,17 +65,19 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
     let chat = chat(&raw.chat, &mut problems);
     let audit = audit(&raw.audit, &mut problems);
     let grpc = grpc(raw.grpc.as_ref(), bind, &mut problems);
+    let valid_grpc = grpc.as_ref().ok().and_then(Option::as_ref);
+    let grpc_bind = valid_grpc.map(|grpc| grpc.bind);
+    let metrics = metrics(raw.metrics.as_ref(), bind, grpc_bind, &mut problems);
     let backups = backups(
         &raw.database,
         path.as_deref(),
-        &named_key_files(vault.as_ref(), grpc.as_ref().ok().and_then(Option::as_ref)),
+        &named_key_files(vault.as_ref(), valid_grpc),
         &mut problems,
     );
 
     let (
         true,
-        Some(bind),
-        Some(trusted_proxies),
+        Some(http),
         Some(path),
         Some(log),
         Some(argon2),
@@ -88,11 +90,11 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
         Some(chat),
         Some(audit),
         Ok(grpc),
+        Ok(metrics),
         Ok(backups),
     ) = (
         problems.is_empty(),
-        bind,
-        trusted_proxies,
+        http,
         path,
         log,
         argon2,
@@ -105,6 +107,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
         chat,
         audit,
         grpc,
+        metrics,
         backups,
     )
     else {
@@ -112,14 +115,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
     };
     Ok(ServerConfig {
         dev_mode: raw.dev_mode,
-        http: HttpConfig {
-            bind,
-            request_timeout: Duration::from_secs(raw.http.request_timeout_secs),
-            // garde has checked it's at most 1 MiB, which fits any usize
-            // afkfleet builds for.
-            max_body_bytes: usize::try_from(raw.http.max_body_bytes).unwrap_or(usize::MAX),
-            trusted_proxies,
-        },
+        http,
         database: DatabaseConfig { path, backups },
         log,
         auth: AuthConfig {
@@ -134,11 +130,66 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
         chat,
         audit,
         grpc,
+        metrics,
     })
 }
 
 /// A section with problems, each already reported.
 struct Invalid;
+
+/// `[http]`, from its validated `bind` and its trusted proxies, which it
+/// checks.
+fn http(raw: &RawConfig, bind: Option<SocketAddr>, problems: &mut Problems) -> Option<HttpConfig> {
+    let trusted_proxies = trusted_proxies(&raw.http.trusted_proxies, problems);
+    Some(HttpConfig {
+        bind: bind?,
+        request_timeout: Duration::from_secs(raw.http.request_timeout_secs),
+        // garde has checked it's at most 1 MiB, which fits any usize
+        // afkfleet builds for.
+        max_body_bytes: usize::try_from(raw.http.max_body_bytes).unwrap_or(usize::MAX),
+        trusted_proxies: trusted_proxies?,
+    })
+}
+
+/// `[metrics]`: absent is `Ok(None)`, the endpoint off. Present, its `bind`
+/// is required: an IP address and a port other than 0 and other than
+/// `http_bind`'s and `grpc_bind`'s, whatever their hosts (ADR-0022, S10).
+/// [`Invalid`] when anything is wrong.
+fn metrics(
+    raw: Option<&RawMetrics>,
+    http_bind: Option<SocketAddr>,
+    grpc_bind: Option<SocketAddr>,
+    problems: &mut Problems,
+) -> Result<Option<SocketAddr>, Invalid> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let key = KeyPath::root().key("metrics").key("bind");
+    let Some(text) = raw.bind.as_deref() else {
+        problems.push(key, ProblemKind::Missing);
+        return Err(Invalid);
+    };
+    let Ok(address) = text.parse::<SocketAddr>() else {
+        problems.push(key, ProblemKind::SocketAddress);
+        return Err(Invalid);
+    };
+    let clash = if address.port() == 0 {
+        Some(ProblemKind::PortZero)
+    } else if http_bind.is_some_and(|http| http.port() == address.port()) {
+        Some(ProblemKind::SamePortAs { key: "http.bind" })
+    } else if grpc_bind.is_some_and(|grpc| grpc.port() == address.port()) {
+        Some(ProblemKind::SamePortAs { key: "grpc.bind" })
+    } else {
+        None
+    };
+    match clash {
+        Some(kind) => {
+            problems.push(key, kind);
+            Err(Invalid)
+        }
+        None => Ok(Some(address)),
+    }
+}
 
 /// `[grpc]`: absent is `Ok(None)`, the control plane off. Present, its four
 /// files are required, absolute and different from each other; `bind` is

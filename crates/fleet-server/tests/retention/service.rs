@@ -810,6 +810,7 @@ async fn the_summary_records_every_key_with_the_runs_sums(
             audit_through: Some(AuditEntryId::new(40 + i64::try_from(n).unwrap())),
             failed: vec![Phase::Invites],
             stopped: false,
+            batches: 2,
         });
     }
 
@@ -879,6 +880,7 @@ async fn the_stops_summary_waits_at_most_its_bound(
         audit_through: None,
         failed: Vec::new(),
         stopped: false,
+        batches: 1,
     });
     let taken = db.write().await.unwrap();
     let started = tokio::time::Instant::now();

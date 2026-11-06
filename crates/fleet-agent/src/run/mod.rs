@@ -56,6 +56,7 @@ use crate::diagnostics::{self, HostDiagnostics};
 use crate::heartbeat::Heartbeat;
 use crate::managed::identity::ManagedIdentity;
 use crate::managed::link::LinkTimings;
+use crate::metrics_endpoint::{self, Endpoint};
 use crate::signals::ShutdownSignals;
 
 /// How long the binary gives the async runtime's remaining tasks once the
@@ -88,6 +89,9 @@ pub struct RunParts<C, D, S, H> {
     /// A managed agent's identity and its link's seed, which main.rs
     /// loads before the runtime starts; none for a standalone agent.
     pub managed: Option<Managed>,
+    /// The metrics endpoint, which main.rs binds on `[metrics] bind`; none
+    /// while metrics are off (P12.4).
+    pub metrics: Option<Endpoint>,
 }
 
 /// What a managed agent's run needs beside the config (ADR-0019, S67, S68).
@@ -116,6 +120,7 @@ impl<C, D, S, H> fmt::Debug for RunParts<C, D, S, H> {
             .field("anchor", &self.anchor)
             .field("seed", &self.seed)
             .field("managed", &self.managed)
+            .field("metrics", &self.metrics)
             .finish_non_exhaustive()
     }
 }
@@ -232,6 +237,7 @@ where
         anchor,
         seed,
         managed: _,
+        metrics,
     } = parts;
     let Built {
         specs,
@@ -245,6 +251,9 @@ where
         }
     };
     let cancel = CancellationToken::new();
+    // Once the fleet registered its series; it serves until the run ends.
+    let mut endpoint = JoinSet::new();
+    metrics_endpoint::start(metrics, &mut endpoint, cancel.child_token());
     let mut logger = JoinSet::new();
     logger
         .spawn(events::log_fleet_events(fleet.subscribe(), cancel.child_token()).in_current_span());
@@ -291,6 +300,7 @@ where
     .await;
     cancel.cancel();
     logger.shutdown().await;
+    endpoint.shutdown().await;
     outcome
 }
 

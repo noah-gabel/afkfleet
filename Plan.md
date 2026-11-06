@@ -208,7 +208,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Configuration | `figment` | 0.10.19 | startup, testkit; agent and server tests | TOML file + env; upstream is quiet but the crate is stable. It has no default features: fleet-startup's loader enables `toml` and `env`, and fleet-testkit `test` for `jail::in_jail`, whose one closure carries the workspace's only approved `#[expect(clippy::result_large_err)]` (ADR-0014, ADR-0015) |
 | DTO & config validation | `garde` | 0.23.0 | api-types, agent, server | Domain value objects use hand-written constructors. It has no default features; members enable `derive` and the rules they use. The agent's config uses garde for its number ranges only and converts texts with the core constructors, so it reports every problem at once (ADR-0014) |
 | Logging / tracing | `tracing`, `tracing-subscriber` | 0.1.44, 0.3.23 | all | `env-filter`, `json`. fleet-startup builds both binaries' log layer (ADR-0015). fleet-testkit's log capture uses `tracing` and `tracing-subscriber`; the redaction tests use it (ADR-0011). Its log buffer is the writer for format and filter tests (ADR-0015) |
-| Metrics | `metrics`, `metrics-exporter-prometheus` | 0.24.6, 0.18.3 (dfo) | runtime, agent, server | Internal port only. The exporter's default `push-gateway` brings its own TLS stack: enable `http-listener` only. Until P12.4 serves the endpoint, the agent enables no features and only installs the recorder. Its metrics-util dependency always enables `storage`, which brings rand 0.9 and getrandom 0.3 into normal dependencies (both already in the graph, neither used for secrets) (ADR-0014) |
+| Metrics | `metrics`, `metrics-exporter-prometheus` | 0.24.6, 0.18.3 (dfo) | runtime, agent, server | Internal port only. No features, ever: the default `push-gateway` brings its own TLS stack, and `http-listener` spawns unowned tasks with no timeouts, so each binary serves `GET /metrics` itself (ADR-0022, S9). Its metrics-util dependency always enables `storage`, which brings rand 0.9 and getrandom 0.3 into normal dependencies (both already in the graph, neither used for secrets) (ADR-0014) |
 | IDs | `uuid` | 1.27.0, dfo | core, mc, server | v7, serde. fleet-mc only names `Uuid` in azalea's `AccountTrait` (ADR-0011). fleet-server binds IDs as `uuid::fmt::Hyphenated` text, never a plain `Uuid` (ADR-0015) |
 | Time | `chrono` | 0.4.45, dfo | core, runtime, agent, server | Always UTC. No `clock` feature in core or runtime: time is passed in. The runtime derives `DateTime<Utc>` from tokio's clock, anchored at a wall time its caller passes in (ADR-0010, ADR-0013). The agent enables `now` only, for that one read at startup; `clock` would add local time zones (ADR-0014). fleet-server enables `now` only, for its `SystemClock`, the one wall-clock read behind the `Clock` port (ADR-0015) |
 | CLI | `clap` | 4.6.7 | agent, server | derive. Both binaries handle clap's errors themselves, so `healthcheck`'s usage errors exit 1 (ADR-0014, ADR-0015) |
@@ -4404,6 +4404,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - Caddy is optional, for a host where 80 and 443 are free. Otherwise the server's HTTP port is reached through the host's existing reverse proxy, and the runbook lists what that proxy must do (TLS, WebSocket upgrades, `X-Forwarded-For` with `trusted_proxies`, HSTS, no `ticket` or `q` in its logs).
   > - The production server config sets `[database] backup_dir`. The backups' folder (owned by 65532, files 0600) is readable by the operator's SFTP account, which their PC pulls from.
   > - One setup script does the one-time steps; its form is group C's.
+
+  > Note (P12.2, from Phase 12, group B) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S10, U1, U5): **the metrics ports.** The production configs set `[metrics] bind = "0.0.0.0:9480"` for the server and `"0.0.0.0:9481"` for agents, reachable only on the project's own network: no `ports:` and no `EXPOSE` for either. Caddy and the host's existing proxy route only the server's 8080, never a metrics port.
 - [x] **P12.3** 🔴 Backups:
   - a scheduled `VACUUM INTO` with retention, plus a `backup` CLI
   - a restore runbook
@@ -4422,7 +4424,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > If sqlx's macros can't read `quick_check` or `journal_size_limit`, the work stops for the user (rule 8).
   >
   > *Built in group A ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), "As built (group A)"):* sqlx's macros describe both reads, so no exception was needed. fleet-core's `backup` module holds the rules; `infra::sqlite::backup` the file, `app::backup` the service, `cli::retention` the schedule, `cli::backup` the command, `just dev-backup` a try on the dev database; `docs/runbook.md` starts with backups and restoring one. The off-host copy (U3) and the compose form come with group C.
-- [ ] **P12.4** A Prometheus metrics endpoint on an internal port, with the key metrics documented.
+- [x] **P12.4** A Prometheus metrics endpoint on an internal port, with the key metrics documented.
 
   > Note (P12.4, from Phase 7, group B, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): a counter of detected refresh-token reuses belongs among the key metrics, so alerting can pick up possible token theft without anyone reading `/audit` or the logs.
 
@@ -4437,6 +4439,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P12.4, from Phase 11, group E) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S45): the retention's rows deleted per phase, a run's time and batches, and the time of its last successful run belong among the key metrics: the task isn't watched, so that time is the alert for one that died or fails every run.
 
   > Note (P12.4, from Phase 12's group A planning) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S6, R4): **the backups' metrics**: the last success, failures, a backup's duration and size. A backup writes no audit entry, so these and its log lines are its only trail. The `backup` command runs in a process of its own, so `serve` reads the last success at start from the newest backup's name.
+
+  > Note (P12.4, Phase 12's group B) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S9–S12, R5–R8): **as built.**
+  > - **`[metrics] bind`** in both binaries, off unless set: an IP address and a port other than 0, and on the server not `[http]`'s or `[grpc]`'s port. One `info` line at startup says where it listens, or that metrics are off.
+  > - **The server:** `crate::metrics`'s `ServerMetrics` records into each server's own recorder through typed methods with fixed labels, every series at 0 from the start. `GET /metrics` is a route of its own router (`metrics_routes`) behind the API's middleware, on a second listener that `serve` stops with the API's; the API's port answers 404 there.
+  > - **The agent:** `metrics_endpoint`, a responder of its own (4 connections, 5 s each, a 2 KiB head, nothing from a request logged), and the outbox's three counters, sampled with the diagnostics every 5 s.
+  > - **Totals only:** no label is per user, per bot or per agent. The ingest note's "per agent" stays in housekeeping's minute line, which names the agent (S11).
+  > - **The docs:** README's Metrics lists every key metric with its labels; the runbook's Metrics says how to read them from the host and what to watch.
 - [ ] **P12.5** Tauri release:
   - NSIS installer.
   - Updater key pair; the private key is kept **offline**.
@@ -4495,6 +4504,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Upgrades:** a backup is taken with the old server before an upgrade, and the key rotation's "copy the database" becomes `backup`.
   >
   > *Group A starts the runbook with "Backups and restore".*
+
+  > Note (P12.6, from Phase 12, group B) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S10): **the metrics** in the finished runbook: the compose form of reading them (from a container on the project's network, never through a published port), and the alerts group B's "Metrics" section starts with.
 - [ ] **P12.7** 🔴 Compose smoke test in CI, run nightly:
   1. `up`
   2. health checks pass
@@ -4509,6 +4520,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P12.7, from Phase 11, group L3, PR #90's review) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S28, S127): when Caddy writes an access log, the smoke test opens the live events socket and asks `grant-candidates` for a match, then checks the log holds neither the `ticket` nor the `q` it sent (P12.2's notes).
 
   > Note (P12.7, from Phase 12's planning, the user's decision) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U5): **both proxy paths** are smoke-tested: afkfleet's own Caddy, and afkfleet behind a stand-in for an existing reverse proxy.
+
+  > Note (P12.7, from Phase 12, group B) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S9, S10): the smoke test scrapes both metrics endpoints from inside the project's network, and checks that `/metrics` through Caddy and through the other proxy path reaches neither.
 
 **DoD:**
 - A clean afkfleet install (no earlier afkfleet state) on an existing Linux host that keeps its other services, following only the runbook.
@@ -4527,6 +4540,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P13.1, from Phase 9, group E) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): the cast steps up first, or every step-up route reads 403 `step_up_required`. The account routes need a pending account (review, grants, re-link) and a grantee with implicit Manage (the grant routes' 422 and 409).
 
   > Note (P13.1, from Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the bot routes** join the matrix: every lifecycle call, `PATCH` (step-up first), and the mode switch with a mode on the allowlist and one off it. The per-bot limit is spent only after `authorize()`, so a stranger's answer stays 404; the cast needs a fresh limit per row, or rows after the fifth read 429.
+
+  > Note (P13.1, from Phase 12, group B) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S9): the metrics router joins the matrix: `GET /metrics` on its own port for every cast, and on the API's port as 404.
 - [ ] **P13.2** Fuzz targets:
   - value-object parsers
   - the chat sanitizer
@@ -4539,6 +4554,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P13.2, from Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): fuzz `IpNet`'s parser and `PrivateTargets::problems`.
 
   > Note (P13.2, from Phase 11, group H7) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S80, R138): two targets for the chat formats, which read untrusted server text: `ChatFormats::try_new` over any list of strings (no panic, an error that never holds the text), and `sender_of` over any valid formats and any received system line (no panic, and a `Some` is a valid `McUsername` read from the text's first characters).
+
+  > Note (P13.2, from Phase 12, group B) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S9): a target for the agent's metrics responder: its request-head reader and router over arbitrary bytes.
 - [ ] **P13.3** cargo-mutants on `fleet-core` and auth/vault. Add tests until no relevant mutants survive.
 - [ ] **P13.4** Load test: 200+ fake bots on one agent and 20 WebSocket clients. Measure CPU, RAM and event latency, then fix the hot spots.
 
@@ -4552,6 +4569,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P13.4, from Phase 11, group D2) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S40, S41, S43, R38): S41's test measured, in a debug build on Windows with 200 bots, 20 users and 400 grants, a rights rebuild at 2.3 ms (median; 2.8 ms at most) and one viewer's batched read of 200 hinted bots at 5.5 ms (11 ms at most), so a hint for all 200 costs 20 sockets about 115 ms of reads, one rebuild shared by all. The load test counts the rebuilds and their time, the steps a commit outran and read again (S43), and the resyncs at the ingest's peak, weighing its 1000-line batch against the bus of 1024 (S40); and it measures an event's latency at that peak and during a reconciler pass that writes many bots.
 
   > Note (P13.4, from Phase 11, group E) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S44, S45): measure a retention run at the ingest's peak: its batch times by phase, commits a second, WAL frames and checkpoints, the sockets' rebuilds and redone reads, the chat the ingest drops meanwhile, and the per-bot walk with 200 bots; retune the pause or the interval, and fall back to `secure_delete = FAST` if ON stalls the ingest.
+
+  > Note (P13.4, from Phase 12, group B) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S9): scrape both metrics endpoints during the load test, so a render under 200 bots and 20 sockets is measured too.
 - [ ] **P13.5** Chaos tests:
   - kill and restart the server, agent and MC containers
   - partition the network between agent and server
@@ -4679,6 +4698,9 @@ agent_cert_lifetime_days = 60
 heartbeat_interval_secs = 10
 heartbeat_timeout_secs = 30
 
+[metrics]                                # off unless set; internal only, never published or proxied
+bind = "0.0.0.0:9480"                    # not port 0, nor [http]'s or [grpc]'s port
+
 [database]
 path = "/data/afkfleet.db"
 backup_dir = "/data/backups"
@@ -4764,6 +4786,8 @@ retention_days = 365                     # 90–730: every entry holds a user's 
 
 > Note (Appendix A, Phase 11, group L3) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U110, S127): `[rate_limits]` gains `grant_candidates_per_user_per_hour` (1–600, 60 by default, all at once if need be; the user's approval at the plan review): how many times one user may read the suggestions behind "Share with" in an hour, one bucket across all their accounts.
 
+> Note (Appendix A, Phase 12, group B) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S10): both configs gain `[metrics]` with one key, `bind`, off unless set: the address of `GET /metrics`, an IP address and a port other than 0; on the server not `[http] bind`'s or `[grpc] bind`'s port, whatever their addresses. In a container it's `0.0.0.0`, on the project's network only (P12.2).
+
 `agent.toml`
 ```toml
 name = "agent-1"
@@ -4788,6 +4812,9 @@ circuit_cooldown_secs = 900
 [log]
 format = "json"                          # or "pretty": one colored line per event, for development
 filter = "info"                          # EnvFilter syntax; azalea stays at warn unless named, azalea_auth at info
+
+[metrics]                                # off unless set; internal only, never published or proxied
+bind = "0.0.0.0:9481"                    # an IP address and a port other than 0
 
 [control_plane]                          # managed mode (production)
 url = "https://fleet.example.com:7443"

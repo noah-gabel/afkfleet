@@ -32,6 +32,9 @@
 //!   that's gone counts as revoked.
 //! - **Logs** name the request, the agent and the reason, never the peer's
 //!   address or the certificate's bytes.
+//! - **Metrics** (P12.4; [`AgentConnectionService::with_metrics`]): every
+//!   refusal by its reason, before the audit cap, and every certificate the
+//!   CA signed that the server doesn't know.
 
 use std::collections::HashSet;
 use std::net::IpAddr;
@@ -52,6 +55,7 @@ use fleet_core::value::{AgentCapacity, AgentVersion};
 use tracing::{debug, error, info, warn};
 
 use crate::app::audit::AuditService;
+use crate::metrics::{ConnectRefused, ServerMetrics};
 use crate::ports::agent_connections::{
     AdmitError, Admitted, AgentConnections, Conflict, Ended, LiveCertificate, Presented,
 };
@@ -70,6 +74,7 @@ pub struct AgentConnectionService {
     names: Arc<dyn AgentNames>,
     audit: AuditService,
     live_hints: Arc<dyn LiveHints>,
+    metrics: ServerMetrics,
 }
 
 /// A refusal of a certificate the server knows, as it's recorded.
@@ -94,6 +99,7 @@ impl AgentConnectionService {
             names,
             audit,
             live_hints: Arc::new(NoLiveHints),
+            metrics: ServerMetrics::off(),
         }
     }
 
@@ -103,6 +109,15 @@ impl AgentConnectionService {
     #[must_use]
     pub fn with_live_hints(self, live_hints: Arc<dyn LiveHints>) -> Self {
         Self { live_hints, ..self }
+    }
+
+    /// The service, counting every refusal in `metrics` as it happens,
+    /// whether or not the audit log's daily cap records it (P12.4; ADR-0019,
+    /// S30), and every certificate the CA signed that the server doesn't
+    /// know.
+    #[must_use]
+    pub fn with_metrics(self, metrics: ServerMetrics) -> Self {
+        Self { metrics, ..self }
     }
 
     /// Whether `cert`, of an agent enabled or not as `enabled` says, admits
@@ -130,6 +145,9 @@ impl AgentConnectionService {
             reason,
             ..
         } = refusal;
+        // Before the audit cap: past it, the metrics still count (S30).
+        self.metrics
+            .connect_refused(ConnectRefused::Refused(reason));
         match self.record(refusal).await {
             Ok(true) if reason == ConnectRefusal::SanMismatch => error!(
                 request_id = %request,
@@ -409,6 +427,8 @@ impl AgentConnections for AgentConnectionService {
             // Only the CA key makes a certificate the handshake accepts; one
             // the server never stored means a restored backup or a stolen
             // key. It names no agent the log could trust, so it isn't parsed.
+            self.metrics
+                .connect_refused(ConnectRefused::UnknownCertificate);
             error!(
                 request_id = %request,
                 fingerprint = %fingerprint,

@@ -106,6 +106,7 @@ use crate::config::Heartbeats;
 use crate::http::error::{BUSY_RETRY_AFTER, chain, whole_seconds};
 use crate::http::middleware::RequestIds;
 use crate::http::rate_limit::RateLimits;
+use crate::metrics::ServerMetrics;
 use crate::ports::agent_connections::{AdmitError, AgentConnections, Presented};
 use crate::ports::ingest::Ingest;
 use crate::ports::session_grants::SessionGrants;
@@ -185,6 +186,9 @@ pub struct ControlPorts {
     pub ingest: Arc<dyn Ingest>,
     /// The server's clock.
     pub clock: Arc<dyn Clock>,
+    /// The server's metrics, where the gate counts a call without a client
+    /// certificate (P12.4).
+    pub metrics: ServerMetrics,
 }
 
 /// The owner of every session's task: each gets a child of the stop token,
@@ -328,6 +332,7 @@ pub fn control_service(
         grants,
         ingest,
         clock,
+        metrics,
     } = ports;
     InterceptedService::new(
         AgentControlServer::new(ControlGrpc {
@@ -342,7 +347,7 @@ pub fn control_service(
         })
         .max_decoding_message_size(MAX_AGENT_MESSAGE_BYTES)
         .max_encoding_message_size(MAX_SERVER_MESSAGE_BYTES),
-        ControlGate::new(limits, ids),
+        ControlGate::new(limits, ids).with_metrics(metrics),
     )
 }
 

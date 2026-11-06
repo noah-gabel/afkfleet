@@ -365,6 +365,7 @@ mod tests {
                 agent_cert_lifetime: chrono::TimeDelta::days(60),
                 heartbeats: crate::config::Heartbeats::default(),
             }),
+            metrics: None,
         }
     }
 

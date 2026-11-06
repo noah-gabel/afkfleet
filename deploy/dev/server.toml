@@ -40,3 +40,9 @@ allow_offline = true                     # dev only: offline-mode test server
 #                                        # connection it read nothing from for this long
 # heartbeat_timeout_secs = 30            # 2–300, at least twice the interval: a stream that
 #                                        # sent nothing for this long ends (ADR-0019)
+
+# [metrics]                              # off unless set: GET /metrics in Prometheus' text format,
+#                                        # on an internal port only, never published or behind a
+#                                        # proxy (ADR-0022, S9, S10); try it with
+#                                        # AFKFLEET_SERVER__METRICS__BIND=127.0.0.1:9480
+# bind = "127.0.0.1:9480"                # an IP address and a port other than 0, [http]'s and [grpc]'s

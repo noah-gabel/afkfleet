@@ -233,6 +233,21 @@ async fn chat_past_the_streams_share_is_dropped_counted_and_the_stream_goes_on(
         }],
         "the barrier's denial, and the second message"
     );
+    // P12.4: the same events in the metrics, totals with no agent's label.
+    for (series, expected) in [
+        (
+            "afkfleet_ingest_chat_dropped_total{reason=\"stream_full\"}",
+            "1",
+        ),
+        ("afkfleet_ingest_rows_total{outcome=\"stored\"}", "1"),
+        ("afkfleet_ingest_rows_total{outcome=\"skipped\"}", "0"),
+        (
+            "afkfleet_session_denials_total{reason=\"not_assigned\"}",
+            "1",
+        ),
+    ] {
+        assert_eq!(port.metric(series).as_deref(), Some(expected), "{series}");
+    }
     port.stop().await;
 }
 

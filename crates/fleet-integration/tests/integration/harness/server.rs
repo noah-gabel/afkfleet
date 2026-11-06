@@ -55,6 +55,7 @@ use fleet_server::infra::msauth::ReqwestMicrosoftAuth;
 use fleet_server::infra::pki::load;
 use fleet_server::infra::sqlite::{self, Database, DatabaseOptions};
 use fleet_server::infra::system::{MonotonicClock, OsRandom, SystemClock, TokioPace};
+use fleet_server::metrics::Metrics;
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord};
 use fleet_server::ports::bots::Bot;
 use fleet_server::ports::msauth::MicrosoftAuthProvider;
@@ -334,6 +335,7 @@ impl Server {
             microsoft: Arc::clone(&self.microsoft),
             pace: Arc::new(TokioPace),
             reconcile: self.reconcile,
+            metrics: Metrics::prometheus(),
         };
         let (opened, ca) = open(
             ControlPlane {
@@ -364,7 +366,8 @@ impl Server {
         let timeouts = ShutdownTimeouts::of(&self.config.http);
         let db = database.clone();
         let mut serving = JoinSet::new();
-        serving.spawn(async move { serve(http, port, app, &database, signals, timeouts).await });
+        serving
+            .spawn(async move { serve(http, port, None, app, &database, signals, timeouts).await });
         self.running = Some(Running {
             db,
             registry,
@@ -583,6 +586,7 @@ fn config(
             agent_cert_lifetime: TimeDelta::days(60),
             heartbeats,
         }),
+        metrics: None,
     }
 }
 

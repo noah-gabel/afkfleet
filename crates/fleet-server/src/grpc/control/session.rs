@@ -470,7 +470,7 @@ impl Session {
             reported,
         };
         if let Err(why) = self.ingest.take(&self.share, report) {
-            self.registry.count_dropped_chat(lease);
+            self.registry.count_dropped_chat(lease, why);
             debug!(
                 request_id = %self.admitted.request,
                 agent_id = %self.admitted.agent,

@@ -562,6 +562,7 @@ async fn serve_stops_every_link_flow_at_the_signal(
     let exit = bounded(serve(
         listener,
         None,
+        None,
         app,
         &setup.db,
         ChannelSignals(receiver),

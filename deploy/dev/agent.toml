@@ -32,6 +32,11 @@ name = "dev-agent"
 format = "pretty"
 filter = "info"                          # EnvFilter syntax; azalea stays at warn unless named, azalea_auth and tungstenite at info
 
+# [metrics]                              # off unless set: GET /metrics in Prometheus' text format,
+#                                        # on an internal port only (ADR-0022, S9, S10); try it with
+#                                        # AFKFLEET_AGENT__METRICS__BIND=127.0.0.1:9481
+# bind = "127.0.0.1:9481"                # an IP address and a port other than 0
+
 [[standalone.bots]]
 username = "AfkBot1"
 server = "127.0.0.1:25565"

@@ -21,19 +21,28 @@
 //! name is an interval old; a stop ends a running one and keeps nothing of
 //! it; a failure is an `error` line, and the next try comes after
 //! [`RETRY_AFTER`].
+//!
+//! **Metrics** (P12.4; ADR-0022, S11, R4, R6; [`Retention::with_metrics`]):
+//! each run's rows by kind, how it ended, its time and its batches, and the
+//! time of the last run with no failed phase that wasn't stopped; each
+//! backup's failure, its pruning's failure, its time, size and duration. The
+//! newest backup's time is read from the folder's names at the task's start
+//! and at each tick's listing, so the `backup` command's counts too.
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use chrono::{DateTime, Utc};
 
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use super::housekeeping::every;
-use crate::app::backup::{BackupService, RETRY_AFTER};
+use crate::app::backup::{BackupService, Due, RETRY_AFTER};
 use crate::app::retention::{Deleted, RetentionService, RetentionTimings, SummaryError, Tally};
 use crate::http::error::chain;
 use crate::infra::sqlite::backup::BackupError;
+use crate::metrics::{RetentionRun, ServerMetrics};
 
 /// What one tick's backup step did (ADR-0022, S3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +69,8 @@ pub struct Retention {
     backups: Option<Arc<BackupService>>,
     /// When the next try may come after a failed backup.
     retry_at: Arc<Mutex<Option<DateTime<Utc>>>>,
+    /// Where its runs and its backups count (P12.4).
+    metrics: ServerMetrics,
 }
 
 impl Retention {
@@ -72,6 +83,7 @@ impl Retention {
             timings,
             backups: None,
             retry_at: Arc::new(Mutex::new(None)),
+            metrics: ServerMetrics::off(),
         }
     }
 
@@ -81,8 +93,17 @@ impl Retention {
     pub fn with_timings(self, timings: RetentionTimings) -> Self {
         Self {
             backups: self.backups,
+            metrics: self.metrics,
             ..Self::new(self.service, timings)
         }
+    }
+
+    /// The same task, its runs and its backups counted in `metrics`
+    /// (P12.4; ADR-0020, S45; ADR-0022, R4): the task isn't watched, so the
+    /// time of its last good run and of the newest backup are the alerts.
+    #[must_use]
+    pub fn with_metrics(self, metrics: ServerMetrics) -> Self {
+        Self { metrics, ..self }
     }
 
     /// The same task, taking `backups` after its runs (none for `None`).
@@ -115,6 +136,13 @@ impl Retention {
     /// Runs until `stop` is cancelled, then records what the runs since the
     /// last entry deleted; see the [module docs](self).
     pub async fn run(self, stop: CancellationToken) {
+        // At the start: the newest backup may be the `backup` command's, or
+        // a run's before a restart (R4).
+        if let Some(backups) = &self.backups
+            && let Ok(due) = backups.due().await
+        {
+            self.newest_backup(due);
+        }
         let tally = Mutex::new(Tally::new(self.service.now()));
         every(self.timings.interval, &stop, || self.tick(&stop, &tally)).await;
         let tally = lock(&tally).clone();
@@ -170,20 +198,33 @@ impl Retention {
             *lock(&self.retry_at) = now.checked_add_signed(RETRY_AFTER);
             BackupStep::Failed
         };
-        match backups.is_due().await {
-            Ok(true) => {}
-            Ok(false) => return BackupStep::NotDue,
+        match backups.due().await {
+            Ok(due) => {
+                self.newest_backup(due);
+                if !due.now {
+                    return BackupStep::NotDue;
+                }
+            }
             Err(failure) => {
                 error!(
                     error = %chain(&failure),
                     "the backups' folder couldn't be read; the next try is in an hour"
                 );
+                self.metrics.backup_failed();
                 return retry_later();
             }
         }
         match backups.take(stop).await {
-            Ok(_) => {
+            Ok(taken) => {
                 *lock(&self.retry_at) = None;
+                self.metrics.backup_taken(
+                    taken.written.name.stamp(),
+                    taken.written.bytes,
+                    taken.took,
+                );
+                if taken.prune_failed.is_some() {
+                    self.metrics.backup_prune_failed();
+                }
                 BackupStep::Taken
             }
             Err(BackupError::Stopped { file }) if stop.is_cancelled() => {
@@ -198,14 +239,31 @@ impl Retention {
                     error = %chain(&failure),
                     "a backup failed; the next try is in an hour"
                 );
+                self.metrics.backup_failed();
                 retry_later()
             }
         }
     }
 
+    /// Sets the newest backup's time in the metrics from `due`'s listing.
+    fn newest_backup(&self, due: Due) {
+        if let Some(newest) = due.newest {
+            self.metrics.newest_backup(newest.stamp());
+        }
+    }
+
     /// One run, added to `tally`, which is recorded when it's due.
     async fn run_and_sum_up(&self, stop: &CancellationToken, tally: &Mutex<Tally>) {
+        let started = Instant::now();
         let run = self.service.run_once(stop).await;
+        self.metrics.retention_ran(&RetentionRun {
+            deleted: &run.deleted,
+            failed: &run.failed,
+            stopped: run.stopped,
+            batches: run.batches,
+            took: started.elapsed(),
+            ended_at: self.service.now(),
+        });
         if run.deleted.any() {
             log_run(&run.deleted);
         }

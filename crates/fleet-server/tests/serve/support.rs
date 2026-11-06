@@ -23,7 +23,7 @@ use fleet_server::app::lockout::LockoutService;
 use fleet_server::app::retention::{RetentionService, RetentionTimings};
 use fleet_server::cli::housekeeping::Housekeeping;
 use fleet_server::cli::retention::Retention;
-use fleet_server::cli::serve::App;
+use fleet_server::cli::serve::{self, App};
 use fleet_server::config::{
     AccountsConfig, AuditConfig, AuthConfig, ChatConfig, DatabaseConfig, HttpConfig, LogConfig,
     LogFormat, RateLimitConfig, ServerConfig, VaultConfig,
@@ -141,6 +141,7 @@ pub(crate) fn server_config(dir: &Path, bind: SocketAddr, dev_mode: bool) -> Ser
         chat: ChatConfig::default(),
         audit: AuditConfig::default(),
         grpc: None,
+        metrics: None,
     }
 }
 
@@ -351,6 +352,7 @@ pub(crate) fn app_of(router: Router, database: &Database) -> App {
     );
     App {
         router,
+        metrics: Router::new(),
         retention,
         housekeeping: Housekeeping::new(
             RateLimits::new(&RateLimitConfig::default(), Arc::clone(&clock)),
@@ -375,6 +377,26 @@ pub(crate) fn app_of(router: Router, database: &Database) -> App {
 
 /// Aborts an in-process task when the test ends, however it ends.
 pub(crate) struct AbortOnDrop<T>(pub(crate) tokio::task::JoinHandle<T>);
+
+/// Starts the server in-process on a free loopback port with its database
+/// in `dir`, and returns its port and the task, aborted when dropped.
+pub(crate) async fn running_server(dir: &Path) -> (u16, AbortOnDrop<serve::Exit>) {
+    let (listener, address) = listener().await;
+    let config = server_config(dir, address, false);
+    let keys = vault_keys(&config);
+    let task = tokio::spawn(async move {
+        serve::run(
+            &config,
+            listener,
+            None,
+            None,
+            ChannelSignals::silent(),
+            keys,
+        )
+        .await
+    });
+    (address.port(), AbortOnDrop(task))
+}
 
 impl<T> Drop for AbortOnDrop<T> {
     fn drop(&mut self) {

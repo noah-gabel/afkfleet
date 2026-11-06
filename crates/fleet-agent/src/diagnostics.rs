@@ -11,6 +11,11 @@
 //!   and `afkfleet_mc_ignored_action_bar_total` are counters, set from
 //!   fleet-mc's own running totals.
 //! - `afkfleet_mc_host_threads` and `afkfleet_mc_worlds` are gauges.
+//! - A managed agent's outbox (P12.4; ADR-0019, S63): the counters
+//!   `afkfleet_outbox_chat_dropped_total`, `afkfleet_outbox_refused_total`
+//!   and `afkfleet_outbox_session_requests_dropped_total`, set from the
+//!   outbox's own running totals at each sample. A standalone agent has no
+//!   outbox, and they stay at 0.
 //!
 //! None of them has a label. The run describes them and registers each
 //! at 0, so they exist before the first sample.
@@ -19,6 +24,8 @@ use core::time::Duration;
 
 use fleet_mc::AzaleaConnector;
 use metrics::{counter, describe_counter, describe_gauge, gauge};
+
+use crate::managed::outbound::Counts;
 
 /// How often the agent samples the diagnostics.
 pub const SAMPLE_PERIOD: Duration = Duration::from_secs(5);
@@ -33,6 +40,12 @@ const IGNORED_ACTION_BAR: &str = "afkfleet_mc_ignored_action_bar_total";
 const HOST_THREADS: &str = "afkfleet_mc_host_threads";
 /// Tracked Minecraft worlds.
 const WORLDS: &str = "afkfleet_mc_worlds";
+/// Chat the outbox dropped for newer chat.
+const OUTBOX_CHAT_DROPPED: &str = "afkfleet_outbox_chat_dropped_total";
+/// Items of a never-drop class the outbox refused, full.
+const OUTBOX_REFUSED: &str = "afkfleet_outbox_refused_total";
+/// Session requests the outbox replaced, or dropped at a stream's end.
+const OUTBOX_REQUESTS_DROPPED: &str = "afkfleet_outbox_session_requests_dropped_total";
 
 /// One reading of the Minecraft adapter's numbers.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -89,7 +102,27 @@ pub(crate) fn register() {
         "Running host threads, including abandoned threads that still run."
     );
     describe_gauge!(WORLDS, "The Minecraft worlds the adapter tracks.");
+    describe_counter!(
+        OUTBOX_CHAT_DROPPED,
+        "Chat a managed agent's outbox dropped for newer chat while the server didn't take it."
+    );
+    describe_counter!(
+        OUTBOX_REFUSED,
+        "Items a managed agent's outbox refused, full: each ends the stream, and the next hello resyncs."
+    );
+    describe_counter!(
+        OUTBOX_REQUESTS_DROPPED,
+        "Session requests a managed agent's outbox replaced, or dropped unsent at a stream's end."
+    );
     record(&HostSample::default());
+    record_outbox(&Counts::default());
+}
+
+/// Records a managed agent's outbox `counts`, its own running totals.
+pub(crate) fn record_outbox(counts: &Counts) {
+    counter!(OUTBOX_CHAT_DROPPED).absolute(counts.chat_dropped);
+    counter!(OUTBOX_REFUSED).absolute(counts.refused);
+    counter!(OUTBOX_REQUESTS_DROPPED).absolute(counts.requests_dropped);
 }
 
 /// Records `sample` in the metrics. The counters take fleet-mc's own
@@ -150,9 +183,36 @@ mod tests {
             IGNORED_ACTION_BAR,
             HOST_THREADS,
             WORLDS,
+            OUTBOX_CHAT_DROPPED,
+            OUTBOX_REFUSED,
+            OUTBOX_REQUESTS_DROPPED,
         ] {
             assert_eq!(value(&render, name).as_deref(), Some("0"), "{render}");
         }
+    }
+
+    #[test]
+    fn the_outbox_counts_set_their_counters() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let counts = Counts {
+            chat_dropped: 12,
+            refused: 1,
+            requests_dropped: 3,
+        };
+
+        metrics::with_local_recorder(&recorder, || {
+            register();
+            record_outbox(&counts);
+        });
+
+        let render = handle.render();
+        assert_eq!(value(&render, OUTBOX_CHAT_DROPPED).as_deref(), Some("12"));
+        assert_eq!(value(&render, OUTBOX_REFUSED).as_deref(), Some("1"));
+        assert_eq!(
+            value(&render, OUTBOX_REQUESTS_DROPPED).as_deref(),
+            Some("3")
+        );
     }
 
     #[test]
@@ -177,6 +237,14 @@ mod tests {
         );
         assert!(
             render.contains("# TYPE afkfleet_mc_worlds gauge"),
+            "{render}"
+        );
+        assert!(
+            render.contains("# HELP afkfleet_outbox_refused_total Items a managed agent's outbox refused, full: each ends the stream, and the next hello resyncs."),
+            "{render}"
+        );
+        assert!(
+            render.contains("# TYPE afkfleet_outbox_chat_dropped_total counter"),
             "{render}"
         );
     }

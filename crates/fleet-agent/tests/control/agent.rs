@@ -17,6 +17,7 @@ use fleet_agent::diagnostics::{HostDiagnostics, HostSample};
 use fleet_agent::heartbeat::Heartbeat;
 use fleet_agent::managed::identity::ManagedIdentity;
 use fleet_agent::managed::link::LinkTimings;
+use fleet_agent::metrics_endpoint::Endpoint;
 use fleet_agent::run::{Managed, Outcome, RunParts, run};
 use fleet_agent::signals::{ShutdownSignals, Signal};
 use fleet_agent::telemetry::layer;
@@ -145,6 +146,7 @@ fn config(dir: &Path, url: &str, ca: &TestCa, max_bots: usize) -> AgentConfig {
         heartbeat_file: dir.join("agent.alive"),
         log: LogConfig::default(),
         mode: AgentMode::ControlPlane(plane),
+        metrics: None,
     }
 }
 
@@ -157,6 +159,21 @@ impl Agent {
 
     /// [`Agent::start`] as `options` say.
     pub(crate) fn launch(dir: &Path, url: &str, ca: &TestCa, options: Options) -> Self {
+        Self::spawn(dir, url, ca, options, None)
+    }
+
+    /// [`Agent::start`], serving its metrics on `endpoint`.
+    pub(crate) fn serving(dir: &Path, url: &str, ca: &TestCa, endpoint: Endpoint) -> Self {
+        Self::spawn(dir, url, ca, Options::default(), Some(endpoint))
+    }
+
+    fn spawn(
+        dir: &Path,
+        url: &str,
+        ca: &TestCa,
+        options: Options,
+        metrics: Option<Endpoint>,
+    ) -> Self {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let logs = LogBuffer::default();
         let log = LogConfig {
@@ -186,6 +203,7 @@ impl Agent {
                     seed: 7,
                     timings: options.timings,
                 }),
+                metrics,
             })
             .in_current_span(),
         );

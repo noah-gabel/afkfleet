@@ -44,7 +44,9 @@
 //! # No audit (S61)
 //! A grant or a denial writes no audit entry: it changes no row, the
 //! assignments' entries name the only agent that could receive a token, and
-//! every new token's refresh is `account.refresh` already.
+//! every new token's refresh is `account.refresh` already. Each counts in
+//! the server's metrics instead (P12.4; [`SessionGrantService::with_metrics`]):
+//! a grant by its kind and freshness, a denial by its log line's reason.
 
 use std::sync::Arc;
 
@@ -60,6 +62,7 @@ use secrecy::SecretString;
 use tracing::{Level, debug, error, info, warn};
 
 use crate::app::session_tokens::{MinecraftSessions, SessionTokenError};
+use crate::metrics::{GrantKind, ServerMetrics, SessionDenial};
 use crate::ports::bots::BotRecord;
 use crate::ports::live_agents::{AnswerRefused, LiveAgents, SessionAnswer, SessionOutcome};
 use crate::ports::msauth::MinecraftSession;
@@ -74,6 +77,7 @@ pub struct SessionGrantService {
     live: Arc<dyn LiveAgents>,
     tokens: Arc<dyn MinecraftSessions>,
     allow_offline: bool,
+    metrics: ServerMetrics,
 }
 
 /// Why this service itself denied a request (S60): every one is retryable.
@@ -138,7 +142,16 @@ impl SessionGrantService {
             live,
             tokens,
             allow_offline,
+            metrics: ServerMetrics::off(),
         }
+    }
+
+    /// The same grants, each grant and denial also counted in `metrics`
+    /// (P12.4; ADR-0019, S61, R43): a grant writes no audit entry, so these
+    /// and its `info` line are its trail.
+    #[must_use]
+    pub fn with_metrics(self, metrics: ServerMetrics) -> Self {
+        Self { metrics, ..self }
     }
 }
 
@@ -274,25 +287,33 @@ impl SessionGrantService {
 impl SessionGrants for SessionGrantService {
     async fn grant(&self, stream: GrantStream, request: GrantRequest) {
         match self.issue(stream, request).await {
-            Ok(Issued::Online(expires_at)) => info!(
-                request_id = %stream.request,
-                agent_id = %stream.agent,
-                bot_id = %request.bot,
-                session_request = request.number.get(),
-                kind = "online",
-                fresh = request.fresh,
-                expires_at = %expires_at,
-                "a session was granted"
-            ),
-            Ok(Issued::Offline) => info!(
-                request_id = %stream.request,
-                agent_id = %stream.agent,
-                bot_id = %request.bot,
-                session_request = request.number.get(),
-                kind = "offline",
-                fresh = request.fresh,
-                "a session was granted"
-            ),
+            Ok(Issued::Online(expires_at)) => {
+                self.metrics
+                    .session_granted(GrantKind::Online, request.fresh);
+                info!(
+                    request_id = %stream.request,
+                    agent_id = %stream.agent,
+                    bot_id = %request.bot,
+                    session_request = request.number.get(),
+                    kind = "online",
+                    fresh = request.fresh,
+                    expires_at = %expires_at,
+                    "a session was granted"
+                );
+            }
+            Ok(Issued::Offline) => {
+                self.metrics
+                    .session_granted(GrantKind::Offline, request.fresh);
+                info!(
+                    request_id = %stream.request,
+                    agent_id = %stream.agent,
+                    bot_id = %request.bot,
+                    session_request = request.number.get(),
+                    kind = "offline",
+                    fresh = request.fresh,
+                    "a session was granted"
+                );
+            }
             Err(Denial::Undelivered) => debug!(
                 request_id = %stream.request,
                 agent_id = %stream.agent,
@@ -302,11 +323,32 @@ impl SessionGrants for SessionGrantService {
             ),
             Err(denial) => {
                 let retryable = retryable(&denial);
+                if let Some(why) = counted(&denial) {
+                    self.metrics.session_denied(why);
+                }
                 log_denial(stream, request, &denial, retryable);
                 self.deny(stream, request, retryable);
             }
         }
     }
+}
+
+/// `denial` as the metrics count it (P12.4), with the log line's reason;
+/// none for a request whose stream ended first, which no agent is told.
+const fn counted(denial: &Denial) -> Option<SessionDenial> {
+    Some(match denial {
+        Denial::Refused(Refusal::UnknownCertificate) => SessionDenial::UnknownCertificate,
+        Denial::Refused(Refusal::NotAdmitted(refusal)) => SessionDenial::NotAdmitted(*refusal),
+        Denial::Refused(Refusal::NoBot) => SessionDenial::NoBot,
+        Denial::Refused(Refusal::AssignedElsewhere) => SessionDenial::AssignedElsewhere,
+        Denial::Refused(Refusal::Unplaced(why)) => SessionDenial::Unplaced(*why),
+        Denial::Refused(Refusal::AccountChanged) => SessionDenial::AccountChanged,
+        Denial::Refused(Refusal::NotHeld) => SessionDenial::NotHeld,
+        Denial::Store(_) => SessionDenial::Store,
+        Denial::Tokens(_) => SessionDenial::SessionToken,
+        Denial::Unsendable => SessionDenial::Unsendable,
+        Denial::Undelivered => return None,
+    })
 }
 
 /// `session` as the agent gets it: its token moved into a `SecretString` of
@@ -524,5 +566,32 @@ mod tests {
     fn every_denial_of_the_grants_own_is_retryable(#[case] denial: Denial, #[case] at: Level) {
         assert!(retryable(&denial), "{denial:?}");
         assert_eq!(level(&denial), at, "{denial:?}");
+    }
+
+    /// P12.4: a denial counts under its log line's own reason, so the
+    /// metric and the line read alike; one whose stream ended first, which
+    /// no agent is told, counts nothing.
+    #[rstest]
+    #[case::unknown_certificate(Denial::Refused(Refusal::UnknownCertificate))]
+    #[case::revoked(Denial::Refused(Refusal::NotAdmitted(ConnectRefusal::Revoked)))]
+    #[case::no_bot(Denial::Refused(Refusal::NoBot))]
+    #[case::elsewhere(Denial::Refused(Refusal::AssignedElsewhere))]
+    #[case::pending(Denial::Refused(Refusal::Unplaced(Unplaced::Pending)))]
+    #[case::account_changed(Denial::Refused(Refusal::AccountChanged))]
+    #[case::not_held(Denial::Refused(Refusal::NotHeld))]
+    #[case::store(Denial::Store(StoreError::Busy))]
+    #[case::tokens(Denial::Tokens(SessionTokenError::TimedOut))]
+    #[case::unsendable(Denial::Unsendable)]
+    fn a_denial_counts_under_its_log_lines_reason(#[case] denial: Denial) {
+        assert_eq!(
+            counted(&denial).map(SessionDenial::label),
+            Some(reason(&denial)),
+            "{denial:?}"
+        );
+    }
+
+    #[test]
+    fn a_request_whose_stream_ended_first_counts_nothing() {
+        assert_eq!(counted(&Denial::Undelivered), None);
     }
 }
