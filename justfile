@@ -32,7 +32,7 @@ default:
 check: fmt-check clippy docs test doctest db-check gen-check testkit-check tauri-check scripts-test ui-check e2e
 
 # Everything CI runs.
-ci: fmt-check clippy docs test-ci db-check migrations-check gen-check testkit-check tauri-check scripts-test cov cov-desktop deny stable-check ui-check ui-audit e2e
+ci: fmt-check clippy docs test-ci db-check migrations-check gen-check testkit-check tauri-check scripts-test sh-check cov cov-desktop deny stable-check ui-check ui-audit e2e
 
 # Run nextest for the workspace, or for one crate: `just test fleet-core`.
 test crate="":
@@ -194,6 +194,13 @@ image-scan:
     grype docker-archive:target/image-scan/agent.tar --output table --file target/image-scan/agent.txt
     grype docker-archive:target/image-scan/server.tar --only-fixed --fail-on high
     grype docker-archive:target/image-scan/agent.tar --only-fixed --fail-on high
+
+# The scripts an operator runs on the host are POSIX sh, as dash and busybox run them
+# (ADR-0022, S18, U15). Part of `ci` and CI's frontend job, which installs ShellCheck
+# 0.11.0 by its SHA-256; not of `check`, since this PC has no ShellCheck.
+# Check the host's shell scripts with ShellCheck (needs ShellCheck).
+sh-check:
+    shellcheck --shell=sh deploy/setup.sh
 
 # The database path, the vault key's path and the PKI's four paths must be absolute, which
 # a committed config can't hold for every machine, so the recipe passes them:
