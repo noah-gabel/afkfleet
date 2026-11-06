@@ -22,6 +22,10 @@
 // - `theme`: light or dark, from what this PC remembers and what Windows says (theme.ts, S92).
 // - `back`: whether a step on screen has taken the frame's Back away, as leaving it would lose
 //   what it shows for good (U112).
+// - `update`: the app's updates (ADR-0022, U27, S27): whether the start's one check ran, the
+//   last check's answer, an install under way or failed, and whether Later put the notice away.
+//   It lives as long as the App, never in the query cache, which a logout clears and a resync
+//   invalidates: either would check GitHub again.
 import { createStore, type StoreApi } from "zustand/vanilla";
 import {
   acknowledge,
@@ -36,6 +40,7 @@ import {
 import type { BotResponse } from "../generated/BotResponse";
 import type { CommandError } from "../generated/CommandError";
 import type { LiveUpdateMessage } from "../generated/LiveUpdateMessage";
+import type { UpdateCheck } from "../generated/UpdateCheck";
 import {
   readThemeChoice,
   resolveTheme,
@@ -174,6 +179,42 @@ export interface BackState {
   hold(held: boolean): void;
 }
 
+/** Where an install stands: none, under way (the app exits at its end), or failed. */
+export type InstallPhase = "idle" | "installing" | "failed";
+
+/** The updates' store; see the module comment. */
+export interface UpdateState {
+  /** The start's check was asked: it runs once per App. */
+  readonly started: boolean;
+  /** This app's version, from the last check that answered; null before one did. */
+  readonly current: string | null;
+  /** The last check's answer; null before one answered, or after one failed. */
+  readonly check: UpdateCheck | null;
+  /** A check runs. */
+  readonly checking: boolean;
+  /** Why the last check the user asked for failed; the start's fails quietly. */
+  readonly checkFailure: CommandError | null;
+  readonly install: InstallPhase;
+  /** Why the last install failed. */
+  readonly installFailure: CommandError | null;
+  /** Later put the notice away, until the next start. */
+  readonly later: boolean;
+  /** Marks the start's check as asked: true the first time only. */
+  start(): boolean;
+  /** A check starts. */
+  beginCheck(): void;
+  /** A check answered `check`. */
+  checked(check: UpdateCheck): void;
+  /** A check failed: `failure` when the user asked for it, null when it was the start's. */
+  checkFailed(failure: CommandError | null): void;
+  /** An install starts. */
+  beginInstall(): void;
+  /** An install failed with `failure`. */
+  installFailed(failure: CommandError): void;
+  /** Later: the notice goes away until the next start, a failed install with it. */
+  putAway(): void;
+}
+
 /** The stores of one App. */
 export interface AppStores {
   readonly session: StoreApi<SessionState>;
@@ -183,6 +224,7 @@ export interface AppStores {
   readonly record: StoreApi<RecordState>;
   readonly theme: StoreApi<ThemeState>;
   readonly back: StoreApi<BackState>;
+  readonly update: StoreApi<UpdateState>;
 }
 
 /** Fresh stores for one App. */
@@ -190,6 +232,41 @@ export function createAppStores(): AppStores {
   const choice = readThemeChoice();
   const windows = windowsTheme();
   return {
+    update: createStore<UpdateState>()((set, get) => ({
+      started: false,
+      current: null,
+      check: null,
+      checking: false,
+      checkFailure: null,
+      install: "idle",
+      installFailure: null,
+      later: false,
+      start() {
+        if (get().started) {
+          return false;
+        }
+        set({ started: true });
+        return true;
+      },
+      beginCheck() {
+        set({ checking: true, checkFailure: null });
+      },
+      checked(check) {
+        set({ checking: false, check, current: check.current, checkFailure: null });
+      },
+      checkFailed(failure) {
+        set({ checking: false, check: null, checkFailure: failure });
+      },
+      beginInstall() {
+        set({ install: "installing", installFailure: null, later: false });
+      },
+      installFailed(failure) {
+        set({ install: "failed", installFailure: failure });
+      },
+      putAway() {
+        set({ later: true, install: get().install === "failed" ? "idle" : get().install });
+      },
+    })),
     back: createStore<BackState>()((set) => ({
       held: false,
       hold(held) {

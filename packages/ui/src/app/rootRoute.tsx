@@ -9,6 +9,7 @@ import { cn } from "cn";
 
 import { ConnectionBanner } from "../features/shell/components/ConnectionBanner";
 import { LiveHint } from "../features/shell/components/LiveHint";
+import { UpdateNotice } from "../features/updates/components/UpdateNotice";
 import type { RouterContext } from "./context";
 
 /** The root route; every other route hangs below it (router.tsx). */
@@ -24,6 +25,7 @@ function RootLayout() {
     <div className="flex h-dvh flex-col bg-background text-foreground">
       <div className={cn("z-20 shrink-0", inApp ? "ml-52 max-rail:ml-16" : undefined)}>
         <ConnectionBanner />
+        <UpdateNotice />
         {inApp ? <LiveHint /> : null}
       </div>
       <div data-slot="screen" className="relative flex min-h-0 flex-1 flex-col overflow-auto">

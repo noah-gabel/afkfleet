@@ -19,9 +19,9 @@ import {
   checkPermissions,
   checkRepoFiles,
   checkUpdaterFeatures,
-  UPDATER_PUBKEY,
   generatedPermission,
   readFolder,
+  UPDATER_PUBKEY,
 } from "./tauri-hardening.mjs";
 
 /** The hardened tauri.conf.json, as P8.3 sets it. */
@@ -224,11 +224,7 @@ describe("checkConfig", () => {
       const config = hardenedConfig();
       change(config.plugins.updater);
 
-      assert.match(
-        checkConfig(config).join("\n"),
-        new RegExp(`plugins\\.updater\\.${key}`),
-        key,
-      );
+      assert.match(checkConfig(config).join("\n"), new RegExp(`plugins\\.updater\\.${key}`), key);
     }
     const other = hardenedConfig();
     other.plugins.opener = {};
@@ -541,7 +537,13 @@ describe("checkUpdaterFeatures", () => {
   });
 
   it("names each TLS, proxy or zip feature as never allowed, and any other one", () => {
-    for (const feature of ["rustls-tls", "native-tls", "native-tls-vendored", "system-proxy", "zip"]) {
+    for (const feature of [
+      "rustls-tls",
+      "native-tls",
+      "native-tls-vendored",
+      "system-proxy",
+      "zip",
+    ]) {
       const problems = checkUpdaterFeatures(`${LINE}${feature}\n`).join("\n");
       assert.match(problems, new RegExp(`${feature}.*never`), feature);
     }

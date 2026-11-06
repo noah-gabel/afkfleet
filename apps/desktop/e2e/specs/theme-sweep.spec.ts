@@ -36,6 +36,67 @@ async function nav(page: Page, name: string): Promise<void> {
   await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name }).click();
 }
 
+/**
+ * The updates' states (ADR-0022, U27, U33): the notice at the login and on Home, installing and
+ * failed; then Profile's Updates section with a newer version, checking, up to date, failed and
+ * off. Each reload is a new start, whose one check answers what the fake was told.
+ */
+async function updateStates(page: Page, backend: FakeBackend): Promise<void> {
+  const notice = page.locator("[data-slot=update-notice]");
+  backend.answerUpdate({ state: "available", current: "0.1.0", version: "0.2.0" });
+  await page.getByRole("group", { name: "Account" }).getByRole("button", { name: "Log out" }).click();
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
+  await expect(notice.getByText("afkfleet 0.2.0 is available.")).toBeVisible();
+  await bothThemes(page, "the update notice, at the login");
+
+  await logIn(page, OWNER);
+  await enterCode(page, backend.code(OWNER));
+  await expectHome(page, OWNER);
+  await expect(notice.getByText("afkfleet 0.2.0 is available.")).toBeVisible();
+  await bothThemes(page, "the update notice, on Home");
+
+  await notice.getByRole("button", { name: "Install and restart" }).click();
+  await expect(notice.getByText(/^Downloading the update…/)).toBeVisible();
+  await bothThemes(page, "the update notice, installing");
+
+  backend.answerInstall("update_invalid");
+  await page.reload();
+  await notice.getByRole("button", { name: "Install and restart" }).click();
+  await expect(notice.getByRole("button", { name: "Try again" })).toBeVisible();
+  await bothThemes(page, "the update notice, failed");
+  await notice.getByRole("button", { name: "Later" }).click();
+  backend.answerInstall(null);
+
+  const updates = page.locator("section", {
+    has: page.getByRole("heading", { name: "Updates", level: 2 }),
+  });
+  await nav(page, "Profile");
+  await expect(updates.getByText("afkfleet 0.2.0 is available.")).toBeVisible();
+  await bothThemes(page, "profile, updates, available", { height: 1300 });
+
+  backend.hold("check_update");
+  await updates.getByRole("button", { name: "Check for updates" }).click();
+  await expect(updates.getByRole("button", { name: "Checking…" })).toBeDisabled();
+  await bothThemes(page, "profile, updates, checking", { height: 1300 });
+  backend.answerUpdate({ state: "up_to_date", current: "0.1.0" });
+  backend.release();
+  await expect(updates.getByText("afkfleet is up to date.")).toBeVisible();
+  await bothThemes(page, "profile, updates, up to date", { height: 1300 });
+
+  backend.answerUpdate("update_unreachable");
+  await updates.getByRole("button", { name: "Check for updates" }).click();
+  await expect(updates.getByText(/^Couldn't check for updates:/)).toBeVisible();
+  await bothThemes(page, "profile, updates, failed", { height: 1300 });
+
+  backend.answerUpdate({ state: "off", current: "0.1.0" });
+  await page.reload();
+  await nav(page, "Profile");
+  await expect(updates.getByText("Updates are off in this build.")).toBeVisible();
+  await bothThemes(page, "profile, updates, off", { height: 1300 });
+  backend.answerUpdate({ state: "up_to_date", current: "0.1.0" });
+}
+
 test("the check itself reports what it should, at the numbers it should", async ({
   page,
   context,
@@ -930,7 +991,7 @@ test("the bot screen and the empty lists of someone with nothing yet", async ({
   await bothThemes(page, "a link's code");
   await nav(page, "Profile");
   await expect(page.getByRole("group", { name: "Theme" })).toBeVisible();
-  await bothThemes(page, "profile", { height: 1100 });
+  await bothThemes(page, "profile", { height: 1300 });
 });
 
 test("modes: the list, the editor, a conflict, and a locked one", async ({ page, context }) => {
@@ -1505,6 +1566,8 @@ test("the banner, the start screen, loading and the error panel", async ({ page,
   await bothThemes(page, "Home, loading");
   backend.release();
   await expect(page.getByRole("link", { name: "Open AfkBot1" })).toBeVisible();
+
+  await updateStates(page, backend);
 
   for (const scheme of ["dark", "light"] as const) {
     await page.emulateMedia({ colorScheme: scheme });

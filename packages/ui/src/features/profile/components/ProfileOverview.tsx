@@ -10,6 +10,7 @@ import { formatTime } from "../../../lib/time";
 import { roleLabel } from "../../shell/nav";
 import { SecurityWarnings } from "./SecurityWarnings";
 import { SessionList } from "./SessionList";
+import { UpdatesSection } from "../../updates/components/UpdatesSection";
 import { ThemeSection } from "./ThemeSection";
 
 /** `/profile`. */
@@ -49,6 +50,7 @@ export function ProfileOverview() {
             </dl>
           </section>
           <ThemeSection />
+          <UpdatesSection />
           <section
             aria-labelledby="password-heading"
             className="flex flex-col gap-2 rounded-lg border bg-card p-3"

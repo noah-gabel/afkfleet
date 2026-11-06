@@ -1,0 +1,234 @@
+// The app's updates (Plan.md P12.5; ADR-0022, U27, U28, U33, S27): one check at each start, its
+// notice under the banner on every screen, Install and restart or Later; and Profile's Updates
+// section, which checks on demand. The texts are the user's, as approved.
+import { act, screen, within } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import type { ApiClient } from "../../api/ApiClient";
+import { ApiError } from "../../api/ApiError";
+import type { UpdateCheck } from "../../generated/UpdateCheck";
+import { atScreen, signedIn } from "../../test/signedIn";
+import { atLogin } from "../../test/signIn";
+
+const AVAILABLE: UpdateCheck = { state: "available", current: "0.1.0", version: "0.2.0" };
+const UP_TO_DATE: UpdateCheck = { state: "up_to_date", current: "0.1.0" };
+const OFF: UpdateCheck = { state: "off", current: "0.1.0" };
+
+/** An updater's refusal with its approved sentence. */
+function refused(code: "update_unreachable" | "update_invalid", message: string): ApiError {
+  return new ApiError({ code, message });
+}
+
+const UNREACHABLE = () =>
+  refused("update_unreachable", "GitHub can't be reached to get the update.");
+const INVALID = () => refused("update_invalid", "The download couldn't be verified.");
+
+/** A call that never answers: the real install ends with the app's exit. */
+const never = () => new Promise<never>(() => {});
+
+/** The notice row, when it's there. */
+function notice() {
+  const row = document.querySelector<HTMLElement>('[data-slot="update-notice"]');
+  return row === null ? null : within(row);
+}
+
+/** How many times the fake answered `method`. */
+function calls(app: { fake: { calls: { method: string }[] } }, method: keyof ApiClient): number {
+  return app.fake.calls.filter((call) => call.method === method).length;
+}
+
+describe("the update notice", () => {
+  it("shows a newer version at the start, on the login screen, with Install and restart and Later", async () => {
+    await atLogin({ checkUpdate: async () => AVAILABLE });
+
+    const row = await screen.findByText("afkfleet 0.2.0 is available.");
+    expect(row).toBeDefined();
+    expect(notice()?.getByRole("button", { name: "Install and restart" })).toBeDefined();
+    expect(notice()?.getByRole("button", { name: "Later" })).toBeDefined();
+  });
+
+  it("checks once per start, not again for a login, a screen or a logout", async () => {
+    const app = await signedIn({ checkUpdate: async () => AVAILABLE });
+    await screen.findByText("afkfleet 0.2.0 is available.");
+
+    await act(() => app.runtime.router.navigate({ to: "/profile" }));
+    await act(() => app.runtime.router.navigate({ to: "/" }));
+    await screen.findByText("afkfleet 0.2.0 is available.");
+
+    expect(calls(app, "checkUpdate")).toBe(1);
+  });
+
+  it("goes away for Later until the next start", async () => {
+    const app = await signedIn({ checkUpdate: async () => AVAILABLE });
+    await screen.findByText("afkfleet 0.2.0 is available.");
+
+    await app.user.click(notice()?.getByRole("button", { name: "Later" }) as HTMLElement);
+    await act(() => app.runtime.router.navigate({ to: "/profile" }));
+
+    expect(notice()?.queryByText("afkfleet 0.2.0 is available.") ?? null).toBeNull();
+  });
+
+  it("installs on Install and restart, and says the app restarts by itself", async () => {
+    const app = await signedIn({ checkUpdate: async () => AVAILABLE, installUpdate: never });
+    await screen.findByText("afkfleet 0.2.0 is available.");
+
+    await app.user.click(
+      notice()?.getByRole("button", { name: "Install and restart" }) as HTMLElement,
+    );
+
+    expect(
+      await screen.findByText(
+        "Downloading the update… afkfleet restarts by itself once it's installed.",
+      ),
+    ).toBeDefined();
+    expect(notice()?.queryByRole("button") ?? null).toBeNull();
+    expect(calls(app, "installUpdate")).toBe(1);
+  });
+
+  it("says why an install failed, offers Try again, which checks and installs again", async () => {
+    let installs = 0;
+    const app = await signedIn({
+      checkUpdate: async () => AVAILABLE,
+      installUpdate: async () => {
+        installs += 1;
+        if (installs === 1) {
+          throw INVALID();
+        }
+        return never();
+      },
+    });
+    await screen.findByText("afkfleet 0.2.0 is available.");
+    const restarts = app.runtime.stores.live.getState().restarts;
+
+    await app.user.click(
+      notice()?.getByRole("button", { name: "Install and restart" }) as HTMLElement,
+    );
+    await screen.findByText("The update wasn't installed: The download couldn't be verified.");
+    expect(app.runtime.stores.live.getState().restarts).toBe(restarts + 1);
+    expect(notice()?.getByRole("button", { name: "Later" })).toBeDefined();
+    await app.user.click(notice()?.getByRole("button", { name: "Try again" }) as HTMLElement);
+
+    expect(
+      await screen.findByText(
+        "Downloading the update… afkfleet restarts by itself once it's installed.",
+      ),
+    ).toBeDefined();
+    expect(calls(app, "checkUpdate")).toBe(2);
+    expect(calls(app, "installUpdate")).toBe(2);
+  });
+
+  it.each([
+    ["up to date", async () => UP_TO_DATE],
+    ["off", async () => OFF],
+    [
+      "unreachable",
+      async () => {
+        throw UNREACHABLE();
+      },
+    ],
+  ] as const)(
+    "shows nothing when the start's check is %s, and raises no banner",
+    async (_, checkUpdate) => {
+      const app = await signedIn({ checkUpdate });
+
+      await act(async () => {});
+
+      expect(notice()?.queryByRole("button") ?? null).toBeNull();
+      expect(screen.queryByText(/is available/)).toBeNull();
+      expect(app.runtime.stores.connection.getState().status).toBe("ok");
+    },
+  );
+});
+
+describe("Profile's Updates section", () => {
+  /** The section. */
+  async function section() {
+    const heading = await screen.findByRole("heading", { name: "Updates", level: 2 });
+    return within(heading.closest("section") as HTMLElement);
+  }
+
+  it("shows the installed version, and checks on demand", async () => {
+    const app = await atScreen("/profile", { checkUpdate: async () => UP_TO_DATE });
+    const updates = await section();
+    expect(await updates.findByText("Installed: afkfleet 0.1.0.")).toBeDefined();
+
+    await app.user.click(updates.getByRole("button", { name: "Check for updates" }));
+
+    expect(await updates.findByText("afkfleet is up to date.")).toBeDefined();
+    expect(calls(app, "checkUpdate")).toBe(2);
+  });
+
+  it("shows Checking… while a check runs", async () => {
+    let answer: (check: UpdateCheck) => void = () => {};
+    let checks = 0;
+    const app = await atScreen("/profile", {
+      checkUpdate: () => {
+        checks += 1;
+        return checks === 1
+          ? Promise.resolve(UP_TO_DATE)
+          : new Promise((resolve) => {
+              answer = resolve;
+            });
+      },
+    });
+    const updates = await section();
+    await updates.findByText("Installed: afkfleet 0.1.0.");
+
+    await app.user.click(updates.getByRole("button", { name: "Check for updates" }));
+
+    const checking = updates.getByRole("button", { name: "Checking…" }) as HTMLButtonElement;
+    expect(checking.disabled).toBe(true);
+    await act(async () => answer(AVAILABLE));
+    expect(await updates.findByText("afkfleet 0.2.0 is available.")).toBeDefined();
+  });
+
+  it("offers Install and restart for a newer version it found", async () => {
+    let checks = 0;
+    const app = await atScreen("/profile", {
+      checkUpdate: async () => {
+        checks += 1;
+        return checks === 1 ? UP_TO_DATE : AVAILABLE;
+      },
+      installUpdate: never,
+    });
+    const updates = await section();
+    await updates.findByText("Installed: afkfleet 0.1.0.");
+
+    await app.user.click(updates.getByRole("button", { name: "Check for updates" }));
+    await updates.findByText("afkfleet 0.2.0 is available.");
+    await app.user.click(updates.getByRole("button", { name: "Install and restart" }));
+
+    expect(
+      await screen.findByText(
+        "Downloading the update… afkfleet restarts by itself once it's installed.",
+      ),
+    ).toBeDefined();
+    expect(calls(app, "installUpdate")).toBe(1);
+  });
+
+  it("says why a check it ran failed, but not the start's", async () => {
+    const app = await atScreen("/profile", {
+      checkUpdate: async () => {
+        throw UNREACHABLE();
+      },
+    });
+    const updates = await section();
+    await act(async () => {});
+    expect(updates.queryByText(/Couldn't check for updates/)).toBeNull();
+
+    await app.user.click(updates.getByRole("button", { name: "Check for updates" }));
+
+    expect(
+      await updates.findByText(
+        "Couldn't check for updates: GitHub can't be reached to get the update.",
+      ),
+    ).toBeDefined();
+  });
+
+  it("says when updates are off in this build, with no check to run", async () => {
+    await atScreen("/profile", { checkUpdate: async () => OFF });
+    const updates = await section();
+
+    expect(await updates.findByText("Updates are off in this build.")).toBeDefined();
+    expect(updates.queryByRole("button", { name: "Check for updates" })).toBeNull();
+  });
+});

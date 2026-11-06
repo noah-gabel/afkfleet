@@ -14,6 +14,7 @@ import type {
   NoticesState,
   RecordState,
   SessionState,
+  UpdateState,
 } from "./stores";
 import type { ThemeState } from "./theme";
 
@@ -69,6 +70,11 @@ export function useTheme<T>(select: (state: ThemeState) => T): T {
 /** A value of the live record's store, re-rendering when it changes. */
 export function useRecord<T>(select: (state: RecordState) => T): T {
   return useStore(useAppStores().record, select);
+}
+
+/** A value of the updates' store, re-rendering when it changes. */
+export function useUpdate<T>(select: (state: UpdateState) => T): T {
+  return useStore(useAppStores().update, select);
 }
 
 /** A value from the Back control's store. */
