@@ -103,7 +103,9 @@ function env(change = (lines) => lines) {
 /**
  * Runs `sh setup.sh <args>` in a fresh folder holding the script and `envText` as `.env`, with
  * the stubs first on PATH: `responses` before the healthy ones, `uid` for `id -u`, `stat` for
- * every `stat`. Returns the exit code, the output, every docker call and the folder.
+ * the backups' folder's `stat` and `parentStat` for any other path's. The backups' folder is
+ * `backups` in the folder, or `backupsDir(folder)`; `makeBackups` makes it. Returns the exit
+ * code, the output, every docker call and the folder.
  */
 function run(
   args,
@@ -112,8 +114,10 @@ function run(
     responses = [],
     uid = "1000",
     stat = "65532:65532 700",
+    parentStat = "0:0 755",
     noDocker = false,
     makeBackups = true,
+    backupsDir = (folder) => join(folder, "backups"),
   } = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), "afkfleet-setup-"));
@@ -122,7 +126,7 @@ function run(
   mkdirSync(bin);
   copyFileSync(join(DEPLOY, "setup.sh"), join(dir, "setup.sh"));
   // The backups' folder: there (the stub `stat` says whose), unless the case leaves it out.
-  const backups = join(dir, "backups");
+  const backups = backupsDir(dir);
   if (makeBackups) {
     mkdirSync(backups);
   }
@@ -133,7 +137,8 @@ function run(
   writeFileSync(join(dir, "responses.json"), JSON.stringify([...responses, ...HEALTHY]));
   const scripts = {
     id: `#!/bin/sh\necho ${uid}\n`,
-    stat: `#!/bin/sh\necho '${stat}'\n`,
+    // The last argument is the path: the backups' folder gets `stat`, any other `parentStat`.
+    stat: `#!/bin/sh\nfor last; do :; done\ncase $last in\n"${backups}") echo '${stat}' ;;\n*) echo '${parentStat}' ;;\nesac\n`,
     install: `#!/bin/sh\necho "install $*" >> "${join(dir, "install.log")}"\n`,
   };
   if (noDocker) {
@@ -322,6 +327,90 @@ describe("setup.sh, run against stubs", { skip: SH }, () => {
     assert.match(result.stdout, /must own it to write the backups/);
     const installed = readFileSync(join(result.dir, "install.log"), "utf8");
     assert.match(installed, /install -d -o 65532 -g 65532 -m 700 .*backups/);
+  });
+
+  /** What the `install` stub was asked to do, one line each. */
+  function installed(result) {
+    try {
+      return readFileSync(join(result.dir, "install.log"), "utf8").split("\n").filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  /** A response that makes the vault key's step fail: a failure after the folders. */
+  const KEY_FAILS = [{ when: "compose run --rm -T setup vault create-key", code: 1 }];
+
+  it("refuses an existing parent that isn't root's alone, and leaves it as it is", () => {
+    for (const parentStat of ["1000:1000 750", "0:0 775", "0:0 757", "0:0 2", "0:0 6"]) {
+      const result = run(["init"], { makeBackups: false, uid: "0", parentStat });
+
+      assert.equal(result.code, 1, parentStat);
+      assert.match(result.stderr, /must belong to root and be writable by root alone/, parentStat);
+      assert.match(result.stderr, /left as it is/, parentStat);
+      assert.deepEqual(installed(result), [], `${parentStat}: nothing was changed or made`);
+    }
+  });
+
+  it("uses an existing root parent as it is, and names only what it made", () => {
+    const result = run(["init"], { makeBackups: false, uid: "0", responses: KEY_FAILS });
+
+    assert.equal(result.code, 1);
+    assert.deepEqual(installed(result), [
+      `install -d -o 65532 -g 65532 -m 700 ${join(result.dir, "backups")}`,
+    ]);
+    assert.match(result.stderr, new RegExp(`this run created: ${join(result.dir, "backups")} `));
+  });
+
+  it("creates a missing parent as root's, and names it among what it made", () => {
+    const result = run(["init"], {
+      makeBackups: false,
+      uid: "0",
+      responses: KEY_FAILS,
+      backupsDir: (folder) => join(folder, "srv", "backups"),
+    });
+
+    assert.equal(result.code, 1);
+    const parent = join(result.dir, "srv");
+    assert.deepEqual(installed(result), [
+      `install -d -o root -g root -m 755 ${parent}`,
+      `install -d -o 65532 -g 65532 -m 700 ${join(parent, "backups")}`,
+    ]);
+    assert.match(
+      result.stderr,
+      new RegExp(`this run created: ${parent} ${join(parent, "backups")} `),
+    );
+  });
+
+  it("without root, prints the parent's command only when the parent is missing", () => {
+    const missing = run(["init"], {
+      makeBackups: false,
+      backupsDir: (folder) => join(folder, "srv", "backups"),
+    });
+    const there = run(["init"], { makeBackups: false });
+
+    assert.equal(missing.code, 1);
+    assert.match(missing.stderr, /sudo install -d -o root -g root -m 755 /);
+    assert.equal(there.code, 1);
+    assert.doesNotMatch(there.stderr, /-o root -g root/);
+    assert.match(there.stderr, /sudo install -d -o 65532 -g 65532 -m 700/);
+  });
+
+  it("refuses a backups path in /, or with //, . or .. parts, before anything else", () => {
+    for (const path of [
+      "/backups",
+      "//backups",
+      "/srv/./backups",
+      "/srv/../backups",
+      "/srv/backups/",
+    ]) {
+      const result = run(["init"], { makeBackups: false, uid: "0", backupsDir: () => path });
+
+      assert.equal(result.code, 1, path);
+      assert.match(result.stderr, /AFKFLEET_BACKUPS_DIR/, path);
+      assert.deepEqual(installed(result), [], path);
+      assert.ok(!joined(result.calls).some((call) => /^compose (run|up|exec)/.test(call)), path);
+    }
   });
 
   it("init runs the one-time steps in order, the bundle only through the pipe", () => {

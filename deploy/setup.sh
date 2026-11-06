@@ -80,6 +80,32 @@ plain() {
 	return 0
 }
 
+# Whether $1 is a folder path the backups can live in: absolute, without
+# //, . or .. parts or a trailing /, of plain characters, and inside a folder
+# of its own other than / (sftp-backups.sh's chroot). The same rules as
+# host/sftp-backups.sh's.
+backups_path() {
+	case $1 in
+	/*) ;;
+	*) return 1 ;;
+	esac
+	case $1 in
+	*//* | */./* | */. | */../* | */.. | */ | *[!A-Za-z0-9./_-]*) return 1 ;;
+	esac
+	[ "$(dirname "$1")" != / ] || return 1
+	return 0
+}
+
+# Whether stat's mode $1 (`%a`: octal, without leading zeros, so 2 for 0002)
+# lets the group or others write.
+others_write() {
+	padded=$(printf '%04d' "$1")
+	case $padded in
+	??[2367]? | ???[2367]) return 0 ;;
+	esac
+	return 1
+}
+
 check_docker() {
 	command -v docker >/dev/null 2>&1 || refuse "docker isn't installed, or isn't on PATH"
 	docker info >/dev/null 2>&1 || refuse "the Docker daemon doesn't answer: is it running, and may this user use it?"
@@ -148,13 +174,8 @@ check_env() {
 	fi
 	BACKUPS=$(env_value AFKFLEET_BACKUPS_DIR)
 	[ -n "$BACKUPS" ] || BACKUPS=$DEFAULT_BACKUPS
-	case $BACKUPS in
-	/*) ;;
-	*) refuse "AFKFLEET_BACKUPS_DIR in .env must be an absolute path" ;;
-	esac
-	case $BACKUPS in
-	*[!A-Za-z0-9./_-]*) refuse "AFKFLEET_BACKUPS_DIR in .env holds a character it can't" ;;
-	esac
+	backups_path "$BACKUPS" ||
+		refuse "AFKFLEET_BACKUPS_DIR in .env must be an absolute path of letters, digits and ._-, without //, . or .. parts or a trailing /, inside a folder of its own other than /"
 	ok ".env: the $PROXY proxy path$extra"
 }
 
@@ -218,20 +239,39 @@ check_clean() {
 }
 
 # The backups' folder: owned by the server's user, owner-only, in a folder
-# only root can change (ChrootDirectory's rule for the SFTP account).
+# only root can change (ChrootDirectory's rule for the SFTP account). An
+# existing folder is checked and never changed; a missing one is made only
+# as root, and named among what this run created.
 check_backups() {
 	parent=$(dirname "$BACKUPS")
+	root=no
+	[ "$(id -u)" != 0 ] || root=yes
+	if [ -d "$parent" ]; then
+		info=$(stat -c '%u:%g %a' "$parent")
+		owner=${info%%:*}
+		mode=${info##* }
+		if [ "$owner" != 0 ] || others_write "$mode"; then
+			refuse "$parent must belong to root and be writable by root alone (sshd's ChrootDirectory demands it), not $info; it's left as it is"
+		fi
+	elif [ ! -d "$(dirname "$parent")" ]; then
+		refuse "$(dirname "$parent") doesn't exist: create it first, or pick another AFKFLEET_BACKUPS_DIR"
+	elif [ "$root" = no ]; then
+		refuse "$parent and $BACKUPS don't exist, and only root can create them for the server's user: run sh setup.sh init with sudo, or create them with: sudo install -d -o root -g root -m 755 $parent && sudo install -d -o $NONROOT -g $NONROOT -m 700 $BACKUPS"
+	else
+		say "creating $parent as root's, mode 755: the backups' folder's chroot for the SFTP account"
+		install -d -o root -g root -m 755 "$parent"
+		CREATED="$CREATED $parent"
+	fi
 	if [ -d "$BACKUPS" ]; then
 		owner=$(stat -c '%u:%g %a' "$BACKUPS")
 		[ "$owner" = "$NONROOT:$NONROOT 700" ] || refuse "$BACKUPS must belong to $NONROOT:$NONROOT with mode 700, not $owner"
 		ok "the backups' folder $BACKUPS"
 		return 0
 	fi
-	if [ "$(id -u)" != 0 ]; then
-		refuse "$BACKUPS doesn't exist, and only root can create it for the server's user: run sh setup.sh init with sudo, or create it with: sudo install -d -o root -g root -m 755 $parent && sudo install -d -o $NONROOT -g $NONROOT -m 700 $BACKUPS"
+	if [ "$root" = no ]; then
+		refuse "$BACKUPS doesn't exist, and only root can create it for the server's user: run sh setup.sh init with sudo, or create it with: sudo install -d -o $NONROOT -g $NONROOT -m 700 $BACKUPS"
 	fi
 	say "creating $BACKUPS as root: the server's user ($NONROOT) must own it to write the backups"
-	install -d -o root -g root -m 755 "$parent"
 	install -d -o "$NONROOT" -g "$NONROOT" -m 700 "$BACKUPS"
 	CREATED="$CREATED $BACKUPS"
 	ok "the backups' folder $BACKUPS"
