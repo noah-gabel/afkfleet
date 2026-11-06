@@ -1,6 +1,6 @@
 # Runbook
 
-An operator's guide to running afkfleet on a Linux host with Docker, beside whatever else the host runs. It names no hosting provider: where a step depends on yours, it says so in general terms.
+An operator's guide to running afkfleet on a Linux host with Docker, beside whatever else the host runs. It names no hosting provider: where a step depends on yours, it says so in general terms. What your friends do in the app (installing it, connecting to your server, registering with an invite, 2FA) is in [Using the afkfleet app](using-the-app.md): hand them that link.
 
 > **Work in progress (Phase 12).** This guide grows with Phase 12's groups ([ADR-0022](adr/0022-deployment-and-phase-12-refinements.md)). So far it covers backups (also in the compose project, and pulled off the host over SFTP), restoring one on a host install, and the metrics, also read inside the compose project. The install with Docker Compose (`deploy/setup.sh`), updates, a restore in the compose project, the uninstall and the rest of operations follow, and P12.6 finishes it.
 

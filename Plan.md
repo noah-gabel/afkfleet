@@ -4319,14 +4319,16 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Introduces:** `tauri-plugin-updater`. Tools: cargo-chef, Docker Compose, Caddy (optional, [ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U5).
 
 > Note (P12, Phase 12's planning, 2026-11-05) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md)):
-> - **Four group branches.** Phase 12 is built in group PRs like Phases 2–11, each after the previous PR is merged: features first, then what packages them, then the release. Each group aims at about 5,300 lines; one that grows past it is split at its plan review.
+> - **Group branches** (four at the planning; at D's plan review D was split into D1 and D2, and E was added, [ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), R27, U35). Phase 12 is built in group PRs like Phases 2–11, each after the previous PR is merged: features first, then what packages them, then the release. Each group aims at about 5,300 lines; one that grows past it is split at its plan review.
 >
 >   | Group | Branch | Tasks |
 >   |---|---|---|
 >   | A | `p12/p12.3-start-screen-and-backups` | The start screen's way out (the user's finding, below), then P12.3 (ticked here) |
 >   | B | `p12/p12.4-metrics` | P12.4 (ticked here) |
 >   | C | `p12/p12-stack` | P12.1, P12.2 and P12.7: the images, the compose project with both proxy paths, the nightly smoke test, the setup script (ticked here) |
->   | D | `p12/p12.5-release` | P12.5 and P12.6: the installer and updater, the release workflow, the runbook finished, the DoD's kit (ticked here) |
+>   | D1 | `p12/p12.5-release` | PR #97's follow-ups, then P12.5: the installer, the updater, the maintainer's signing step and the rehearsal, the release workflow; the friends' and the maintainer's guides (ticked here) |
+>   | D2 | `p12/p12.6-runbook` | P12.6 and the DoD's kit: the host's release bundle and `setup.sh fetch`, the operations on the volumes, dynamic DNS, the runbook finished, the Minecraft version bump in `docs/releasing.md` (ticked there) |
+>   | E | `p12/tidy-up` | P12.8: the repository tidied for readability, with no behaviour change (ticked there) |
 >
 > - **The user's frame for the phase** (U1, U2):
 >   - No paid services are required.
@@ -4472,12 +4474,19 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The agent:** `metrics_endpoint`, a responder of its own (4 connections, 5 s each, a 2 KiB head, nothing from a request logged), and the outbox's three counters, sampled with the diagnostics every 5 s.
   > - **Totals only:** no label is per user, per bot or per agent. The ingest note's "per agent" stays in housekeeping's minute line, which names the agent (S11).
   > - **The docs:** README's Metrics lists every key metric with its labels; the runbook's Metrics says how to read them from the host and what to watch.
-- [ ] **P12.5** Tauri release:
+- [x] **P12.5** Tauri release:
   - NSIS installer.
   - Updater key pair; the private key is kept **offline**.
   - An update manifest, hosted on GitHub Releases.
   - No Authenticode signing: the installer is unsigned, and README and the runbook explain Windows' "Windows protected your PC" ("More info", "Run anyway") ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U1).
   - CI builds the installer on a Windows runner.
+
+  > Note (P12.5, group D1) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U25–U33, S22, S24, S27, R19–R26, "As built (group D1)"): **as built.**
+  > - **The installer:** NSIS, per user (no administrator prompt), WebView2's download bootstrapper, publisher "afkfleet", unsigned. `just app-installer` refuses to start while a signing key's variable is set, builds with `--no-sign`, and prints the installer's SHA-256; CI's `tauri-build` job runs it on every pull request.
+  > - **The updater:** `tauri-plugin-updater` 2.14.1 without default features, the committed public key (ID `D2C6CEB25F9F2CB0`; the private key and its password never left the user's PC), `releases/latest/download/latest.json`, `requireSignedVersion`, the passive installer. Its plugin commands are never granted: the app's own `check_update` and `install_update` are, and updates are on only in a release build under the real identifier (and the rehearsal's debug build). The UI checks at each start and on Profile's Updates, and installs only after "Install and restart".
+  > - **The signing step and the rehearsal** are the user's alone: `just updater-sign` (the key by path, the password at a hidden prompt, into the CLI's environment alone) and `just update-rehearsal` (a throwaway key, a separate product on loopback).
+  > - **The release workflow** (`.github/workflows/release.yml`): a tag vX.Y.Z on main; the guard requires CI green on that commit; each image job tests as Stack does, then logs in, pushes `X.Y.Z-<arch>` and logs out; the merge job makes `X.Y.Z` from the digests; the installer is built from scratch; a job with `contents: write` and no repository code drafts the release. The maintainer signs and publishes by `docs/releasing.md`.
+  > - **Deviations:** README and the runbook don't explain SmartScreen: the friends' guide `docs/using-the-app.md` does (U34). Cargo.lock gains six entries, not two (four are macOS-only). The signing step prompts for the password itself instead of leaving it to the CLI's prompt (S24). The pushed images are checked by their platform and release labels instead of an image-ID comparison (R24). A tag the registry denies reading counts as absent (the first release's packages don't exist yet).
 - [ ] **P12.6** `docs/runbook.md`:
   - install, configure, bootstrap the Owner
   - enroll an agent
@@ -4485,6 +4494,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - **Minecraft version upgrade** (azalea + nightly + test-server bump)
   - restore a backup
   - incident response: revoke sessions, disable users and agents
+
+  > Note (P12.6, from group D's planning, the user's change) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U34, R29): **docs for three readers.** The runbook is the operators' guide alone: nothing about GitHub settings, tags, signing or the updater's key. The **Minecraft version upgrade** is the maintainer's code work, so it goes into `docs/releasing.md` (D2), with every note below about it. What friends do (installing the app, SmartScreen, "Connecting to a server, for friends") is in `docs/using-the-app.md`, written in D1. D2 moves README's operator material into the runbook, leaving a pointer.
 
   > Note (P12.6, from Phase 5, group D, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): The **Minecraft version upgrade** section carries ADR-0003's bump procedure, whose verify step now runs `just ci`, `just test-slow` and `just demo-agent` (1 h), with the demo's `summary.txt` in the bump's pull request.
 
@@ -4550,6 +4561,12 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P12.7, from Phase 12, group B) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S9, S10): the smoke test scrapes both metrics endpoints from inside the project's network, and checks that `/metrics` through Caddy and through the other proxy path reaches neither.
 
   > Note (P12.7, Phase 12's group C) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S19, U5, U20, U21): **as built.** fleet-integration's `slow_smoke_with_caddy`, `slow_smoke_behind_a_container_proxy` and `slow_smoke_behind_a_host_proxy` bring the production project up from a copy of `deploy/`, with a `.env` and an override of their own (offline accounts allowed there alone, U20), under project names of their own. Beyond the five steps (the Owner created with `--password-stdin`, the login through fleet-client with the full 2FA flow), they check the client's real address and a forged `X-Forwarded-For`; no `ticket`, `q`, password, TOTP secret or recovery code in any log after forced 502s; both metrics ports from inside and neither through any path; `.env`'s settings in the server's environment; the database and a backup across a recreate; memory and pids under 75 % of the limits (U21); Caddy's one capability; the image alone refusing to start; and every exit clean. The Stack workflow runs them nightly on arm64 and amd64, with `deploy/setup.sh init` doing the setup there; `just test-stack` and `just test-slow` run them elsewhere, the test doing the same steps itself.
+
+- [ ] **P12.8** Tidy-up (group E, `p12/tidy-up`, after D2's merge; [ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U35): the repository tidied for readability, with no behaviour change. Its plan first lists what it would move, merge, shorten or delete, each with why, for the user's approval. Candidates:
+  - README's length and order;
+  - an index for `docs/`;
+  - stale notes, dead scripts or recipes, and outdated comments;
+  - Plan.md's finished phases condensed, as long as every note an ADR or a comment points to stays findable.
 
 **DoD:**
 - A clean afkfleet install (no earlier afkfleet state) on an existing Linux host that keeps its other services, following only the runbook.
