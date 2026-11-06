@@ -384,6 +384,13 @@ dev-app:
 app-build *args:
     pnpm --filter @afkfleet/desktop tauri build {{ args }}
 
+# The NSIS installer, target/release/bundle/nsis/afkfleet_X.Y.Z_x64-setup.exe: built with no
+# signing key (it refuses one in the environment) and no updater signature, then its SHA-256 and
+# name printed as SHA256SUMS lists them (ADR-0022, S22, U1, U31). The AI builds it and never runs
+# it; signing it for the updater is the maintainer's step on their own PC (docs/releasing.md).
+app-installer:
+    node scripts/app-installer.mjs
+
 # The debug exe the AI launches, under its own identifier from its very first launch, so it can
 # never reach the user's running app, its single-instance lock, its profile or its Credential
 # Manager entries (ADR-0020, U87). The config's path is absolute, as the CLI may change folders.

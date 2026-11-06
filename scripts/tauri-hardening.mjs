@@ -5,6 +5,8 @@
 // Fails if any of these changes:
 // - the CSP, `withGlobalTauri` or any other `app.security` setting in tauri.conf.json
 // - a window's devtools, URL or scheme, or the dev URL
+// - any `bundle` setting: the installer's publisher, copyright, install mode and WebView2
+//   handling, and no updater artifacts or signing command (ADR-0022, U29, U33)
 // - the capabilities: one file, `main.json`, granting exactly the app's own commands
 // - the app's command manifest: build.rs's `COMMANDS`, the empty default permission that
 //   keeps the ACL on for app commands, and the `allow-`/`deny-<command>` files tauri-build
@@ -116,6 +118,24 @@ const SECURITY = {
   capabilities: ["main"],
 };
 
+/**
+ * The whole of `bundle`: the icon, the installer's publisher and copyright (which Windows shows),
+ * a per-user NSIS install and WebView2's bootstrapper downloaded when it's missing (ADR-0022, U29,
+ * U33). No `createUpdaterArtifacts`, which would sign during the build and so need the updater's
+ * key in CI (U1), and no signing command. `active` stays false: `just app-build` builds the exe
+ * alone, and `just app-installer` asks for the NSIS bundle by name.
+ */
+const BUNDLE = {
+  active: false,
+  icon: ["icons/icon.ico"],
+  publisher: "afkfleet",
+  copyright: "The afkfleet contributors. GPL-3.0-or-later.",
+  windows: {
+    webviewInstallMode: { type: "downloadBootstrapper" },
+    nsis: { installMode: "currentUser" },
+  },
+};
+
 /** Vite's dev server, the only other origin a dev build may show (the navigation guard). */
 const DEV_URL = "http://localhost:1420";
 
@@ -199,6 +219,16 @@ export function checkConfig(config) {
   }
   if (config?.build?.devUrl !== DEV_URL) {
     problems.push(`build.devUrl is ${show(config?.build?.devUrl)}, expected ${show(DEV_URL)}`);
+  }
+  const bundle = config?.bundle ?? {};
+  for (const key of new Set([...Object.keys(BUNDLE), ...Object.keys(bundle)])) {
+    if (!isDeepStrictEqual(bundle[key], BUNDLE[key])) {
+      problems.push(
+        key in BUNDLE
+          ? `bundle.${key} is ${show(bundle[key])}, expected ${show(BUNDLE[key])}`
+          : `bundle.${key} must not be set`,
+      );
+    }
   }
   return problems;
 }

@@ -219,8 +219,9 @@ jobs:
 
   # The desktop app ships only for Windows, so the Linux jobs leave its crate out and this
   # job covers what they would have (ADR-0017): its docs, the stable check, its coverage
-  # gate, and the release build with the embedded frontend. clippy and test on
-  # windows-latest include it too.
+  # gate, and the release build with the embedded frontend, packaged as the NSIS installer
+  # the release ships (ADR-0022, U31): built with no signing key, its SHA-256 in the job's
+  # summary. clippy and test on windows-latest include it too.
   tauri-build:
     name: tauri-build
     runs-on: windows-latest
@@ -256,7 +257,7 @@ jobs:
       - run: just docs
       - run: just stable-check
       - run: just cov-desktop
-      - run: just app-build
+      - run: just app-installer
 
   frontend:
     name: frontend

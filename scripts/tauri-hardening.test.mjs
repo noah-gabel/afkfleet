@@ -37,6 +37,16 @@ function hardenedConfig() {
         capabilities: ["main"],
       },
     },
+    bundle: {
+      active: false,
+      icon: ["icons/icon.ico"],
+      publisher: "afkfleet",
+      copyright: "The afkfleet contributors. GPL-3.0-or-later.",
+      windows: {
+        webviewInstallMode: { type: "downloadBootstrapper" },
+        nsis: { installMode: "currentUser" },
+      },
+    },
   };
 }
 
@@ -181,6 +191,33 @@ describe("checkConfig", () => {
     config.build.devUrl = "https://example.com";
 
     assert.match(checkConfig(config).join("\n"), /devUrl/);
+  });
+
+  it("fails on any bundle setting that's added, removed or changed (ADR-0022, U29, U33)", () => {
+    const cases = [
+      // The updater's artifacts would sign during the build, with a key in CI.
+      [
+        "createUpdaterArtifacts",
+        (bundle) => Object.assign(bundle, { createUpdaterArtifacts: true }),
+      ],
+      ["active", (bundle) => Object.assign(bundle, { active: true })],
+      ["publisher", (bundle) => Object.assign(bundle, { publisher: "github" })],
+      ["copyright", (bundle) => delete bundle.copyright],
+      ["licenseFile", (bundle) => Object.assign(bundle, { licenseFile: "../../../LICENSE" })],
+      ["homepage", (bundle) => Object.assign(bundle, { homepage: "https://example.com" })],
+      ["windows", (bundle) => Object.assign(bundle.windows.nsis, { installMode: "perMachine" })],
+      [
+        "windows",
+        (bundle) => Object.assign(bundle.windows, { webviewInstallMode: { type: "skip" } }),
+      ],
+      ["windows", (bundle) => Object.assign(bundle.windows, { signCommand: "sign %1" })],
+    ];
+    for (const [key, change] of cases) {
+      const config = hardenedConfig();
+      change(config.bundle);
+
+      assert.match(checkConfig(config).join("\n"), new RegExp(`bundle\\.${key}`), key);
+    }
   });
 });
 
