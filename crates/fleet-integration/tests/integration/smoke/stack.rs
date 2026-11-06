@@ -391,17 +391,21 @@ impl Stack {
     }
 }
 
-/// The backups' host folder, made as root for the server's user (S15), in
-/// `dir`: the one step `sudo` runs on CI's throwaway runners.
+/// The backups' host folder as an operator's host has it (S15): a parent of
+/// its own, root's and writable by root alone, which setup.sh checks and
+/// never changes (PR #97's review), and the folder in it for the server's
+/// user. Made in `dir` by the one step `sudo` runs on CI's throwaway
+/// runners; `dir` itself is the runner's user's.
 fn host_backups(dir: &Path) -> PathBuf {
-    let backups = dir.join("backups");
-    let mut command = std::process::Command::new("sudo");
-    command.args([
-        "-n", "install", "-d", "-o", "65532", "-g", "65532", "-m", "700",
-    ]);
-    command.arg(&backups);
-    let finished = finish(command, None, QUICK).unwrap();
-    assert!(finished.success, "sudo install failed: {}", finished.stderr);
+    let parent = dir.join("srv");
+    let backups = parent.join("backups");
+    for (owner, mode, folder) in [("root", "755", &parent), ("65532", "700", &backups)] {
+        let mut command = std::process::Command::new("sudo");
+        command.args(["-n", "install", "-d", "-o", owner, "-g", owner, "-m", mode]);
+        command.arg(folder);
+        let finished = finish(command, None, QUICK).unwrap();
+        assert!(finished.success, "sudo install failed: {}", finished.stderr);
+    }
     backups
 }
 
