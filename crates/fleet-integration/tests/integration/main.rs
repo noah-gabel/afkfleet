@@ -31,6 +31,7 @@ mod full_flow;
 mod harness;
 mod loopback;
 mod managed_check;
+mod sftp;
 mod slow_on_respawn;
 mod smoke;
 mod timing;

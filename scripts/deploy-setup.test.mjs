@@ -1,11 +1,13 @@
-// Tests for deploy/setup.sh (ADR-0022, S18, U8). Run with `just scripts-test`.
+// Tests for deploy/setup.sh (ADR-0022, S18, U8), and the POSIX syntax of every script an
+// operator runs on the host. Run with `just scripts-test`.
 //
 // The cases that run the script use POSIX sh against stubs of `docker`, `id`, `stat` and
 // `install` first on PATH, in a temporary folder: never a real Docker, never a real host (the
 // user's rule). The stub records every call's arguments and the bytes it got on stdin. Windows
 // has no POSIX sh under PowerShell, so those cases run in CI's Linux job, under dash; the
-// check of the script's syntax runs everywhere. env.example and the compose files have their
-// own tests in fleet-server's tests/compose.rs (U18).
+// check of the scripts' syntax runs everywhere. env.example and the compose files have their
+// own tests in fleet-server's tests/compose.rs (U18); deploy/host/sftp-backups.sh runs in a
+// throwaway sshd container in fleet-integration's slow_sftp_backups_account (S15).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
@@ -28,6 +30,11 @@ import { fileURLToPath } from "node:url";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const DEPLOY = join(ROOT, "deploy");
 const SETUP = readFileSync(join(DEPLOY, "setup.sh"), "utf8");
+/** Every script an operator runs on the host, as (name, text). */
+const HOST_SCRIPTS = [
+  ["setup.sh", SETUP],
+  ["host/sftp-backups.sh", readFileSync(join(DEPLOY, "host", "sftp-backups.sh"), "utf8")],
+];
 
 /** The cases that run sh: not on Windows. */
 const SH =
@@ -181,11 +188,13 @@ function code(text) {
     .join("\n");
 }
 
-describe("setup.sh, the file", () => {
-  it("uses POSIX sh only, as dash and busybox run it", () => {
-    assert.ok(SETUP.startsWith("#!/bin/sh\n"));
-    for (const banned of BANNED) {
-      assert.doesNotMatch(code(SETUP), banned, `${banned}`);
+describe("the host's scripts", () => {
+  it("use POSIX sh only, as dash and busybox run them", () => {
+    for (const [name, text] of HOST_SCRIPTS) {
+      assert.ok(text.startsWith("#!/bin/sh\n"), name);
+      for (const banned of BANNED) {
+        assert.doesNotMatch(code(text), banned, `${name}: ${banned}`);
+      }
     }
   });
 
