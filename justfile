@@ -399,6 +399,13 @@ app-installer:
 updater-sign key installer sha256 version:
     node scripts/updater-sign.mjs "{{ key }}" "{{ installer }}" "{{ sha256 }}" "{{ version }}"
 
+# The user only; the AI never runs it. Rehearses an update on this PC with a throwaway key: two
+# debug installers of "afkfleet rehearsal" (an identifier and a product of their own, so they never
+# touch the installed afkfleet), 0.0.2 signed and served on loopback until Ctrl+C, and the steps
+# printed (ADR-0022, R20).
+update-rehearsal:
+    node scripts/update-rehearsal.mjs
+
 # The debug exe the AI launches, under its own identifier from its very first launch, so it can
 # never reach the user's running app, its single-instance lock, its profile or its Credential
 # Manager entries (ADR-0020, U87). The config's path is absolute, as the CLI may change folders.

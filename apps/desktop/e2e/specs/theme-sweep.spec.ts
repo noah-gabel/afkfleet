@@ -44,7 +44,10 @@ async function nav(page: Page, name: string): Promise<void> {
 async function updateStates(page: Page, backend: FakeBackend): Promise<void> {
   const notice = page.locator("[data-slot=update-notice]");
   backend.answerUpdate({ state: "available", current: "0.1.0", version: "0.2.0" });
-  await page.getByRole("group", { name: "Account" }).getByRole("button", { name: "Log out" }).click();
+  await page
+    .getByRole("group", { name: "Account" })
+    .getByRole("button", { name: "Log out" })
+    .click();
   await page.reload();
   await expect(page.getByRole("heading", { name: "Log in" })).toBeVisible();
   await expect(notice.getByText("afkfleet 0.2.0 is available.")).toBeVisible();
