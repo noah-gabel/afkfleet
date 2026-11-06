@@ -23,7 +23,7 @@ use fleet_core::auth::SessionPolicy;
 use fleet_core::authz::Role;
 use fleet_core::bot::{BotSnapshot, BotState, DesiredRunState};
 use fleet_core::chat::{IncomingChat, PlayerChatKind};
-use fleet_core::id::{AccountId, BotId, UserId};
+use fleet_core::id::{AccountId, AgentId, BotId, UserId};
 use fleet_core::mode::ModePreset;
 use fleet_core::system::Clock as _;
 use fleet_core::value::{ServerAddress, Username};
@@ -35,10 +35,11 @@ use fleet_proto::generated::agent_control_client::AgentControlClient;
 use fleet_proto::generated::agent_enrollment_client::AgentEnrollmentClient;
 use fleet_server::app::auth::TokenService;
 use fleet_server::app::enrollment::EnrollmentTokenService;
+use fleet_server::cli::agent as cli_agent;
 use fleet_server::cli::healthcheck;
 use fleet_server::cli::serve::{self, ControlPlane, Exit, GrpcPort, ServerPorts, ShutdownTimeouts};
 use fleet_server::config::{GrpcConfig, PkiPaths, ServerConfig};
-use fleet_server::grpc::control::SHUTTING_DOWN;
+use fleet_server::grpc::control::{CERTIFICATE_REFUSED, CERTIFICATE_REQUIRED, SHUTTING_DOWN};
 use fleet_server::grpc::listener as grpc_listener;
 use fleet_server::grpc::reconciler::ReconcileTimings;
 use fleet_server::infra::crypto::passwords::Argon2Passwords;
@@ -53,8 +54,8 @@ use fleet_server::ports::audit::NewAuditEntry;
 use fleet_server::ports::bots::NewBot;
 use fleet_server::ports::chat::ChatEntry;
 use fleet_server::ports::msauth::{
-    DeviceCode, DeviceFlow, Failure, MicrosoftAuthProvider, MicrosoftTokens, MinecraftSession,
-    MsAccessToken, PollOutcome, RefreshError, RefreshToken, SessionError,
+    DeviceCode, DeviceFlow, Failure, McToken, MicrosoftAuthProvider, MicrosoftTokens,
+    MinecraftSession, MsAccessToken, PollOutcome, RefreshError, RefreshToken, SessionError,
 };
 use fleet_server::ports::page::{Page, PageLimit};
 use fleet_server::ports::store::Store as _;
@@ -85,6 +86,11 @@ const EXPIRED: &str = "the server certificate has expired: no agent can connect 
 
 /// The longest a test waits for anything.
 const PATIENCE: Duration = Duration::from_secs(30);
+
+/// [`online_bot`]'s profile name.
+const ONLINE_NAME: &str = "AfkOnline1";
+/// [`online_bot`]'s profile UUID.
+const ONLINE_UUID: &str = "4566e69f-c907-48ee-8d71-d7ba5aa00d20";
 
 /// A PKI whose certificates start at `at`: the CA, and the server's
 /// certificate for localhost and 127.0.0.1.
@@ -513,13 +519,7 @@ async fn a_denied_session_request_counts_in_the_apps_own_metrics() {
         .unwrap();
     let microsoft = Arc::new(HangingRefresh::default());
     let (app, port) = app_and_port(&config, &database, pki, grpc, microsoft).await;
-    let metrics = app
-        .metrics
-        .clone()
-        .layer(MockConnectInfo(std::net::SocketAddr::from((
-            [127, 0, 0, 1],
-            9,
-        ))));
+    let metrics = app.metrics.clone();
     let (sender, signals) = ChannelSignals::new();
     let server = tokio::spawn({
         let database = database.clone();
@@ -541,21 +541,176 @@ async fn a_denied_session_request_counts_in_the_apps_own_metrics() {
     })
     .await
     .expect("the denial should come");
-    let scraped = metrics
-        .oneshot(
-            Request::builder()
-                .uri("/metrics")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let body = to_bytes(scraped.into_body(), usize::MAX).await.unwrap();
-    let render = String::from_utf8(body.to_vec()).unwrap();
+    let render = scrape(&metrics).await;
 
     assert!(denied.retryable);
     assert!(
         render.contains("afkfleet_session_denials_total{reason=\"not_assigned\"} 1"),
+        "{render}"
+    );
+    sender.send(Signal::Terminate).await.unwrap();
+    let exit = tokio::time::timeout(PATIENCE, server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(exit, Exit::Stopped);
+}
+
+/// serve's wiring of the connect refusals' counter (P12.4; ADR-0022, S12;
+/// PR #96's review): a call without a client certificate, which the control
+/// service's gate refuses, and one with a certificate `agent disable`
+/// revoked, which the connection service refuses, each count once in the
+/// app's own `GET /metrics`. Without `metrics` in `ControlPorts`, or
+/// without `.with_metrics` on `AgentConnectionService`, in `cli/serve.rs`,
+/// one of them stays at 0.
+#[tokio::test]
+async fn refused_connects_count_through_serves_wiring() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let dir = test_dir("control_plane_refusals");
+    let (http, http_address) = listener().await;
+    let grpc = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let grpc_address = grpc.local_addr().unwrap();
+    let config = with_grpc(server_config(&dir, http_address, false), &dir, grpc_address);
+    let pki = pki(SystemClock.now());
+    let ca_pem = String::from_utf8(pki.ca_cert_pem.clone()).unwrap();
+    let fingerprint = pki.ca.fingerprint();
+    let database = sqlite::open(&config.database, DatabaseOptions::default())
+        .await
+        .unwrap();
+    let microsoft = Arc::new(HangingRefresh::default());
+    let (app, port) = app_and_port(&config, &database, pki, grpc, microsoft).await;
+    let metrics = app.metrics.clone();
+    let (sender, signals) = ChannelSignals::new();
+    let server = tokio::spawn({
+        let database = database.clone();
+        let timeouts = ShutdownTimeouts::of(&config.http);
+        async move { serve::serve(http, Some(port), None, app, &database, signals, timeouts).await }
+    });
+    let token = host_token(&database, fingerprint).await;
+    let (endpoint, identity) = enrolled(grpc_address, &ca_pem, token).await;
+    disable_every_agent(&config).await;
+
+    let anonymous =
+        refused_connect(endpoint.clone().tls_config(anonymous_tls(&ca_pem)).unwrap()).await;
+    let revoked = refused_connect(endpoint.tls_config(identity).unwrap()).await;
+    let render = scrape(&metrics).await;
+
+    assert_eq!(anonymous.message(), CERTIFICATE_REQUIRED, "{anonymous:?}");
+    assert_eq!(revoked.message(), CERTIFICATE_REFUSED, "{revoked:?}");
+    for reason in ["no_certificate", "revoked"] {
+        let series = format!("afkfleet_agent_connects_refused_total{{reason=\"{reason}\"}} 1");
+        assert!(render.contains(&series), "{series} in {render}");
+    }
+    sender.send(Signal::Terminate).await.unwrap();
+    let exit = tokio::time::timeout(PATIENCE, server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(exit, Exit::Stopped);
+}
+
+/// Microsoft answering at once: a refresh hands out new tokens and the
+/// session is [`online_bot`]'s profile, both valid for an hour.
+#[derive(Debug)]
+struct AnsweringMicrosoft;
+
+#[async_trait::async_trait]
+impl MicrosoftAuthProvider for AnsweringMicrosoft {
+    async fn start_device_flow(&self) -> Result<DeviceFlow, Failure> {
+        Err(Failure::Unreachable)
+    }
+
+    async fn poll(&self, _code: &DeviceCode) -> Result<PollOutcome, Failure> {
+        Err(Failure::Unreachable)
+    }
+
+    async fn refresh(&self, _token: &RefreshToken) -> Result<MicrosoftTokens, RefreshError> {
+        Ok(MicrosoftTokens {
+            access: MsAccessToken::try_from(secret("access-of-the-test")).unwrap(),
+            access_expires_at: SystemClock.now() + TimeDelta::hours(1),
+            refresh: RefreshToken::try_from(secret("refresh-of-the-test")).unwrap(),
+        })
+    }
+
+    async fn minecraft_session(
+        &self,
+        _access: &MsAccessToken,
+    ) -> Result<MinecraftSession, SessionError> {
+        Ok(MinecraftSession {
+            token: McToken::try_from(secret("session-of-the-test")).unwrap(),
+            expires_at: SystemClock.now() + TimeDelta::hours(1),
+            uuid: ONLINE_UUID.parse().unwrap(),
+            name: ONLINE_NAME.parse().unwrap(),
+        })
+    }
+}
+
+/// `text` as a secret.
+fn secret(text: &str) -> secrecy::SecretString {
+    secrecy::SecretString::from(text.to_owned())
+}
+
+/// serve's wiring of the grants' counter (P12.4; ADR-0022, S12; PR #96's
+/// review): an online bot's session request, granted through the
+/// session-token service with Microsoft answering, counts once as
+/// `kind="online", fresh="false"` in the app's own metrics. Without
+/// `.with_metrics` on `SessionGrantService` in `cli/serve.rs` it stays at 0.
+#[tokio::test]
+async fn a_granted_session_counts_through_serves_wiring() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let dir = test_dir("control_plane_grant_metrics");
+    let (http, http_address) = listener().await;
+    let grpc = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let grpc_address = grpc.local_addr().unwrap();
+    let config = with_grpc(server_config(&dir, http_address, false), &dir, grpc_address);
+    let pki = pki(SystemClock.now());
+    let ca_pem = String::from_utf8(pki.ca_cert_pem.clone()).unwrap();
+    let fingerprint = pki.ca.fingerprint();
+    let database = sqlite::open(&config.database, DatabaseOptions::default())
+        .await
+        .unwrap();
+    let (app, port) =
+        app_and_port(&config, &database, pki, grpc, Arc::new(AnsweringMicrosoft)).await;
+    let metrics = app.metrics.clone();
+    let bot = online_bot(&config, &database).await;
+    let (sender, signals) = ChannelSignals::new();
+    let server = tokio::spawn({
+        let database = database.clone();
+        let timeouts = ShutdownTimeouts::of(&config.http);
+        async move { serve::serve(http, Some(port), None, app, &database, signals, timeouts).await }
+    });
+    let token = host_token(&database, fingerprint).await;
+    let (agent, mut answers) = connected_agent(grpc_address, &ca_pem, token).await;
+    let reconcile = ServerMessage::try_from(
+        tokio::time::timeout(PATIENCE, answers.message())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap(),
+    );
+    assert!(
+        matches!(&reconcile, Ok(ServerMessage::Reconcile(bots)) if bots.len() == 1),
+        "the bot should be assigned first: {reconcile:?}"
+    );
+
+    agent.send(session_request(bot)).await.unwrap();
+    let answer = tokio::time::timeout(PATIENCE, async {
+        loop {
+            let message = answers.message().await.unwrap().unwrap();
+            match ServerMessage::try_from(message) {
+                Ok(ServerMessage::SessionGrant(_)) => return "granted",
+                Ok(ServerMessage::SessionDenied(_)) => return "denied",
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("the answer should come");
+    let render = scrape(&metrics).await;
+
+    assert_eq!(answer, "granted");
+    assert!(
+        render.contains("afkfleet_session_grants_total{kind=\"online\",fresh=\"false\"} 1"),
         "{render}"
     );
     sender.send(Signal::Terminate).await.unwrap();
@@ -586,6 +741,7 @@ async fn chat_admitted_before_the_signal_is_stored_before_the_database_closes() 
         .unwrap();
     let microsoft = Arc::new(HangingRefresh::default());
     let (app, port) = app_and_port(&config, &database, pki, grpc, microsoft).await;
+    let metrics = app.metrics.clone();
     let bot = online_bot(&config, &database).await;
     let http_config = config.http.clone();
     let (sender, signals) = ChannelSignals::new();
@@ -650,29 +806,16 @@ async fn chat_admitted_before_the_signal_is_stored_before_the_database_closes() 
         .await
         .expect("the server should stop within its deadline")
         .unwrap();
-    let reopened = sqlite::open(&config.database, DatabaseOptions::default())
-        .await
-        .unwrap();
-    let stored = reopened
-        .chat()
-        .page(
-            bot,
-            Page {
-                before: None,
-                limit: PageLimit::new(10).unwrap(),
-            },
-        )
-        .await
-        .unwrap();
-    reopened.close().await;
+    let stored = stored_chat(&config, bot).await;
 
     assert_eq!(exit, Exit::Stopped, "{}", logs.text());
-    assert_eq!(
-        stored
-            .into_iter()
-            .map(|line| line.record.entry)
-            .collect::<Vec<_>>(),
-        [ChatEntry::Received(chat)]
+    assert_eq!(stored, [ChatEntry::Received(chat)]);
+    // serve's wiring of the ingest's counts (P12.4; PR #96's review): the
+    // stored row counts in the app's own metrics, which outlive the stop.
+    let render = scrape(&metrics).await;
+    assert!(
+        render.contains("afkfleet_ingest_rows_total{outcome=\"stored\"} 1"),
+        "{render}"
     );
 }
 
@@ -849,7 +992,7 @@ async fn app_and_port(
     database: &sqlite::Database,
     pki: LoadedPki,
     grpc: TcpListener,
-    microsoft: Arc<HangingRefresh>,
+    microsoft: Arc<dyn MicrosoftAuthProvider>,
 ) -> (serve::App, GrpcPort) {
     let tls = grpc_listener::tls(&pki);
     let keys = vault_keys(config);
@@ -961,10 +1104,10 @@ async fn online_bot(config: &ServerConfig, database: &sqlite::Database) -> BotId
         .insert(&McAccount {
             id: account,
             owner: user,
-            name: "AfkOnline1".parse().unwrap(),
+            name: ONLINE_NAME.parse().unwrap(),
             created_at: now,
             credential: AccountCredential::Microsoft {
-                uuid: "4566e69f-c907-48ee-8d71-d7ba5aa00d20".parse().unwrap(),
+                uuid: ONLINE_UUID.parse().unwrap(),
                 refresh_envelope: envelope,
                 status: AccountStatus::Active,
             },
@@ -1001,22 +1144,17 @@ async fn online_bot(config: &ServerConfig, database: &sqlite::Database) -> BotId
     bot
 }
 
-/// Enrolls agent-1 with `token` and connects it, as [`welcomed_agent`]
-/// does, but stops after `Welcome`: its full reconcile is the test's.
-async fn connected_agent(
+/// Enrolls agent-1 with `token` over the port at `grpc`, whose CA is
+/// `ca_pem`: the port's endpoint, and TLS with the agent's new identity.
+async fn enrolled(
     grpc: std::net::SocketAddr,
     ca_pem: &str,
     token: String,
-) -> (
-    tokio::sync::mpsc::Sender<wire::AgentMessage>,
-    tonic::Streaming<wire::ServerMessage>,
-) {
+) -> (Endpoint, ClientTlsConfig) {
     let endpoint = Endpoint::from_shared(format!("https://127.0.0.1:{}", grpc.port()))
         .unwrap()
         .connect_timeout(PATIENCE);
-    let tls = ClientTlsConfig::new()
-        .ca_certificate(Certificate::from_pem(ca_pem))
-        .domain_name("localhost");
+    let tls = anonymous_tls(ca_pem);
     let channel = endpoint.clone().tls_config(tls.clone()).unwrap();
     let enrolled = AgentEnrollmentClient::new(channel.connect().await.unwrap())
         .enroll(EnrollRequest {
@@ -1028,7 +1166,28 @@ async fn connected_agent(
         .unwrap()
         .into_inner();
     let identity = Identity::from_pem(&enrolled.certificate_pem, agent_key().serialize_pem());
-    let channel = endpoint.tls_config(tls.identity(identity)).unwrap();
+    (endpoint, tls.identity(identity))
+}
+
+/// TLS that trusts `ca_pem` for `localhost`, with no client certificate.
+fn anonymous_tls(ca_pem: &str) -> ClientTlsConfig {
+    ClientTlsConfig::new()
+        .ca_certificate(Certificate::from_pem(ca_pem))
+        .domain_name("localhost")
+}
+
+/// Enrolls agent-1 with `token` and connects it, as [`welcomed_agent`]
+/// does, but stops after `Welcome`: its full reconcile is the test's.
+async fn connected_agent(
+    grpc: std::net::SocketAddr,
+    ca_pem: &str,
+    token: String,
+) -> (
+    tokio::sync::mpsc::Sender<wire::AgentMessage>,
+    tonic::Streaming<wire::ServerMessage>,
+) {
+    let (endpoint, tls) = enrolled(grpc, ca_pem, token).await;
+    let channel = endpoint.tls_config(tls).unwrap();
     let mut control = AgentControlClient::new(channel.connect().await.unwrap());
     let (agent, outbox) = tokio::sync::mpsc::channel(4);
     let mut answers = control
@@ -1059,6 +1218,89 @@ async fn connected_agent(
         Ok(ServerMessage::Welcome(_))
     ));
     (agent, answers)
+}
+
+/// The refusal a `Connect` over `channel` gets before its stream opens.
+async fn refused_connect(channel: Endpoint) -> tonic::Status {
+    let mut control = AgentControlClient::new(channel.connect().await.unwrap());
+    let (_agent, outbox) = tokio::sync::mpsc::channel::<wire::AgentMessage>(1);
+    tokio::time::timeout(PATIENCE, control.connect(ReceiverStream::new(outbox)))
+        .await
+        .expect("the refusal should come")
+        .expect_err("the call should be refused")
+}
+
+/// Disables every agent in `config`'s database as `afkfleet-server agent
+/// disable --id …` does beside the running server: through the agents'
+/// service, which revokes every certificate.
+async fn disable_every_agent(config: &ServerConfig) {
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let listed = cli_agent::list(config, Arc::new(SystemClock), &mut out, &mut err).await;
+    assert_eq!(
+        listed,
+        cli_agent::Exit::Done,
+        "{}",
+        String::from_utf8_lossy(&err)
+    );
+    let ids = String::from_utf8(out)
+        .unwrap()
+        .lines()
+        .skip(1)
+        .map(|row| row.split('\t').next().unwrap().parse::<AgentId>().unwrap())
+        .collect::<Vec<_>>();
+    assert_ne!(ids.len(), 0, "an agent should be enrolled");
+    for id in ids {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let disabled =
+            cli_agent::disable(config, Arc::new(SystemClock), id, &mut out, &mut err).await;
+        assert_eq!(
+            disabled,
+            cli_agent::Exit::Done,
+            "{}",
+            String::from_utf8_lossy(&err)
+        );
+    }
+}
+
+/// `bot`'s stored chat, newest first, read from `config`'s database opened
+/// again after the server closed it.
+async fn stored_chat(config: &ServerConfig, bot: BotId) -> Vec<ChatEntry> {
+    let reopened = sqlite::open(&config.database, DatabaseOptions::default())
+        .await
+        .unwrap();
+    let stored = reopened
+        .chat()
+        .page(
+            bot,
+            Page {
+                before: None,
+                limit: PageLimit::new(10).unwrap(),
+            },
+        )
+        .await
+        .unwrap();
+    reopened.close().await;
+    stored.into_iter().map(|line| line.record.entry).collect()
+}
+
+/// The metrics port's `router` scraped once: its `GET /metrics` body.
+async fn scrape(router: &axum::Router) -> String {
+    let scraped = router
+        .clone()
+        .layer(MockConnectInfo(std::net::SocketAddr::from((
+            [127, 0, 0, 1],
+            9,
+        ))))
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(scraped.into_body(), usize::MAX).await.unwrap();
+    String::from_utf8(body.to_vec()).unwrap()
 }
 
 /// Starts `config`'s server with `plane`, stops it at once, and returns its

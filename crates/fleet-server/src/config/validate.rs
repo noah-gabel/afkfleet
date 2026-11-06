@@ -64,9 +64,10 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
     let accounts = accounts(&raw.accounts);
     let chat = chat(&raw.chat, &mut problems);
     let audit = audit(&raw.audit, &mut problems);
-    let grpc = grpc(raw.grpc.as_ref(), bind, &mut problems);
+    // The metrics port is checked against `[grpc] bind` even while the
+    // rest of `[grpc]` has problems, so every mistake is named at once.
+    let (grpc, grpc_bind) = grpc(raw.grpc.as_ref(), bind, &mut problems);
     let valid_grpc = grpc.as_ref().ok().and_then(Option::as_ref);
-    let grpc_bind = valid_grpc.map(|grpc| grpc.bind);
     let metrics = metrics(raw.metrics.as_ref(), bind, grpc_bind, &mut problems);
     let backups = backups(
         &raw.database,
@@ -194,14 +195,15 @@ fn metrics(
 /// `[grpc]`: absent is `Ok(None)`, the control plane off. Present, its four
 /// files are required, absolute and different from each other; `bind` is
 /// an IP address with a port other than 0 and other than `http_bind`'s.
-/// [`Invalid`] when anything is wrong.
+/// [`Invalid`] when anything is wrong. Beside it, `bind` once valid, even
+/// while the section's other keys aren't.
 fn grpc(
     raw: Option<&RawGrpc>,
     http_bind: Option<SocketAddr>,
     problems: &mut Problems,
-) -> Result<Option<GrpcConfig>, Invalid> {
+) -> (Result<Option<GrpcConfig>, Invalid>, Option<SocketAddr>) {
     let Some(raw) = raw else {
-        return Ok(None);
+        return (Ok(None), None);
     };
     let section = KeyPath::root().key("grpc");
     let bind = grpc_bind(raw.bind.as_deref(), http_bind, &section, problems);
@@ -248,9 +250,9 @@ fn grpc(
         Some(heartbeats),
     ) = (paths.as_slice(), valid, bind, lifetime, heartbeats)
     else {
-        return Err(Invalid);
+        return (Err(Invalid), bind);
     };
-    Ok(Some(GrpcConfig {
+    let config = GrpcConfig {
         bind,
         pki: PkiPaths {
             ca_cert_file: ca_cert.1.clone(),
@@ -260,7 +262,8 @@ fn grpc(
         },
         agent_cert_lifetime: lifetime,
         heartbeats,
-    }))
+    };
+    (Ok(Some(config)), Some(bind))
 }
 
 /// `[grpc]`'s heartbeat keys: each against its range, then the interval

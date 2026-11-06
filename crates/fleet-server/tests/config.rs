@@ -2190,6 +2190,35 @@ fn metrics_bind_never_takes_the_grpc_port(#[case] grpc_bind: &str, #[case] metri
     });
 }
 
+/// The clash is found while `[grpc]` has problems of its own, and reported
+/// together with them, so one run names every mistake (PR #96's review).
+#[test]
+fn a_metrics_port_clash_is_reported_with_the_grpc_sections_other_problems() {
+    in_jail(|jail| {
+        let toml = format!(
+            "{}\n[grpc]\nbind = \"127.0.0.1:7500\"\n[metrics]\nbind = \"0.0.0.0:7500\"\n",
+            minimal(jail)
+        );
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(
+            keys(&problems),
+            [
+                "grpc.ca_cert_file",
+                "grpc.ca_key_file",
+                "grpc.server_cert_file",
+                "grpc.server_key_file",
+                "metrics.bind"
+            ]
+        );
+        assert_eq!(
+            kinds(&problems).last(),
+            Some(&ProblemKind::SamePortAs { key: "grpc.bind" })
+        );
+    });
+}
+
 #[test]
 fn metrics_bind_can_come_from_the_environment() {
     in_jail(|jail| {
