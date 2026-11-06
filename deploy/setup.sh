@@ -80,6 +80,24 @@ plain() {
 	return 0
 }
 
+# Whether $1 is an image reference: a registry path, a tag and a digest
+# allowed (ghcr.io/owner/afkfleet-server:1.0), but no whitespace, no glob
+# character and no leading -, so it's one word and never an option.
+image_ref() {
+	case $1 in
+	"" | -* | *[!A-Za-z0-9./:@_-]*) return 1 ;;
+	esac
+	return 0
+}
+
+# Whether $1 is a name env.example uses as a placeholder.
+placeholder_name() {
+	case $1 in
+	example.com | *.example.com | example.org | *.example.org | example.net | *.example.net) return 0 ;;
+	esac
+	return 1
+}
+
 # Whether $1 is a folder path the backups can live in: absolute, without
 # //, . or .. parts or a trailing /, of plain characters, and inside a folder
 # of its own other than / (sftp-backups.sh's chroot). The same rules as
@@ -147,14 +165,12 @@ check_env() {
 	esac
 	SERVER_IMAGE=$(env_value AFKFLEET_SERVER_IMAGE)
 	AGENT_IMAGE=$(env_value AFKFLEET_AGENT_IMAGE)
-	plain "$SERVER_IMAGE" || refuse "AFKFLEET_SERVER_IMAGE in .env is missing or holds a character it can't"
-	plain "$AGENT_IMAGE" || refuse "AFKFLEET_AGENT_IMAGE in .env is missing or holds a character it can't"
+	image_ref "$SERVER_IMAGE" || refuse "AFKFLEET_SERVER_IMAGE in .env is missing, starts with - or holds a character an image reference can't"
+	image_ref "$AGENT_IMAGE" || refuse "AFKFLEET_AGENT_IMAGE in .env is missing, starts with - or holds a character an image reference can't"
 	if [ "$PROXY" = caddy ]; then
 		domain=$(env_value AFKFLEET_DOMAIN)
 		plain "$domain" || refuse "AFKFLEET_DOMAIN in .env is missing or isn't a plain host name"
-		case $domain in
-		*example.com | *example.org | *example.net) refuse "AFKFLEET_DOMAIN in .env is still env.example's placeholder" ;;
-		esac
+		! placeholder_name "$domain" || refuse "AFKFLEET_DOMAIN in .env is still env.example's placeholder"
 		tls=$(env_value AFKFLEET_TLS)
 		case $tls in
 		letsencrypt)
@@ -171,6 +187,15 @@ check_env() {
 	NAMES=$(env_value AFKFLEET_GRPC_NAMES)
 	if [ -n "$NAMES" ]; then
 		plain "$NAMES" || refuse "AFKFLEET_GRPC_NAMES in .env must be names and addresses, separated by commas"
+		rest=$NAMES
+		while [ -n "$rest" ]; do
+			name=${rest%%,*}
+			case $rest in
+			*,*) rest=${rest#*,} ;;
+			*) rest="" ;;
+			esac
+			! placeholder_name "$name" || refuse "AFKFLEET_GRPC_NAMES in .env is still env.example's placeholder ($name)"
+		done
 	fi
 	BACKUPS=$(env_value AFKFLEET_BACKUPS_DIR)
 	[ -n "$BACKUPS" ] || BACKUPS=$DEFAULT_BACKUPS

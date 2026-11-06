@@ -30,7 +30,7 @@ services:
     environment:
       AFKFLEET_DOMAIN: ${AFKFLEET_DOMAIN:?set AFKFLEET_DOMAIN in .env}
       AFKFLEET_TLS: ${AFKFLEET_TLS:?set AFKFLEET_TLS in .env to letsencrypt}
-      AFKFLEET_ACME_EMAIL: ${AFKFLEET_ACME_EMAIL:-}
+      AFKFLEET_ACME_EMAIL: ${AFKFLEET_ACME_EMAIL:?set AFKFLEET_ACME_EMAIL in .env}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       # Its certificates and ACME account.

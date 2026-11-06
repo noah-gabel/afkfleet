@@ -422,6 +422,19 @@ fn caddy_proxies_only_the_apps_routes_and_logs_neither_ticket_nor_q() {
     }
 }
 
+/// Caddy's settings must be set in `.env`, or compose refuses to start: an
+/// empty ACME email, for one, would make Caddy restart in a loop (PR #97's
+/// review).
+#[test]
+fn caddys_settings_must_be_set_in_env() {
+    let caddy = service(CADDY, "caddy");
+
+    for name in ["AFKFLEET_DOMAIN", "AFKFLEET_TLS", "AFKFLEET_ACME_EMAIL"] {
+        let set = value(&caddy, name).unwrap();
+        assert!(set.starts_with(&format!("${{{name}:?")), "{name}: {set}");
+    }
+}
+
 /// The images come from `.env`, as an operator pins them; compose names no
 /// image of afkfleet's itself.
 #[test]

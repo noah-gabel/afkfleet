@@ -424,6 +424,7 @@ fn env_file(path: ProxyPath, project: &str, net: Net, backups: Option<&Path>) ->
          AFKFLEET_AGENT_IMAGE={AGENT_IMAGE}\n\
          AFKFLEET_DOMAIN=localhost\n\
          AFKFLEET_TLS=internal\n\
+         AFKFLEET_ACME_EMAIL=smoke@example.com\n\
          AFKFLEET_FLEET_SUBNET={}\n\
          AFKFLEET_FLEET_GATEWAY={}\n\
          AFKFLEET_FLEET_RANGE={}\n\

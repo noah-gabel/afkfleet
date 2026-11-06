@@ -413,6 +413,39 @@ describe("setup.sh, run against stubs", { skip: SH }, () => {
     }
   });
 
+  it("takes an image from a registry path, and refuses one with a space, a glob or a leading -", () => {
+    const image = "ghcr.io/owner/afkfleet-server:1.0";
+    const registry = run(["init"], {
+      envText: env((lines) => [...lines, `AFKFLEET_SERVER_IMAGE=${image}`]),
+    });
+
+    assert.equal(registry.code, 0, registry.stderr);
+    assert.ok(joined(registry.calls).includes(`image inspect ${image}`));
+    for (const bad of ["-oops", "afkfleet server", "afkfleet-*", "afkfleet?", "afkfleet[1]"]) {
+      const result = run(["init"], {
+        envText: env((lines) => [...lines, `AFKFLEET_SERVER_IMAGE=${bad}`]),
+      });
+
+      assert.equal(result.code, 1, bad);
+      assert.match(result.stderr, /AFKFLEET_SERVER_IMAGE/, bad);
+      assert.ok(!joined(result.calls).some((call) => call.startsWith("image")), bad);
+    }
+  });
+
+  it("refuses env.example's AFKFLEET_GRPC_NAMES placeholder", () => {
+    for (const names of ["fleet.example.com", "192.0.2.10,fleet.example.com"]) {
+      const result = run(["init"], {
+        envText: env((lines) => [...lines, `AFKFLEET_GRPC_NAMES=${names}`]),
+      });
+
+      assert.equal(result.code, 1, names);
+      assert.match(
+        result.stderr,
+        /AFKFLEET_GRPC_NAMES in \.env is still env\.example's placeholder/,
+      );
+    }
+  });
+
   it("init runs the one-time steps in order, the bundle only through the pipe", () => {
     const result = run(["init"]);
 
