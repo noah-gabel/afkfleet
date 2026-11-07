@@ -1,14 +1,18 @@
-# The release (Plan.md P12.5; ADR-0022, S22, U31). A tag vX.Y.Z pushed on a commit of main runs it,
-# and it ends in a draft release that the maintainer finishes by hand (docs/releasing.md): nothing
-# here signs, publishes or holds a key, and no repository secret is used, only the job token.
+# The release (Plan.md P12.5; ADR-0022, S22, U31, PR #98's review). A tag vX.Y.Z pushed on a commit
+# of main runs it, and it ends in a draft release that the maintainer finishes by hand
+# (docs/releasing.md): nothing here signs, publishes or holds a key, and no repository secret is
+# used, only the job token.
 #
 # - guard: the tag is vX.Y.Z, equal to the workspace's version, on main, and CI succeeded on that
 #   exact commit (scripts/release.mjs guard). Every other job needs it.
-# - image (arm64 and amd64, each on its native runner): both images built and tested exactly as
-#   the Stack workflow does; then, only after every build and test, one step logs in, pushes
-#   X.Y.Z-<arch> (never over a tag that exists) and logs out, and the digests go on.
-# - merge: each X.Y.Z index made from those digests, never from the per-architecture tags, and
-#   checked; then the draft's body.
+# - build (arm64 and amd64, each on its native runner, no package permission): both images built
+#   and tested exactly as the Stack workflow does, then saved by their image IDs and handed on.
+#   Every dependency's build code runs here, where no registry token exists.
+# - push (each architecture, on a fresh runner): it checks out release.mjs alone, runs no build
+#   tool, loads the tested images and checks their IDs, platform and labels before any login; then
+#   one step logs in, pushes X.Y.Z-<arch> (never over a tag that exists) and logs out.
+# - merge: each X.Y.Z index made from the pushed digests, never from the per-architecture tags,
+#   and checked; then the draft's body.
 # - installer: the NSIS installer, built with no signing key (`just app-installer`), its SHA-256
 #   in the log and the job's summary. No cache: a release is built from scratch.
 # - release: the only job that can write to the repository, and it runs no repository code: the
@@ -17,7 +21,7 @@
 # No tag is ever `latest` or `X.Y`, and none is overwritten: when a job failed, re-run the failed
 # jobs alone (docs/releasing.md). Third-party actions are pinned to full commit SHAs (version in
 # the comment), as in ci.yml; the artifact actions are approved for this workflow alone.
-# scripts/release-workflow.test.mjs pins all of this.
+# scripts/release-workflow.test.mjs pins all of this, and every job that can write word for word.
 name: Release
 
 on:
@@ -27,10 +31,12 @@ on:
 permissions:
   contents: read
 
-# One release at a time, and none cancelled halfway.
+# One release at a time, none cancelled halfway, and a release waiting behind another is queued,
+# never dropped.
 concurrency:
   group: release
   cancel-in-progress: false
+  queue: max
 
 env:
   CARGO_TERM_COLOR: always
@@ -67,8 +73,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: node scripts/release.mjs guard "$GITHUB_REF"
 
-  image:
-    name: image (${{ matrix.arch }})
+  build:
+    name: build (${{ matrix.arch }})
     needs: guard
     strategy:
       # Each finishes on its own: when one fails, re-running it alone completes the release.
@@ -83,10 +89,9 @@ jobs:
     timeout-minutes: 150
     permissions:
       contents: read
-      packages: write
     # The labels' build args for every build in the job, so test-stack's own `just images` comes
-    # from the cache and the tested image is the one pushed (R24). No default attestations: each
-    # push is one platform's image, which the merge job checks.
+    # from the cache and the tested image is the one saved (R24). No default attestations: each
+    # image is one platform's, which the merge job checks.
     env:
       AFKFLEET_IMAGE_VERSION: ${{ needs.guard.outputs.version }}
       AFKFLEET_IMAGE_REVISION: ${{ needs.guard.outputs.revision }}
@@ -111,8 +116,58 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-      # The registry's credential exists in this step alone, after every build and test (U31):
-      # the login, release.mjs push (the checks, the tags, the pushes, the digests), the logout.
+      - name: Save the tested images by their IDs
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir "$RUNNER_TEMP/images"
+          node scripts/release.mjs save "$ARCH" "$RUNNER_TEMP/images"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: images-${{ matrix.arch }}
+          path: ${{ runner.temp }}/images/
+          if-no-files-found: error
+          retention-days: 7
+
+  # The registry's credential lives on this fresh runner alone, where nothing but release.mjs of
+  # the repository runs and no build tool does: the build jobs' build code can't reach it.
+  push:
+    name: push (${{ matrix.arch }})
+    needs: [guard, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+          - runner: ubuntu-24.04
+            arch: amd64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      AFKFLEET_IMAGE_VERSION: ${{ needs.guard.outputs.version }}
+      AFKFLEET_IMAGE_REVISION: ${{ needs.guard.outputs.revision }}
+      AFKFLEET_IMAGE_CREATED: ${{ needs.guard.outputs.created }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/release.mjs
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: images-${{ matrix.arch }}
+          path: ${{ runner.temp }}/images
+      - name: Load the tested images and check them, before any login
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: node scripts/release.mjs load "$ARCH" "$RUNNER_TEMP/images"
       - name: Push by architecture (log in, push, log out)
         env:
           REGISTRY_TOKEN: ${{ github.token }}
@@ -120,7 +175,7 @@ jobs:
         run: |
           mkdir "$RUNNER_TEMP/digests"
           printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          node scripts/release.mjs push "$ARCH" "$RUNNER_TEMP/digests"
+          node scripts/release.mjs push "$ARCH" "$RUNNER_TEMP/images" "$RUNNER_TEMP/digests"
           docker logout ghcr.io
       - name: Log out, whatever happened
         if: always()
@@ -134,7 +189,7 @@ jobs:
 
   merge:
     name: merge
-    needs: [guard, image]
+    needs: [guard, push]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -151,6 +206,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          sparse-checkout: scripts/release.mjs
+          sparse-checkout-cone-mode: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
@@ -159,7 +216,7 @@ jobs:
           pattern: digests-*
           path: ${{ runner.temp }}/digests
           merge-multiple: true
-      # Each index from the image jobs' digests (name@sha256:…), never from their tags, checked
+      # Each index from the push jobs' digests (name@sha256:…), never from their tags, checked
       # before and after (scripts/release.mjs merge); a warning while the packages are private.
       - id: merge
         name: The indexes, from the digests (log in, create and check, log out)

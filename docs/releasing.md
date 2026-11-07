@@ -18,7 +18,7 @@ CI builds the installer and the images and makes a draft release, all without an
 2. **Immutable releases**, so a published release's files and tag can't change afterwards. In **Settings › General › Releases**, tick **Enable release immutability**. You add the updater's files to the draft before you publish, so this never gets in the way.
 3. **Workflow permissions** stay at **Read repository contents and packages permissions** (**Settings › Actions › General**). The release workflow asks for more per job: `packages: write` for the images, and `contents: write` for its last job alone, which runs no repository code. No repository secret is used.
 4. **The images' packages** exist only after the first release run. Then, on your GitHub profile's **Packages** tab, open `afkfleet-server` and `afkfleet-agent` in turn, and in each one's **Package settings**:
-   - check that **Manage Actions access** lists this repository with the **Write** role, so later releases can push;
+   - check that **Manage Actions access** lists this repository with the **Admin** role (or **Write**), so later releases can push;
    - under **Danger Zone**, choose **Change visibility › Public**, so operators can pull without a login. This can't be undone.
 
    Until both are public, the workflow's `merge` job warns "can't be pulled without a login yet".
@@ -52,12 +52,13 @@ The app installs only updates signed by the key whose public half it carries (`p
    Success: the **Release** workflow starts in the repository's **Actions** tab.
 4. **The workflow** (`.github/workflows/release.yml`) runs, in order:
    - `guard`: the tag is vX.Y.Z, equals the workspace version, is on main, and CI succeeded on it;
-   - `image (arm64)` and `image (amd64)`: both images built and tested as the nightly Stack workflow does, then pushed as `X.Y.Z-arm64` and `X.Y.Z-amd64`, never over a tag that exists (an hour or two);
+   - `build (arm64)` and `build (amd64)`: both images built and tested as the nightly Stack workflow does, then saved by their image IDs (an hour or two). No registry token exists in these jobs;
+   - `push (arm64)` and `push (amd64)`: on fresh runners, the saved images loaded and checked, then pushed as `X.Y.Z-arm64` and `X.Y.Z-amd64`, never over a tag that exists;
    - `merge`: the `X.Y.Z` index of each image, made from the pushed digests and checked;
    - `installer`: the installer, built with no key; its SHA-256 is in the job's log and summary;
    - `release`: a **draft** release with the installer, `SHA256SUMS` and the body naming both images by digest.
 
-   If a job fails, use **Re-run failed jobs**, never **Re-run all jobs**: a tag that was pushed is never pushed again, so a re-run of a finished image job is refused. If a push failed halfway, its tag stays: fix the cause and release the next patch version instead.
+   If a job fails, use **Re-run failed jobs**, never **Re-run all jobs**: a tag that was pushed is never pushed again, so a re-run of a finished push job is refused. If a push failed halfway, its tag stays: fix the cause and release the next patch version instead. If the `release` job failed after its draft was made, delete that leftover draft (**Releases**, the draft, **Delete**) before you re-run it: it never makes a second draft for the same tag.
 5. **First release only:** make both packages public (the setup's step 4), before you publish.
 6. **Download and check the installer.** Open the draft (**Releases**), download `afkfleet_X.Y.Z_x64-setup.exe`, and run `Get-FileHash "$HOME\Downloads\afkfleet_X.Y.Z_x64-setup.exe"` in PowerShell. The hash must equal both the `installer` job's printed SHA-256 and the installer's line in the draft's `SHA256SUMS` (capital or small letters don't matter). If they differ, stop.
 7. **Sign it for the updater**, with your offline key attached:

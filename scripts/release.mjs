@@ -1,20 +1,29 @@
 // The release workflow's own steps (Plan.md P12.5; ADR-0022, S22, U31), each a subcommand that
-// .github/workflows/release.yml runs:
+// .github/workflows/release.yml runs. It imports nothing of the repository's: the jobs that hold
+// a registry token check out this one file and run nothing else of the repository.
 //
-//   node scripts/release.mjs guard <GITHUB_REF>          (the guard job)
-//   node scripts/release.mjs push <arm64|amd64> <dir>    (each image job, logged in)
-//   node scripts/release.mjs merge <dir>                 (the merge job, logged in)
+//   node scripts/release.mjs guard <GITHUB_REF>                     (the guard job)
+//   node scripts/release.mjs save <arm64|amd64> <dir>               (each build job)
+//   node scripts/release.mjs load <arm64|amd64> <dir>               (each push job, before its login)
+//   node scripts/release.mjs push <arm64|amd64> <dir> <digests>     (each push job, logged in)
+//   node scripts/release.mjs merge <dir>                            (the merge job, logged in)
 //   node scripts/release.mjs notes <X.Y.Z> <server digest> <agent digest>
 //
 // guard: the tag is `vX.Y.Z`, X.Y.Z is the workspace's version, the tag's commit is the run's
 // own (GITHUB_SHA) and on main, and CI's own workflow succeeded on a push of exactly that commit
-// (never Stack's: each image job runs `just test-stack` itself, U31). It writes `version`,
+// (never Stack's: each build job runs `just test-stack` itself, U31). It writes `version`,
 // `revision` and one UTC `created` to GITHUB_OUTPUT, and nothing when it refuses.
 //
-// push: the two images `just images` and `just test-stack` left as `afkfleet-*:dev`, which are
+// save: the two images `just images` and `just test-stack` left as `afkfleet-*:dev`, which are
 // the tested ones, must be linux/<arch> and carry this release's labels (AFKFLEET_IMAGE_*). Each
-// tag `ghcr.io/<owner>/afkfleet-*:X.Y.Z-<arch>` must not exist yet: nothing is ever overwritten.
-// Then it tags, pushes and records each image's digest in `<dir>/digests-<arch>.txt`.
+// is saved by its image ID into `<dir>/afkfleet-*.tar`, and the IDs into `<dir>/images-<arch>.txt`.
+//
+// load: on the push job's fresh runner, before any login, each tarball is loaded, must load the
+// recorded ID, and that image must again be linux/<arch> with this release's labels.
+//
+// push: each recorded image must be loaded, and each tag `ghcr.io/<owner>/afkfleet-*:X.Y.Z-<arch>`
+// must not exist yet: nothing is ever overwritten. Then it tags each image by its ID, pushes it,
+// and records its digest in `<digests>/digests-<arch>.txt`.
 //
 // merge: from both digests files, each index `X.Y.Z` is made with `docker buildx imagetools
 // create` from the digests themselves (`name@sha256:…`), never from the per-architecture tags.
@@ -34,8 +43,6 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { installerName, workspaceVersion } from "./app-installer.mjs";
-
 /** The repository's own URL, as the Dockerfiles' source label has it. */
 export const SOURCE = "https://github.com/noah-gabel/afkfleet";
 /** The images a release pushes, in order. */
@@ -51,6 +58,21 @@ const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const OWNER = /^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
 const CREATED = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 const LABEL = "org.opencontainers.image";
+
+/** The installer's file name for `version`: app-installer.mjs's, which a test holds equal. */
+export function installerName(version) {
+  return `afkfleet_${version}_x64-setup.exe`;
+}
+
+/**
+ * Cargo.toml's `[workspace.package] version` when it's X.Y.Z, else null: app-installer.mjs's,
+ * which a test holds equal. A copy, so this file imports nothing of the repository's.
+ */
+export function workspaceVersion(cargoToml) {
+  const section = cargoToml.split(/^\[/m).find((part) => part.startsWith("workspace.package]"));
+  const version = section?.match(/^version = "([^"]*)"$/m)?.[1];
+  return version !== undefined && VERSION.test(version) ? version : null;
+}
 
 /** A refusal: the release must not go on (exit 1). */
 class Refusal extends Error {}
@@ -255,46 +277,113 @@ function guard(ctx, args) {
   ctx.out.write(`v${version} on ${revision}: on main, CI green; created ${created}\n`);
 }
 
-function push(ctx, args) {
-  const [arch, dir] = args;
-  if (args.length !== 2 || !ARCHITECTURES.includes(arch)) {
-    throw new Usage(`push takes an architecture (${ARCHITECTURES.join(" or ")}) and a folder`);
+/**
+ * Checks that `reference` is a linux/<arch> image carrying this release's labels; its image ID.
+ */
+function checkImage(ctx, reference, arch, { version, revision, created }) {
+  const inspect = (format) =>
+    ctx.must(
+      "docker",
+      ["image", "inspect", "--format", format, reference],
+      `inspecting ${reference}`,
+    );
+  const platform = inspect("{{.Os}}/{{.Architecture}}").trim();
+  if (platform !== `linux/${arch}`) {
+    throw new Refusal(`${reference} is ${platform || "of no platform"}, not linux/${arch}`);
   }
-  const { version, revision, created } = release(ctx.env);
+  const labels = json(inspect("{{json .Config.Labels}}"), `inspecting ${reference}`) ?? {};
+  for (const [label, value] of [
+    ["version", version],
+    ["revision", revision],
+    ["created", created],
+  ]) {
+    if (labels[`${LABEL}.${label}`] !== value) {
+      throw new Refusal(
+        `${reference}'s ${LABEL}.${label} isn't ${value}: it wasn't built for this release`,
+      );
+    }
+  }
+  const id = inspect("{{.Id}}").trim();
+  if (!DIGEST.test(id)) {
+    throw new Refusal(`${reference} has no image ID of the form sha256:…`);
+  }
+  return id;
+}
+
+/** An architecture and the folders a step takes, or a usage error naming them. */
+function architectureAnd(args, step, folders) {
+  const [arch, ...rest] = args;
+  if (rest.length !== folders.length || !ARCHITECTURES.includes(arch)) {
+    throw new Usage(
+      `${step} takes an architecture (${ARCHITECTURES.join(" or ")}) and ${folders.join(" and ")}`,
+    );
+  }
+  return [arch, ...rest];
+}
+
+function save(ctx, args) {
+  const [arch, dir] = architectureAnd(args, "save", ["the folder to save into"]);
+  const built = release(ctx.env);
+  const ids = IMAGES.map((image) => [image, checkImage(ctx, `${image}:dev`, arch, built)]);
+  for (const [image, id] of ids) {
+    ctx.must(
+      "docker",
+      ["save", "--output", path.join(dir, `${image}.tar`), id],
+      `saving ${image}:dev (${id})`,
+    );
+    ctx.out.write(`saved ${image}:dev as ${id}\n`);
+  }
+  writeFileSync(
+    path.join(dir, `images-${arch}.txt`),
+    ids.map(([image, id]) => `${image}=${id}\n`).join(""),
+    { flag: "wx" },
+  );
+}
+
+function load(ctx, args) {
+  const [arch, dir] = architectureAnd(args, "load", ["the folder the images were downloaded to"]);
+  const built = release(ctx.env);
+  const ids = readRecorded(
+    path.join(dir, `images-${arch}.txt`),
+    "image ID",
+    `the ${arch} build job`,
+  );
+  for (const image of IMAGES) {
+    const id = ids.get(image);
+    const loaded = ctx.must(
+      "docker",
+      ["load", "--input", path.join(dir, `${image}.tar`)],
+      `loading ${image}.tar`,
+    );
+    if (!loaded.includes(id)) {
+      throw new Refusal(`${image}.tar didn't load the recorded image ${id}`);
+    }
+    if (checkImage(ctx, id, arch, built) !== id) {
+      throw new Refusal(`the image loaded from ${image}.tar isn't the recorded ${id}`);
+    }
+    ctx.out.write(`loaded ${image} as ${id}\n`);
+  }
+}
+
+function push(ctx, args) {
+  const [arch, imagesDir, outDir] = architectureAnd(args, "push", [
+    "the folder of the loaded images",
+    "the folder for the digests",
+  ]);
+  const { version } = release(ctx.env);
   const name = owner(ctx.env);
-  const local = (image) => `${image}:dev`;
+  const ids = readRecorded(
+    path.join(imagesDir, `images-${arch}.txt`),
+    "image ID",
+    `the ${arch} build job`,
+  );
   const remote = (image) => `${REGISTRY}/${name}/${image}:${version}-${arch}`;
 
   for (const image of IMAGES) {
-    const platform = ctx
-      .must(
-        "docker",
-        ["image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", local(image)],
-        `inspecting ${local(image)}`,
-      )
-      .trim();
-    if (platform !== `linux/${arch}`) {
-      throw new Refusal(`${local(image)} is ${platform || "of no platform"}, not linux/${arch}`);
-    }
-    const labels =
-      json(
-        ctx.must(
-          "docker",
-          ["image", "inspect", "--format", "{{json .Config.Labels}}", local(image)],
-          `inspecting ${local(image)}`,
-        ),
-        `inspecting ${local(image)}`,
-      ) ?? {};
-    for (const [label, value] of [
-      ["version", version],
-      ["revision", revision],
-      ["created", created],
-    ]) {
-      if (labels[`${LABEL}.${label}`] !== value) {
-        throw new Refusal(
-          `${local(image)}'s ${LABEL}.${label} isn't ${value}: it wasn't built for this release`,
-        );
-      }
+    const id = ids.get(image);
+    const present = ctx.run("docker", ["image", "inspect", "--format", "{{.Id}}", id]);
+    if (present.status !== 0 || present.stdout.trim() !== id) {
+      throw new Refusal(`${image}'s recorded image ${id} isn't loaded`);
     }
   }
   for (const image of IMAGES) {
@@ -304,7 +393,7 @@ function push(ctx, args) {
   }
   const lines = [];
   for (const image of IMAGES) {
-    ctx.must("docker", ["tag", local(image), remote(image)], `tagging ${remote(image)}`);
+    ctx.must("docker", ["tag", ids.get(image), remote(image)], `tagging ${remote(image)}`);
     ctx.must("docker", ["push", remote(image)], `pushing ${remote(image)}`);
     const repoDigests =
       json(
@@ -325,31 +414,33 @@ function push(ctx, args) {
     lines.push(`${image}=${own[0]}\n`);
     ctx.out.write(`pushed ${remote(image)}@${own[0]}\n`);
   }
-  writeFileSync(path.join(dir, `digests-${arch}.txt`), lines.join(""), { flag: "wx" });
+  writeFileSync(path.join(outDir, `digests-${arch}.txt`), lines.join(""), { flag: "wx" });
 }
 
-/** One architecture's digests file: exactly one well-formed digest per image. */
-function readDigests(dir, arch) {
-  const file = path.join(dir, `digests-${arch}.txt`);
+/**
+ * A file of `name=sha256:…` lines another job left: exactly one well-formed `what` per image, or
+ * a refusal naming `from`.
+ */
+function readRecorded(file, what, from) {
   let text;
   try {
     text = readFileSync(file, "utf8");
   } catch {
-    throw new Refusal(`${file} is missing: the ${arch} image job left no digests`);
+    throw new Refusal(`${file} is missing: ${from} left none`);
   }
   const entries = text
     .split("\n")
     .filter((line) => line !== "")
     .map((line) => line.split("="));
-  const digests = new Map(entries.map(([image, digest]) => [image, digest]));
+  const values = new Map(entries.map(([image, value]) => [image, value]));
   const wellFormed =
     entries.length === IMAGES.length &&
-    digests.size === IMAGES.length &&
-    IMAGES.every((image) => DIGEST.test(digests.get(image) ?? ""));
+    values.size === IMAGES.length &&
+    IMAGES.every((image) => DIGEST.test(values.get(image) ?? ""));
   if (!wellFormed) {
-    throw new Refusal(`${file} isn't one digest for each of ${IMAGES.join(" and ")}`);
+    throw new Refusal(`${file} isn't one ${what} for each of ${IMAGES.join(" and ")}`);
   }
-  return digests;
+  return values;
 }
 
 function merge(ctx, args) {
@@ -358,7 +449,12 @@ function merge(ctx, args) {
   }
   const { version, revision, created } = release(ctx.env);
   const name = owner(ctx.env);
-  const byArch = new Map(ARCHITECTURES.map((arch) => [arch, readDigests(args[0], arch)]));
+  const byArch = new Map(
+    ARCHITECTURES.map((arch) => [
+      arch,
+      readRecorded(path.join(args[0], `digests-${arch}.txt`), "digest", `the ${arch} push job`),
+    ]),
+  );
   if (!(ctx.env.GITHUB_OUTPUT ?? "")) {
     throw new Usage("GITHUB_OUTPUT isn't set");
   }
@@ -463,7 +559,7 @@ function printNotes(ctx, args) {
   ctx.out.write(notes({ version, owner: owner(ctx.env), server, agent }));
 }
 
-const COMMANDS = { guard, push, merge, notes: printNotes };
+const COMMANDS = { guard, save, load, push, merge, notes: printNotes };
 
 /** Runs one subcommand; its exit code. `io.run` and `io.now` stand in for commands and the clock. */
 export function main(args, io) {
