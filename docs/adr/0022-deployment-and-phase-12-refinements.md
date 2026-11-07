@@ -554,6 +554,7 @@ The user's review of PR #98 and their hands-on test, fixed on `p12/p12.5-release
 
   The threat model's "an image job holds the job token while it builds and tests" went away. Red: 12 of 27 release.mjs tests against a re-export stub; the workflow pins red against the old workflow; seven workflow mutations, each caught.
 - **Every job that can write is pinned whole** (push, merge, release): its exact keys (so no `container:`, `services:` or anything else), every step word for word, and no `run:` calling npm, npx, pnpm, cargo, just or rustup. The token regex allows spaces (`\$\{\{\s*github\.token\s*\}\}`). The concurrency adds `queue: max` (GitHub's larger queues, 2026-05-07), so a release waiting behind another is never dropped.
+- **`scripts/tauri-hardening.mjs` refuses any other Tauri configuration in src-tauri** *(the user's finding: Tauri merges `tauri.windows.conf.json` into the Windows build, which could replace the updater's key unseen)*: any name starting with "tauri" and ending in `.conf.json`, `.conf.json5` or `.toml`, in any case, but `tauri.conf.json` and `tauri.check.conf.json` (`checkConfigFiles`, called by `checkRepoFiles` on the folder's real listing). Red: two tests against a stub; two mutations (the check overlay not allowed, any `.toml` refused), each caught; and the real check refused a real `tauri.windows.conf.json`.
 
 ### Notes for later groups
 - **C (P12.1, P12.2, P12.7):**

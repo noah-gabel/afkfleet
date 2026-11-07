@@ -568,8 +568,38 @@ export function readFolder(dir) {
   });
 }
 
-/** Checks the committed files under `root` (everything but `cargo tree`). */
-export function checkRepoFiles(root) {
+/** The configuration files src-tauri may hold: the app's own, and the check build's overlay. */
+const CONFIG_FILES = ["tauri.conf.json", "tauri.check.conf.json"];
+
+/**
+ * Problems with the file names `names` of src-tauri (PR #98's review): Tauri merges a
+ * `tauri.<platform>.conf.json`, a `.json5` or a `Tauri*.toml` beside tauri.conf.json into the
+ * build (tauri.windows.conf.json into every Windows build), which could replace what this script
+ * pins, the updater's key among it, unseen. So any name that starts with "tauri" and ends in
+ * `.conf.json`, `.conf.json5` or `.toml`, in any case (Windows' names ignore it), is refused but
+ * the two this script reads.
+ */
+export function checkConfigFiles(names) {
+  return names
+    .filter((name) => {
+      const lower = name.toLowerCase();
+      return (
+        lower.startsWith("tauri") &&
+        [".conf.json", ".conf.json5", ".toml"].some((end) => lower.endsWith(end)) &&
+        !CONFIG_FILES.includes(name)
+      );
+    })
+    .map(
+      (name) =>
+        `${name}: Tauri would merge it into a build, over what this script pins; src-tauri holds only ${CONFIG_FILES.join(" and ")}`,
+    );
+}
+
+/**
+ * Checks the committed files under `root` (everything but `cargo tree`); `listed` stands in for
+ * src-tauri's listing in a test.
+ */
+export function checkRepoFiles(root, listed = (names) => names) {
   const dir = path.join(root, SRC_TAURI);
   let config;
   try {
@@ -587,6 +617,7 @@ export function checkRepoFiles(root) {
     ? []
     : [`tauri.check.conf.json is ${show(check)}, expected ${show(CHECK_CONFIG)}`];
   return [
+    ...checkConfigFiles(listed(readdirSync(dir))),
     ...checkProblems,
     ...checkConfig(config),
     ...checkCapabilities(readFolder(path.join(dir, "capabilities"))),

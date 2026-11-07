@@ -14,6 +14,7 @@ import {
   checkClientFeatures,
   checkCommands,
   checkConfig,
+  checkConfigFiles,
   checkContract,
   checkFeatures,
   checkPermissions,
@@ -478,11 +479,60 @@ describe("checkFeatures", () => {
   });
 });
 
-describe("the repository", () => {
-  it("has the hardened desktop configuration", () => {
-    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+describe("the configuration files (PR #98's review)", () => {
+  const SRC_TAURI = ["Cargo.toml", "build.rs", "capabilities", "src", "tests", "icons"];
 
+  it("allows tauri.conf.json and tauri.check.conf.json beside the crate's other files", () => {
+    assert.deepEqual(
+      checkConfigFiles([...SRC_TAURI, "tauri.conf.json", "tauri.check.conf.json"]),
+      [],
+    );
+  });
+
+  it("refuses every other configuration Tauri would merge into a build, whatever its case", () => {
+    for (const name of [
+      "tauri.windows.conf.json",
+      "tauri.linux.conf.json",
+      "tauri.conf.json5",
+      "tauri.windows.conf.json5",
+      "Tauri.toml",
+      "Tauri.windows.toml",
+      "tauri.toml",
+      "TAURI.CONF.JSON5",
+      "Tauri.Windows.Conf.Json",
+    ]) {
+      const problems = checkConfigFiles([...SRC_TAURI, "tauri.conf.json", name]);
+
+      assert.equal(problems.length, 1, name);
+      assert.match(problems[0], new RegExp(name.replaceAll(".", "\\.")), name);
+    }
+  });
+
+  it("leaves files that aren't Tauri's configuration alone", () => {
+    assert.deepEqual(
+      checkConfigFiles([
+        "tauri.conf.json",
+        "tauri.check.conf.json",
+        "tauri-notes.md",
+        "rustfmt.toml",
+      ]),
+      [],
+    );
+  });
+});
+
+describe("the repository", () => {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+  it("has the hardened desktop configuration", () => {
     assert.deepEqual(checkRepoFiles(repoRoot), []);
+  });
+
+  it("checks the configuration files src-tauri holds", () => {
+    const problems = checkRepoFiles(repoRoot, (names) => [...names, "tauri.windows.conf.json"]);
+
+    assert.equal(problems.length, 1, problems.join("; "));
+    assert.match(problems[0], /tauri\.windows\.conf\.json/);
   });
 });
 
