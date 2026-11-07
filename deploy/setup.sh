@@ -92,10 +92,16 @@ refuse() {
 	if [ -n "$LEFT" ]; then
 		printf 'afkfleet setup: %s\n' "$LEFT" >&2
 	fi
-	if [ -n "$STAGE" ]; then
-		rm -rf "$STAGE"
-	fi
+	drop_stage
 	exit 1
+}
+
+# Removes keys-restore's staging folder, once.
+drop_stage() {
+	if [ -n "$STAGE" ]; then
+		rm -rf -- "$STAGE"
+		STAGE=""
+	fi
 }
 
 usage() {
@@ -241,12 +247,36 @@ vercmp() {
 }
 
 # Whether $1 is a plain name for a release file: letters, digits and ._-,
-# not hidden.
+# not hidden and never read as an option (no leading -).
 plain_name() {
 	case $1 in
-	"" | .* | *[!A-Za-z0-9._-]*) return 1 ;;
+	"" | .* | -* | *[!A-Za-z0-9._-]*) return 1 ;;
 	esac
 	return 0
+}
+
+# Whether $1 is a release file's name: a plain name, or one in host/ or
+# prod/.
+release_name() {
+	case $1 in
+	host/* | prod/*) plain_name "${1#*/}" ;;
+	*/*) return 1 ;;
+	*) plain_name "$1" ;;
+	esac
+}
+
+# Whether $1 (a RELEASE file= line without file=) is exactly 64 small hex
+# digits, two spaces and a release file's name: sha256sum -c skips a line it
+# can't read, and a skipped line would leave its file unchecked.
+sum_line() {
+	hash=${1%%  *}
+	name=${1#*  }
+	[ "$hash  $name" = "$1" ] || return 1
+	[ ${#hash} -eq 64 ] || return 1
+	case $hash in
+	*[!0-9a-f]*) return 1 ;;
+	esac
+	release_name "$name"
 }
 
 # Whether $1 is a name env.example uses as a placeholder.
@@ -887,7 +917,9 @@ check_copy() {
 		info=$(stat -c '%u:%g %a' "$folder")
 		[ "$info" = "0:0 700" ] || refuse "${folder#"$1"/} must belong to root with mode 700, not $info"
 	done
-	for entry in "$1"/* "$1"/.[!.]* "$1"/keys/* "$1"/keys/.[!.]* "$1"/ca/* "$1"/ca/.[!.]*; do
+	# Every name, the hidden ones too: .x and ..x alike.
+	for entry in "$1"/* "$1"/.[!.]* "$1"/..?* "$1"/keys/* "$1"/keys/.[!.]* "$1"/keys/..?* \
+		"$1"/ca/* "$1"/ca/.[!.]* "$1"/ca/..?*; do
 		if [ ! -e "$entry" ] && [ ! -L "$entry" ]; then
 			continue
 		fi
@@ -977,25 +1009,27 @@ keys_restore() {
 	if [ -e "$stage" ] || [ -L "$stage" ]; then
 		refuse "$stage exists: an earlier keys-restore stopped there; remove it (rm -r $stage) and run again"
 	fi
-	mkdir -m 700 "$stage" || refuse "$stage couldn't be made"
+	# The stage goes on every way out: a refusal, the end, or a signal.
+	trap 'drop_stage' EXIT
+	trap 'drop_stage; exit 1' INT HUP TERM
+	mkdir -m 700 -- "$stage" || refuse "$stage couldn't be made"
 	STAGE=$stage
-	mkdir -m 700 "$stage/keys" "$stage/ca" || refuse "$stage couldn't be made"
+	mkdir -m 700 -- "$stage/keys" "$stage/ca" || refuse "$stage couldn't be made"
 	for entry in "$1"/keys/* "$1"/ca/*; do
 		[ -f "$entry" ] || continue
 		relative=${entry#"$1"/}
-		cp "$entry" "$stage/$relative" || refuse "$relative couldn't be staged"
-		chown 65532:65532 "$stage/$relative" || refuse "$relative couldn't be given to the server's user"
-		chmod 600 "$stage/$relative" || refuse "$relative couldn't be made owner-only"
+		cp -- "$entry" "$stage/$relative" || refuse "$relative couldn't be staged"
+		chown 65532:65532 -- "$stage/$relative" || refuse "$relative couldn't be given to the server's user"
+		chmod 600 -- "$stage/$relative" || refuse "$relative couldn't be made owner-only"
 	done
 	CREATED="$CREATED the project's volumes"
 	docker compose --profile setup create setup || refuse "the setup service couldn't be created"
-	container=$(docker compose ps -a -q setup)
+	container=$(docker compose ps -a -q setup) || refuse "the setup service's container can't be listed"
 	[ -n "$container" ] || refuse "the setup service's container isn't there"
 	docker cp -a "$stage/keys/." "$container:/keys" || refuse "the keys couldn't be copied into their volume"
 	docker cp -a "$stage/ca/." "$container:/ca" || refuse "the CA's certificate couldn't be copied into its volume"
 	docker rm -f "$container" >/dev/null || refuse "the setup service's container couldn't be removed"
-	rm -rf "$stage"
-	STAGE=""
+	drop_stage
 	ok "the keys and the CA are in this host's volumes, as the server's user"
 	# shellcheck disable=SC2046 # one name per line, each its own argument
 	set -- $(pki_names)
@@ -1048,6 +1082,7 @@ fetch() {
 	while IFS= read -r line || [ -n "$line" ]; do
 		case $line in
 		*"  $bundle")
+			sum_line "$line" || refuse "SHA256SUMS' line for $bundle isn't 64 small hex digits, two spaces and its name: nothing was changed"
 			lines=$((lines + 1))
 			printf '%s\n' "$line" >"$FETCH/bundle.sum"
 			;;
@@ -1073,17 +1108,22 @@ fetch() {
 	while IFS= read -r name || [ -n "$name" ]; do
 		case $name in
 		host/ | prod/) ;;
-		host/* | prod/*) plain_name "${name#*/}" || refuse "the bundle holds a name it can't: $name" ;;
-		*/*) refuse "the bundle holds a name it can't: $name" ;;
-		*) plain_name "$name" || refuse "the bundle holds a name it can't: $name" ;;
+		*) release_name "$name" || refuse "the bundle holds a name it can't: $name" ;;
 		esac
+		# A file's folder counts as the archive's, listed or not: it's checked
+		# here before anything is written into it.
 		case $name in
 		*/) printf '%s\n' "${name%/}" >>"$FETCH/folders" ;;
-		RELEASE) ;;
+		*/*) printf '%s\n' "${name%%/*}" >>"$FETCH/folders" ;;
+		esac
+		case $name in
+		*/ | RELEASE) ;;
 		*) printf '%s\n' "$name" >>"$FETCH/archived" ;;
 		esac
 	done <"$FETCH/names"
-	mkdir "$FETCH/new" || refuse "$FETCH/new can't be made"
+	sort -u "$FETCH/folders" >"$FETCH/folders.sorted"
+	mv -f -- "$FETCH/folders.sorted" "$FETCH/folders"
+	mkdir -- "$FETCH/new" || refuse "$FETCH/new can't be made"
 	tar -xzf "$FETCH/$bundle" -C "$FETCH/new" || refuse "$bundle couldn't be unpacked"
 
 	# The new RELEASE: this version, an update from this folder's, listing
@@ -1098,6 +1138,11 @@ fetch() {
 	vercmp "$installed" "$from"
 	[ "$CMP" -ge 0 ] ||
 		refuse "$version updates only from $from or newer, and this folder's release is $installed: fetch $from first (sh setup.sh fetch $from), then $version"
+	while IFS= read -r line || [ -n "$line" ]; do
+		case $line in
+		file=*) sum_line "${line#file=}" || refuse "the bundle's RELEASE has a file line it can't read: ${line#file=}" ;;
+		esac
+	done <"$new/RELEASE"
 	release_names "$new/RELEASE" | sort >"$FETCH/listed"
 	sort "$FETCH/archived" >"$FETCH/archived.sorted"
 	cmp -s "$FETCH/listed" "$FETCH/archived.sorted" || refuse "the bundle's RELEASE doesn't list exactly its files"
@@ -1140,16 +1185,16 @@ fetch() {
 		[ -d "$folder" ] || mkdir -m 755 "$folder" || refuse "$folder couldn't be made"
 	done <"$FETCH/folders"
 	while IFS= read -r name || [ -n "$name" ]; do
-		{ chmod 644 "$new/$name" && mv -f "$new/$name" "$name"; } ||
+		{ chmod 644 -- "$new/$name" && mv -f -- "$new/$name" "$name"; } ||
 			refuse "$name couldn't be moved into place; RELEASE still says $installed, so fetch again once that's fixed"
 	done <"$FETCH/listed"
-	{ chmod 644 "$new/RELEASE" && mv -f "$new/RELEASE" RELEASE; } ||
+	{ chmod 644 -- "$new/RELEASE" && mv -f -- "$new/RELEASE" RELEASE; } ||
 		refuse "RELEASE couldn't be moved into place; it still says $installed, so fetch again once that's fixed"
 	while IFS= read -r name || [ -n "$name" ]; do
 		grep -Fqx -- "$name" "$FETCH/listed" ||
 			say "left: $name, which release $version no longer ships; remove it once nothing needs it"
 	done <"$FETCH/was"
-	rm -rf "$FETCH"
+	rm -rf -- "$FETCH"
 	LEFT=""
 	ok "this folder holds release $version's files"
 	say ""

@@ -326,6 +326,23 @@ describe("files.sh, under POSIX sh against a stub stat", { skip: SH }, () => {
     }
   });
 
+  it("restore-in refuses a copy that differs from the backup: the database stays aside, nothing takes its place", () => {
+    const root = volumes();
+    // A copy that writes something else: a disk that corrupts it, say.
+    writeFileSync(
+      join(root, "bin", "cp"),
+      '#!/bin/sh\nfor last; do :; done\nprintf "not the backup\\n" > "$last"\n',
+    );
+    chmodSync(join(root, "bin", "cp"), 0o755);
+
+    const result = run(root, ["restore-in", STAMP, BACKUP]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /differs from it/);
+    assert.ok(!existsSync(join(root, "data", "afkfleet.db")), "a wrong copy is the database");
+    assert.equal(text(root, "data", `afkfleet.db.aside-${STAMP}`), "live database\n");
+  });
+
   it("finished marks its stamp in the data volume, owner-only", () => {
     const root = volumes();
 

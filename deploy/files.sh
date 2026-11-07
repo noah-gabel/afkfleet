@@ -105,7 +105,7 @@ move() {
 	if [ -e "$2" ] || [ -L "$2" ]; then
 		refuse "$2 exists already: nothing is moved over a file"
 	fi
-	mv -n "$1" "$2" || refuse "$1 couldn't be moved to $2"
+	mv -n -- "$1" "$2" || refuse "$1 couldn't be moved to $2"
 	if [ -e "$1" ] || [ ! -e "$2" ]; then
 		refuse "$1 couldn't be moved to $2"
 	fi
@@ -165,8 +165,8 @@ restore_in() {
 		refuse "$partial exists already: an earlier restore under $1 stopped there"
 	fi
 	aside "$DATA" "$DATABASE" "$1"
-	cp "$BACKUPS/$2" "$partial" || refuse "$2 couldn't be copied in"
-	chmod 600 "$partial"
+	cp -- "$BACKUPS/$2" "$partial" || refuse "$2 couldn't be copied in"
+	chmod 600 -- "$partial"
 	cmp -s "$BACKUPS/$2" "$partial" || refuse "the copy of $2 differs from it"
 	move "$partial" "$DATA/afkfleet.db"
 	say "restored: afkfleet.db from $2"
@@ -197,23 +197,23 @@ forget() {
 	for kind in aside undone; do
 		for file in $DATABASE; do
 			if [ -f "$DATA/$file.$kind-$1" ]; then
-				rm -f "$DATA/$file.$kind-$1"
+				rm -f -- "$DATA/$file.$kind-$1"
 				say "deleted: $file.$kind-$1"
 			fi
 		done
 		for file in $PAIR; do
 			if [ -f "$TLS/$file.$kind-$1" ]; then
-				rm -f "$TLS/$file.$kind-$1"
+				rm -f -- "$TLS/$file.$kind-$1"
 				say "deleted: $file.$kind-$1"
 			fi
 		done
 	done
 	partial=$DATA/.afkfleet-restore-$1.partial
 	if [ -f "$partial" ] && [ ! -L "$partial" ]; then
-		rm -f "$partial"
+		rm -f -- "$partial"
 		say "deleted: .afkfleet-restore-$1.partial"
 	fi
-	rm -f "$(marker "$1")"
+	rm -f -- "$(marker "$1")"
 }
 
 # Names every aside and undone file, by its volume.

@@ -17,7 +17,9 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -80,6 +82,10 @@ for (const [name, text] of Object.entries(found.writes ?? {})) {
 }
 process.stdout.write(found.stdout ?? "");
 process.stderr.write(found.stderr ?? "");
+// A signal to the script that called it, as an operator's Ctrl+C or a hang-up sends one.
+if (found.kill) {
+  process.kill(process.ppid, found.kill);
+}
 process.exit(found.code ?? 0);
 `;
 
@@ -283,6 +289,22 @@ describe("the host's scripts", () => {
         assert.doesNotMatch(code(text), banned, `${name}: ${banned}`);
       }
     }
+  });
+
+  it("give -- before the paths of every mv, cp, rm or chmod that takes one from a variable", () => {
+    let checked = 0;
+    for (const [name, text] of HOST_SCRIPTS) {
+      for (const line of code(text).split("\n")) {
+        // Each command of the line on its own: a second one can't hide behind the first's --.
+        for (const command of line.split(/&&|\|\||[;{}!(]|\bthen\b|\belse\b|\bdo\b/)) {
+          if (/^\s*(mv|cp|rm|chmod)\s/.test(command) && command.includes('"$')) {
+            checked += 1;
+            assert.match(command, / -- /, `${name}: ${command.trim()}`);
+          }
+        }
+      }
+    }
+    assert.ok(checked > 10, `${checked}`);
   });
 
   it("the syntax rules catch what they ban, and not a message that names a word", () => {
@@ -999,6 +1021,7 @@ describe("setup.sh fetch, against a stub curl", { skip: SH }, () => {
         ["--proto-redir", "=https"],
         ["--tlsv1.2"],
         ["--fail"],
+        ["--max-redirs", "5"],
         ["--max-time", "300"],
         ["--max-filesize", "10485760"],
         ["--connect-timeout", "20"],
@@ -1069,6 +1092,7 @@ describe("setup.sh fetch, against a stub curl", { skip: SH }, () => {
       assert.match(result.stderr, /SHA256SUMS/, label);
       assert.equal(readFileSync(join(result.dir, "RELEASE"), "utf8"), installed.release, label);
       assert.match(result.stderr, /left in \.afkfleet-fetch/, label);
+      assert.ok(!existsSync(join(result.dir, ".afkfleet-fetch", "new")), `${label}: unpacked`);
     }
   });
 
@@ -1114,6 +1138,110 @@ describe("setup.sh fetch, against a stub curl", { skip: SH }, () => {
     const entries = readEntries(gunzipSync(bundleOf(NEW, OLD).bytes));
     return { bytes: crafted(edit(entries)) };
   }
+
+  it("refuses an archive holding a symbolic or a hard link by its type, unpacking nothing", () => {
+    const folder = mkdtempSync(join(tmpdir(), "afkfleet-links-"));
+    made.push(folder);
+    writeFileSync(join(folder, "Caddyfile"), "x\n");
+    symlinkSync("Caddyfile", join(folder, "compose.yaml"));
+    linkSync(join(folder, "Caddyfile"), join(folder, "env.example"));
+    for (const [label, names] of [
+      ["a symbolic link", ["Caddyfile", "compose.yaml"]],
+      ["a hard link", ["Caddyfile", "env.example"]],
+    ]) {
+      const archive = spawnSync("tar", ["-czf", "-", ...names], { cwd: folder });
+      assert.equal(archive.status, 0, label);
+
+      const { result } = fetchNew({ offered: { bytes: archive.stdout } });
+
+      assert.equal(result.code, 1, label);
+      assert.match(
+        result.stderr,
+        /the bundle holds something that isn't a file or a folder/,
+        label,
+      );
+      assert.ok(!existsSync(join(result.dir, ".afkfleet-fetch", "new")), `${label}: unpacked`);
+    }
+  });
+
+  it("refuses a name that starts with -", () => {
+    for (const name of ["-rf", "prod/-x"]) {
+      const { result, installed } = fetchNew({
+        offered: { bytes: crafted([{ name, data: Buffer.from("x") }]) },
+      });
+
+      assert.equal(result.code, 1, name);
+      assert.match(result.stderr, new RegExp(`the bundle holds a name it can't: ${name}`), name);
+      assert.equal(readFileSync(join(result.dir, "RELEASE"), "utf8"), installed.release, name);
+    }
+  });
+
+  it("compares versions part by part, as numbers: 0.10.0 is newer than 0.9.0", () => {
+    const installed = bundleOf("0.9.0");
+    const offered = bundleOf("0.10.0", "0.9.0");
+
+    const newer = run(["fetch", "0.10.0"], {
+      prepare: (dir) => unpack(installed, dir),
+      served: serve(name("0.10.0"), offered.bytes),
+    });
+    const older = run(["fetch", "0.9.0"], { prepare: (dir) => unpack(offered, dir) });
+
+    assert.equal(newer.code, 0, newer.stderr);
+    assert.equal(readFileSync(join(newer.dir, "RELEASE"), "utf8"), offered.release);
+    assert.equal(older.code, 1);
+    assert.match(older.stderr, /0\.9\.0 isn't newer than this folder's release 0\.10\.0/);
+  });
+
+  it("refuses a prod/ or host/ here that's a link, even when the archive lists no such folder", () => {
+    for (const folder of ["prod", "host"]) {
+      const elsewhere = mkdtempSync(join(tmpdir(), "afkfleet-elsewhere-"));
+      made.push(elsewhere);
+      const { result } = fetchNew({
+        offered: editedBundle((entries) => entries.filter((entry) => entry.name !== `${folder}/`)),
+        change: (dir) => {
+          cpSync(join(dir, folder), elsewhere, { recursive: true });
+          rmSync(join(dir, folder), { recursive: true });
+          symlinkSync(elsewhere, join(dir, folder));
+        },
+      });
+      const before = bundleOf(OLD);
+
+      assert.equal(result.code, 1, folder);
+      assert.match(result.stderr, new RegExp(`${folder} here isn't a folder`), folder);
+      for (const file of readdirSync(elsewhere)) {
+        const shipped = readEntries(gunzipSync(before.bytes)).find(
+          (entry) => entry.name === `${folder}/${file}`,
+        );
+        assert.equal(sha256(readFileSync(join(elsewhere, file))), sha256(shipped.data), file);
+      }
+    }
+  });
+
+  it("refuses a RELEASE whose file line isn't 64 small hex digits, two spaces and a name", () => {
+    for (const [label, change] of [
+      ["a short hash", (line) => line.replace(/^file=./, "file=")],
+      [
+        "capital hex",
+        (line) => line.replace(/^file=([0-9a-f]{64})/, (_, hash) => `file=${hash.toUpperCase()}`),
+      ],
+      ["one space", (line) => line.replace("  ", " ")],
+    ]) {
+      const { result, installed } = fetchNew({
+        offered: editedBundle((entries) => {
+          const release = entries.find((entry) => entry.name === "RELEASE");
+          const lines = String(release.data).split("\n");
+          const at = lines.findIndex((line) => line.startsWith("file="));
+          lines[at] = change(lines[at]);
+          release.data = Buffer.from(lines.join("\n"));
+          return entries;
+        }),
+      });
+
+      assert.equal(result.code, 1, label);
+      assert.match(result.stderr, /the bundle's RELEASE has a file line it can't read/, label);
+      assert.equal(readFileSync(join(result.dir, "RELEASE"), "utf8"), installed.release, label);
+    }
+  });
 
   it("refuses a RELEASE of another version, or one that doesn't list exactly its files", () => {
     for (const [label, edit, refusal] of [
@@ -1193,7 +1321,10 @@ describe("setup.sh fetch, against a stub curl", { skip: SH }, () => {
     assert.match(result.stdout, /old\.txt/);
   });
 
-  it("an interrupted fetch leaves RELEASE as it was, and runs again once its folder is gone", () => {
+  it("an interrupted fetch leaves RELEASE as it was, and runs again once its folder is gone", {
+    // A folder's mode blocks the move: root writes it whatever its mode.
+    skip: process.getuid?.() === 0 && "root writes a folder whatever its mode",
+  }, () => {
     const installed = bundleOf(OLD);
     const offered = bundleOf(NEW, OLD);
     const served = serve(name(NEW), offered.bytes);
@@ -1527,6 +1658,30 @@ describe("setup.sh restore, forget-aside and renew-cert, against stubs", { skip:
     }
   });
 
+  it("restore disables again only agents the backup holds enabled: one made and disabled since isn't", () => {
+    const result = run(["restore", NAME], {
+      responses: [
+        {
+          when: "compose exec -T server /usr/local/bin/afkfleet-server agent list",
+          stdout: agentList([
+            ["a1", "lost", "disabled"],
+            ["a3", "newer", "disabled"],
+          ]),
+        },
+        {
+          when: "compose run --rm -T maintenance agent list",
+          stdout: agentList([["a1", "lost", "enabled"]]),
+        },
+      ],
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(
+      steps(result).filter((call) => call.includes("agent disable")),
+      ["compose run --rm -T maintenance agent disable --config /etc/afkfleet/server.toml --id a1"],
+    );
+  });
+
   it("restore on a new host, with no server container, ends with init as its next step", () => {
     const result = run(["restore", NAME], {
       responses: [
@@ -1843,6 +1998,31 @@ describe("setup.sh keys-backup and keys-restore, against stubs", { skip: SH }, (
         /has no ca\/ca\.crt/,
       ],
       [
+        "a hidden file",
+        restoreFrom(copyFolder((copy) => writeFileSync(join(copy, "keys", ".x"), "x"))),
+        /keys\/\.x isn't a file of the keys' copy/,
+      ],
+      [
+        "a name starting with two dots",
+        restoreFrom(copyFolder((copy) => writeFileSync(join(copy, "ca", "..x"), "x"))),
+        /ca\/\.\.x isn't a file of the keys' copy/,
+      ],
+      [
+        "a hidden entry at the top",
+        restoreFrom(copyFolder((copy) => writeFileSync(join(copy, "..keys"), "x"))),
+        /\.\.keys isn't a file of the keys' copy/,
+      ],
+      [
+        "a link",
+        restoreFrom(
+          copyFolder((copy) => {
+            rmSync(join(copy, "keys", "ca.key"));
+            symlinkSync(join(copy, "ca", "ca.crt"), join(copy, "keys", "ca.key"));
+          }),
+        ),
+        /keys\/ca\.key isn't a regular file/,
+      ],
+      [
         "a project with volumes",
         restoreFrom(copyFolder(), {
           responses: [
@@ -1861,6 +2041,27 @@ describe("setup.sh keys-backup and keys-restore, against stubs", { skip: SH }, (
       assert.ok(!joined(result.calls).some((call) => call.startsWith("cp -a")), label);
       assert.ok(!existsSync(join(result.dir, ".afkfleet-keys-restore")), `${label}: staging left`);
     }
+  });
+
+  it("keys-restore removes its staging folder when a signal stops it", () => {
+    for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+      const result = restoreFrom(copyFolder(), {
+        responses: [{ when: "cp -a .afkfleet-keys-restore/keys/.", kill: signal }],
+      });
+
+      assert.notEqual(result.code, 0, signal);
+      assert.ok(!existsSync(join(result.dir, ".afkfleet-keys-restore")), `${signal}: staging left`);
+    }
+  });
+
+  it("keys-restore refuses, removing its stage, when the setup container can't be listed", () => {
+    const result = restoreFrom(copyFolder(), {
+      responses: [{ when: "compose ps -a -q setup", code: 1 }],
+    });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /the setup service's container can't be listed/);
+    assert.ok(!existsSync(join(result.dir, ".afkfleet-keys-restore")));
   });
 
   it("keys-restore removes its staging folder when the copy into the volume fails", () => {
