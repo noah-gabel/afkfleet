@@ -1394,10 +1394,11 @@ describe("setup.sh restore, forget-aside and renew-cert, against stubs", { skip:
     assert.equal(result.code, 0, result.stderr);
     assert.deepEqual(stamped(result), [
       "compose exec -T server /usr/local/bin/afkfleet-server agent list --config /etc/afkfleet/server.toml",
-      "compose stop agent server",
       "compose run --rm -T maintenance --version",
+      "compose stop agent server",
       `compose run --rm -T files restore-in STAMP ${NAME}`,
       "compose run --rm -T maintenance migrate --config /etc/afkfleet/server.toml",
+      "compose run --rm -T files finished STAMP",
       "compose run --rm -T maintenance vault status --config /etc/afkfleet/server.toml",
       "compose run --rm -T maintenance agent list --config /etc/afkfleet/server.toml",
       "compose run --rm -T maintenance agent disable --config /etc/afkfleet/server.toml --id a1",
@@ -1414,10 +1415,11 @@ describe("setup.sh restore, forget-aside and renew-cert, against stubs", { skip:
 
     assert.equal(result.code, 0, result.stderr);
     assert.deepEqual(stamped(result), [
-      "compose stop agent server",
       "compose run --rm -T maintenance --version",
+      "compose stop agent server",
       `compose run --rm -T files restore-in STAMP ${NAME}`,
       "compose run --rm -T maintenance migrate --config /etc/afkfleet/server.toml",
+      "compose run --rm -T files finished STAMP",
       "compose run --rm -T maintenance vault status --config /etc/afkfleet/server.toml",
       "compose run --rm -T maintenance agent list --config /etc/afkfleet/server.toml",
     ]);
@@ -1490,6 +1492,53 @@ describe("setup.sh restore, forget-aside and renew-cert, against stubs", { skip:
     assert.match(result.stderr, /newer server/);
     assert.match(result.stderr, /files put-back \d{8}T\d{6}Z/);
     assert.ok(!steps(result).some((call) => call.startsWith("compose up")));
+    assert.ok(!steps(result).some((call) => call.includes("files finished")), "marked finished");
+  });
+
+  it("restore's failures after the stop keep the server stopped and give put-back, never forget-aside", () => {
+    const disabledBefore = {
+      when: "compose exec -T server /usr/local/bin/afkfleet-server agent list",
+      stdout: agentList([["a1", "lost", "disabled"]]),
+    };
+    const enabledInBackup = {
+      when: "compose run --rm -T maintenance agent list",
+      stdout: agentList([["a1", "lost", "enabled"]]),
+    };
+    for (const [label, responses] of [
+      ["restore-in", [SAVED, { when: "compose run --rm -T files restore-in", code: 1 }]],
+      ["vault status", [SAVED, { when: "compose run --rm -T maintenance vault status", code: 1 }]],
+      ["the agent list", [SAVED, { when: "compose run --rm -T maintenance agent list", code: 1 }]],
+      [
+        "an agent's disable",
+        [
+          disabledBefore,
+          enabledInBackup,
+          { when: "compose run --rm -T maintenance agent disable", code: 1 },
+        ],
+      ],
+    ]) {
+      const result = run(["restore", NAME], { responses });
+
+      assert.equal(result.code, 1, label);
+      assert.match(result.stderr, /the server stays stopped/, label);
+      assert.match(result.stderr, /docker compose run --rm files put-back \d{8}T\d{6}Z/, label);
+      assert.doesNotMatch(result.stderr, /forget-aside/, label);
+      assert.ok(!steps(result).some((call) => call.startsWith("compose up")), label);
+    }
+  });
+
+  it("restore on a new host, with no server container, ends with init as its next step", () => {
+    const result = run(["restore", NAME], {
+      responses: [
+        { when: "compose ps -q server", stdout: "" },
+        { when: "compose ps -a -q server", stdout: "" },
+      ],
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /sudo sh setup\.sh init/);
+    assert.doesNotMatch(result.stdout, /docker compose up/);
+    assert.ok(!steps(result).some((call) => call.startsWith("compose up")));
   });
 
   it("restore stops with the server down when a vault key is missing (vault status's exit 3)", () => {
@@ -1532,6 +1581,7 @@ describe("setup.sh restore, forget-aside and renew-cert, against stubs", { skip:
       "compose stop server",
       "compose run --rm -T files tls-aside STAMP",
       "compose run --rm -T setup pki server-cert --config /etc/afkfleet/server.toml --dns server --dns fleet.afkfleet.test --ip 192.0.2.10",
+      "compose run --rm -T files finished STAMP",
       "compose up --detach --wait",
     ]);
     assert.match(result.stdout, /sh setup\.sh forget-aside \d{8}T\d{6}Z/);

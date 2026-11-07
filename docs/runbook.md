@@ -380,13 +380,15 @@ sh setup.sh restore afkfleet-backup-YYYYMMDDTHHMMSSZ.db
   ```sh
   docker compose up --detach --wait
   ```
-- **A backup from a newer server** is refused at the migration, and **one whose secrets need a vault key this host doesn't configure** (from before a key rotation) at the vault check; either way the server stays stopped, and it says how to put the old database back:
+- **When a step after the stop fails** (a backup from a newer server is refused at the migration, and one whose secrets need a vault key this host doesn't configure, from before a key rotation, at the vault check), the server stays stopped, and it says how to put the old database back. Success: `put back: afkfleet.db`, and the server starts again on the old database.
   ```sh
   docker compose run --rm files put-back YYYYMMDDTHHMMSSZ
+  docker compose up --detach --wait
   ```
+- **What's aside is never deleted halfway:** a restore marks its stamp finished only once the backup is in place and migrated, and `forget-aside` refuses a stamp that isn't, whatever the server's health: after a failed restore, the old database aside may be the only copy. `put-back` marks its stamp finished too, since what's left then is the undone copy.
 - **Then, in the app,** redo what was done after the backup was taken: disable users again, end sessions and revoke grants again; whoever changed their password or 2FA since must change it once more (the old ones work again).
 - **Agents:** an agent may still run bots the restored database doesn't give it: they're fenced (`bot.stray`) until it removes them. Right after the start nothing new is placed until every enabled agent is back or 90 s have passed. An agent enrolled after the backup isn't in it: it's refused at its next connect (exit 5) and enrolls again.
-- **Once all is well,** delete what's aside: without a stamp it lists what's aside; with one, it deletes exactly that stamp's files, only while the server is healthy. Success: `ok: what was aside under … is gone`.
+- **Once all is well,** delete what's aside: without a stamp it lists what's aside; with one, it deletes exactly that stamp's files, only once the stamp is marked finished and while the server is healthy. Success: `ok: what was aside under … is gone`.
   ```sh
   sh setup.sh forget-aside
   sh setup.sh forget-aside YYYYMMDDTHHMMSSZ
@@ -404,7 +406,7 @@ The old host is gone, and you have a backup (pulled by your PC) and [the keys' c
    ```sh
    sudo install -o 65532 -g 65532 -m 600 afkfleet-backup-YYYYMMDDTHHMMSSZ.db /srv/afkfleet-backups/backups/
    ```
-3. **The restore,** which ends with the server stopped (there was none). Success: as above, ending with the start command.
+3. **The restore,** which ends with no server running (there was none). Success: as above, ending with `Then: sudo sh setup.sh init`; start afkfleet no other way here, since `init` enrolls this host's agent.
    ```sh
    sh setup.sh restore afkfleet-backup-YYYYMMDDTHHMMSSZ.db
    ```

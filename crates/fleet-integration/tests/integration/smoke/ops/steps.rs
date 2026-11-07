@@ -129,28 +129,49 @@ impl Stack {
         self.ok(&full, SLOW)
     }
 
-    /// `sh setup.sh restore NAME` after a crash or on a new host, which ends
-    /// with the server stopped (S40); the stamp the old files were moved
-    /// aside under.
+    /// `sh setup.sh restore NAME` after a crash, which ends with the server
+    /// stopped and the start command printed (S40); the stamp the old files
+    /// were moved aside under.
     pub(crate) fn restore(&mut self, name: &str) -> String {
+        let (out, stamp) = self.restore_steps(name);
+        if let Some(out) = out {
+            assert!(out.contains("docker compose up --detach --wait"), "{out}");
+            return stamp_in(&out).unwrap_or_else(|| panic!("no stamp in:\n{out}"));
+        }
+        stamp
+    }
+
+    /// `sh setup.sh restore NAME` on a new host, with no server container:
+    /// it ends with init as the next step, never another start (PR #99's
+    /// review).
+    pub(crate) fn restore_on_a_new_host(&mut self, name: &str) {
+        if let (Some(out), _) = self.restore_steps(name) {
+            assert!(out.contains("sudo sh setup.sh init"), "{out}");
+            assert!(!out.contains("docker compose up"), "{out}");
+        }
+    }
+
+    /// Restore's steps: setup.sh's own output in Script mode, or the same
+    /// compose calls in Steps mode; and Steps mode's stamp.
+    fn restore_steps(&mut self, name: &str) -> (Option<String>, String) {
         match self.setup {
-            Setup::Script => {
-                let out = self.setup_sh_ok(&["restore", name], Root::No);
-                assert!(out.contains("docker compose up --detach --wait"), "{out}");
-                stamp_in(&out).unwrap_or_else(|| panic!("no stamp in:\n{out}"))
-            }
+            Setup::Script => (
+                Some(self.setup_sh_ok(&["restore", name], Root::No)),
+                String::new(),
+            ),
             Setup::Steps => {
-                self.ok(&["stop", "agent", "server"], SLOW);
                 self.ok(&["run", "--rm", "-T", "maintenance", "--version"], SLOW);
+                self.ok(&["stop", "agent", "server"], SLOW);
                 let stamp = stamp_now();
                 self.ok(
                     &["run", "--rm", "-T", "files", "restore-in", &stamp, name],
                     SLOW,
                 );
                 self.maintenance(&["migrate"]);
+                self.ok(&["run", "--rm", "-T", "files", "finished", &stamp], SLOW);
                 self.maintenance(&["vault", "status"]);
                 self.maintenance(&["agent", "list"]);
-                stamp
+                (None, stamp)
             }
         }
     }
@@ -213,6 +234,7 @@ impl Stack {
                     pki.extend(["--dns", name]);
                 }
                 self.ok(&pki, SLOW);
+                self.ok(&["run", "--rm", "-T", "files", "finished", &stamp], SLOW);
                 self.start();
                 stamp
             }

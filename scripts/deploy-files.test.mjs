@@ -108,6 +108,7 @@ describe("files.sh, under POSIX sh against a stub stat", { skip: SH }, () => {
       ["forget", "*"],
       ["tls-aside", `${STAMP}x`],
       ["list", STAMP],
+      ["finished", "x"],
     ]) {
       const result = run(root, args);
 
@@ -220,6 +221,7 @@ describe("files.sh, under POSIX sh against a stub stat", { skip: SH }, () => {
 
     assert.equal(result.code, 0, result.stderr);
     assert.deepEqual(listing(root, "data"), [
+      `.afkfleet-finished-${STAMP}`,
       "afkfleet.db",
       "afkfleet.db-shm",
       "afkfleet.db-wal",
@@ -287,6 +289,7 @@ describe("files.sh, under POSIX sh against a stub stat", { skip: SH }, () => {
       writeFileSync(join(root, "data", decoy), "keep\n");
     }
 
+    run(root, ["finished", STAMP]);
     const result = run(root, ["forget", STAMP]);
 
     assert.equal(result.code, 0, result.stderr);
@@ -310,6 +313,7 @@ describe("files.sh, under POSIX sh against a stub stat", { skip: SH }, () => {
     ]) {
       const root = volumes((dir) => {
         writeFileSync(join(dir, "data", `afkfleet.db.aside-${STAMP}`), "old\n");
+        writeFileSync(join(dir, "data", `.afkfleet-finished-${STAMP}`), "");
         change(dir);
       });
 
@@ -319,6 +323,64 @@ describe("files.sh, under POSIX sh against a stub stat", { skip: SH }, () => {
       assert.match(result.stderr, /isn't a regular file/, label);
       assert.ok(existsSync(join(root, "data", `afkfleet.db.aside-${STAMP}`)), label);
       assert.ok(lstatSync(join(root, "data", "afkfleet.db")).isFile(), label);
+    }
+  });
+
+  it("finished marks its stamp in the data volume, owner-only", () => {
+    const root = volumes();
+
+    const result = run(root, ["finished", STAMP]);
+
+    assert.equal(result.code, 0, result.stderr);
+    const marker = join(root, "data", `.afkfleet-finished-${STAMP}`);
+    assert.ok(lstatSync(marker).isFile());
+    assert.equal(statSync(marker).mode & 0o777, 0o600);
+  });
+
+  it("forget refuses a stamp nothing marked finished, deleting nothing", () => {
+    const root = volumes();
+    run(root, ["restore-in", STAMP, BACKUP]);
+    const before = listing(root, "data");
+
+    const result = run(root, ["forget", STAMP]);
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /isn't marked finished/);
+    assert.match(result.stderr, /put-back 20261107T120000Z/);
+    assert.deepEqual(listing(root, "data"), before);
+  });
+
+  it("a failed restore-in, then a restart that makes an empty database: forget refuses, the aside set intact", () => {
+    const root = volumes();
+    // The copy fails after the database moved aside.
+    writeFileSync(join(root, "bin", "cp"), "#!/bin/sh\nexit 1\n");
+    chmodSync(join(root, "bin", "cp"), 0o755);
+    const failed = run(root, ["restore-in", STAMP, BACKUP]);
+    // The server started again, on a volume without its database: an empty one.
+    writeFileSync(join(root, "data", "afkfleet.db"), "");
+
+    const result = run(root, ["forget", STAMP]);
+
+    assert.equal(failed.code, 1);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /isn't marked finished/);
+    assert.equal(text(root, "data", `afkfleet.db.aside-${STAMP}`), "live database\n");
+    assert.equal(text(root, "data", `afkfleet.db-wal.aside-${STAMP}`), "live wal\n");
+    assert.equal(text(root, "data", `afkfleet.db-shm.aside-${STAMP}`), "live shm\n");
+  });
+
+  it("put-back and tls-back mark their stamp finished: what's left is the undone copy", () => {
+    const root = volumes();
+    run(root, ["restore-in", STAMP, BACKUP]);
+    run(root, ["tls-aside", OTHER]);
+
+    const back = run(root, ["put-back", STAMP]);
+    const tlsBack = run(root, ["tls-back", OTHER]);
+
+    assert.equal(back.code, 0, back.stderr);
+    assert.equal(tlsBack.code, 0, tlsBack.stderr);
+    for (const stamp of [STAMP, OTHER]) {
+      assert.ok(existsSync(join(root, "data", `.afkfleet-finished-${stamp}`)), stamp);
     }
   });
 

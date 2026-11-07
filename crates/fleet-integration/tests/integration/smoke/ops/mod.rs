@@ -268,7 +268,7 @@ async fn slow_ops_new_host_from_the_keys_copy() {
     forbid_the_keys(&mut new, &copy);
     new.keys_restore(&copy, names);
     new.put_backup(&old.dir().join("srv").join("backups"), &backup, &old);
-    new.restore(&backup);
+    new.restore_on_a_new_host(&backup);
     let list = new.maintenance(&["agent", "list"]);
     let old_agent = agents(&list)
         .unwrap_or_else(|| panic!("{list}"))

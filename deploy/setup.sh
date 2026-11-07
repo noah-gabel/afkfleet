@@ -755,30 +755,44 @@ restore() {
 	check_env
 	need_volume keys
 	need_volume tls
+	# No server container at all: a new host, which init starts (S39).
+	installed=$(docker compose ps -a -q server) || refuse "docker compose can't list the server's container: nothing was changed"
 	saved=""
 	if server_healthy; then
 		saved=$(docker compose exec -T server /usr/local/bin/afkfleet-server agent list --config "$SERVER_CONFIG") ||
 			refuse "the server's agents can't be listed: nothing was changed"
 		[ "${saved%%"$NL"*}" = "$AGENTS_HEADER" ] || refuse "the server's agent list can't be read: nothing was changed"
 	fi
+	docker compose run --rm -T maintenance --version >/dev/null || refuse "the server's image can't run here: nothing was changed"
 	docker compose stop agent server || refuse "the agent and the server couldn't be stopped: nothing was restored"
-	docker compose run --rm -T maintenance --version >/dev/null || refuse "the server's image can't run here: nothing was restored"
 	when=$(stamp_now)
+	# From here on, a failure leaves the server stopped, and put-back undoes
+	# whatever moved; forget-aside refuses the stamp until it's finished.
+	back="the server stays stopped; put the old database back with: docker compose run --rm files put-back $when"
 	docker compose run --rm -T files restore-in "$when" "$backup" ||
-		refuse "$backup couldn't be put in place: the database is as it was, or aside under $when (sh setup.sh forget-aside lists it)"
+		refuse "$backup couldn't be put in place: $back"
 	ok "$backup is the database; the old one is aside under $when"
 	docker compose run --rm -T maintenance migrate --config "$SERVER_CONFIG" ||
-		refuse "the backup is from a newer server than this one, or can't be read: the server stays stopped; put the old database back with: docker compose run --rm files put-back $when"
+		refuse "the backup is from a newer server than this one, or can't be read: $back"
+	docker compose run --rm -T files finished "$when" ||
+		refuse "the restore couldn't be marked finished: $back"
 	status=0
 	docker compose run --rm -T maintenance vault status --config "$SERVER_CONFIG" || status=$?
 	case $status in
 	0) ok "every secret opens with this host's vault keys" ;;
 	3) refuse "the backup's secrets need a vault key this host doesn't configure (vault status above says which): the server stays stopped; put that key back (the runbook's Rotating the vault key), or the old database with: docker compose run --rm files put-back $when" ;;
-	*) refuse "vault status failed: the server stays stopped" ;;
+	*) refuse "vault status failed: $back" ;;
 	esac
 	restored=$(docker compose run --rm -T maintenance agent list --config "$SERVER_CONFIG") ||
-		refuse "the restored agents can't be listed: the server stays stopped"
+		refuse "the restored agents can't be listed: $back"
 	printf '%s\n' "$restored"
+	if [ -z "$installed" ]; then
+		say ""
+		say "This host has no server yet. Before init, disable every agent you disabled since this backup was taken (it has them enabled), and the old host's local agent:"
+		say "  docker compose run --rm maintenance agent disable --config $SERVER_CONFIG --id <its id>"
+		say "Then: sudo sh setup.sh init, which starts afkfleet on the restored state; don't start it any other way here."
+		return 0
+	fi
 	if [ -z "$saved" ]; then
 		say ""
 		say "The server is stopped. Before you start it, disable every agent you disabled since this backup was taken (it has them enabled):"
@@ -787,10 +801,11 @@ restore() {
 	else
 		for id in $(disabled_since "$saved" "$restored"); do
 			docker compose run --rm -T maintenance agent disable --config "$SERVER_CONFIG" --id "$id" ||
-				refuse "the agent $id couldn't be disabled again: the server stays stopped; disable it, then start afkfleet (docker compose up --detach --wait)"
+				refuse "the agent $id couldn't be disabled again: the server stays stopped; disable it, then start afkfleet (docker compose up --detach --wait), or put the old database back with: docker compose run --rm files put-back $when"
 			ok "the agent $id is disabled again, as it was before the restore"
 		done
-		docker compose up --detach --wait || refuse "afkfleet didn't come up healthy: docker compose ps and docker compose logs say why"
+		docker compose up --detach --wait ||
+			refuse "afkfleet didn't come up healthy: docker compose ps and docker compose logs say why; to go back to the old database: docker compose stop agent server, then docker compose run --rm files put-back $when"
 		ok "afkfleet runs on $backup"
 	fi
 	say ""
@@ -838,6 +853,9 @@ renew_cert() {
 		docker compose up --detach --wait server || true
 		refuse "a new certificate couldn't be made; the old certificate is back and the server started"
 	fi
+	# The new pair is in place: forget-aside may delete the old one later.
+	docker compose run --rm -T files finished "$when" ||
+		say "warning: the renewal couldn't be marked finished, so forget-aside keeps the old pair under $when"
 	docker compose up --detach --wait || refuse "afkfleet didn't come up healthy: docker compose logs server says why"
 	ok "the server's certificate is new, from the same CA: no agent enrolls again"
 	say "Once the agents are back online: sh setup.sh forget-aside $when"

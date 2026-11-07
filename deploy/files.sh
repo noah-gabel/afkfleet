@@ -14,13 +14,19 @@
 #                           moved to <name>.undone-STAMP, the aside ones back
 #   tls-aside STAMP         server.crt and server.key moved aside
 #   tls-back STAMP          undoes tls-aside STAMP, as put-back does
-#   forget STAMP            deletes exactly STAMP's aside and undone files
+#   finished STAMP          marks STAMP's restore or renewal finished
+#   forget STAMP            deletes exactly STAMP's aside and undone files,
+#                           only once STAMP is marked finished
 #   list                    names every aside and undone file
 #
 # STAMP is a UTC time, YYYYMMDDTHHMMSSZ; NAME a backup's file name,
 # afkfleet-backup-<STAMP>.db. Nothing is ever moved over a file, and only
-# forget deletes, by exact names built from its stamp. Each volume's root
-# must be 65532's, owner-only, as the server's image made it.
+# forget deletes, by exact names built from its stamp, and only a set whose
+# restore or renewal finished (setup.sh marks it after migrate, or after the
+# new certificate) or was put back: its marker .afkfleet-finished-STAMP in
+# the database's volume. A restore that stopped halfway leaves the only copy
+# of the database aside, which nothing deletes (PR #99's review). Each
+# volume's root must be 65532's, owner-only, as the server's image made it.
 #
 # Exit codes: 0 done, 1 refused (it says why), 2 usage error.
 #
@@ -50,8 +56,22 @@ refuse() {
 }
 
 usage() {
-	printf 'usage: files.sh restore-in STAMP NAME | put-back STAMP | tls-aside STAMP | tls-back STAMP | forget STAMP | list\n' >&2
+	printf 'usage: files.sh restore-in STAMP NAME | put-back STAMP | tls-aside STAMP | tls-back STAMP | finished STAMP | forget STAMP | list\n' >&2
 	exit 2
+}
+
+# The marker of STAMP ($1): its restore or renewal finished, or was put back.
+marker() {
+	printf '%s' "$DATA/.afkfleet-finished-$1"
+}
+
+# Marks STAMP ($1) finished: an empty owner-only file, never a link.
+finish() {
+	if [ -L "$(marker "$1")" ] || { [ -e "$(marker "$1")" ] && [ ! -f "$(marker "$1")" ]; }; then
+		refuse ".afkfleet-finished-$1 isn't a regular file: it's left as it is"
+	fi
+	: >"$(marker "$1")" || refuse "$1 couldn't be marked finished"
+	say "marked finished: $1"
 }
 
 # Whether $1 is a stamp: YYYYMMDDTHHMMSSZ.
@@ -130,6 +150,8 @@ put_back() {
 			say "put back: $file"
 		fi
 	done
+	# What's left under the stamp is the undone copy: forget may delete it.
+	finish "$3"
 }
 
 restore_in() {
@@ -151,10 +173,13 @@ restore_in() {
 }
 
 # Deletes exactly STAMP's ($1) aside and undone files, each only a regular
-# file; checks every one first.
+# file, once STAMP is marked finished; checks every one first.
 forget() {
 	check_root "$DATA"
 	check_root "$TLS"
+	if [ -L "$(marker "$1")" ] || [ ! -f "$(marker "$1")" ]; then
+		refuse "$1 isn't marked finished: its restore or renewal stopped halfway, so what's aside may be the only copy of the database or the certificate; nothing was deleted. Put it back first (docker compose run --rm files put-back $1, or tls-back $1), then forget it"
+	fi
 	for kind in aside undone; do
 		for file in $DATABASE; do
 			name=$DATA/$file.$kind-$1
@@ -188,6 +213,7 @@ forget() {
 		rm -f "$partial"
 		say "deleted: .afkfleet-restore-$1.partial"
 	fi
+	rm -f "$(marker "$1")"
 }
 
 # Names every aside and undone file, by its volume.
@@ -221,7 +247,13 @@ tls-aside)
 tls-back)
 	if [ $# -ne 2 ] || ! stamp "$2"; then usage; fi
 	check_root "$TLS"
+	check_root "$DATA"
 	put_back "$TLS" "$PAIR" "$2"
+	;;
+finished)
+	if [ $# -ne 2 ] || ! stamp "$2"; then usage; fi
+	check_root "$DATA"
+	finish "$2"
 	;;
 forget)
 	if [ $# -ne 2 ] || ! stamp "$2"; then usage; fi
