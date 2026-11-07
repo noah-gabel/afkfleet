@@ -32,8 +32,9 @@ use crate::accounts::{
 };
 use crate::agents::{AgentPage, AgentResponse, AgentStatus};
 use crate::app::{
-    BotCommandResponse, LiveUpdateMessage, LoginStepResponse, LogoutResponse, ServerProfileRequest,
-    ServerProfileResponse, ServerProfileState, SetupStepResponse, UpdateCheck, WindowTheme,
+    AppVersion, BotCommandResponse, LiveUpdateMessage, LoginStepResponse, LogoutResponse,
+    ServerProfileRequest, ServerProfileResponse, ServerProfileState, SetupStepResponse,
+    UpdateCheck, WindowTheme,
 };
 use crate::audit::AuditPage;
 use crate::auth::{
@@ -240,6 +241,7 @@ fn write_app(config: &Config) -> Result<(), TypeScriptError> {
     SetupStepResponse::export_all(config).map_err(TypeScriptError::Export)?;
     WindowTheme::export_all(config).map_err(TypeScriptError::Export)?;
     UpdateCheck::export_all(config).map_err(TypeScriptError::Export)?;
+    AppVersion::export_all(config).map_err(TypeScriptError::Export)?;
     ServerProfileRequest::export_all(config).map_err(TypeScriptError::Export)?;
     ServerProfileResponse::export_all(config).map_err(TypeScriptError::Export)?;
     ServerProfileState::export_all(config).map_err(TypeScriptError::Export)?;

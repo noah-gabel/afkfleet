@@ -297,6 +297,16 @@ pub enum UpdateCheck {
     },
 }
 
+/// The `app_version` command's answer (Plan.md P12.5; ADR-0022, U37): the
+/// installed app's own version, read from the app itself with no network
+/// call, so Profile, the login screen and the start screen can always show it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct AppVersion {
+    /// This app's version.
+    #[ts(type = "string")]
+    pub version: BoundedText<VERSION_MAX_CHARS>,
+}
+
 /// What the `set_window_theme` command takes: the user's theme choice, for
 /// the native title bar (ADR-0020, U85, S94). Closed: anything else is
 /// refused before the command runs.
@@ -766,6 +776,18 @@ mod tests {
             json!({ "state": "available", "current": "0.1.0", "version": "0.2.0" })
         );
         assert_eq!(VERSION_MAX_CHARS, 64);
+    }
+
+    /// The app's version crosses as that one field (ADR-0022, U37).
+    #[test]
+    fn the_apps_version_crosses_as_its_one_field() {
+        assert_eq!(
+            serde_json::to_value(AppVersion {
+                version: BoundedText::new("0.1.0")
+            })
+            .unwrap(),
+            json!({ "version": "0.1.0" })
+        );
     }
 
     #[test]

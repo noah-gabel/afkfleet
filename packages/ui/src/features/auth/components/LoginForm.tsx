@@ -20,6 +20,7 @@ import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import { useRetryWait } from "../../../hooks/useRetryWait";
 import { showFieldErrors } from "../../../lib/formErrors";
+import { AppVersionLine } from "../../updates/components/AppVersionLine";
 import type { Notice } from "../authFlowReducer";
 import { type LoginValues, loginForm } from "../schemas";
 import { AuthCard, FormError, ServerLine } from "./AuthCard";
@@ -79,6 +80,7 @@ export function LoginForm({
       brand
       title="Log in"
       intro={origin === undefined ? undefined : <ServerLine origin={origin} />}
+      footer={<AppVersionLine />}
     >
       {notice === undefined ? null : (
         <Alert>

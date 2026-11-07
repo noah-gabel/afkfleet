@@ -667,6 +667,13 @@
       "inputs": [],
       "args": {},
       "expect": { "error": "no_update" }
+    },
+    {
+      "command": "app_version",
+      "method": "appVersion",
+      "inputs": [],
+      "args": {},
+      "expect": { "ok": { "version": "0.1.0" } }
     }
   ]
 }

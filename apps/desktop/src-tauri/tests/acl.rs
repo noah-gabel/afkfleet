@@ -4,7 +4,8 @@
 //! - tauri-plugin-opener's own commands don't exist for the webview: the app calls only
 //!   its free `open_url`, from Rust (ADR-0018)
 //! - tauri-plugin-updater is registered, but none of its commands is granted: only the
-//!   app's own `check_update` and `install_update` reach it, from Rust (ADR-0022, S27)
+//!   app's own `check_update` and `install_update` reach it, from Rust (ADR-0022, S27);
+//!   `app_version` answers the app's own version, with no network call (U37)
 //! - every command the app registers and grants answers exactly as
 //!   `tests/ipc-contract.json` says, with the arguments `TauriApiClient` sends
 // Integration tests are test code, but clippy only applies the test allowances
@@ -18,7 +19,9 @@ use std::sync::{Arc, mpsc};
 use afkfleet_desktop::keychain::KeychainFactory;
 use afkfleet_desktop::profile::PROFILE_FILE;
 use afkfleet_desktop::state::{AppState, LinkOpener, OpenError};
-use fleet_api_types::app::{CommandError, LogoutResponse, ServerProfileState, UpdateCheck};
+use fleet_api_types::app::{
+    AppVersion, CommandError, LogoutResponse, ServerProfileState, UpdateCheck,
+};
 use fleet_client::VerifiedLink;
 use rstest::rstest;
 use serde_json::Value;
@@ -213,7 +216,7 @@ fn every_contract_command_passes_the_acl_and_answers_as_the_contract_says() {
             (_, _, answer) => panic!("{command}: unexpected answer {answer:?}"),
         }
     }
-    assert_eq!(entries.len(), 70);
+    assert_eq!(entries.len(), 71);
 }
 
 /// An Ok answer must parse as `command`'s own response type and equal the expected
@@ -233,6 +236,11 @@ fn assert_ok(command: &str, expected: &Value, value: &Value) {
         "check_update" => assert_eq!(
             serde_json::from_value::<UpdateCheck>(value.clone()).unwrap(),
             serde_json::from_value::<UpdateCheck>(expected.clone()).unwrap(),
+            "{command}"
+        ),
+        "app_version" => assert_eq!(
+            serde_json::from_value::<AppVersion>(value.clone()).unwrap(),
+            serde_json::from_value::<AppVersion>(expected.clone()).unwrap(),
             "{command}"
         ),
         other => panic!("{other}: the contract expects no Ok answer from it"),

@@ -113,6 +113,7 @@ export const COMMANDS = [
   "set_window_theme",
   "check_update",
   "install_update",
+  "app_version",
 ];
 
 /** The whole of `app.security`. */

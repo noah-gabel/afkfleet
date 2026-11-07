@@ -70,6 +70,7 @@ export class UnavailableApiClient implements ApiClient {
   leaveAccount = unavailable;
   setWindowTheme = unavailable;
   checkUpdate = unavailable;
+  appVersion = unavailable;
   installUpdate = unavailable;
   accountsAwaitingApproval = unavailable;
   account = unavailable;

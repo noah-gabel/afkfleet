@@ -151,6 +151,7 @@ pub fn configure<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
             commands::window::set_window_theme,
             commands::update::check_update,
             commands::update::install_update,
+            commands::update::app_version,
         ])
 }
 

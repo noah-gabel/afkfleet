@@ -186,8 +186,6 @@ export type InstallPhase = "idle" | "installing" | "failed";
 export interface UpdateState {
   /** The start's check was asked: it runs once per App. */
   readonly started: boolean;
-  /** This app's version, from the last check that answered; null before one did. */
-  readonly current: string | null;
   /** The last check's answer; null before one answered, or after one failed. */
   readonly check: UpdateCheck | null;
   /** A check runs. */
@@ -234,7 +232,6 @@ export function createAppStores(): AppStores {
   return {
     update: createStore<UpdateState>()((set, get) => ({
       started: false,
-      current: null,
       check: null,
       checking: false,
       checkFailure: null,
@@ -252,7 +249,7 @@ export function createAppStores(): AppStores {
         set({ checking: true, checkFailure: null });
       },
       checked(check) {
-        set({ checking: false, check, current: check.current, checkFailure: null });
+        set({ checking: false, check, checkFailure: null });
       },
       checkFailed(failure) {
         set({ checking: false, check: null, checkFailure: failure });

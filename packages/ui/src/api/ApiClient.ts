@@ -7,6 +7,7 @@ import type { AccountPage } from "../generated/AccountPage";
 import type { AccountResponse } from "../generated/AccountResponse";
 import type { AgentPage } from "../generated/AgentPage";
 import type { AgentResponse } from "../generated/AgentResponse";
+import type { AppVersion } from "../generated/AppVersion";
 import type { AuditPage } from "../generated/AuditPage";
 import type { BotCommandResponse } from "../generated/BotCommandResponse";
 import type { BotModeRequest } from "../generated/BotModeRequest";
@@ -243,6 +244,11 @@ export interface ApiClient {
    * progress, and the app starts again (ADR-0022, U27, U28, S27).
    */
   installUpdate(): Promise<void>;
+  /**
+   * This app's own version, read from the app itself with no network call (ADR-0022, U37): for
+   * Profile's Updates section, the login screen and the start screen.
+   */
+  appVersion(): Promise<AppVersion>;
 }
 
 /** A method of the API. */
@@ -320,4 +326,5 @@ export const API_METHODS = [
   "setWindowTheme",
   "checkUpdate",
   "installUpdate",
+  "appVersion",
 ] as const satisfies readonly ApiMethod[];

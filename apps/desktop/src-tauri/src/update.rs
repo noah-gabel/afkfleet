@@ -38,7 +38,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use fleet_api_types::BoundedText;
-use fleet_api_types::app::{CommandError, CommandErrorCode, UpdateCheck, VERSION_MAX_CHARS};
+use fleet_api_types::app::{
+    AppVersion, CommandError, CommandErrorCode, UpdateCheck, VERSION_MAX_CHARS,
+};
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_updater::{Error, Update, UpdaterExt as _};
 
@@ -214,6 +216,15 @@ impl<U: Updates> Updater<U> {
 
     fn current(&self) -> BoundedText<VERSION_MAX_CHARS> {
         BoundedText::new(&self.current)
+    }
+
+    /// The `app_version` command: this app's own version, at once and with
+    /// no network call, never waiting for a check or an install (U37).
+    #[must_use]
+    pub fn app_version(&self) -> AppVersion {
+        AppVersion {
+            version: self.current(),
+        }
     }
 
     /// The `check_update` command: this app's version, and the newer
@@ -841,6 +852,31 @@ mod tests {
         assert_eq!(code(second), CommandErrorCode::UpdateBusy);
         assert_eq!(code(install), CommandErrorCode::UpdateBusy);
         assert!(first.is_ok(), "{first:?}");
+        assert_eq!(updater.port.checks.load(Ordering::SeqCst), 1);
+    }
+
+    /// The app's version comes from the app itself: on or off, at once, even
+    /// while a check holds the one-at-a-time lock, and never asking (U37).
+    #[tokio::test]
+    async fn the_apps_version_answers_at_once_on_or_off_even_while_a_check_runs() {
+        let off = Updater::new(StandIn::default(), false, "0.1.0");
+        let updater = on(StandIn::default());
+        let gate = Arc::new(Notify::new());
+        *updater.port.gate.lock().unwrap() = Some(Arc::clone(&gate));
+
+        let mut checking = pin!(updater.check());
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(matches!(
+            checking.as_mut().poll(&mut context),
+            Poll::Pending
+        ));
+        let during = updater.app_version();
+        gate.notify_one();
+        let _ = checking.await;
+
+        assert_eq!(during.version.as_str(), "0.1.0");
+        assert_eq!(off.app_version().version.as_str(), "0.1.0");
+        assert_eq!(off.port.checks.load(Ordering::SeqCst), 0);
         assert_eq!(updater.port.checks.load(Ordering::SeqCst), 1);
     }
 }

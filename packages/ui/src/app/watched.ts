@@ -162,6 +162,8 @@ export function watched(client: ApiClient, stores: AppStores, events: WatchEvent
     // failure says anything about the banner or the session (ADR-0022, S27).
     checkUpdate: () => client.checkUpdate(),
     installUpdate: () => client.installUpdate(),
+    // Not watched: the app answers it from its own version, with no network call (U37).
+    appVersion: () => client.appVersion(),
   };
 }
 

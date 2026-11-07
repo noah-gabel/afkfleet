@@ -168,11 +168,13 @@ describe("watched", () => {
       installUpdate: async () => {
         throw fakeApiError("update_unreachable");
       },
+      appVersion: async () => ({ version: "0.1.0" }),
     });
     stores.connection.getState().fail("down");
 
     await client.checkUpdate();
     await expect(client.installUpdate()).rejects.toBeInstanceOf(ApiError);
+    await client.appVersion();
 
     expect(stores.connection.getState().status).toBe("down");
     expect(events.recovered).not.toHaveBeenCalled();

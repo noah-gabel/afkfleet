@@ -1,15 +1,17 @@
-// Profile's Updates section, beside Theme (Plan.md P12.5; ADR-0022, U27, U33): this PC's installed
-// version, and a check on demand. A check the user ran says why it failed; the start's never
+// Profile's Updates section, beside Theme (Plan.md P12.5; ADR-0022, U27, U33, U37): this PC's
+// installed version, read from the app itself in every state, before any check too, and a check
+// on demand. A check the user ran says why it failed; the start's never
 // does. An installed release's progress shows in the notice under the banner. The texts are the
 // user's.
 import { describeError } from "../../../api/describeError";
+import { useAppVersion } from "../../../api/queries";
 import { useUpdate } from "../../../app/context";
 import { Button } from "../../../components/ui/button";
 import { useUpdates } from "../hooks/useUpdates";
 
 /** The section. */
 export function UpdatesSection() {
-  const current = useUpdate((state) => state.current);
+  const version = useAppVersion();
   const check = useUpdate((state) => state.check);
   const checking = useUpdate((state) => state.checking);
   const failure = useUpdate((state) => state.checkFailure);
@@ -39,7 +41,10 @@ export function UpdatesSection() {
       >
         Updates
       </h2>
-      {current === null ? null : <p className="text-sm">Installed: afkfleet {current}.</p>}
+      {/* One line high before the app answers, so nothing moves when it does. */}
+      <p className="min-h-5 text-sm">
+        {version.data === undefined ? null : `Installed: afkfleet ${version.data.version}.`}
+      </p>
       {/* One line high even while it's empty, so nothing jumps while a check runs. */}
       <p role="status" className="min-h-5 text-sm text-muted-foreground">
         {result}

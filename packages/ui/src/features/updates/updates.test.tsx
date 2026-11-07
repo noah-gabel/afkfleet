@@ -5,7 +5,10 @@ import { act, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { ApiClient } from "../../api/ApiClient";
 import { ApiError } from "../../api/ApiError";
+import { fakeApiError } from "../../api/FakeApiClient";
 import type { UpdateCheck } from "../../generated/UpdateCheck";
+import { PROFILE } from "../../test/fixtures";
+import { renderApp } from "../../test/renderApp";
 import { atScreen, signedIn } from "../../test/signedIn";
 import { atLogin } from "../../test/signIn";
 
@@ -230,5 +233,83 @@ describe("Profile's Updates section", () => {
 
     expect(await updates.findByText("Updates are off in this build.")).toBeDefined();
     expect(updates.queryByRole("button", { name: "Check for updates" })).toBeNull();
+  });
+});
+
+describe("the app's version (U37)", () => {
+  /** The app's own answer, apart from any check's `current`, so the source shows. */
+  const VERSION = async () => ({ version: "0.3.1" });
+
+  /** Profile's Updates section. */
+  async function section() {
+    const heading = await screen.findByRole("heading", { name: "Updates", level: 2 });
+    return within(heading.closest("section") as HTMLElement);
+  }
+
+  it.each<[string, Partial<ApiClient>]>([
+    ["before any check answers", { checkUpdate: never }],
+    ["while updates are off", { checkUpdate: async () => OFF }],
+    ["when the check is up to date", { checkUpdate: async () => UP_TO_DATE }],
+    ["when a newer version is available", { checkUpdate: async () => AVAILABLE }],
+    [
+      "when the check failed",
+      {
+        checkUpdate: async () => {
+          throw UNREACHABLE();
+        },
+      },
+    ],
+  ])("Profile shows the installed version %s, read from the app", async (_, handlers) => {
+    await atScreen("/profile", { ...handlers, appVersion: VERSION });
+    const updates = await section();
+
+    expect(await updates.findByText("Installed: afkfleet 0.3.1.")).toBeDefined();
+  });
+
+  it("Profile shows it while a check it ran is checking", async () => {
+    let checks = 0;
+    const app = await atScreen("/profile", {
+      appVersion: VERSION,
+      checkUpdate: () => {
+        checks += 1;
+        return checks === 1 ? Promise.resolve(UP_TO_DATE) : never();
+      },
+    });
+    const updates = await section();
+    await updates.findByText("afkfleet is up to date.");
+
+    await app.user.click(updates.getByRole("button", { name: "Check for updates" }));
+
+    expect(updates.getByRole("button", { name: "Checking…" })).toBeDefined();
+    expect(updates.getByText("Installed: afkfleet 0.3.1.")).toBeDefined();
+  });
+
+  it("the login screen shows it in a line of its own below the card, with no check answered", async () => {
+    await atLogin({ appVersion: VERSION, checkUpdate: never });
+
+    const line = await screen.findByText("afkfleet 0.3.1");
+    const card = screen
+      .getByRole("heading", { name: "Log in", level: 1 })
+      .closest('[data-slot="card"]') as HTMLElement;
+
+    expect(card.contains(line)).toBe(false);
+    expect(card.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("the start screen shows it below its choices while it waits for the server", async () => {
+    renderApp({
+      serverProfile: async () => PROFILE,
+      me: async () => {
+        throw fakeApiError("unreachable");
+      },
+      appVersion: VERSION,
+      checkUpdate: never,
+    });
+    await screen.findByText("Waiting for the server…");
+
+    const line = await screen.findByText("afkfleet 0.3.1");
+    const settings = screen.getByRole("button", { name: "Server settings" });
+
+    expect(settings.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

@@ -170,7 +170,7 @@ To be written per boundary (STRIDE: spoofing, tampering, repudiation, informatio
 ### Desktop app (B2, B7)
 *Expanded in P8 (ADR-0007, ADR-0017) and P11 (ADR-0020).*
 
-**What crosses B2, the webview and the app's Rust side.** The UI calls the 70 commands its one capability grants, and nothing else: no core command and no plugin API, and `withGlobalTauri` is off. tauri-plugin-opener isn't registered: the Rust side calls its free `open_url`, from one command without arguments, on the link it checked (P9.8).
+**What crosses B2, the webview and the app's Rust side.** The UI calls the 71 commands its one capability grants, and nothing else: no core command and no plugin API, and `withGlobalTauri` is off. tauri-plugin-opener isn't registered: the Rust side calls its free `open_url`, from one command without arguments, on the link it checked (P9.8).
 - **Into Rust:**
   - the server's address and a custom CA's certificates
   - usernames, passwords (login, registration, step-up, a new password), 2FA and recovery codes, invite codes
@@ -189,6 +189,7 @@ To be written per boundary (STRIDE: spoofing, tampering, repudiation, informatio
   - the bots, their chat history and the modes, as the viewer may see them (H1–H3, I)
   - the audit log and the agents, to Admins and the Owner (J); the grants a user holds and the accounts they share, to the Owner reviewing them (F, S47)
   - at most 8 usernames behind "Share with" (U110, S127)
+  - this app's own version, read from the app with no network call (ADR-0022, U37), and an update check's versions, never a release's notes, date or address (S27)
   - errors: a closed code with a fixed message and the server's details
   - the live events (P11.8), over one long-running command's Tauri `Channel`: the server's frames as this viewer's REST shows them, why to fetch again, and why the socket went down with its wait; the socket, its ticket and its token stay in fleet-client
 - **Never a token.** fleet-client keeps the access token and the login's step tokens in memory, and the refresh token lives in the Windows Credential Manager.

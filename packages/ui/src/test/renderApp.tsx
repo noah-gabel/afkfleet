@@ -34,6 +34,8 @@ export function renderApp(
     setWindowTheme: async () => {},
     // The start's update check (ADR-0022, U27): nothing newer, unless a test says otherwise.
     checkUpdate: async () => ({ state: "up_to_date", current: "0.1.0" }),
+    // The app's own version (U37).
+    appVersion: async () => ({ version: "0.1.0" }),
     ...handlers,
   });
   const runtime = createAppRuntime(fake);

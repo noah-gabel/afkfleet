@@ -81,6 +81,7 @@ const COMMANDS: &[&str] = &[
     "set_window_theme",
     "check_update",
     "install_update",
+    "app_version",
 ];
 
 fn main() -> Result<(), Box<dyn Error>> {

@@ -174,6 +174,7 @@ export const COMMANDS = [
   "set_window_theme",
   "check_update",
   "install_update",
+  "app_version",
 ] as const;
 
 /** One command. */
@@ -838,13 +839,14 @@ export class FakeBackend {
       return lasting;
     }
     // Not the theme's, which reaches no server, nor the profile, which only the app holds,
-    // nor the updater's, which ask GitHub (ADR-0022, S27).
+    // nor the updater's, which ask GitHub (ADR-0022, S27), nor the app's version (U37).
     if (
       this.#refusing !== null &&
       command !== "set_window_theme" &&
       command !== "server_profile" &&
       command !== "check_update" &&
-      command !== "install_update"
+      command !== "install_update" &&
+      command !== "app_version"
     ) {
       // The real logout ends the session in the app whatever the server does, and answers
       // that the server wasn't told (ADR-0022, S1).
@@ -2328,6 +2330,8 @@ export class FakeBackend {
         return typeof this.#update === "string" ? refused(this.#update) : value(this.#update);
       case "install_update":
         return this.#install === null ? value() : refused(this.#install);
+      case "app_version":
+        return value({ version: "0.1.0" });
       case "open_verification_link":
         if (this.#flow === null) {
           return refused("no_verification_link");

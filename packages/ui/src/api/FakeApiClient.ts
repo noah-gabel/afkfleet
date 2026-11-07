@@ -7,6 +7,7 @@ import type { AccountResponse } from "../generated/AccountResponse";
 import type { AgentPage } from "../generated/AgentPage";
 import type { AgentResponse } from "../generated/AgentResponse";
 import type { ApiErrorDetails } from "../generated/ApiErrorDetails";
+import type { AppVersion } from "../generated/AppVersion";
 import type { AuditPage } from "../generated/AuditPage";
 import type { BotCommandResponse } from "../generated/BotCommandResponse";
 import type { BotModeRequest } from "../generated/BotModeRequest";
@@ -334,6 +335,10 @@ export class FakeApiClient implements ApiClient {
 
   async checkUpdate(): Promise<UpdateCheck> {
     return this.#handler("checkUpdate", [])();
+  }
+
+  async appVersion(): Promise<AppVersion> {
+    return this.#handler("appVersion", [])();
   }
 
   async installUpdate(): Promise<void> {

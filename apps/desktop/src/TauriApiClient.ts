@@ -11,6 +11,7 @@ import type { AccountPage } from "@afkfleet/ui/generated/AccountPage";
 import type { AccountResponse } from "@afkfleet/ui/generated/AccountResponse";
 import type { AgentPage } from "@afkfleet/ui/generated/AgentPage";
 import type { AgentResponse } from "@afkfleet/ui/generated/AgentResponse";
+import type { AppVersion } from "@afkfleet/ui/generated/AppVersion";
 import type { AuditPage } from "@afkfleet/ui/generated/AuditPage";
 import type { BotCommandResponse } from "@afkfleet/ui/generated/BotCommandResponse";
 import type { BotModeRequest } from "@afkfleet/ui/generated/BotModeRequest";
@@ -384,6 +385,10 @@ export class TauriApiClient implements ApiClient {
 
   installUpdate(): Promise<void> {
     return this.#call("install_update");
+  }
+
+  appVersion(): Promise<AppVersion> {
+    return this.#call("app_version");
   }
 
   async watchEvents(onUpdate: (update: LiveUpdateMessage) => void): Promise<void> {
