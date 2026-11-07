@@ -192,6 +192,18 @@ describe("check", () => {
       "the threat model cites no test, so the check proves nothing",
     ]);
   });
+
+  it("names a cited scripts/ test file that doesn't exist, and passes one that does", () => {
+    const table = [
+      "| a | Verified by |",
+      "|---|---|",
+      "| x | `scripts/release.test.mjs`, `scripts/gone.test.mjs` and `scripts/release.mjs` |",
+    ].join("\n");
+
+    assert.deepEqual(check(table, FILES, new Set(["scripts/release.test.mjs"])), [
+      "line 3: `scripts/gone.test.mjs` names no file under scripts/",
+    ]);
+  });
 });
 
 describe("rustFiles", () => {

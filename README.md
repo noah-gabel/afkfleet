@@ -239,6 +239,9 @@ There's no support, and I don't take feature requests. Security reports are welc
   - **Metrics** (P12.4): the server and the agent each on an internal port, in Prometheus' format (see [Metrics](#metrics)).
   - **The stack** (P12.1, P12.2, P12.7): the server's and the agent's images for linux/arm64 and linux/amd64, a compose project beside the host's other services behind its own Caddy or an existing proxy, a setup script, and smoke tests of both paths every night (see [Running it all with Docker Compose](#running-it-all-with-docker-compose)).
   - **The release** (P12.5): the app's NSIS installer, per user and unsigned, and updates the app checks for at each start and installs only when they're signed with the maintainer's offline key; a release workflow that pushes both images and drafts the GitHub release from a tag, with no key in CI (see [Releasing afkfleet](docs/releasing.md)).
+  - **Operations** (P12.6): the operators' guide, [docs/runbook.md](docs/runbook.md), from the install in about eleven commands to the uninstall; each release's host files with `setup.sh fetch` and `update`; restores, the keys' copy for a new host, the yearly certificate renewal and the vault key's rotation, each command run by a test or marked why not. The Minecraft version bump is the maintainer's, in [docs/releasing.md](docs/releasing.md#the-minecraft-version-bump).
+
+  Phase 12's definition of done is the user's to run, on their own host, with [docs/dod/phase-12.md](docs/dod/phase-12.md) once the first release exists; P12.8, the repository's tidy-up, comes after it.
 
   [ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md) records Phase 12's decisions.
 

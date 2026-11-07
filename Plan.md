@@ -4327,7 +4327,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >   | B | `p12/p12.4-metrics` | P12.4 (ticked here) |
 >   | C | `p12/p12-stack` | P12.1, P12.2 and P12.7: the images, the compose project with both proxy paths, the nightly smoke test, the setup script (ticked here) |
 >   | D1 | `p12/p12.5-release` | PR #97's follow-ups, then P12.5: the installer, the updater, the maintainer's signing step and the rehearsal, the release workflow; the friends' and the maintainer's guides (ticked here) |
->   | D2 | `p12/p12.6-runbook` | P12.6 and the DoD's kit: the host's release bundle and `setup.sh fetch`, the operations on the volumes, dynamic DNS, the runbook finished, the Minecraft version bump in `docs/releasing.md` (ticked there) |
+>   | D2 | `p12/p12.6-runbook` | P12.6 and the DoD's kit: the host's release bundle and `setup.sh fetch`, the operations on the volumes, dynamic DNS, the runbook finished, the Minecraft version bump in `docs/releasing.md` (ticked here) |
 >   | E | `p12/tidy-up` | P12.8: the repository tidied for readability, with no behaviour change (ticked there) |
 >
 > - **The user's frame for the phase** (U1, U2):
@@ -4487,7 +4487,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The signing step and the rehearsal** are the user's alone: `just updater-sign` (the key by path, the password at a hidden prompt, into the CLI's environment alone) and `just update-rehearsal` (a throwaway key, a separate product on loopback).
   > - **The release workflow** (`.github/workflows/release.yml`): a tag vX.Y.Z on main; the guard requires CI green on that commit; each build job tests as Stack does and saves the images by ID, with no package permission; each push job, on a fresh runner that checks out `scripts/release.mjs` alone and runs no build tool, loads and checks them, then logs in, pushes `X.Y.Z-<arch>` and logs out (PR #98's review); the merge job makes `X.Y.Z` from the digests; the installer is built from scratch; a job with `contents: write` and no repository code drafts the release. The maintainer signs and publishes by `docs/releasing.md`.
   > - **Deviations:** README and the runbook don't explain SmartScreen: the friends' guide `docs/using-the-app.md` does (U34). Cargo.lock gains six entries, not two (four are macOS-only). The signing step prompts for the password itself instead of leaving it to the CLI's prompt (S24). The pushed images are checked by their platform and release labels instead of an image-ID comparison (R24). A tag the registry denies reading counts as absent (the first release's packages don't exist yet). The updater's on/off policy reads the build's endpoints instead of its identifier (S27, R20), as the check exe's guard (ADR-0020, U87) refused a binary holding the identifier constants.
-- [ ] **P12.6** `docs/runbook.md`:
+- [x] **P12.6** `docs/runbook.md`:
   - install, configure, bootstrap the Owner
   - enroll an agent
   - rotate keys, renew certificates
@@ -4543,6 +4543,16 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > *Group A starts the runbook with "Backups and restore".*
 
   > Note (P12.6, from Phase 12, group B) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S10): **the metrics** in the finished runbook: the compose form of reading them (from a container on the project's network, never through a published port), and the alerts group B's "Metrics" section starts with.
+
+  > Note (P12.6, from Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **bots on a lost agent:** disable the agent, make sure its host and its bots are stopped, then `afkfleet-server agent release --id …`; a running server places the bots within 30 s. Nothing moves them by time (S32). **After restoring a backup:** an agent may run bots the database doesn't give it; they're fenced (`bot.stray`) until the agent removes them, and the agents' bots count shows them.
+
+  > Note (P12.6, group D2) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U38–U41, S28–S51, R30, R31, "As built (group D2)"): **as built.**
+  > - **The runbook** (`docs/runbook.md`) is the operators' guide alone: 22 sections, every step with its success line, placeholders alone. README's operator material moved into it, each heading left with a pointer. `scripts/runbook-commands.mjs` ties each of its commands to the test that runs it, or its block says why none can.
+  > - **The host's release files:** `afkfleet-deploy-X.Y.Z.tar.gz`, written byte for byte the same by `scripts/deploy-bundle.mjs` in the release's `bundle` job (`contents: read`), its `RELEASE` pinning both images by their index digests; `sh setup.sh fetch X.Y.Z`, and `update`'s refusal of a running server newer than the folder's release.
+  > - **Operations on the volumes:** the `files` and `maintenance` services and `setup.sh`'s `restore`, `forget-aside`, `renew-cert`, `keys-backup` and `keys-restore`; the vault key's rotation and incident response as runbook commands; Docker Engine 28.0 or newer checked at the install (U40); the keys' copy leaving the host through the operator's own SSH login, compared by SHA-256 (U41).
+  > - **Tests:** `smoke::ops::slow_ops_restore_after_a_crash` and `smoke::ops::slow_ops_new_host_from_the_keys_copy` in `just test-stack`, which CI runs with `setup.sh` itself; setup.sh's and files.sh's stub tests under dash.
+  > - **The Minecraft version upgrade** is the maintainer's, in `docs/releasing.md` (U34): ADR-0003's steps, numbers kept, and ADR-0003 points there.
+  > - **Deviations:** `put-back` and `tls-back` keep what they replace as `.undone-STAMP`, which `forget-aside` deletes too; the runbook's Owner line is marked as run by no test (it asks at a terminal; the tests use `--password-stdin`); more of the runbook's commands run in tests than S46 listed; PR #98's updater note was half right (a newer release without a Windows entry is `update_manifest`).
 - [x] **P12.7** 🔴 Compose smoke test in CI, run nightly:
   1. `up`
   2. health checks pass
@@ -4573,6 +4583,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - A friend on another PC installs the release build, registers with an invite and logs in with 2FA, over HTTPS against that system (moved from Phase 8's DoD).
 
 > Note (Phase 12's DoD, the user's change at the planning) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U6): **"A fresh VPS gets to a running system by following only the runbook" became the clean install above.** Both checks are the user's, on their own host, once group D is merged and the first release exists. The AI never touches the host.
+
+> Note (Phase 12's DoD, group D2) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S49): **the user's kit is `docs/dod/phase-12.md`:** part (a), the clean install by the runbook alone, and part (b), the friend's login by the friends' guide alone, each step with what success looks like and a place for its outcome. It's opened at the first release's tag; the AI never runs any of it.
 
 ---
 
@@ -4606,7 +4618,6 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P13.4, from Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): the gRPC port counts no connections per address (S22's residual); a cap, if the load test calls for one, goes into the listener's map of accepted sockets.
   > Note (P13.4, from Phase 10, group F) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): measure grant throughput after a restart of both server and agent (no cached sessions: about 1.3 refreshes a second per agent with `GRANT_WORKERS` = 4), and retune the constant if needed; a load test that asks fresh sessions raises `fresh_sessions_per_bot_per_hour` in its config (S57, S58).
-  > Note (P12.6, from Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **bots on a lost agent:** disable the agent, make sure its host and its bots are stopped, then `afkfleet-server agent release --id …`; a running server places the bots within 30 s. Nothing moves them by time (S32). **After restoring a backup:** an agent may run bots the database doesn't give it; they're fenced (`bot.stray`) until the agent removes them, and the agents' bots count shows them.
 
   > Note (P13.4, from Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): load the conductor and the ingest too, and measure chat's stored size under that load (P11.6's note: retention must bound size, not only time).
 
