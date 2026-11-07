@@ -40,7 +40,7 @@ CONTAINER_PATH=compose.yaml:compose.edge.yaml
 HOST_PATH=compose.yaml:compose.loopback.yaml
 
 # The files compose mounts into the containers, which the images' user reads.
-MOUNTED="Caddyfile prod/server.toml prod/agent.toml"
+MOUNTED="Caddyfile files.sh prod/server.toml prod/agent.toml"
 # Where fetch downloads a release's files from: the repository's own
 # releases (scripts/release.mjs's SOURCE; a test holds them equal).
 RELEASES=https://github.com/noah-gabel/afkfleet/releases/download

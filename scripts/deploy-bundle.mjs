@@ -44,6 +44,7 @@ export const BUNDLE_FILES = [
   ["compose.loopback.yaml", "deploy/compose.loopback.yaml"],
   ["compose.yaml", "deploy/compose.yaml"],
   ["env.example", "deploy/env.example"],
+  ["files.sh", "deploy/files.sh"],
   ["host/sftp-backups.sh", "deploy/host/sftp-backups.sh"],
   ["prod/agent.remote.toml", "deploy/prod/agent.remote.toml"],
   ["prod/agent.toml", "deploy/prod/agent.toml"],

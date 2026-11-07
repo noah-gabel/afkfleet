@@ -213,7 +213,7 @@ image-scan:
 # 0.11.0 by its SHA-256; not of `check`, since this PC has no ShellCheck.
 # Check the host's shell scripts with ShellCheck (needs ShellCheck).
 sh-check:
-    shellcheck --shell=sh deploy/setup.sh deploy/host/sftp-backups.sh
+    shellcheck --shell=sh deploy/setup.sh deploy/files.sh deploy/host/sftp-backups.sh
 
 # The database path, the vault key's path and the PKI's four paths must be absolute, which
 # a committed config can't hold for every machine, so the recipe passes them:

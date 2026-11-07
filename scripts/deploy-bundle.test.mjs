@@ -305,7 +305,7 @@ describe("the image lines", () => {
         .map((line) => line.trim());
     assert.deepEqual(
       images("compose.yaml").filter((line) => !line.includes("caddy:")),
-      [`image: ${server}`, `image: ${agent}`, `image: ${server}`],
+      [`image: ${server}`, `image: ${agent}`, `image: ${server}`, `image: ${server}`],
     );
     assert.deepEqual(images("compose.agent.yaml"), [`image: ${agent}`]);
     for (const name of ["compose.yaml", "compose.agent.yaml"]) {

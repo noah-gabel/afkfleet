@@ -44,6 +44,7 @@ const SETUP = readFileSync(join(DEPLOY, "setup.sh"), "utf8");
 const HOST_SCRIPTS = [
   ["setup.sh", SETUP],
   ["host/sftp-backups.sh", readFileSync(join(DEPLOY, "host", "sftp-backups.sh"), "utf8")],
+  ["files.sh", readFileSync(join(DEPLOY, "files.sh"), "utf8")],
 ];
 
 /** The cases that run sh: not on Windows. */
@@ -98,7 +99,7 @@ const HEALTHY = [
 ];
 
 /** The release's files compose mounts into the containers, copied beside the script. */
-const MOUNTED = ["Caddyfile", "prod/server.toml", "prod/agent.toml"];
+const MOUNTED = ["Caddyfile", "files.sh", "prod/server.toml", "prod/agent.toml"];
 
 /** The stub `curl`: serves `--output`'s file from STUB_SERVED by the URL's last part, or 22. */
 const CURL = `

@@ -39,7 +39,7 @@ pub(crate) const QUICK: Duration = Duration::from_secs(60);
 pub(crate) const SLOW: Duration = Duration::from_secs(240);
 
 /// The release's files the copy holds, from `deploy/`.
-const DEPLOY_FILES: [&str; 9] = [
+const DEPLOY_FILES: [&str; 10] = [
     "compose.yaml",
     "compose.edge.yaml",
     "compose.caddy.yaml",
@@ -47,6 +47,7 @@ const DEPLOY_FILES: [&str; 9] = [
     "compose.grpc.yaml",
     "Caddyfile",
     "setup.sh",
+    "files.sh",
     "prod/server.toml",
     "prod/agent.toml",
 ];
