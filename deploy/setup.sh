@@ -5,7 +5,8 @@
 #   sh setup.sh check          what's there and which proxy path fits; changes nothing
 #   sh setup.sh init           a first install's one-time steps, then afkfleet started
 #   sh setup.sh fetch X.Y.Z    a newer release's files, checked, into this folder
-#   sh setup.sh update         a backup with the running server, then the new images
+#   sh setup.sh update         a backup with the running server, then the new images;
+#                              in a remote agent's folder, the agent's new image alone
 #   sh setup.sh restore NAME   the backup NAME as the database, the old one aside
 #   sh setup.sh forget-aside [STAMP]
 #                              what restore and renew-cert set aside: listed, or
@@ -47,9 +48,13 @@ DEFAULT_BACKUPS=/srv/afkfleet-backups/backups
 CADDY_PATH=compose.yaml:compose.edge.yaml:compose.caddy.yaml
 CONTAINER_PATH=compose.yaml:compose.edge.yaml
 HOST_PATH=compose.yaml:compose.loopback.yaml
+# A remote agent's folder, on another host than the server's.
+AGENT_PATH=compose.agent.yaml
 
-# The files compose mounts into the containers, which the images' user reads.
+# The files compose mounts into the containers, which the images' user reads:
+# on the server's host, and in a remote agent's folder.
 MOUNTED="Caddyfile files.sh prod/server.toml prod/agent.toml"
+AGENT_MOUNTED="prod/agent.remote.toml"
 # Where fetch downloads a release's files from: the repository's own
 # releases (scripts/release.mjs's SOURCE; a test holds them equal).
 RELEASES=https://github.com/noah-gabel/afkfleet/releases/download
@@ -339,6 +344,22 @@ check_env() {
 	case $path in
 	*:compose.override.yaml) path=${path%:compose.override.yaml}; extra=" and compose.override.yaml" ;;
 	esac
+	# A remote agent's folder: the agent alone, which check and update take
+	# (the runbook's Agents on other hosts); everything else is the server's.
+	if [ "$path" = "$AGENT_PATH" ]; then
+		[ "${1:-}" = agent-ok ] ||
+			refuse "this folder runs a remote agent (COMPOSE_FILE=compose.agent.yaml): only check, fetch and update apply here; the rest runs on the server's host"
+		MODE=agent
+		PROXY=none
+		MOUNTS=$AGENT_MOUNTED
+		image AFKFLEET_AGENT_IMAGE agent_image "${AFKFLEET_AGENT_IMAGE:-}"
+		AGENT_IMAGE=$IMAGE
+		SERVER_IMAGE=""
+		ok ".env: a remote agent's folder$extra"
+		return 0
+	fi
+	MODE=server
+	MOUNTS=$MOUNTED
 	case $path in
 	*:compose.grpc.yaml) path=${path%:compose.grpc.yaml}; extra=" with remote agents$extra" ;;
 	esac
@@ -393,7 +414,7 @@ check_env() {
 # them as their own user (65532), and a bundle unpacked under umask 077 would
 # leave them owner-only (fetch sets the modes itself).
 check_mounted() {
-	for file in $MOUNTED; do
+	for file in $MOUNTS; do
 		[ -f "$file" ] || refuse "$file is missing here: this folder must hold a release's files (the runbook's Installing)"
 		info=$(stat -c '%u:%g %a' "$file")
 		padded=$(printf '%04d' "${info##* }")
@@ -413,7 +434,7 @@ check_image() {
 }
 
 check_images() {
-	check_image "$SERVER_IMAGE"
+	[ -z "$SERVER_IMAGE" ] || check_image "$SERVER_IMAGE"
 	check_image "$AGENT_IMAGE"
 	ok "the images are here"
 }
@@ -581,9 +602,18 @@ init() {
 
 check() {
 	check_docker
-	check_env
+	check_env agent-ok
 	check_mounted
 	check_images
+	if [ "$MODE" = agent ]; then
+		agents=$(docker compose ps -a -q agent) || refuse "docker compose can't list the agent's container"
+		if [ -n "$agents" ]; then
+			say "a remote agent is installed here: update it with sh setup.sh update"
+		else
+			say "no remote agent is installed here yet: enroll it as the runbook's Agents on other hosts says"
+		fi
+		return 0
+	fi
 	check_ports
 	name=$(project)
 	if [ -n "$(docker ps -a -q --filter "label=com.docker.compose.project=$name")" ]; then
@@ -593,32 +623,52 @@ check() {
 	fi
 }
 
-# A running server newer than this folder's release would be replaced by an
-# older one: refused. An image without a release version (a local build) isn't
+# A running $2 (server or agent; its container $1) newer than this folder's
+# release would be replaced by an older one: refused. RELEASE's own version
+# must be one; an image without a release version (a local build) isn't
 # compared.
 check_running_version() {
 	[ -f RELEASE ] || return 0
 	release=$(release_value version)
-	running=$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$1")
+	semver "$release" || refuse "RELEASE's version can't be read ($release): fetch the release again (sh setup.sh fetch <version>); nothing was changed"
+	running=$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$1") ||
+		refuse "the running $2's version label can't be read: nothing was changed"
 	if [ -z "$running" ]; then
-		say "the running server has no release version (a local build): not compared"
+		say "the running $2 has no release version (a local build): not compared"
 		return 0
 	fi
-	semver "$running" || refuse "the running server's version label isn't a version ($running): nothing was changed"
+	semver "$running" || refuse "the running $2's version label isn't a version ($running): nothing was changed"
 	vercmp "$running" "$release"
 	[ "$CMP" -le 0 ] ||
-		refuse "the running server is $running, newer than this folder's release $release: fetch it (sh setup.sh fetch $running), or restore a backup; nothing was changed"
+		refuse "the running $2 is $running, newer than this folder's release $release: fetch it (sh setup.sh fetch $running), or restore a backup; nothing was changed"
+}
+
+# update in a remote agent's folder: no backup (the server's host keeps the
+# database), the same refusals for a fetch that didn't finish and a newer
+# running agent, then its new image and the agent started.
+update_agent() {
+	installed=$(docker compose ps -a -q agent) || refuse "docker compose can't list the agent's container: nothing was changed"
+	[ -n "$installed" ] || refuse "the agent isn't installed here: enroll it first, as the runbook's Agents on other hosts says"
+	id=$(docker compose ps -q agent) || refuse "docker compose can't list the agent's container: nothing was changed"
+	[ -z "$id" ] || check_running_version "$id" agent
+	docker compose pull || refuse "the new image couldn't be pulled; nothing changed"
+	docker compose up --detach --wait || refuse "the agent didn't come up healthy: docker compose logs agent says why"
+	ok "the agent is updated"
 }
 
 update() {
 	[ ! -e "$FETCH" ] || refuse "$FETCH is here: a fetch didn't finish; look inside, remove it (rm -r $FETCH) and fetch again before updating"
 	check_docker
-	check_env
+	check_env agent-ok
+	if [ "$MODE" = agent ]; then
+		update_agent
+		return 0
+	fi
 	id=$(docker compose ps -q server)
 	[ -n "$id" ] || refuse "the server isn't running: an update starts from a running, healthy afkfleet"
 	health=$(docker inspect --format '{{.State.Health.Status}}' "$id")
 	[ "$health" = healthy ] || refuse "the server isn't healthy ($health): fix that before updating"
-	check_running_version "$id"
+	check_running_version "$id" server
 	status=0
 	docker compose exec -T server /usr/local/bin/afkfleet-server backup --config "$SERVER_CONFIG" || status=$?
 	case $status in

@@ -1880,3 +1880,152 @@ describe("setup.sh keys-backup and keys-restore, against stubs", { skip: SH }, (
     }
   });
 });
+
+/** A remote agent's `.env`, as the runbook's Agents on other hosts gives it. */
+const AGENT_ENV = () =>
+  [
+    "COMPOSE_FILE=compose.agent.yaml",
+    "AFKFLEET_AGENT__NAME=agent-2",
+    "AFKFLEET_AGENT__CONTROL_PLANE__URL=https://fleet.afkfleet.test:7443",
+    "AFKFLEET_CA_CERT_FILE=./ca.crt",
+    "",
+  ].join("\n");
+
+/** The docker answers for a remote agent installed here, running the release `version`. */
+const AGENT_RUNS = (version = "0.1.0") => [
+  { when: "compose ps -a -q agent", stdout: "4567cdef\n" },
+  { when: "compose ps -q agent", stdout: "4567cdef\n" },
+  {
+    when: 'inspect --format {{index .Config.Labels "org.opencontainers.image.version"}}',
+    stdout: `${version}\n`,
+  },
+];
+
+describe("setup.sh in a remote agent's folder (PR #99's review), against stubs", {
+  skip: SH,
+}, () => {
+  /** A remote agent's folder: release 0.1.0's RELEASE, and the agent's config. */
+  const agentFolder = (dir) => {
+    writeFileSync(join(dir, "RELEASE"), releaseText());
+    copyFileSync(join(DEPLOY, "prod", "agent.remote.toml"), join(dir, "prod", "agent.remote.toml"));
+  };
+
+  it("update in a remote agent's folder pulls and starts the agent, with no backup", () => {
+    const result = run(["update"], {
+      envText: AGENT_ENV(),
+      prepare: agentFolder,
+      responses: AGENT_RUNS(),
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(
+      joined(result.calls).filter((call) => /^compose (exec|pull|up|run|stop)/.test(call)),
+      ["compose pull", "compose up --detach --wait"],
+    );
+    assert.match(result.stdout, /ok: the agent is updated/);
+  });
+
+  it("update in a remote agent's folder refuses a running agent newer than RELEASE, changing nothing", () => {
+    const result = run(["update"], {
+      envText: AGENT_ENV(),
+      prepare: agentFolder,
+      responses: AGENT_RUNS("0.2.0"),
+    });
+
+    assert.equal(result.code, 1);
+    assert.match(
+      result.stderr,
+      /the running agent is 0\.2\.0, newer than this folder's release 0\.1\.0/,
+    );
+    assert.ok(!joined(result.calls).some((call) => /^compose (pull|up)/.test(call)));
+  });
+
+  it("update in a remote agent's folder refuses where no agent is installed, and while a fetch's folder is there", () => {
+    const none = run(["update"], {
+      envText: AGENT_ENV(),
+      prepare: agentFolder,
+      responses: [{ when: "compose ps -a -q agent", stdout: "" }],
+    });
+    const fetching = run(["update"], {
+      envText: AGENT_ENV(),
+      prepare: (dir) => {
+        agentFolder(dir);
+        mkdirSync(join(dir, ".afkfleet-fetch"));
+      },
+      responses: AGENT_RUNS(),
+    });
+
+    assert.equal(none.code, 1);
+    assert.match(none.stderr, /the agent isn't installed here/);
+    assert.equal(fetching.code, 1);
+    assert.match(fetching.stderr, /\.afkfleet-fetch/);
+    for (const result of [none, fetching]) {
+      assert.ok(!joined(result.calls).some((call) => /^compose (pull|up)/.test(call)));
+    }
+  });
+
+  it("check in a remote agent's folder checks the agent's image alone, and no port", () => {
+    const result = run(["check"], {
+      envText: AGENT_ENV(),
+      prepare: agentFolder,
+      responses: AGENT_RUNS(),
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.ok(joined(result.calls).includes(`image inspect ${RELEASED.agent}`));
+    assert.ok(!joined(result.calls).includes(`image inspect ${RELEASED.server}`));
+    assert.ok(!joined(result.calls).some((call) => call.startsWith("run --rm -p")));
+    assert.match(
+      result.stdout,
+      /a remote agent is installed here: update it with sh setup\.sh update/,
+    );
+  });
+
+  it("a remote agent's folder refuses what only the server's host does", () => {
+    for (const args of [
+      ["init"],
+      ["restore", "afkfleet-backup-20261106T000000Z.db"],
+      ["forget-aside"],
+      ["renew-cert"],
+      ["keys-backup"],
+      ["keys-restore", "/root/afkfleet-keys-20261107T120000Z"],
+    ]) {
+      const result = run(args, {
+        envText: AGENT_ENV(),
+        prepare: agentFolder,
+        responses: AGENT_RUNS(),
+        uid: "0",
+      });
+
+      assert.equal(result.code, 1, args[0]);
+      assert.match(result.stderr, /this folder runs a remote agent/, args[0]);
+      assert.ok(
+        !joined(result.calls).some((call) => /^compose (exec|pull|up|run|stop|cp)/.test(call)),
+        args[0],
+      );
+    }
+  });
+
+  it("update refuses a RELEASE whose version can't be read, before anything changes", () => {
+    for (const [label, text] of [
+      ["no version line", releaseText().replace("version=0.1.0\n", "")],
+      ["an empty version", releaseText().replace("version=0.1.0", "version=")],
+      ["not X.Y.Z", releaseText().replace("version=0.1.0", "version=1.0")],
+    ]) {
+      const result = run(["update"], {
+        envText: RELEASE_ENV(),
+        prepare: (dir) => writeFileSync(join(dir, "RELEASE"), text),
+        responses: [
+          {
+            when: 'inspect --format {{index .Config.Labels "org.opencontainers.image.version"}}',
+            stdout: "0.1.0\n",
+          },
+        ],
+      });
+
+      assert.equal(result.code, 1, label);
+      assert.match(result.stderr, /RELEASE's version can't be read/, label);
+      assert.ok(!joined(result.calls).some((call) => /^compose (exec|pull|up)/.test(call)), label);
+    }
+  });
+});

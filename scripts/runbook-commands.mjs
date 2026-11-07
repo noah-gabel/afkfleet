@@ -72,7 +72,9 @@ const setupCase = (name) => `${SETUP_TESTS} › ${name}`;
 
 /**
  * The runbook's tested lines: `line` as the runbook gives it, `test` the test that runs it,
- * and `literal` the code by which `file` (from the repository's root) runs it.
+ * and `literal` the code by which `file` (from the repository's root) runs it; `also` lists
+ * further `{ test, file, literal }` for a line the runbook gives in more than one setting
+ * (`update` on the server's host and in a remote agent's folder).
  */
 export const TESTED = [
   {
@@ -154,6 +156,16 @@ export const TESTED = [
     test: CRASH,
     file: STEPS,
     literal: 'self.setup_sh_ok(&["update"], Root::No)',
+    also: [
+      {
+        test: setupCase(
+          "update in a remote agent's folder pulls and starts the agent, with no backup",
+        ),
+        file: SETUP_TESTS,
+        literal: '["compose pull", "compose up --detach --wait"]',
+      },
+      { test: NEW_HOST, file: OPS, literal: "remote.update(&mut old)" },
+    ],
   },
   {
     line: "rm -r .afkfleet-fetch",
@@ -541,7 +553,9 @@ export function check(markdown, tested, context) {
     if (!given.has(row.line)) {
       problems.push(`the table's \`${row.line}\` isn't a command of the runbook's any more`);
     }
-    problems.push(...citationProblems(row, context, index));
+    for (const citation of [row, ...(row.also ?? [])]) {
+      problems.push(...citationProblems({ ...citation, line: row.line }, context, index));
+    }
   }
   return problems;
 }

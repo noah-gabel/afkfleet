@@ -22,7 +22,8 @@
 //!   the write is there, the CA is the same bytes, a new local agent comes
 //!   online, the key files are the server's user's, owner-only, and nothing
 //!   of the copy reaches any output. On CI a remote agent
-//!   (`afkfleet-ops-remote`) moves with the server and comes back online
+//!   (`afkfleet-ops-remote`), updated in its own folder with `setup.sh`
+//!   first, moves with the server and comes back online
 //!   with its old ID, never enrolling again.
 //!
 //! Every wait is bounded and wakes on an event: compose's `--wait`, or a
@@ -237,7 +238,13 @@ async fn slow_ops_new_host_from_the_keys_copy() {
     let old_local = until_online(&mut old, &owner, "local").await;
     let remote = if script {
         let remote = Remote::enroll(&mut old);
-        Some((until_online(&mut old, &owner, Remote::NAME).await, remote))
+        let online = until_online(&mut old, &owner, Remote::NAME).await;
+        // The runbook's update in a remote agent's folder (PR #99's review):
+        // no backup, the agent's image, the agent started again.
+        remote.update(&mut old);
+        let again = until_online(&mut old, &owner, Remote::NAME).await;
+        assert_eq!(again.id, online.id, "the update enrolled the agent again");
+        Some((online, remote))
     } else {
         None
     };
@@ -435,10 +442,11 @@ fn forbid_the_keys(stack: &mut Stack, copy: &KeysCopy) {
 /// A remote agent on another compose project, on CI's runners alone: the
 /// server's CA copied to its folder as the runbook says (65532, 600), its
 /// name and URL in its `.env`, host networking so it dials the server's
-/// published gRPC port as a remote host would.
+/// published gRPC port as a remote host would; `setup.sh` beside them, for
+/// the runbook's update in a remote agent's folder.
 struct Remote {
     _cleanup: fleet_testkit::docker::Cleanup,
-    _dir: TempDir,
+    dir: TempDir,
 }
 
 impl Remote {
@@ -448,7 +456,7 @@ impl Remote {
     fn enroll(server: &mut Stack) -> Self {
         let dir = TempDir::new().unwrap();
         std::fs::create_dir(dir.path().join("prod")).unwrap();
-        for file in ["compose.agent.yaml", "prod/agent.remote.toml"] {
+        for file in ["compose.agent.yaml", "prod/agent.remote.toml", "setup.sh"] {
             std::fs::copy(repo().join("deploy").join(file), dir.path().join(file)).unwrap();
         }
         // The runbook's copy of the CA's certificate, on the server's host.
@@ -469,7 +477,7 @@ impl Remote {
         std::fs::write(
             dir.path().join(".env"),
             format!(
-                "AFKFLEET_AGENT_IMAGE={AGENT_IMAGE}\nAFKFLEET_AGENT__NAME={}\nAFKFLEET_AGENT__CONTROL_PLANE__URL=https://{}:{}\nAFKFLEET_CA_CERT_FILE=./ca.crt\n",
+                "COMPOSE_PROJECT_NAME=afkfleet-ops-remote\nCOMPOSE_PATH_SEPARATOR=:\nCOMPOSE_FILE=compose.agent.yaml:compose.override.yaml\nAFKFLEET_AGENT_IMAGE={AGENT_IMAGE}\nAFKFLEET_AGENT__NAME={}\nAFKFLEET_AGENT__CONTROL_PLANE__URL=https://{}:{}\nAFKFLEET_CA_CERT_FILE=./ca.crt\n",
                 Self::NAME,
                 GRPC.0,
                 GRPC.1
@@ -532,7 +540,25 @@ impl Remote {
         assert!(up.success, "{}", up.stderr);
         Self {
             _cleanup: compose.cleanup(SLOW),
-            _dir: dir,
+            dir,
         }
+    }
+
+    /// `sh setup.sh update` in its folder, as the runbook's Agents on other
+    /// hosts gives it: no backup, the agent's image pulled (none here: the
+    /// test's override never pulls) and the agent started.
+    fn update(&self, server: &mut Stack) {
+        let mut command = std::process::Command::new("sh");
+        command
+            .args(["setup.sh", "update"])
+            .current_dir(self.dir.path());
+        let finished = fleet_testkit::docker::finish(command, None, SLOW).unwrap();
+        server.transcript.keep(&finished);
+        assert!(finished.success, "{}", finished.stderr);
+        assert!(
+            finished.stdout.contains("ok: the agent is updated"),
+            "{}",
+            finished.stdout
+        );
     }
 }

@@ -514,7 +514,12 @@ Then start it. Success: healthy, and **Admin › Agents** in the app shows it on
 docker compose up --detach --wait
 ```
 
-Updates: the agent's host takes `fetch` and `update` after the server's ([Updating](#updating)).
+**Updating it,** after the server's host ([Updating](#updating)): the same two commands, in the agent's folder. There `update` takes no backup (the server's host keeps the database): it refuses while a fetch didn't finish or the running agent is newer than the folder's release, pulls the agent's new image and starts it. Success: `ok: this folder holds release X.Y.Z's files`, then `ok: the agent is updated`, and **Admin › Agents** shows it online again.
+
+```sh
+sh setup.sh fetch X.Y.Z
+sh setup.sh update
+```
 
 ## An agent next to a local Minecraft server
 

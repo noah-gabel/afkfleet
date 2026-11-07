@@ -259,6 +259,22 @@ describe("check", () => {
     ]);
   });
 
+  it("checks a row's further citations (also) as its first", () => {
+    const row = {
+      ...CHECK,
+      also: [
+        { test: MKDIR.test, file: MKDIR.file, literal: MKDIR.literal },
+        { test: "smoke::ops::slow_ops_gone", file: STEPS, literal: '"nowhere"' },
+      ],
+    };
+    const markdown = doc("```sh", "sh setup.sh check", "```");
+
+    assert.deepEqual(check(markdown, [row], CONTEXT), [
+      "the table's `sh setup.sh check`: `smoke::ops::slow_ops_gone` names no test under crates/ or apps/desktop/src-tauri/",
+      `the table's \`sh setup.sh check\`: ${STEPS} doesn't hold "nowhere"`,
+    ]);
+  });
+
   it("refuses a runbook without a command, which would prove nothing", () => {
     assert.deepEqual(check(doc("# Empty", "", "Nothing to run."), [], CONTEXT), [
       "the runbook gives no command, so the check proves nothing",
