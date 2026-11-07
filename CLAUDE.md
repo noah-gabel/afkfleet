@@ -252,7 +252,7 @@ The frontend's rules (structure, data and state, safety, quality, and every plac
   - Docker Desktop (WSL 2 backend) runs the Minecraft test server and the compose stack. It must be running for `just mc-up`, `just test-slow` and `just shots`; if Docker isn't reachable, ask the user to start it.
 - **Toolchain:** `rust-toolchain.toml` pins a **dated nightly**, and rustup installs it automatically.
   - Change it only in a deliberate Minecraft-version bump.
-  - That bump changes nightly, azalea and the test server's `VERSION` together, as in `docs/runbook.md`.
+  - That bump changes nightly, azalea and the test server's `VERSION` together, as in `docs/releasing.md`.
 - **Production:** Linux + Docker Compose (`deploy/`).
 - Files use LF line endings (`.gitattributes`; the user's git has `core.autocrlf = false`).
 

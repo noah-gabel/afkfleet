@@ -442,3 +442,21 @@ fn every_server_setting_env_example_names_loads() {
     assert_eq!(config.vault.active_key_id, 2);
     assert_eq!(config.vault.key_files.len(), 2);
 }
+
+/// `deploy/setup.sh` reads `agent list` by fleet-server's own header, so a
+/// restore re-disables the right agents (ADR-0022, S40): its copy, with
+/// `${TAB}` for each tab, equals `cli::agent::LIST_HEADER`.
+#[test]
+fn setup_sh_reads_agent_lists_by_the_servers_own_header() {
+    let script = include_str!("../../../deploy/setup.sh");
+    let line = script
+        .lines()
+        .find_map(|line| line.strip_prefix("AGENTS_HEADER=\""))
+        .and_then(|rest| rest.strip_suffix('"'))
+        .expect("setup.sh should set AGENTS_HEADER");
+
+    assert_eq!(
+        line.replace("${TAB}", "\t"),
+        fleet_server::cli::agent::LIST_HEADER
+    );
+}

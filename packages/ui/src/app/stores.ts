@@ -186,7 +186,10 @@ export type InstallPhase = "idle" | "installing" | "failed";
 export interface UpdateState {
   /** The start's check was asked: it runs once per App. */
   readonly started: boolean;
-  /** The last check's answer; null before one answered, or after one failed. */
+  /**
+   * The last check's answer; null before one answered, after one failed, or once an install
+   * failed after it found a newer version: Rust keeps no release then (ADR-0022, S28).
+   */
   readonly check: UpdateCheck | null;
   /** A check runs. */
   readonly checking: boolean;
@@ -258,7 +261,14 @@ export function createAppStores(): AppStores {
         set({ install: "installing", installFailure: null, later: false });
       },
       installFailed(failure) {
-        set({ install: "failed", installFailure: failure });
+        // A failed install leaves Rust nothing to install: an available version goes with it,
+        // so nothing offers it until a check finds it again (S28). Up to date and off stay.
+        const check = get().check;
+        set({
+          install: "failed",
+          installFailure: failure,
+          check: check?.state === "available" ? null : check,
+        });
       },
       putAway() {
         set({ later: true, install: get().install === "failed" ? "idle" : get().install });

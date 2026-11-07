@@ -16,7 +16,8 @@
 //! - changed bytes, another key's signature, a version raised in the
 //!   manifest after signing, and a signature without a version each fail
 //!   the download's checks;
-//! - the app's own version is no update; a manifest that isn't JSON can't be
+//! - the app's own version is no update, with or without a Windows entry; a
+//!   newer release without one, and a manifest that isn't JSON, can't be
 //!   read; a missing one is unreachable; a download over the cap is refused.
 //!
 //! It needs `node` and `pnpm install` (the CLI). It runs on real time, as
@@ -328,6 +329,38 @@ async fn the_apps_own_version_is_no_update() {
     assert!(check(&release.updates()).await.unwrap().is_none());
 }
 
+/// A manifest whose release has no Windows entry: the plugin compares the
+/// versions first (since 2.14.0) and looks for this platform only for a
+/// newer one, so a release that isn't newer is no update whatever its
+/// platforms, and a newer one without a Windows entry can't be read
+/// (`TargetsNotFound`; PR #98's review).
+fn without_windows(manifest: &mut Value) {
+    let windows = manifest["platforms"]["windows-x86_64"].clone();
+    manifest["platforms"] = json!({ "linux-x86_64": windows });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_newer_release_without_a_windows_entry_cant_be_read() {
+    let release = Release::new();
+    release.serve("latest.json", without_windows);
+
+    assert_eq!(
+        check(&release.updates()).await.map(|found| found.is_some()),
+        Err(UpdateFailure::Manifest)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_release_that_isnt_newer_is_no_update_without_a_windows_entry_too() {
+    let release = Release::new();
+    release.serve("latest.json", |manifest| {
+        without_windows(manifest);
+        manifest["version"] = json!("0.1.0");
+    });
+
+    assert!(check(&release.updates()).await.unwrap().is_none());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_manifest_that_isnt_json_cant_be_read() {
     let release = Release::new();
@@ -350,30 +383,39 @@ async fn a_missing_manifest_is_unreachable() {
     );
 }
 
-/// The real cap stops a download while it streams: a body with no length
-/// that never ends is refused once it passes 64 MiB, and the server sees the
-/// client stop reading, so the whole of it is never held (PR #98's review).
+/// The real cap stops a download itself, within one chunk, whatever the
+/// machine's load: a body with no length that never ends, sent as fast as
+/// the server can, is read up to the chunk that passes 64 MiB and no further,
+/// and the download is refused, holding nothing to install (PR #99's
+/// review). The bound is the bytes read, never a time.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_cap_stops_a_download_while_it_streams_past_64_mib() {
+async fn the_cap_stops_a_download_within_one_chunk_past_64_mib() {
     let release = Release::new();
-    let (sent, got) = mpsc::channel();
+    let (sent, _streamed) = mpsc::channel();
     *release.served.endless.lock().unwrap() = Some(sent);
-    let updates = release.updates();
+    let chunks = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&chunks);
+    let updates = release
+        .updates()
+        .counting(Arc::new(move |chunk| seen.lock().unwrap().push(chunk)));
+    let found = check(&updates).await.unwrap().expect("no release found");
 
-    let started = std::time::Instant::now();
-    let refused = download(&updates).await;
-    let elapsed = started.elapsed();
-    let streamed = got
-        .recv_timeout(Duration::from_secs(10))
-        .expect("the server never saw the client stop reading");
+    // Bounded by the download's own timeouts alone: the cap ends it first.
+    let refused = updates.download(&found).await;
 
     assert_eq!(refused, Err(UpdateFailure::Invalid));
-    assert!(elapsed < WAIT, "it ran until the bound: {elapsed:?}");
-    let cap = afkfleet_desktop::update::MAX_DOWNLOAD_BYTES;
-    assert!(streamed > cap, "it stopped before the cap: {streamed}");
+    let cap = usize::try_from(afkfleet_desktop::update::MAX_DOWNLOAD_BYTES).unwrap();
+    let chunks = chunks.lock().unwrap();
+    let (last, before) = chunks.split_last().expect("nothing was read");
+    let kept: usize = before.iter().sum();
     assert!(
-        streamed < 4 * cap,
-        "it read far past the cap before stopping: {streamed}"
+        kept <= cap,
+        "it read past the cap before its last chunk: {kept}"
+    );
+    assert!(
+        kept + last > cap,
+        "it stopped before the cap: {}",
+        kept + last
     );
 }
 

@@ -33,4 +33,8 @@ Log in with your username, your password and a code from the app. Success: Home 
 Updates come through the app. At each start it checks GitHub, and when a newer version exists, a row at the top says "afkfleet X.Y.Z is available." Click **Install and restart**: a small installer window shows its progress, and afkfleet starts again by itself. **Check for updates** in **Profile › Updates** checks whenever you want. The app installs only updates signed with afkfleet's key. They're downloaded by the app, not a browser, so Windows normally doesn't warn again.
 
 ## Removing the app
-Log out first, which removes the session this PC keeps in Windows' Credential Manager. Then go to Windows Settings › Apps › Installed apps › afkfleet › Uninstall. Tick "Delete the application data" to remove the saved server address too.
+Log out first, which removes the session this PC keeps in Windows' Credential Manager. Then uninstall it in Windows Settings:
+- Windows 11: Apps › Installed apps, then the ⋯ next to afkfleet › Uninstall.
+- Windows 10: Apps › Apps & features, then afkfleet › Uninstall.
+
+Tick "Delete the application data" to remove the saved server address too.

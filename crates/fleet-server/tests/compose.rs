@@ -3,9 +3,14 @@
 //! - every long-running service is hardened: the nonroot user, a read-only
 //!   root, no capability, no new privilege, rotated logs, no swap, limits;
 //!   no service sets the anchor's keys again, the one-shot services have
-//!   small fixed limits, and every tmpfs is `noexec,nosuid,nodev`
+//!   small fixed limits, and every tmpfs is `noexec,nosuid,nodev`, takes
+//!   none of them back and is never a volume's long-syntax tmpfs
 //! - the server mounts every folder its config names, the setup service
-//!   writes the keys and never the database, the agent reads the CA alone
+//!   writes the keys and never the database, the agent reads the CA alone;
+//!   the files service reaches the database, the server's pair and the
+//!   backups alone, the maintenance service writes the database and reads
+//!   the keys, and the keys and the CA are read-only everywhere else and
+//!   never on Caddy's image (S25, S38)
 //! - each service's grace period outlasts its worst-case shutdown
 //! - the binaries get `.env` (U18) and nothing else does; `env.example`
 //!   lists every variable compose reads and every setting the runbook
@@ -44,6 +49,7 @@ const REMOTE: &str = include_str!("../../../deploy/compose.agent.yaml");
 const CADDYFILE: &str = include_str!("../../../deploy/Caddyfile");
 const PROD: &str = include_str!("../../../deploy/prod/server.toml");
 const ENV_EXAMPLE: &str = include_str!("../../../deploy/env.example");
+const RUNBOOK: &str = include_str!("../../../docs/runbook.md");
 /// The smoke test's stand-in proxy, pinned as Caddy is.
 const STAND_IN: &str = include_str!("../../fleet-integration/tests/integration/smoke/edge.yaml");
 
@@ -146,10 +152,12 @@ fn no_service_sets_the_anchors_keys_again() {
 }
 
 /// The one-shot services run with small fixed limits, never `.env` knobs:
-/// `setup` makes a key and a PKI, `probe` reads one page (PR #97's review).
+/// `setup` makes a key and a PKI, `probe` reads one page (PR #97's review),
+/// `files` moves and copies a few files (S38).
 #[rstest::rstest]
 #[case::setup("setup", "128m", "0.5", "64")]
 #[case::probe("probe", "32m", "0.25", "16")]
+#[case::files("files", "64m", "0.5", "16")]
 fn the_one_shot_services_have_small_fixed_limits(
     #[case] name: &str,
     #[case] memory: &str,
@@ -165,7 +173,9 @@ fn the_one_shot_services_have_small_fixed_limits(
 }
 
 /// Every tmpfs of every file mounts `noexec,nosuid,nodev`, written as a
-/// list, so nothing written there runs (PR #97's review).
+/// list, so nothing written there runs (PR #97's review), and none takes
+/// one back with `exec`, `suid` or `dev`, which would win as the later
+/// option (PR #98's review).
 #[test]
 fn every_tmpfs_is_noexec_nosuid_and_nodev() {
     let mut mounts = 0;
@@ -180,14 +190,34 @@ fn every_tmpfs_is_noexec_nosuid_and_nodev() {
                 for flag in ["noexec", "nosuid", "nodev"] {
                     assert!(options.contains(&flag), "{file}'s {name}: {mount}");
                 }
+                for flag in ["exec", "suid", "dev"] {
+                    assert!(!options.contains(&flag), "{file}'s {name}: {mount}");
+                }
                 mounts += 1;
             }
         }
     }
     assert_eq!(
-        mounts, 6,
-        "server, agent, setup, caddy (2), the remote agent"
+        mounts, 7,
+        "server, agent, setup, maintenance, caddy (2), the remote agent"
     );
+}
+
+/// No service mounts a tmpfs in a volume's long syntax (`type: tmpfs`),
+/// whose options can't say `noexec`, `nosuid` or `nodev`, so the check
+/// above would miss it (PR #98's review).
+#[test]
+fn no_volume_is_a_long_syntax_tmpfs() {
+    for (file, text) in FILES {
+        for line in text.lines() {
+            let line = line.split('#').next().unwrap_or_default();
+            let words: String = line.split_whitespace().collect();
+            assert!(
+                !words.contains("type:tmpfs"),
+                "{file}: a long-syntax tmpfs: {line}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -200,7 +230,7 @@ fn every_long_running_service_is_hardened() {
         );
     }
     assert!(anchor.contains(&"restart: unless-stopped"));
-    for name in ["server", "agent", "setup", "probe"] {
+    for name in ["server", "agent", "setup", "probe", "files", "maintenance"] {
         let lines = trimmed(&service(COMPOSE, name));
         assert!(lines.contains(&"<<: *hardened"), "{name} isn't hardened");
     }
@@ -223,6 +253,8 @@ fn only_caddy_adds_a_capability_and_only_net_bind_service() {
         (COMPOSE, "agent"),
         (COMPOSE, "setup"),
         (COMPOSE, "probe"),
+        (COMPOSE, "files"),
+        (COMPOSE, "maintenance"),
         (REMOTE, "agent"),
     ] {
         assert_eq!(value(&service(file, name), "cap_add"), None, "{name}");
@@ -250,6 +282,7 @@ fn only_caddy_adds_a_capability_and_only_net_bind_service() {
 #[rstest::rstest]
 #[case::server(COMPOSE, "server", "SERVER", "512m", "1.0", "256")]
 #[case::agent(COMPOSE, "agent", "AGENT", "512m", "1.0", "512")]
+#[case::maintenance(COMPOSE, "maintenance", "SERVER", "512m", "1.0", "256")]
 #[case::caddy(CADDY, "caddy", "CADDY", "256m", "0.5", "128")]
 #[case::remote_agent(REMOTE, "agent", "AGENT", "512m", "1.0", "512")]
 fn every_limit_is_a_knob_and_memory_has_no_swap(
@@ -359,6 +392,107 @@ fn the_setup_service_writes_the_keys_and_never_the_database() {
     assert_eq!(value(&lines, "restart"), Some("\"no\""));
 }
 
+/// The volumes' file operations (`deploy/files.sh`): Caddy's pinned image for
+/// its busybox, no network, the database's and the server certificate's
+/// volumes at `/vol` with `nocopy` (it never creates or fills one), the
+/// backups read-only, never the keys or the CA; started only by
+/// `docker compose run` (S25, S38).
+#[test]
+fn the_files_service_reaches_the_database_the_server_pair_and_the_backups_alone() {
+    let lines = service(COMPOSE, "files");
+    let probe = value(&service(COMPOSE, "probe"), "image").unwrap();
+    let written = trimmed(&lines);
+
+    assert_eq!(value(&lines, "image"), Some(probe));
+    assert_eq!(
+        list(&lines, "volumes"),
+        [
+            "./files.sh:/afkfleet/files.sh:ro",
+            "type: volume",
+            "type: volume",
+            "type: bind",
+        ]
+    );
+    for expected in [
+        "source: data",
+        "target: /vol/data",
+        "source: tls",
+        "target: /vol/tls",
+        "source: ${AFKFLEET_BACKUPS_DIR:-/srv/afkfleet-backups/backups}",
+        "target: /vol/backups",
+        "read_only: true",
+        "create_host_path: false",
+    ] {
+        assert!(written.contains(&expected), "{expected}");
+    }
+    assert_eq!(
+        written
+            .iter()
+            .filter(|line| **line == "nocopy: true")
+            .count(),
+        2
+    );
+    assert_eq!(
+        value(&lines, "entrypoint"),
+        Some(r#"["/bin/sh", "/afkfleet/files.sh"]"#)
+    );
+    assert_eq!(value(&lines, "network_mode"), Some("none"));
+    assert_eq!(value(&lines, "profiles"), Some("[files]"));
+    assert_eq!(value(&lines, "restart"), Some("\"no\""));
+    assert_eq!(list(&lines, "tmpfs"), Vec::<&str>::new());
+}
+
+/// The server's commands while `serve` is stopped (`migrate`, `vault
+/// status`, `vault rotate-key`, `agent list` and `disable`): the server's
+/// image with no network, the database writable, the keys read-only, never
+/// the CA, the server's pair or the backups (S25, S38).
+#[test]
+fn the_maintenance_service_writes_the_database_and_reads_the_keys_alone() {
+    let lines = service(COMPOSE, "maintenance");
+
+    assert_eq!(
+        list(&lines, "volumes"),
+        [
+            "./prod/server.toml:/etc/afkfleet/server.toml:ro",
+            "data:/data",
+            "keys:/keys:ro",
+        ]
+    );
+    assert_eq!(value(&lines, "network_mode"), Some("none"));
+    assert_eq!(value(&lines, "profiles"), Some("[maintenance]"));
+    assert_eq!(value(&lines, "restart"), Some("\"no\""));
+    assert_eq!(value(&lines, "disable"), Some("true"), "no healthcheck");
+}
+
+/// The keys and the CA are read-only everywhere but `setup`, which makes
+/// them, and never reach a service on Caddy's image (S25, S38).
+#[test]
+fn the_keys_and_the_ca_are_read_only_but_for_setup_and_never_on_caddys_image() {
+    let mut checked = 0;
+    for (file, text) in FILES {
+        for name in services(text) {
+            let lines = service(text, name);
+            let caddy = value(&lines, "image").is_some_and(|image| image.starts_with("caddy:"));
+            for mount in list(&lines, "volumes") {
+                let source = mount.split(':').next().unwrap_or_default();
+                if ["keys", "ca"].contains(&source) {
+                    checked += 1;
+                    assert!(!caddy, "{file}'s {name} mounts {mount}");
+                    assert!(
+                        name == "setup" || mount.ends_with(":ro"),
+                        "{file}'s {name}: {mount}"
+                    );
+                }
+            }
+            for line in trimmed(&lines) {
+                let long = line == "source: keys" || line == "source: ca";
+                assert!(!long, "{file}'s {name}: a long-syntax {line}");
+            }
+        }
+    }
+    assert_eq!(checked, 6, "server (2), agent, setup (2), maintenance");
+}
+
 /// The server's grace outlasts its worst-case shutdown with the largest
 /// request timeout the config allows (19 s): the drain, the close, the
 /// runtime's own shutdown (ADR-0015). Caddy's outlasts its own grace.
@@ -393,6 +527,8 @@ fn the_binaries_and_only_they_read_env() {
         (COMPOSE, "agent", true),
         (COMPOSE, "setup", true),
         (COMPOSE, "probe", false),
+        (COMPOSE, "files", false),
+        (COMPOSE, "maintenance", true),
         (CADDY, "caddy", false),
         (REMOTE, "agent", true),
     ] {
@@ -451,14 +587,14 @@ fn each_path_trusts_exactly_its_proxys_address() {
     assert!(!PROD.contains("trusted_proxies ="));
 }
 
-/// compose.yaml publishes nothing; each path's file its own port alone, the
-/// host's API on loopback only; no metrics port anywhere.
 /// A service's name and the ports it publishes, as written.
 type Published = (&'static str, &'static [&'static str]);
 
-/// Every service of every file, with exactly the ports it publishes: each
-/// path's own, never a metrics port, nothing else (PR #97's review: a list
-/// per service, not a text search for `"9480:`).
+/// compose.yaml publishes nothing; each path's file its own port alone, the
+/// host's API on loopback only; no metrics port anywhere. Every service of
+/// every file, with exactly the ports it publishes: each path's own, never a
+/// metrics port, nothing else (PR #97's review: a list per service, not a
+/// text search for `"9480:`).
 #[test]
 fn nothing_is_published_but_each_paths_own_port() {
     let none: &[&str] = &[];
@@ -471,6 +607,8 @@ fn nothing_is_published_but_each_paths_own_port() {
                 ("agent", none),
                 ("setup", none),
                 ("probe", none),
+                ("files", none),
+                ("maintenance", none),
             ],
         ),
         ("compose.edge.yaml", EDGE, &[("server", none)]),
@@ -515,6 +653,7 @@ fn caddy_is_pinned_the_same_everywhere() {
     let probe = value(&service(COMPOSE, "probe"), "image").unwrap();
     let caddy = value(&service(CADDY, "caddy"), "image").unwrap();
     let stand_in = value(&service(STAND_IN, "proxy"), "image").unwrap();
+    let files = value(&service(COMPOSE, "files"), "image").unwrap();
     let scanned: Vec<&str> = include_str!("../../../justfile")
         .split_whitespace()
         .filter(|word| word.starts_with("caddy:"))
@@ -522,6 +661,7 @@ fn caddy_is_pinned_the_same_everywhere() {
 
     assert_eq!(caddy, probe);
     assert_eq!(stand_in, probe);
+    assert_eq!(files, probe);
     assert_eq!(scanned, [probe, probe], "image-scan pulls and saves it");
     let (tag, digest) = probe.split_once("@sha256:").unwrap();
     assert_eq!(tag, "caddy:2.11.7-alpine");
@@ -585,6 +725,7 @@ fn the_images_come_from_env() {
         (COMPOSE, "server", "AFKFLEET_SERVER_IMAGE"),
         (COMPOSE, "setup", "AFKFLEET_SERVER_IMAGE"),
         (COMPOSE, "agent", "AFKFLEET_AGENT_IMAGE"),
+        (COMPOSE, "maintenance", "AFKFLEET_SERVER_IMAGE"),
         (REMOTE, "agent", "AFKFLEET_AGENT_IMAGE"),
     ] {
         let image = value(&service(file, name), "image").unwrap();
@@ -624,9 +765,11 @@ fn nothing_under_deploy_allows_offline_accounts() {
             continue;
         };
         checked += 1;
-        // Spaces and either quote go, so `= true`, `: "true"` and `: 'true'`
-        // all read alike (PR #97's review).
-        let text = text.to_ascii_lowercase().replace([' ', '"', '\''], "");
+        // Spaces, tabs and either quote go, so `= true`, `:\t"true"` and
+        // `: 'true'` all read alike (PR #97's and PR #98's reviews).
+        let text = text
+            .to_ascii_lowercase()
+            .replace([' ', '\t', '"', '\''], "");
         assert!(!text.contains("allow_offline=true"), "{}", file.display());
         assert!(!text.contains("allow_offline:true"), "{}", file.display());
     }
@@ -676,6 +819,27 @@ fn env_example_lists_every_variable_the_compose_files_read() {
     assert!(checked > 20, "{checked}");
 }
 
+/// `env.example` names the two images in comments alone: a release's files
+/// pin their own images by digest as the compose files' defaults, so a host
+/// `.env` sets one only to run other images (ADR-0022, S23, S34).
+#[test]
+fn env_example_names_the_images_in_comments_alone() {
+    for name in ["AFKFLEET_SERVER_IMAGE", "AFKFLEET_AGENT_IMAGE"] {
+        let lines: Vec<&str> = ENV_EXAMPLE
+            .lines()
+            .filter(|line| {
+                line.trim_start_matches('#')
+                    .starts_with(&format!("{name}="))
+            })
+            .collect();
+        assert_eq!(lines.len(), 1, "{name}: {lines:?}");
+        assert!(
+            lines.iter().all(|line| line.starts_with('#')),
+            "{name} is set: {lines:?}"
+        );
+    }
+}
+
 /// A remote agent's compose file names, in its header, every variable it
 /// reads: its host has no env.example of its own.
 #[test]
@@ -689,28 +853,44 @@ fn the_remote_agents_header_names_every_variable_it_reads() {
     }
 }
 
-/// Every setting the runbook tells an operator to change is a line of
-/// `env.example` (U18), and public dialling is on with no line at all
-/// (U10).
+/// The whole `AFKFLEET_*` names in `text`, each once; a prefix the runbook
+/// gives as a pattern (`AFKFLEET_SERVER__<SECTION>__<KEY>`) is left out.
+fn afkfleet_names(text: &str) -> Vec<&str> {
+    let mut names = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("AFKFLEET_") {
+        let tail = rest.get(at..).unwrap();
+        let end = tail
+            .find(|c: char| !(c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
+            .unwrap_or(tail.len());
+        let name = tail.get(..end).unwrap();
+        if !name.ends_with('_') {
+            names.push(name);
+        }
+        rest = tail.get(end..).unwrap();
+    }
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+/// Every setting the runbook names is a line of `env.example` (U18), or,
+/// for a remote agent's own host, named in compose.agent.yaml's header; and
+/// public dialling is on with no line at all (U10).
 #[test]
 fn env_example_lists_every_setting_the_runbook_names() {
-    for key in [
-        "AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__2",
-        "AFKFLEET_SERVER__VAULT__ACTIVE_KEY_ID",
-        "AFKFLEET_SERVER__DATABASE__BACKUP_KEEP",
-        "AFKFLEET_SERVER__DATABASE__BACKUP_INTERVAL_HOURS",
-        "AFKFLEET_SERVER__CHAT__RETENTION_DAYS",
-        "AFKFLEET_SERVER__CHAT__MAX_LINES_PER_BOT",
-        "AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS",
-        "AFKFLEET_AGENT__CONTROL_PLANE__PRIVATE_TARGETS",
-        "AFKFLEET_SERVER_MEMORY",
-        "AFKFLEET_AGENT_MEMORY",
-        "AFKFLEET_FLEET_SUBNET",
-        "AFKFLEET_EDGE_SUBNET",
-        "AFKFLEET_BACKUPS_DIR",
-    ] {
-        assert!(env_example_names(key), "{key}");
+    let header: String = REMOTE
+        .lines()
+        .take_while(|line| line.starts_with('#'))
+        .collect();
+    let names = afkfleet_names(RUNBOOK);
+    for name in &names {
+        assert!(
+            env_example_names(name) || header.contains(name),
+            "the runbook names {name}"
+        );
     }
+    assert!(names.len() > 20, "{names:?}");
     assert!(
         ENV_EXAMPLE
             .lines()

@@ -185,7 +185,7 @@ images:
 # CI's Stack workflow sets AFKFLEET_SMOKE_SETUP=host to run deploy/setup.sh itself.
 # The stack's smoke tests and the SFTP account's test (needs Docker; ADR-0022, S15, S19).
 test-stack $AFKFLEET_SMOKE_IMAGES_BUILT="1": images
-    cargo nextest run -p fleet-integration --profile slow -E "test(/slow_(smoke|sftp)_/)"
+    cargo nextest run -p fleet-integration --profile slow -E "test(/slow_(smoke|sftp|ops)_/)"
 
 # The weekly audit's image scan (ADR-0022, U12, U13): each image saved to a file Grype reads,
 # so Grype never talks to Docker: afkfleet's two, and Caddy's pinned one, which
@@ -213,7 +213,7 @@ image-scan:
 # 0.11.0 by its SHA-256; not of `check`, since this PC has no ShellCheck.
 # Check the host's shell scripts with ShellCheck (needs ShellCheck).
 sh-check:
-    shellcheck --shell=sh deploy/setup.sh deploy/host/sftp-backups.sh
+    shellcheck --shell=sh deploy/setup.sh deploy/files.sh deploy/host/sftp-backups.sh
 
 # The database path, the vault key's path and the PKI's four paths must be absolute, which
 # a committed config can't hold for every machine, so the recipe passes them:

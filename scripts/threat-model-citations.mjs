@@ -7,7 +7,8 @@
 // (Plan.md P7.12, ADR-0016). Only that column counts, and only spans in backticks that are
 // Rust paths: snake_case segments joined by `::` (`map::chat_text_and_sender_are_sanitized`)
 // or a bare name. Anything else in backticks (`tests/connector.rs`, `cargo deny`,
-// `unsafe_code = "forbid"`) is skipped.
+// `unsafe_code = "forbid"`) is skipped, but for a `scripts/<name>.test.mjs` file, which must
+// exist (ADR-0022, S51).
 //
 // A citation's last segment must be a test function in a `.rs` file under crates/ or the
 // desktop crate (apps/desktop/src-tauri, Phase 8): a `fn`
@@ -26,6 +27,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 /** The column whose citations are checked. */
 export const COLUMN = "Verified by";
+
+/** A Node test file of scripts/. */
+const SCRIPT_TEST = /^scripts\/[a-z0-9-]+\.test\.mjs$/;
 
 /** A Rust path: snake_case segments joined by `::`. */
 const RUST_PATH = /^[a-z_][a-z0-9_]*(?:::[a-z_][a-z0-9_]*)*$/;
@@ -81,6 +85,13 @@ export function citations(text) {
   return [...text.matchAll(/`([^`]+)`/g)]
     .map((match) => match[1])
     .filter((span) => RUST_PATH.test(span));
+}
+
+/** The scripts/ test files a cell cites: every span in backticks that names one. */
+export function scriptCitations(text) {
+  return [...text.matchAll(/`([^`]+)`/g)]
+    .map((match) => match[1])
+    .filter((span) => SCRIPT_TEST.test(span));
 }
 
 /** A string literal, or a char literal, whose brackets don't count. */
@@ -169,11 +180,12 @@ export function resolves(citation, index) {
 }
 
 /**
- * Checks the threat model's citations against `files`. Returns one message per citation
- * that names no test, and one if the document cites none at all (the check would prove
- * nothing).
+ * Checks the threat model's citations against `files` and `scripts` (the scripts/ test
+ * files there are, as `scripts/<name>.test.mjs`). Returns one message per citation that
+ * names no test or no file, and one if the document cites none at all (the check would
+ * prove nothing).
  */
-export function check(markdown, files) {
+export function check(markdown, files, scripts = new Set()) {
   const index = indexTests(files);
   const problems = [];
   let cited = 0;
@@ -184,6 +196,12 @@ export function check(markdown, files) {
         problems.push(
           `line ${cell.line}: \`${citation}\` names no test under crates/ or apps/desktop/src-tauri/`,
         );
+      }
+    }
+    for (const script of scriptCitations(cell.text)) {
+      cited += 1;
+      if (!scripts.has(script)) {
+        problems.push(`line ${cell.line}: \`${script}\` names no file under scripts/`);
       }
     }
   }
@@ -232,7 +250,12 @@ export const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 /** Checks the real threat model against the real crates. */
 export function checkRepository(root = ROOT) {
   const markdown = readFileSync(join(root, "docs", "threat-model.md"), "utf8");
-  return check(markdown, rustFiles(root));
+  const scripts = new Set(
+    readdirSync(join(root, "scripts"))
+      .filter((name) => name.endsWith(".test.mjs"))
+      .map((name) => `scripts/${name}`),
+  );
+  return check(markdown, rustFiles(root), scripts);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

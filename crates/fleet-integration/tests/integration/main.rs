@@ -20,9 +20,11 @@
 //! - [`timing`]: the timing contracts between the agent and the server,
 //!   over their constants.
 //! - [`smoke`]: P12.7's smoke tests (ADR-0022, S19): the production compose
-//!   project from a copy of `deploy/`, on each proxy path, with both images;
-//!   `just test-stack` and `just test-slow` run them, and the Stack
-//!   workflow nightly.
+//!   project from a copy of `deploy/`, on each proxy path, with both images,
+//!   and the runbook's operations on it (`smoke::ops`: a restore after a
+//!   crash, a new host from the keys' copy; ADR-0022, S43); `just
+//!   test-stack` and `just test-slow` run them, and the Stack workflow
+//!   nightly.
 //! - [`sftp`]: the backups' SFTP account (ADR-0022, S15), installed by
 //!   `deploy/host/sftp-backups.sh` in a throwaway sshd container.
 //!

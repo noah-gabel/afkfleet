@@ -9,9 +9,14 @@ import { afterEach, describe, it } from "node:test";
 
 import { installerName, workspaceVersion } from "./app-installer.mjs";
 import {
+  bundleName as deployBundleName,
+  workspaceVersion as deployWorkspaceVersion,
+} from "./deploy-bundle.mjs";
+import {
   main,
   notes,
   parseTag,
+  bundleName as releaseBundleName,
   installerName as releaseInstallerName,
   workspaceVersion as releaseWorkspaceVersion,
 } from "./release.mjs";
@@ -540,6 +545,20 @@ describe("release.mjs itself", () => {
       assert.equal(releaseWorkspaceVersion(cargo), workspaceVersion(cargo), cargo);
     }
   });
+
+  it("names the bundle and reads the version as deploy-bundle.mjs does", () => {
+    for (const version of ["0.2.0", "10.0.31"]) {
+      assert.equal(releaseBundleName(version), deployBundleName(version));
+    }
+    for (const cargo of [
+      '[workspace.package]\nversion = "0.2.0"\n',
+      '[package]\nversion = "0.3.0"\n[workspace.package]\nversion = "0.2.0"\n',
+      '[workspace.package]\nversion = "0.2"\n',
+      "",
+    ]) {
+      assert.equal(releaseWorkspaceVersion(cargo), deployWorkspaceVersion(cargo), cargo);
+    }
+  });
 });
 
 describe("release merge", () => {
@@ -785,7 +804,7 @@ describe("release merge", () => {
 });
 
 describe("release notes", () => {
-  it("are the approved body, with the images by digest", () => {
+  it("are the approved body, with the host's files, the runbook at the tag and the images by digest", () => {
     assert.equal(
       notes({ version: "0.2.0", owner: "owner", server: DIGEST(5), agent: DIGEST(6) }),
       [
@@ -793,6 +812,8 @@ describe("release notes", () => {
         "",
         "Desktop app for Windows: afkfleet_0.2.0_x64-setup.exe",
         "How to install and use it: https://github.com/noah-gabel/afkfleet/blob/main/docs/using-the-app.md",
+        "Files for hosting the server: afkfleet-deploy-0.2.0.tar.gz",
+        "How to host it: https://github.com/noah-gabel/afkfleet/blob/v0.2.0/docs/runbook.md",
         "Server images:",
         `  ghcr.io/owner/afkfleet-server:0.2.0@${DIGEST(5)}`,
         `  ghcr.io/owner/afkfleet-agent:0.2.0@${DIGEST(6)}`,

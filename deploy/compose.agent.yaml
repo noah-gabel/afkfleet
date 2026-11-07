@@ -1,13 +1,14 @@
 # A remote agent's compose project, for a host other than the server's
 # (Plan.md P12.2; ADR-0022, S17): the managed agent alone, which dials the
 # server's published gRPC port (compose.grpc.yaml on the server's host). Run
-# it from this folder with its own .env beside it:
-#   AFKFLEET_AGENT_IMAGE                      the agent's image
+# it from this folder with its own .env beside it (COMPOSE_FILE=compose.agent.yaml):
 #   AFKFLEET_AGENT__NAME                      its name, unique among the agents
 #   AFKFLEET_AGENT__CONTROL_PLANE__URL        https://<a name the server's certificate names>:7443
 #   AFKFLEET_CA_CERT_FILE                     the server's CA certificate (ca.crt), copied here
 # and, as env.example explains them, AFKFLEET_AGENT_MEMORY, AFKFLEET_AGENT_CPUS,
 # AFKFLEET_AGENT_PIDS and AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS.
+# AFKFLEET_AGENT_IMAGE stays unset: a release's files pin the agent's image by
+# its digest in the line below, and a line in .env would replace that pin.
 # The CA certificate is a compose secret from a file on this host, which
 # must belong to 65532 with mode 600: root once (`sudo chown 65532:65532
 # ca.crt` and `sudo chmod 600 ca.crt`), since the agent reads it as its own

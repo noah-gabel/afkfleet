@@ -306,7 +306,7 @@ pub enum VaultCommand {
     },
     /// Re-encrypts every secret sealed under another key than `[vault]
     /// active_key_id`, in one transaction, then prints the status. Stop the
-    /// server and copy the database first (README).
+    /// server and copy the database first (docs/runbook.md).
     #[command(after_help = vault::ROTATE_KEY_EXIT_CODES)]
     RotateKey {
         /// The config file (TOML): the command reads `[database] path`,

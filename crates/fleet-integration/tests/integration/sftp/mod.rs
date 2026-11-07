@@ -412,6 +412,23 @@ fn slow_sftp_backups_account() {
 
     exec_ok("sh /root/sftp-backups.sh install --key /root/pull.pub");
     let files_before = backups_state();
+    // The runbook's check for an operator's own address, as it gives it
+    // (docs/runbook.md, Keeping backups off the host).
+    let for_a_pc = exec_ok(
+        "sshd -T -C user=afkfleet-backup,host=pc.example.com,addr=192.0.2.20 | grep -E '^(chrootdirectory|forcecommand|permittty|allowtcpforwarding|disableforwarding) '",
+    );
+    for expected in [
+        "chrootdirectory /srv/afkfleet-backups",
+        "forcecommand internal-sftp -R -d /backups",
+        "permittty no",
+        "allowtcpforwarding no",
+        "disableforwarding yes",
+    ] {
+        assert!(
+            for_a_pc.lines().any(|line| line == expected),
+            "{expected} isn't in:\n{for_a_pc}"
+        );
+    }
 
     let listed = sftp("ls -la");
     let got = sftp(&format!("get {ONE} /root/got"));

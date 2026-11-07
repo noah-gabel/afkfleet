@@ -50,9 +50,13 @@ export function useUpdates(): Updates {
       // The real install ends with the app's exit; it answers only when it failed.
       await api.installUpdate();
     } catch (rejection) {
-      store.getState().installFailed(toApiError(rejection).error);
-      // The Rust side stopped the live events watch before installing: it starts again.
-      stores.live.getState().restart();
+      const failure = toApiError(rejection).error;
+      store.getState().installFailed(failure);
+      // The Rust side stops the live events watch only once the download is checked, and answers
+      // `update_install` for every failure after that: the watch starts again then alone (S29).
+      if (failure.code === "update_install") {
+        stores.live.getState().restart();
+      }
     }
   }
 

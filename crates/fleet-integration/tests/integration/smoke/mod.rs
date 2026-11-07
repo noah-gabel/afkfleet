@@ -32,6 +32,7 @@
 //! service's next log line, or a socket's own timeout (ADR-0014's form).
 
 mod checks;
+mod ops;
 mod stack;
 
 use core::fmt::Write as _;
@@ -52,7 +53,7 @@ use self::checks::{capabilities, mounts, series, stats};
 use self::stack::{ProxyPath, QUICK, SERVER_CONFIG, SETTING, SLOW, Stack};
 
 /// The Owner's name.
-const OWNER: &str = "SmokeOwner";
+pub(crate) const OWNER: &str = "SmokeOwner";
 /// The address a forged `X-Forwarded-For` claims (a documentation address).
 const FORGED: &str = "203.0.113.7";
 /// The share search's distinctive query and the forced 502s' ticket.
@@ -142,7 +143,7 @@ async fn slow_smoke_behind_a_host_proxy() {
 }
 
 /// A password drawn for this run: 24 random bytes as hex.
-fn draw_password() -> String {
+pub(crate) fn draw_password() -> String {
     let mut bytes = [0_u8; 24];
     getrandom_fill(&mut bytes);
     bytes.iter().fold(String::new(), |mut text, byte| {
@@ -160,7 +161,7 @@ fn getrandom_fill(bytes: &mut [u8]) {
 /// The Owner, created as the runbook says: the password on stdin, never an
 /// argument (Plan.md P12.7's note). `exec`, not `run`: the server's fixed
 /// address on the fleet network can't be taken twice.
-fn create_owner(stack: &mut Stack, password: &str) {
+pub(crate) fn create_owner(stack: &mut Stack, password: &str) {
     let finished = stack
         .compose
         .run_with_stdin(
@@ -206,7 +207,7 @@ fn caddy_root(compose: &Compose, service: &str) -> CustomCa {
 
 /// Calls `attempt` until it answers, waking at each of `service`'s log
 /// lines (or every 2 s), within [`SLOW`].
-fn until_answered<T>(
+pub(crate) fn until_answered<T>(
     compose: &Compose,
     service: &str,
     mut attempt: impl FnMut() -> Option<T>,
@@ -223,50 +224,113 @@ fn until_answered<T>(
 }
 
 /// Seconds since the epoch on this machine, which Docker's VM follows.
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs()
 }
 
-/// The Owner's first login at `url` with `trust`: the setup step, the
-/// authenticator's code, the login with the next step's code (the server
-/// takes one step of drift and only a later step than the last used).
+/// The Owner's first login at `url` with `trust`; see [`Owner::first`].
 async fn log_in(url: &str, trust: Trust, password: &str, stack: &mut Stack) -> Client<MemoryStore> {
-    let client = Client::new(
+    Owner::first(url, trust, password, stack).await.client
+}
+
+/// A client of `url` over `trust`, with nothing stored.
+fn client(url: &str, trust: Trust) -> Client<MemoryStore> {
+    Client::new(
         ClientConfig {
             server: ServerUrl::parse(url).unwrap(),
             trust,
         },
         MemoryStore::new(),
     )
-    .unwrap();
-    let login = LoginRequest {
-        username: SecretText::new(OWNER.to_owned()),
-        password: SecretText::new(password.to_owned()),
-    };
-    let step = client.login(&login).await.unwrap();
-    assert!(matches!(step, LoginStep::SetupRequired { .. }), "{step:?}");
-    let enrolled = client.mfa_enroll().await.unwrap();
-    stack.transcript.forbid(enrolled.secret.expose());
-    stack.transcript.forbid(enrolled.otpauth_uri.expose());
-    let app = Totp::from_url(enrolled.otpauth_uri.expose()).unwrap();
-    let at = now();
-    let confirmed = client
-        .mfa_confirm(SecretText::new(app.generate(at).to_string()))
-        .await
-        .unwrap();
-    for code in &confirmed.recovery_codes {
-        stack.transcript.forbid(code.expose());
+    .unwrap()
+}
+
+/// The Owner signed in, with what signs them in again: the password and the
+/// authenticator.
+pub(crate) struct Owner {
+    pub(crate) client: Client<MemoryStore>,
+    password: String,
+    app: Totp,
+    /// When the last code sent was made: the next must be a later step.
+    last: u64,
+}
+
+impl Owner {
+    /// The first login at `url` with `trust`: the setup step, the
+    /// authenticator's code, the login with the next step's code (the server
+    /// takes one step of drift and only a later step than the last used).
+    pub(crate) async fn first(url: &str, trust: Trust, password: &str, stack: &mut Stack) -> Self {
+        let client = client(url, trust);
+        let login = LoginRequest {
+            username: SecretText::new(OWNER.to_owned()),
+            password: SecretText::new(password.to_owned()),
+        };
+        let step = client.login(&login).await.unwrap();
+        assert!(matches!(step, LoginStep::SetupRequired { .. }), "{step:?}");
+        let enrolled = client.mfa_enroll().await.unwrap();
+        stack.transcript.forbid(enrolled.secret.expose());
+        stack.transcript.forbid(enrolled.otpauth_uri.expose());
+        let app = Totp::from_url(enrolled.otpauth_uri.expose()).unwrap();
+        let at = now();
+        let confirmed = client
+            .mfa_confirm(SecretText::new(app.generate(at).to_string()))
+            .await
+            .unwrap();
+        for code in &confirmed.recovery_codes {
+            stack.transcript.forbid(code.expose());
+        }
+        let step = client.login(&login).await.unwrap();
+        assert!(matches!(step, LoginStep::MfaRequired { .. }), "{step:?}");
+        client
+            .login_mfa(SecretText::new(app.generate(at + 30).to_string()))
+            .await
+            .unwrap();
+        Self {
+            client,
+            password: password.to_owned(),
+            app,
+            last: at + 30,
+        }
     }
-    let step = client.login(&login).await.unwrap();
-    assert!(matches!(step, LoginStep::MfaRequired { .. }), "{step:?}");
-    client
-        .login_mfa(SecretText::new(app.generate(at + 30).to_string()))
-        .await
-        .unwrap();
-    client
+
+    /// A new login at `url` with `trust`, the same password and
+    /// authenticator: the Owner's TOTP secret must still open (after a
+    /// restore, a key rotation, a new host). The server takes only a step
+    /// later than the last used, and one step of drift, so the code is the
+    /// step after the last one, once the clock has reached the last one:
+    /// until then the wait wakes at each of `stack`'s server's log lines, or
+    /// every 2 s, within [`SLOW`], as every smoke wait does.
+    pub(crate) async fn again(&mut self, url: &str, trust: Trust, stack: &Stack) {
+        let follower = stack.compose.follow("server").unwrap();
+        let started = std::time::Instant::now();
+        while now() / 30 < self.last / 30 {
+            assert!(
+                started.elapsed() < SLOW,
+                "the authenticator's next step never came"
+            );
+            follower.wait(Duration::from_secs(2));
+        }
+        drop(follower);
+        let client = client(url, trust);
+        let step = client
+            .login(&LoginRequest {
+                username: SecretText::new(OWNER.to_owned()),
+                password: SecretText::new(self.password.clone()),
+            })
+            .await
+            .unwrap();
+        assert!(matches!(step, LoginStep::MfaRequired { .. }), "{step:?}");
+        let at = now().max(self.last + 30);
+        client
+            .login_mfa(SecretText::new(self.app.generate(at).to_string()))
+            .await
+            .unwrap();
+        self.last = at;
+        self.client = client;
+    }
 }
 
 /// The newest audit entries, newest first.

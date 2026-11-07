@@ -141,6 +141,75 @@ services:
     cpus: 0.25
     pids_limit: 16
 
+  # The volumes' file operations, run only by deploy/setup.sh's restore,
+  # renew-cert and forget-aside (`docker compose run --rm files <verb> …`,
+  # deploy/files.sh; ADR-0022, S25, S38): Caddy's pinned image for its
+  # busybox, as the nonroot user, with no network. The database's and the
+  # server certificate's volumes and the backups (read-only), never the keys
+  # or the CA. At /vol, a folder the image doesn't have, with nocopy: it
+  # never creates or fills a volume, and files.sh checks each one's owner.
+  files:
+    <<: *hardened
+    image: caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5
+    profiles: [files]
+    restart: "no"
+    network_mode: none
+    entrypoint: ["/bin/sh", "/afkfleet/files.sh"]
+    command: ["--help"]
+    volumes:
+      - ./files.sh:/afkfleet/files.sh:ro
+      - type: volume
+        source: data
+        target: /vol/data
+        volume:
+          nocopy: true
+      - type: volume
+        source: tls
+        target: /vol/tls
+        volume:
+          nocopy: true
+      - type: bind
+        source: ${AFKFLEET_BACKUPS_DIR:-/srv/afkfleet-backups/backups}
+        target: /vol/backups
+        read_only: true
+        bind:
+          create_host_path: false
+    # A few files moved or copied: small and fixed.
+    mem_limit: 64m
+    memswap_limit: 64m
+    cpus: 0.5
+    pids_limit: 16
+
+  # The server's commands while serve is stopped (`docker compose run --rm
+  # maintenance <command> --config /etc/afkfleet/server.toml`): migrate,
+  # vault status, vault rotate-key, agent list and agent disable (S25, S38).
+  # The server's image with no network; the database writable, the keys
+  # read-only, never the CA, the server's pair or the backups.
+  maintenance:
+    <<: *hardened
+    image: ${AFKFLEET_SERVER_IMAGE:?set AFKFLEET_SERVER_IMAGE in .env}
+    profiles: [maintenance]
+    restart: "no"
+    network_mode: none
+    env_file:
+      - path: .env
+        required: true
+    command: ["--help"]
+    healthcheck:
+      disable: true
+    volumes:
+      - ./prod/server.toml:/etc/afkfleet/server.toml:ro
+      - data:/data
+      - keys:/keys:ro
+    tmpfs:
+      # SQLite's temporary files stay off the disk, as the server's.
+      - /tmp:size=64m,noexec,nosuid,nodev
+    # A migration needs the server's memory: the server's knobs.
+    mem_limit: ${AFKFLEET_SERVER_MEMORY:-512m}
+    memswap_limit: ${AFKFLEET_SERVER_MEMORY:-512m}
+    cpus: ${AFKFLEET_SERVER_CPUS:-1.0}
+    pids_limit: ${AFKFLEET_SERVER_PIDS:-256}
+
 networks:
   fleet:
     ipam:

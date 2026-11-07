@@ -103,10 +103,10 @@ cleanup() {
 	*" group "*) groupdel "$ACCOUNT" >/dev/null 2>&1 || LEFTOVER="$LEFTOVER the group $ACCOUNT" ;;
 	esac
 	case " $ADDED " in
-	*" dropin "*) rm -f "$DROPIN" || LEFTOVER="$LEFTOVER $DROPIN" ;;
+	*" dropin "*) rm -f -- "$DROPIN" || LEFTOVER="$LEFTOVER $DROPIN" ;;
 	esac
 	case " $ADDED " in
-	*" keys "*) rm -f "$KEYS" || LEFTOVER="$LEFTOVER $KEYS" ;;
+	*" keys "*) rm -f -- "$KEYS" || LEFTOVER="$LEFTOVER $KEYS" ;;
 	esac
 	ADDED=""
 }
@@ -239,7 +239,7 @@ install() {
 
 	# Neither file existed (checked above), so what a failure removes is ours.
 	ADDED="$ADDED keys"
-	{ printf 'restrict %s\n' "$line" >"$KEYS" && chmod 644 "$KEYS"; } || fail "$KEYS couldn't be written"
+	{ printf 'restrict %s\n' "$line" >"$KEYS" && chmod 644 -- "$KEYS"; } || fail "$KEYS couldn't be written"
 	ADDED="$ADDED dropin"
 	write_dropin || fail "$DROPIN couldn't be written"
 	"$sshd" -t || fail "the drop-in fails sshd -t"
@@ -315,7 +315,7 @@ Match User $ACCOUNT
 	PermitListen none
 	PermitOpen none
 EOF
-	chmod 644 "$DROPIN"
+	chmod 644 -- "$DROPIN"
 }
 
 uninstall() {
@@ -334,11 +334,11 @@ uninstall() {
 			refuse "groupdel couldn't remove the group $ACCOUNT; the account is gone, the drop-in and the key file stay: run uninstall again"
 	fi
 	if [ -e "$DROPIN" ]; then
-		rm -f "$DROPIN"
+		rm -f -- "$DROPIN"
 		"$sshd" -t || refuse "sshd's config fails sshd -t without the drop-in: fix it, then reload sshd"
 		reload_sshd || refuse "sshd couldn't be reloaded with $RELOAD: reload it yourself; the account and the drop-in are gone"
 	fi
-	rm -f "$KEYS"
+	rm -f -- "$KEYS"
 	say "ok: the account, its key and the drop-in are gone; the backups' folders stay"
 }
 
