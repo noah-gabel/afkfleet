@@ -383,30 +383,39 @@ async fn a_missing_manifest_is_unreachable() {
     );
 }
 
-/// The real cap stops a download while it streams: a body with no length
-/// that never ends is refused once it passes 64 MiB, and the server sees the
-/// client stop reading, so the whole of it is never held (PR #98's review).
+/// The real cap stops a download itself, within one chunk, whatever the
+/// machine's load: a body with no length that never ends, sent as fast as
+/// the server can, is read up to the chunk that passes 64 MiB and no further,
+/// and the download is refused, holding nothing to install (PR #99's
+/// review). The bound is the bytes read, never a time.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_cap_stops_a_download_while_it_streams_past_64_mib() {
+async fn the_cap_stops_a_download_within_one_chunk_past_64_mib() {
     let release = Release::new();
-    let (sent, got) = mpsc::channel();
+    let (sent, _streamed) = mpsc::channel();
     *release.served.endless.lock().unwrap() = Some(sent);
-    let updates = release.updates();
+    let chunks = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&chunks);
+    let updates = release
+        .updates()
+        .counting(Arc::new(move |chunk| seen.lock().unwrap().push(chunk)));
+    let found = check(&updates).await.unwrap().expect("no release found");
 
-    let started = std::time::Instant::now();
-    let refused = download(&updates).await;
-    let elapsed = started.elapsed();
-    let streamed = got
-        .recv_timeout(Duration::from_secs(10))
-        .expect("the server never saw the client stop reading");
+    // Bounded by the download's own timeouts alone: the cap ends it first.
+    let refused = updates.download(&found).await;
 
     assert_eq!(refused, Err(UpdateFailure::Invalid));
-    assert!(elapsed < WAIT, "it ran until the bound: {elapsed:?}");
-    let cap = afkfleet_desktop::update::MAX_DOWNLOAD_BYTES;
-    assert!(streamed > cap, "it stopped before the cap: {streamed}");
+    let cap = usize::try_from(afkfleet_desktop::update::MAX_DOWNLOAD_BYTES).unwrap();
+    let chunks = chunks.lock().unwrap();
+    let (last, before) = chunks.split_last().expect("nothing was read");
+    let kept: usize = before.iter().sum();
     assert!(
-        streamed < 4 * cap,
-        "it read far past the cap before stopping: {streamed}"
+        kept <= cap,
+        "it read past the cap before its last chunk: {kept}"
+    );
+    assert!(
+        kept + last > cap,
+        "it stopped before the cap: {}",
+        kept + last
     );
 }
 

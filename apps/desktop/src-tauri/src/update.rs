@@ -15,7 +15,9 @@
 //!   and `install_update` takes no argument: it installs exactly that kept
 //!   release, taken out first, so a failure leaves nothing kept.
 //! - **Bounded:** a check 20 s (5 s to connect), a download 5 minutes and at
-//!   most 64 MiB, each also under an outer timeout; the install's start 30 s,
+//!   most 64 MiB plus the one chunk that passes it (the app reads the body
+//!   itself and stops there, then the plugin checks the signature; PR #99's
+//!   review), each also under an outer timeout; the install's start 30 s,
 //!   claimed once, so a start the main thread reaches only after that never
 //!   runs (S30). One check or install at a time: another call meanwhile is
 //!   `update_busy`.
@@ -40,13 +42,13 @@
 
 use core::future::Future;
 use core::time::Duration;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use fleet_api_types::BoundedText;
 use fleet_api_types::app::{
     AppVersion, CommandError, CommandErrorCode, UpdateCheck, VERSION_MAX_CHARS,
 };
+use reqwest::header::{ACCEPT, HeaderValue};
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_updater::{Error, Update, UpdaterExt as _};
 
@@ -336,7 +338,12 @@ pub struct PluginUpdates<R: Runtime> {
     app: AppHandle<R>,
     /// The largest download.
     cap: u64,
+    /// Told the length of each chunk of a download's body as it's read.
+    on_chunk: Option<ChunkObserver>,
 }
+
+/// What a download tells of each chunk of its body: its length.
+pub type ChunkObserver = Arc<dyn Fn(usize) + Send + Sync>;
 
 impl<R: Runtime> PluginUpdates<R> {
     /// Over `app`'s registered plugin, downloads capped at
@@ -350,9 +357,93 @@ impl<R: Runtime> PluginUpdates<R> {
     /// update's proof uses a small cap.
     #[must_use]
     pub const fn with_cap(app: AppHandle<R>, cap: u64) -> Self {
-        Self { app, cap }
+        Self {
+            app,
+            cap,
+            on_chunk: None,
+        }
+    }
+
+    /// The same, telling `on_chunk` each chunk's length as a download reads
+    /// it: the cap's proof counts what was read.
+    #[must_use]
+    pub fn counting(self, on_chunk: ChunkObserver) -> Self {
+        Self {
+            on_chunk: Some(on_chunk),
+            ..self
+        }
     }
 }
+
+impl<R: Runtime> PluginUpdates<R> {
+    /// `release`'s installer, fetched as tauri-plugin-updater 2.14.1's own
+    /// `Update::download` fetches it (the manifest's URL, its headers with
+    /// `Accept: application/octet-stream`, the plugin's user agent, the
+    /// download's timeout, the check's connect timeout, the update's proxy
+    /// fields, reqwest's redirects, a failure for any answer but 2xx), but
+    /// read under the cap: a `Content-Length` over it is refused before the
+    /// body, and the chunk that passes it is the last one read, whatever the
+    /// machine's load, with everything so far dropped (PR #99's review). The
+    /// plugin's own download reads on while chunks are ready, so its callback
+    /// could only signal.
+    async fn fetch(&self, release: &Update) -> Result<Vec<u8>, UpdateFailure> {
+        let mut headers = release.headers.clone();
+        if !headers.contains_key(ACCEPT) {
+            headers.insert(ACCEPT, HeaderValue::from_static("application/octet-stream"));
+        }
+        let mut client = reqwest::Client::builder()
+            .user_agent(PLUGIN_USER_AGENT)
+            .timeout(DOWNLOAD_TIMEOUT)
+            .connect_timeout(CONNECT_TIMEOUT);
+        if release.no_proxy {
+            client = client.no_proxy();
+        } else if let Some(proxy) = &release.proxy {
+            let proxy =
+                reqwest::Proxy::all(proxy.as_str()).map_err(|_| UpdateFailure::Unreachable)?;
+            client = client.proxy(proxy);
+        }
+        let client = client.build().map_err(|_| UpdateFailure::Unreachable)?;
+        // Bounded by the client's own timeout, as every read below is.
+        let mut response = client
+            .get(release.download_url.clone())
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|_| UpdateFailure::Unreachable)?;
+        if !response.status().is_success() {
+            return Err(UpdateFailure::Unreachable);
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > self.cap)
+        {
+            return Err(UpdateFailure::Invalid);
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| UpdateFailure::Unreachable)?
+        {
+            if let Some(observer) = &self.on_chunk {
+                observer(chunk.len());
+            }
+            let held = u64::try_from(bytes.len().saturating_add(chunk.len())).unwrap_or(u64::MAX);
+            if held > self.cap {
+                // Dropping the response closes its connection; the bytes so
+                // far go with `bytes`.
+                return Err(UpdateFailure::Invalid);
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
+    }
+}
+
+/// The user agent tauri-plugin-updater 2.14.1 sends with its own download
+/// (`UPDATER_USER_AGENT`): the app's fetch is the plugin's request, read
+/// under the cap. A test holds it equal to Cargo.lock's version.
+pub const PLUGIN_USER_AGENT: &str = "tauri-plugin-updater/2.14.1";
 
 /// Only the cap.
 impl<R: Runtime> core::fmt::Debug for PluginUpdates<R> {
@@ -385,42 +476,12 @@ impl<R: Runtime> Updates for PluginUpdates<R> {
     }
 
     async fn download(&self, release: &Update) -> Result<Vec<u8>, UpdateFailure> {
-        // The plugin gives each found update no timeout of its own: the
-        // download sets one.
-        let mut update = release.clone();
-        update.timeout = Some(DOWNLOAD_TIMEOUT);
-        let cap = self.cap;
-        let total = Arc::new(AtomicU64::new(0));
-        let over = Arc::new(tokio::sync::Notify::new());
-        let (counted, signal) = (Arc::clone(&total), Arc::clone(&over));
-        let downloading = update.download(
-            move |chunk, length| {
-                let chunk = u64::try_from(chunk).unwrap_or(u64::MAX);
-                let sum = counted
-                    .fetch_add(chunk, Ordering::Relaxed)
-                    .saturating_add(chunk);
-                if sum > cap || length.is_some_and(|length| length > cap) {
-                    signal.notify_one();
-                }
-            },
-            || {},
-        );
-        let bounded = async {
-            tokio::select! {
-                // Cancel-safe for what matters: dropping the download drops
-                // its request and the bytes so far, and nothing is installed.
-                downloaded = downloading => downloaded.map_err(|error| download_failure(&error)),
-                () = over.notified() => Err(UpdateFailure::Invalid),
-            }
-        };
-        let bytes = tokio::time::timeout(DOWNLOAD_TIMEOUT + SLACK, bounded)
+        let bytes = tokio::time::timeout(DOWNLOAD_TIMEOUT + SLACK, self.fetch(release))
             .await
             .map_err(|_| UpdateFailure::Unreachable)??;
-        // The signal stops a large download early; a body that arrives in one
-        // read finishes before it's seen, so the whole is measured too.
-        if u64::try_from(bytes.len()).map_or(true, |length| length > cap) {
-            return Err(UpdateFailure::Invalid);
-        }
+        // The plugin's own signature check, where its download runs it: the
+        // committed key, bound to the version. `install` checks it again.
+        release.verify(&bytes).map_err(|_| UpdateFailure::Invalid)?;
         Ok(bytes)
     }
 
@@ -498,14 +559,6 @@ fn check_failure(error: &Error) -> UpdateFailure {
             UpdateFailure::Unreachable
         }
         _ => UpdateFailure::Manifest,
-    }
-}
-
-/// A failed download: no answer, or bytes that fail their checks.
-fn download_failure(error: &Error) -> UpdateFailure {
-    match error {
-        Error::Reqwest(_) | Error::Network(_) | Error::Http(_) => UpdateFailure::Unreachable,
-        _ => UpdateFailure::Invalid,
     }
 }
 
@@ -787,6 +840,25 @@ mod tests {
         assert_eq!(code(checked), CommandErrorCode::UpdateManifest);
         assert_eq!(code(installed), CommandErrorCode::NoUpdate);
         assert_eq!(updater.port.downloads.load(Ordering::SeqCst), 0);
+    }
+
+    /// The download sends the plugin's own user agent: the version Cargo.lock
+    /// pins, so the fetch stays the plugin's request after a bump.
+    #[test]
+    fn the_downloads_user_agent_is_the_locked_plugins() {
+        let lock = include_str!("../../../../Cargo.lock");
+        let at = lock.find("name = \"tauri-plugin-updater\"\n").unwrap();
+        let version = lock
+            .get(at..)
+            .and_then(|rest| rest.lines().nth(1))
+            .and_then(|line| line.strip_prefix("version = \""))
+            .and_then(|line| line.strip_suffix('"'))
+            .unwrap();
+
+        assert_eq!(
+            super::PLUGIN_USER_AGENT,
+            format!("tauri-plugin-updater/{version}")
+        );
     }
 
     #[tokio::test]

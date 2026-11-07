@@ -43,6 +43,7 @@ dependencies = [
  "garde",
  "keyring-core",
  "rcgen",
+ "reqwest",
  "rstest",
  "rustls",
  "secrecy",
