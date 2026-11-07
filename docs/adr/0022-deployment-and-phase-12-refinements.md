@@ -599,6 +599,14 @@ The user's review of PR #98 and their hands-on test, fixed on `p12/p12.5-release
     - **The release body** gains the bundle's line, and `SHA256SUMS` lists it; `scripts/release-workflow.test.mjs` pins the new job like the others.
     - **R22** (the keys' copy as a root-only folder of root-only files) and **R23** (key 1 stays configured after a rotation; a note for P13.7) are D2's.
     - **Caddy's pin:** 2.11.8 qualifies under the 7-day rule from 2026-11-11 and 2.11.9 from 2026-11-12; ask the user with its date, its fixes and S21's `cap_add` (which 2.11.8 drops).
+  - **From PR #98's review, for D2's first commit** *(the user's list, 2026-11-07)*:
+    - **A failed install** leaves Profile offering "Install and restart" for a release Rust already dropped: clear the check on `installFailed` (or route the button through check-then-install), with a test.
+    - **`useUpdates` restarts the live watch after any install failure,** though Rust stopped it only after a successful download: restart it only then.
+    - **The install's timeout doesn't cancel the queued install,** which can still exit the app later, without `settle`.
+    - **update.rs's and app.rs's docs:** since tauri-plugin-updater 2.14.0, a manifest without `windows-x86_64` is "no update", not `update_manifest`.
+    - **Tests:** "Later" lasting only until the next start (a real restart); the notice not coming back after a login or a logout; `settle()` and `begin_switch()` on a live session.
+    - **`tests/compose.rs`:** refuse `exec`, `suid` and `dev` in any tmpfs; check long-syntax tmpfs volumes; strip tabs in the U20 check; move the stale doc comment back to its test.
+    - **The friends' guide:** Windows 10's path is "Apps & features".
 - **E (P12.8, after D2's merge; U35):** its plan first lists every move, merge, shortening or deletion with why, for the user's approval, and changes no behaviour. Every note an ADR or a comment points to stays findable; CLAUDE.md's pointers to `.claude/rules/` and the threat model's citations keep working.
 - **Phase 13** (from group B): the metrics router in the authorization matrix (P13.1); a fuzz target for the agent's responder (P13.2); a scrape during the load test (P13.4).
 
