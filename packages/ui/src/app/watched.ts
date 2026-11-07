@@ -158,6 +158,12 @@ export function watched(client: ApiClient, stores: AppStores, events: WatchEvent
     leaveAccount: watch((id) => client.leaveAccount(id)),
     // Not watched: it reaches no server, so its success says nothing about the banner (S94).
     setWindowTheme: (theme) => client.setWindowTheme(theme),
+    // Not watched: they ask GitHub, never the server, so neither their success nor their
+    // failure says anything about the banner or the session (ADR-0022, S27).
+    checkUpdate: () => client.checkUpdate(),
+    installUpdate: () => client.installUpdate(),
+    // Not watched: the app answers it from its own version, with no network call (U37).
+    appVersion: () => client.appVersion(),
   };
 }
 

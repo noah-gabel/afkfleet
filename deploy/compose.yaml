@@ -118,6 +118,11 @@ services:
       - tls:/tls
     tmpfs:
       - /tmp:size=1m,noexec,nosuid,nodev
+    # A key and a PKI: small and fixed, never .env knobs.
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.5
+    pids_limit: 64
 
   # Reads a metrics port from inside the fleet network (R17):
   #   docker compose run --rm probe                              the server's
@@ -130,6 +135,11 @@ services:
     entrypoint: ["wget", "-q", "-O", "-", "-T", "5"]
     command: ["http://server:9480/metrics"]
     networks: [fleet]
+    # One page with busybox's wget: small and fixed.
+    mem_limit: 32m
+    memswap_limit: 32m
+    cpus: 0.25
+    pids_limit: 16
 
 networks:
   fleet:

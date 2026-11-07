@@ -203,6 +203,13 @@ tauri-plugin-single-instance = "2.5.3"
 # its free `open_url` is called, from one Rust command without arguments; the plugin isn't
 # registered, so the webview gets none of its commands (ADR-0018).
 tauri-plugin-opener = "2.7.0"
+# tauri-plugin-updater: the desktop app's signed updates (P12.5; ADR-0022, U25, S27). Without
+# default features: `rustls-tls` pulls rustls's `ring` provider, which deny.toml bans, and
+# installs it as the process's provider; `system-proxy` and `zip` (old-style .nsis.zip updates)
+# aren't needed. Its reqwest then gets TLS from the workspace's `rustls` feature (aws-lc-rs and
+# the platform verifier), which fleet-client already enables. Only Rust calls it: the webview
+# gets none of its commands (no capability grants them).
+tauri-plugin-updater = { version = "2.14.1", default-features = false }
 # totp-rs: one time step's TOTP code and the otpauth URI of an enrollment. Without
 # default features: no `std` (wall-clock `*_current`), no `gen_secret` (rand's thread RNG;
 # the secret comes from the SecureRandom port), no `serde`, no `qr` (image codecs).

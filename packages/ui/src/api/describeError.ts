@@ -31,6 +31,12 @@ export function describeError(error: CommandError): string {
     case "no_verification_link":
     case "verification_link_open":
     case "ipc":
+    case "update_unreachable":
+    case "update_manifest":
+    case "update_invalid":
+    case "update_install":
+    case "no_update":
+    case "update_busy":
       return error.message;
     default: {
       // Every code is handled: a new one is a compile error here.

@@ -194,6 +194,15 @@ impl<S: SessionStore> Client<S> {
         self.core.discard().await
     }
 
+    /// Waits until no refresh runs, so the stored refresh token is the
+    /// newest: a refresh in flight finishes with its rotated token saved,
+    /// bounded by its own request's and the store's timeouts. The desktop
+    /// app calls it before it exits for an update, with no command running
+    /// that could start another (ADR-0022, S27).
+    pub async fn settle(&self) {
+        self.core.settle().await;
+    }
+
     /// `POST /auth/step-up`: the password again, which allows step-up
     /// actions in this session for 5 minutes.
     ///

@@ -653,6 +653,27 @@
       "inputs": ["dark"],
       "args": { "theme": "dark" },
       "expect": { "ok": null }
+    },
+    {
+      "command": "check_update",
+      "method": "checkUpdate",
+      "inputs": [],
+      "args": {},
+      "expect": { "ok": { "state": "off", "current": "0.1.0" } }
+    },
+    {
+      "command": "install_update",
+      "method": "installUpdate",
+      "inputs": [],
+      "args": {},
+      "expect": { "error": "no_update" }
+    },
+    {
+      "command": "app_version",
+      "method": "appVersion",
+      "inputs": [],
+      "args": {},
+      "expect": { "ok": { "version": "0.1.0" } }
     }
   ]
 }

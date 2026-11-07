@@ -14,9 +14,12 @@ describe("the launch", () => {
     const app = renderApp({ serverProfile: async () => ({ state: "none" }) });
 
     await waitFor(() => expect(app.path()).toBe("/setup"));
-    // Besides the window's theme, which reaches no server (ADR-0020, S94).
+    // Besides the window's theme and the start's update check, which reach no server (ADR-0020,
+    // S94; ADR-0022, S27).
     expect(
-      app.fake.calls.map((call) => call.method).filter((method) => method !== "setWindowTheme"),
+      app.fake.calls
+        .map((call) => call.method)
+        .filter((method) => method !== "setWindowTheme" && method !== "checkUpdate"),
     ).toEqual(["serverProfile"]);
   });
 

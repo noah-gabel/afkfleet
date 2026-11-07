@@ -227,7 +227,7 @@ describe("setup.sh, run against stubs", { skip: SH }, () => {
     assert.equal(run(["init", "now"]).code, 2);
   });
 
-  it("refuses without docker, without Compose v2.24, or with rootless Docker", () => {
+  it("refuses without docker, without Compose v2.24, with rootless Docker or user namespaces", () => {
     const missing = run(["check"], { noDocker: true });
     const old = run(["check"], {
       responses: [{ when: "compose version --short", stdout: "2.20.3\n" }],
@@ -235,13 +235,22 @@ describe("setup.sh, run against stubs", { skip: SH }, () => {
     const rootless = run(["check"], {
       responses: [{ when: "info --format", stdout: "[name=rootless]\n" }],
     });
+    // userns-remap maps the containers' 65532 to another host uid (PR #97's review).
+    const userns = run(["check"], {
+      responses: [
+        { when: "info --format", stdout: "[name=seccomp,profile=builtin name=userns]\n" },
+      ],
+    });
 
     assert.equal(missing.code, 1);
     assert.match(missing.stderr, /docker isn't installed/);
     assert.equal(old.code, 1);
     assert.match(old.stderr, /2\.20\.3 is too old/);
-    assert.equal(rootless.code, 1);
-    assert.match(rootless.stderr, /rootless/);
+    for (const refused of [rootless, userns]) {
+      assert.equal(refused.code, 1);
+      assert.match(refused.stderr, /rootless or with user namespaces/);
+      assert.doesNotMatch(refused.stdout, /ok: Docker/);
+    }
   });
 
   it("refuses a missing .env, another COMPOSE_FILE and env.example's placeholders", () => {
@@ -290,7 +299,17 @@ describe("setup.sh, run against stubs", { skip: SH }, () => {
   });
 
   it("refuses an install whose project has containers or volumes already", () => {
-    const result = run(["init"], {
+    // Either half alone refuses (PR #97's review): a container left without its volumes, and
+    // volumes left without a container.
+    const containers = run(["init"], {
+      responses: [
+        {
+          when: "ps -a -q --filter label=com.docker.compose.project=afkfleet",
+          stdout: "0123abcd\n",
+        },
+      ],
+    });
+    const volumes = run(["init"], {
       responses: [
         {
           when: "volume ls -q --filter label=com.docker.compose.project=afkfleet",
@@ -299,9 +318,11 @@ describe("setup.sh, run against stubs", { skip: SH }, () => {
       ],
     });
 
-    assert.equal(result.code, 1);
-    assert.match(result.stderr, /init is for a first install only/);
-    assert.ok(!joined(result.calls).some((call) => call.includes("create-key")));
+    for (const result of [containers, volumes]) {
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /init is for a first install only/);
+      assert.ok(!joined(result.calls).some((call) => call.includes("create-key")));
+    }
   });
 
   it("refuses a missing backups folder without root, printing the commands", () => {
@@ -489,6 +510,29 @@ describe("setup.sh, run against stubs", { skip: SH }, () => {
     assert.match(result.stderr, /agent disable/);
     assert.match(result.stderr, /this run created/);
     assert.ok(!joined(result.calls).includes("compose up --detach --wait"));
+  });
+
+  it("init stops when the token command fails: enroll gets no bundle, and nothing more starts", () => {
+    // No pipefail (R18): the pipeline's status is enroll's, so the token command's failure
+    // reaches the script as enroll's refusal of an empty stdin (PR #97's review).
+    const result = run(["init"], {
+      responses: [
+        {
+          when: "compose exec -T server /usr/local/bin/afkfleet-server agent create-enrollment-token",
+          stderr: "the server couldn't be reached\n",
+          code: 1,
+        },
+        { when: "compose run --rm -T --no-deps agent enroll", code: 1 },
+      ],
+    });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /the local agent couldn't be enrolled/);
+    assert.match(result.stderr, /this run created/);
+    const enroll = result.calls.find((call) => call.args.includes("enroll"));
+    assert.equal(enroll.stdin, "", "enroll got nothing to read");
+    assert.ok(!joined(result.calls).includes("compose up --detach --wait"));
+    assert.doesNotMatch(result.stdout, /the local agent is enrolled/);
   });
 
   it("update backs up with the running server first, then pulls and starts the server before the rest", () => {

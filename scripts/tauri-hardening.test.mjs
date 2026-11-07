@@ -14,12 +14,15 @@ import {
   checkClientFeatures,
   checkCommands,
   checkConfig,
+  checkConfigFiles,
   checkContract,
   checkFeatures,
   checkPermissions,
   checkRepoFiles,
+  checkUpdaterFeatures,
   generatedPermission,
   readFolder,
+  UPDATER_PUBKEY,
 } from "./tauri-hardening.mjs";
 
 /** The hardened tauri.conf.json, as P8.3 sets it. */
@@ -35,6 +38,24 @@ function hardenedConfig() {
         dangerousDisableAssetCspModification: true,
         freezePrototype: true,
         capabilities: ["main"],
+      },
+    },
+    plugins: {
+      updater: {
+        pubkey: UPDATER_PUBKEY,
+        endpoints: ["https://github.com/noah-gabel/afkfleet/releases/latest/download/latest.json"],
+        requireSignedVersion: true,
+        windows: { installMode: "passive" },
+      },
+    },
+    bundle: {
+      active: false,
+      icon: ["icons/icon.ico"],
+      publisher: "afkfleet",
+      copyright: "The afkfleet contributors. GPL-3.0-or-later.",
+      windows: {
+        webviewInstallMode: { type: "downloadBootstrapper" },
+        nsis: { installMode: "currentUser" },
       },
     },
   };
@@ -181,6 +202,61 @@ describe("checkConfig", () => {
     config.build.devUrl = "https://example.com";
 
     assert.match(checkConfig(config).join("\n"), /devUrl/);
+  });
+
+  it("fails on any updater setting that's added, removed or changed (ADR-0022, S27)", () => {
+    const cases = [
+      ["pubkey", (updater) => Object.assign(updater, { pubkey: "c29tZXRoaW5nIGVsc2U=" })],
+      ["endpoints", (updater) => Object.assign(updater, { endpoints: ["https://example.com/x"] })],
+      ["requireSignedVersion", (updater) => delete updater.requireSignedVersion],
+      ["allowDowngrades", (updater) => Object.assign(updater, { allowDowngrades: true })],
+      [
+        "dangerousInsecureTransportProtocol",
+        (updater) => Object.assign(updater, { dangerousInsecureTransportProtocol: true }),
+      ],
+      [
+        "dangerousAcceptInvalidCerts",
+        (updater) => Object.assign(updater, { dangerousAcceptInvalidCerts: true }),
+      ],
+      ["windows", (updater) => Object.assign(updater.windows, { installMode: "basicUi" })],
+      ["windows", (updater) => Object.assign(updater.windows, { installerArgs: ["/S"] })],
+    ];
+    for (const [key, change] of cases) {
+      const config = hardenedConfig();
+      change(config.plugins.updater);
+
+      assert.match(checkConfig(config).join("\n"), new RegExp(`plugins\\.updater\\.${key}`), key);
+    }
+    const other = hardenedConfig();
+    other.plugins.opener = {};
+    assert.match(checkConfig(other).join("\n"), /plugins\.opener/);
+  });
+
+  it("fails on any bundle setting that's added, removed or changed (ADR-0022, U29, U33)", () => {
+    const cases = [
+      // The updater's artifacts would sign during the build, with a key in CI.
+      [
+        "createUpdaterArtifacts",
+        (bundle) => Object.assign(bundle, { createUpdaterArtifacts: true }),
+      ],
+      ["active", (bundle) => Object.assign(bundle, { active: true })],
+      ["publisher", (bundle) => Object.assign(bundle, { publisher: "github" })],
+      ["copyright", (bundle) => delete bundle.copyright],
+      ["licenseFile", (bundle) => Object.assign(bundle, { licenseFile: "../../../LICENSE" })],
+      ["homepage", (bundle) => Object.assign(bundle, { homepage: "https://example.com" })],
+      ["windows", (bundle) => Object.assign(bundle.windows.nsis, { installMode: "perMachine" })],
+      [
+        "windows",
+        (bundle) => Object.assign(bundle.windows, { webviewInstallMode: { type: "skip" } }),
+      ],
+      ["windows", (bundle) => Object.assign(bundle.windows, { signCommand: "sign %1" })],
+    ];
+    for (const [key, change] of cases) {
+      const config = hardenedConfig();
+      change(config.bundle);
+
+      assert.match(checkConfig(config).join("\n"), new RegExp(`bundle\\.${key}`), key);
+    }
   });
 });
 
@@ -403,11 +479,60 @@ describe("checkFeatures", () => {
   });
 });
 
-describe("the repository", () => {
-  it("has the hardened desktop configuration", () => {
-    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+describe("the configuration files (PR #98's review)", () => {
+  const SRC_TAURI = ["Cargo.toml", "build.rs", "capabilities", "src", "tests", "icons"];
 
+  it("allows tauri.conf.json and tauri.check.conf.json beside the crate's other files", () => {
+    assert.deepEqual(
+      checkConfigFiles([...SRC_TAURI, "tauri.conf.json", "tauri.check.conf.json"]),
+      [],
+    );
+  });
+
+  it("refuses every other configuration Tauri would merge into a build, whatever its case", () => {
+    for (const name of [
+      "tauri.windows.conf.json",
+      "tauri.linux.conf.json",
+      "tauri.conf.json5",
+      "tauri.windows.conf.json5",
+      "Tauri.toml",
+      "Tauri.windows.toml",
+      "tauri.toml",
+      "TAURI.CONF.JSON5",
+      "Tauri.Windows.Conf.Json",
+    ]) {
+      const problems = checkConfigFiles([...SRC_TAURI, "tauri.conf.json", name]);
+
+      assert.equal(problems.length, 1, name);
+      assert.match(problems[0], new RegExp(name.replaceAll(".", "\\.")), name);
+    }
+  });
+
+  it("leaves files that aren't Tauri's configuration alone", () => {
+    assert.deepEqual(
+      checkConfigFiles([
+        "tauri.conf.json",
+        "tauri.check.conf.json",
+        "tauri-notes.md",
+        "rustfmt.toml",
+      ]),
+      [],
+    );
+  });
+});
+
+describe("the repository", () => {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+  it("has the hardened desktop configuration", () => {
     assert.deepEqual(checkRepoFiles(repoRoot), []);
+  });
+
+  it("checks the configuration files src-tauri holds", () => {
+    const problems = checkRepoFiles(repoRoot, (names) => [...names, "tauri.windows.conf.json"]);
+
+    assert.equal(problems.length, 1, problems.join("; "));
+    assert.match(problems[0], /tauri\.windows\.conf\.json/);
   });
 });
 
@@ -421,16 +546,17 @@ describe("the debug exe the AI launches (ADR-0020, U87)", () => {
   );
   const config = (name) => JSON.parse(readFileSync(path.join(srcTauri, name), "utf8"));
 
-  it("changes the identifier and nothing else", () => {
+  it("changes the identifier and empties the updater's endpoints, nothing else", () => {
     const check = config("tauri.check.conf.json");
 
-    assert.deepEqual(Object.keys(check), ["identifier"]);
+    assert.deepEqual(Object.keys(check), ["identifier", "plugins"]);
     assert.notEqual(check.identifier, config("tauri.conf.json").identifier);
+    assert.deepEqual(check.plugins, { updater: { endpoints: [] } });
   });
 
-  it("is what its recipe builds, in debug, and copies to its own path", () => {
+  it("is what its recipe builds, in debug and without a bundle, and copies to its own path", () => {
     assert.deepEqual(recipeBody("app-build-check"), [
-      'pnpm --filter @afkfleet/desktop tauri build --debug --config "{{ justfile_directory() }}/apps/desktop/src-tauri/tauri.check.conf.json"',
+      'pnpm --filter @afkfleet/desktop tauri build --debug --no-bundle --config "{{ justfile_directory() }}/apps/desktop/src-tauri/tauri.check.conf.json"',
       "node scripts/app-check.mjs",
     ]);
   });
@@ -448,6 +574,35 @@ describe("the debug exe the AI launches (ADR-0020, U87)", () => {
     for (const file of ["CLAUDE.md", ".claude/rules/commands.md", "README.md"]) {
       assert.ok(readFileSync(path.join(root, file), "utf8").includes(CHECK_EXE), file);
     }
+  });
+});
+
+describe("checkUpdaterFeatures", () => {
+  /** tauri-plugin-updater's line as `cargo tree` prints it. */
+  const LINE = "tauri-plugin-updater v2.14.1|";
+
+  it("accepts the updater with no feature at all (ADR-0022, U25)", () => {
+    assert.deepEqual(checkUpdaterFeatures(`${LINE}\n`), []);
+    assert.deepEqual(checkUpdaterFeatures(`${LINE}\r\n`), []);
+  });
+
+  it("names each TLS, proxy or zip feature as never allowed, and any other one", () => {
+    for (const feature of [
+      "rustls-tls",
+      "native-tls",
+      "native-tls-vendored",
+      "system-proxy",
+      "zip",
+    ]) {
+      const problems = checkUpdaterFeatures(`${LINE}${feature}\n`).join("\n");
+      assert.match(problems, new RegExp(`${feature}.*never`), feature);
+    }
+    assert.match(checkUpdaterFeatures(`${LINE}default\n`).join("\n"), /default/);
+  });
+
+  it("fails on output it can't read", () => {
+    assert.match(checkUpdaterFeatures("").join("\n"), /can't be read/);
+    assert.match(checkUpdaterFeatures("tauri v2.12.3|wry\n").join("\n"), /can't be read/);
   });
 });
 

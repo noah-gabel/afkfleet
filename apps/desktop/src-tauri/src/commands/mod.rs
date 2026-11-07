@@ -27,6 +27,7 @@ pub(crate) mod mfa;
 pub(crate) mod modes;
 pub(crate) mod server;
 pub(crate) mod server_settings;
+pub(crate) mod update;
 pub(crate) mod users;
 pub(crate) mod window;
 

@@ -93,6 +93,22 @@ pub enum CommandErrorCode {
     /// The app's own call didn't reach the command. Only the UI produces
     /// this code, for a refusal from Tauri itself.
     Ipc,
+    /// The update's manifest or its download couldn't be fetched from
+    /// GitHub: no connection, a TLS failure, a timeout or another status
+    /// (ADR-0022, S27).
+    UpdateUnreachable,
+    /// The update's manifest can't be read: not JSON, no Windows release, or
+    /// a version that isn't one.
+    UpdateManifest,
+    /// The download failed its checks: its signature, the version it was
+    /// signed for, or its size. Nothing was installed.
+    UpdateInvalid,
+    /// The downloaded installer couldn't be written or started.
+    UpdateInstall,
+    /// There's no checked update to install: check again first.
+    NoUpdate,
+    /// An update check or install is already running.
+    UpdateBusy,
 }
 
 impl CommandErrorCode {
@@ -120,6 +136,12 @@ impl CommandErrorCode {
         Self::NoVerificationLink,
         Self::VerificationLinkOpen,
         Self::Ipc,
+        Self::UpdateUnreachable,
+        Self::UpdateManifest,
+        Self::UpdateInvalid,
+        Self::UpdateInstall,
+        Self::NoUpdate,
+        Self::UpdateBusy,
     ];
 
     /// The code's fixed sentence: the same for every error with this code,
@@ -151,6 +173,13 @@ impl CommandErrorCode {
             Self::NoVerificationLink => "There's no Microsoft page to open.",
             Self::VerificationLinkOpen => "Windows couldn't open Microsoft's page.",
             Self::Ipc => "The app couldn't run the request.",
+            // The updater's, as the user approved them (ADR-0022, U33).
+            Self::UpdateUnreachable => "GitHub can't be reached to get the update.",
+            Self::UpdateManifest => "The update information from GitHub couldn't be read.",
+            Self::UpdateInvalid => "The download couldn't be verified.",
+            Self::UpdateInstall => "The installer couldn't be started.",
+            Self::NoUpdate => "There's no update to install. Check again.",
+            Self::UpdateBusy => "An update check or install is already running.",
         }
     }
 }
@@ -232,6 +261,50 @@ pub struct ApiErrorDetails {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub retry_after_secs: Option<u32>,
+}
+
+/// The longest version an update check passes on (ADR-0022, S27): a longer
+/// one in the manifest is `update_manifest`.
+pub const VERSION_MAX_CHARS: usize = 64;
+
+/// The `check_update` command's answer (Plan.md P12.5; ADR-0022, U27, S27,
+/// R21): this app's version, and whether a newer signed release waits. Only
+/// versions cross: never a release's notes, date or download address.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum UpdateCheck {
+    /// Updates are off in this build: a debug or check build, which never
+    /// asks GitHub.
+    Off {
+        /// This app's version.
+        #[ts(type = "string")]
+        current: BoundedText<VERSION_MAX_CHARS>,
+    },
+    /// No newer release.
+    UpToDate {
+        /// This app's version.
+        #[ts(type = "string")]
+        current: BoundedText<VERSION_MAX_CHARS>,
+    },
+    /// A newer release: `install_update` installs exactly this one.
+    Available {
+        /// This app's version.
+        #[ts(type = "string")]
+        current: BoundedText<VERSION_MAX_CHARS>,
+        /// The release's version.
+        #[ts(type = "string")]
+        version: BoundedText<VERSION_MAX_CHARS>,
+    },
+}
+
+/// The `app_version` command's answer (Plan.md P12.5; ADR-0022, U37): the
+/// installed app's own version, read from the app itself with no network
+/// call, so Profile, the login screen and the start screen can always show it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct AppVersion {
+    /// This app's version.
+    #[ts(type = "string")]
+    pub version: BoundedText<VERSION_MAX_CHARS>,
 }
 
 /// What the `set_window_theme` command takes: the user's theme choice, for
@@ -557,10 +630,16 @@ mod tests {
             CommandErrorCode::NoVerificationLink => 19,
             CommandErrorCode::VerificationLinkOpen => 20,
             CommandErrorCode::Ipc => 21,
+            CommandErrorCode::UpdateUnreachable => 22,
+            CommandErrorCode::UpdateManifest => 23,
+            CommandErrorCode::UpdateInvalid => 24,
+            CommandErrorCode::UpdateInstall => 25,
+            CommandErrorCode::NoUpdate => 26,
+            CommandErrorCode::UpdateBusy => 27,
         }
     }
 
-    const CODES: usize = 22;
+    const CODES: usize = 28;
 
     fn details() -> ApiErrorDetails {
         ApiErrorDetails {
@@ -628,6 +707,86 @@ mod tests {
                 json!("verification_link_open"),
                 json!("ipc")
             ]
+        );
+    }
+
+    /// The updater's codes and their sentences, as the user approved them
+    /// (ADR-0022, U33, R21): the UI shows them after its own lead-in.
+    #[test]
+    fn the_updaters_codes_have_their_wire_names_and_approved_sentences() {
+        let codes = [
+            (
+                CommandErrorCode::UpdateUnreachable,
+                "update_unreachable",
+                "GitHub can't be reached to get the update.",
+            ),
+            (
+                CommandErrorCode::UpdateManifest,
+                "update_manifest",
+                "The update information from GitHub couldn't be read.",
+            ),
+            (
+                CommandErrorCode::UpdateInvalid,
+                "update_invalid",
+                "The download couldn't be verified.",
+            ),
+            (
+                CommandErrorCode::UpdateInstall,
+                "update_install",
+                "The installer couldn't be started.",
+            ),
+            (
+                CommandErrorCode::NoUpdate,
+                "no_update",
+                "There's no update to install. Check again.",
+            ),
+            (
+                CommandErrorCode::UpdateBusy,
+                "update_busy",
+                "An update check or install is already running.",
+            ),
+        ];
+
+        for (code, name, sentence) in codes {
+            assert_eq!(serde_json::to_value(code).unwrap(), json!(name));
+            assert_eq!(code.message(), sentence);
+        }
+    }
+
+    /// An update check crosses as its state and the versions alone: never a
+    /// release's notes, date or download address (ADR-0022, S27, R21).
+    #[test]
+    fn an_update_check_crosses_as_its_state_and_versions_alone() {
+        let current = || BoundedText::new("0.1.0");
+
+        assert_eq!(
+            serde_json::to_value(UpdateCheck::Off { current: current() }).unwrap(),
+            json!({ "state": "off", "current": "0.1.0" })
+        );
+        assert_eq!(
+            serde_json::to_value(UpdateCheck::UpToDate { current: current() }).unwrap(),
+            json!({ "state": "up_to_date", "current": "0.1.0" })
+        );
+        assert_eq!(
+            serde_json::to_value(UpdateCheck::Available {
+                current: current(),
+                version: BoundedText::new("0.2.0"),
+            })
+            .unwrap(),
+            json!({ "state": "available", "current": "0.1.0", "version": "0.2.0" })
+        );
+        assert_eq!(VERSION_MAX_CHARS, 64);
+    }
+
+    /// The app's version crosses as that one field (ADR-0022, U37).
+    #[test]
+    fn the_apps_version_crosses_as_its_one_field() {
+        assert_eq!(
+            serde_json::to_value(AppVersion {
+                version: BoundedText::new("0.1.0")
+            })
+            .unwrap(),
+            json!({ "version": "0.1.0" })
         );
     }
 

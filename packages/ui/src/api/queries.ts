@@ -64,6 +64,24 @@ export function serverProfileQuery(api: ApiClient) {
   });
 }
 
+/**
+ * This app's own version (ADR-0022, U37): the app answers it from itself, with no network call,
+ * and it never changes while the app runs.
+ */
+export function appVersionQuery(api: ApiClient) {
+  return queryOptions({
+    queryKey: ["appVersion"],
+    queryFn: () => api.appVersion(),
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false,
+  });
+}
+
+/** This app's own version, through the app's client. */
+export function useAppVersion() {
+  return useQuery(appVersionQuery(useApiClient()));
+}
+
 /** The signed-in user, through the app's client. */
 export function useMe() {
   return useQuery(meQuery(useApiClient()));

@@ -5,6 +5,8 @@
 // Fails if any of these changes:
 // - the CSP, `withGlobalTauri` or any other `app.security` setting in tauri.conf.json
 // - a window's devtools, URL or scheme, or the dev URL
+// - any `bundle` setting: the installer's publisher, copyright, install mode and WebView2
+//   handling, and no updater artifacts or signing command (ADR-0022, U29, U33)
 // - the capabilities: one file, `main.json`, granting exactly the app's own commands
 // - the app's command manifest: build.rs's `COMMANDS`, the empty default permission that
 //   keeps the ACL on for app commands, and the `allow-`/`deny-<command>` files tauri-build
@@ -15,6 +17,10 @@
 //   `custom-protocol` are named as never allowed
 // - fleet-client's resolved features in the app: exactly `CLIENT_FEATURES`, none (ADR-0020,
 //   S57)
+// - `plugins`: the updater alone, its public key, endpoint, `requireSignedVersion` and passive
+//   install exactly, nothing `dangerous*`; the check build's config exactly its identifier and
+//   the updater's endpoints emptied; tauri-plugin-updater's resolved features exactly none
+//   (ADR-0022, U25, S27)
 //
 // The expected values live here on purpose: changing a hardening setting means changing
 // this check too, deliberately, with an ADR. A new command goes into `COMMANDS` here and
@@ -105,6 +111,9 @@ export const COMMANDS = [
   "shared_accounts",
   "leave_account",
   "set_window_theme",
+  "check_update",
+  "install_update",
+  "app_version",
 ];
 
 /** The whole of `app.security`. */
@@ -115,6 +124,63 @@ const SECURITY = {
   freezePrototype: true,
   capabilities: ["main"],
 };
+
+/**
+ * The whole of `bundle`: the icon, the installer's publisher and copyright (which Windows shows),
+ * a per-user NSIS install and WebView2's bootstrapper downloaded when it's missing (ADR-0022, U29,
+ * U33). No `createUpdaterArtifacts`, which would sign during the build and so need the updater's
+ * key in CI (U1), and no signing command. `active` stays false: `just app-build` builds the exe
+ * alone, and `just app-installer` asks for the NSIS bundle by name.
+ */
+const BUNDLE = {
+  active: false,
+  icon: ["icons/icon.ico"],
+  publisher: "afkfleet",
+  copyright: "The afkfleet contributors. GPL-3.0-or-later.",
+  windows: {
+    webviewInstallMode: { type: "downloadBootstrapper" },
+    nsis: { installMode: "currentUser" },
+  },
+};
+
+/**
+ * The updater's public key: the maintainer's, whose private key stays offline (ADR-0022, U1).
+ * Every installed app accepts only updates it signed, so changing it strands them all.
+ */
+export const UPDATER_PUBKEY =
+  "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQyQzZDRUIyNUY5RjJDQjAKUldTd0xKOWZzczdHMHZGQWVwOUtWMGk2bVMvakdOSkM4aFFCcGJiSGExNjRNclFYeFNxemlHVDIK";
+
+/**
+ * The whole of `plugins`: the updater alone, with the key, GitHub's latest release, the
+ * signature bound to its version, and the passive install (ADR-0022, U28, S27). Nothing
+ * `dangerous*`, no downgrades, no installer arguments.
+ */
+const PLUGINS = {
+  updater: {
+    pubkey: UPDATER_PUBKEY,
+    endpoints: ["https://github.com/noah-gabel/afkfleet/releases/latest/download/latest.json"],
+    requireSignedVersion: true,
+    windows: { installMode: "passive" },
+  },
+};
+
+/**
+ * The check build's whole config: its own identifier, and the updater's endpoints emptied, so
+ * it can never update itself into the real app (ADR-0020, U87; ADR-0022, S27).
+ */
+const CHECK_CONFIG = {
+  identifier: "io.github.noah-gabel.afkfleet.check",
+  plugins: { updater: { endpoints: [] } },
+};
+
+/** tauri-plugin-updater's features that must never appear: other TLS stacks, a proxy, zip. */
+const FORBIDDEN_UPDATER_FEATURES = [
+  "rustls-tls",
+  "native-tls",
+  "native-tls-vendored",
+  "system-proxy",
+  "zip",
+];
 
 /** Vite's dev server, the only other origin a dev build may show (the navigation guard). */
 const DEV_URL = "http://localhost:1420";
@@ -152,6 +218,11 @@ export const CARGO_TREE_ARGS = [
   "--format",
   "{p}|{f}",
 ];
+
+/** The same for tauri-plugin-updater's line. */
+export const UPDATER_TREE_ARGS = CARGO_TREE_ARGS.map((arg) =>
+  arg === "tauri" ? "tauri-plugin-updater" : arg,
+);
 
 /** The same for fleet-client's line, as the desktop app resolves it, dev edges left out. */
 export const CLIENT_TREE_ARGS = CARGO_TREE_ARGS.map((arg) =>
@@ -199,6 +270,34 @@ export function checkConfig(config) {
   }
   if (config?.build?.devUrl !== DEV_URL) {
     problems.push(`build.devUrl is ${show(config?.build?.devUrl)}, expected ${show(DEV_URL)}`);
+  }
+  const plugins = config?.plugins ?? {};
+  for (const name of new Set([...Object.keys(PLUGINS), ...Object.keys(plugins)])) {
+    if (!(name in PLUGINS)) {
+      problems.push(`plugins.${name} must not be set`);
+      continue;
+    }
+    const expected = PLUGINS[name];
+    const actual = plugins[name] ?? {};
+    for (const key of new Set([...Object.keys(expected), ...Object.keys(actual)])) {
+      if (!isDeepStrictEqual(actual[key], expected[key])) {
+        problems.push(
+          key in expected
+            ? `plugins.${name}.${key} is ${show(actual[key])}, expected ${show(expected[key])}`
+            : `plugins.${name}.${key} must not be set`,
+        );
+      }
+    }
+  }
+  const bundle = config?.bundle ?? {};
+  for (const key of new Set([...Object.keys(BUNDLE), ...Object.keys(bundle)])) {
+    if (!isDeepStrictEqual(bundle[key], BUNDLE[key])) {
+      problems.push(
+        key in BUNDLE
+          ? `bundle.${key} is ${show(bundle[key])}, expected ${show(BUNDLE[key])}`
+          : `bundle.${key} must not be set`,
+      );
+    }
   }
   return problems;
 }
@@ -401,6 +500,29 @@ export function checkFeatures(output) {
 }
 
 /**
+ * Checks `cargo tree`'s output for tauri-plugin-updater's features: none at all (ADR-0022,
+ * U25). Its `rustls-tls` would install ring as the process's provider. Returns one message per
+ * problem.
+ */
+export function checkUpdaterFeatures(output) {
+  const lines = output
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line !== "");
+  const match =
+    lines.length === 1 ? /^tauri-plugin-updater v\S+\|(.*)$/.exec(lines[0] ?? "") : null;
+  if (match === null) {
+    return [`cargo tree's output for tauri-plugin-updater can't be read: \`${output.trim()}\``];
+  }
+  const features = (match[1] ?? "").split(",").filter((feature) => feature !== "");
+  return features.map((feature) =>
+    FORBIDDEN_UPDATER_FEATURES.includes(feature)
+      ? `tauri-plugin-updater's \`${feature}\` feature is on, but it must never be`
+      : `tauri-plugin-updater has a feature the check doesn't expect: ${feature}`,
+  );
+}
+
+/**
  * Checks `cargo tree`'s output for fleet-client's features: exactly `expected`, by default
  * `CLIENT_FEATURES`. Returns one message per problem.
  */
@@ -446,8 +568,38 @@ export function readFolder(dir) {
   });
 }
 
-/** Checks the committed files under `root` (everything but `cargo tree`). */
-export function checkRepoFiles(root) {
+/** The configuration files src-tauri may hold: the app's own, and the check build's overlay. */
+const CONFIG_FILES = ["tauri.conf.json", "tauri.check.conf.json"];
+
+/**
+ * Problems with the file names `names` of src-tauri (PR #98's review): Tauri merges a
+ * `tauri.<platform>.conf.json`, a `.json5` or a `Tauri*.toml` beside tauri.conf.json into the
+ * build (tauri.windows.conf.json into every Windows build), which could replace what this script
+ * pins, the updater's key among it, unseen. So any name that starts with "tauri" and ends in
+ * `.conf.json`, `.conf.json5` or `.toml`, in any case (Windows' names ignore it), is refused but
+ * the two this script reads.
+ */
+export function checkConfigFiles(names) {
+  return names
+    .filter((name) => {
+      const lower = name.toLowerCase();
+      return (
+        lower.startsWith("tauri") &&
+        [".conf.json", ".conf.json5", ".toml"].some((end) => lower.endsWith(end)) &&
+        !CONFIG_FILES.includes(name)
+      );
+    })
+    .map(
+      (name) =>
+        `${name}: Tauri would merge it into a build, over what this script pins; src-tauri holds only ${CONFIG_FILES.join(" and ")}`,
+    );
+}
+
+/**
+ * Checks the committed files under `root` (everything but `cargo tree`); `listed` stands in for
+ * src-tauri's listing in a test.
+ */
+export function checkRepoFiles(root, listed = (names) => names) {
   const dir = path.join(root, SRC_TAURI);
   let config;
   try {
@@ -455,7 +607,18 @@ export function checkRepoFiles(root) {
   } catch (error) {
     return [`tauri.conf.json can't be read: ${error.message}`];
   }
+  let check;
+  try {
+    check = JSON.parse(readFileSync(path.join(dir, "tauri.check.conf.json"), "utf8"));
+  } catch (error) {
+    return [`tauri.check.conf.json can't be read: ${error.message}`];
+  }
+  const checkProblems = isDeepStrictEqual(check, CHECK_CONFIG)
+    ? []
+    : [`tauri.check.conf.json is ${show(check)}, expected ${show(CHECK_CONFIG)}`];
   return [
+    ...checkConfigFiles(listed(readdirSync(dir))),
+    ...checkProblems,
     ...checkConfig(config),
     ...checkCapabilities(readFolder(path.join(dir, "capabilities"))),
     ...checkCommands(readFileSync(path.join(dir, "build.rs"), "utf8")),
@@ -484,6 +647,13 @@ function main() {
     problems.push(`cargo tree failed: ${result.error?.message ?? `exit code ${result.status}`}`);
   } else {
     problems.push(...checkFeatures(result.stdout));
+  }
+  const updater = spawnSync("cargo", UPDATER_TREE_ARGS, { cwd: root, encoding: "utf8" });
+  if (updater.error !== undefined || updater.status !== 0) {
+    console.error(updater.stderr ?? "");
+    problems.push(`cargo tree failed: ${updater.error?.message ?? `exit code ${updater.status}`}`);
+  } else {
+    problems.push(...checkUpdaterFeatures(updater.stdout));
   }
   const client = spawnSync("cargo", CLIENT_TREE_ARGS, { cwd: root, encoding: "utf8" });
   if (client.error !== undefined || client.status !== 0) {

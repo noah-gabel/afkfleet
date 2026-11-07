@@ -11,6 +11,7 @@ import type { AccountPage } from "@afkfleet/ui/generated/AccountPage";
 import type { AccountResponse } from "@afkfleet/ui/generated/AccountResponse";
 import type { AgentPage } from "@afkfleet/ui/generated/AgentPage";
 import type { AgentResponse } from "@afkfleet/ui/generated/AgentResponse";
+import type { AppVersion } from "@afkfleet/ui/generated/AppVersion";
 import type { AuditPage } from "@afkfleet/ui/generated/AuditPage";
 import type { BotCommandResponse } from "@afkfleet/ui/generated/BotCommandResponse";
 import type { BotModeRequest } from "@afkfleet/ui/generated/BotModeRequest";
@@ -58,6 +59,7 @@ import type { ServerSettingsResponse } from "@afkfleet/ui/generated/ServerSettin
 import type { SessionPage } from "@afkfleet/ui/generated/SessionPage";
 import type { SetupStepResponse } from "@afkfleet/ui/generated/SetupStepResponse";
 import type { StepUpRequest } from "@afkfleet/ui/generated/StepUpRequest";
+import type { UpdateCheck } from "@afkfleet/ui/generated/UpdateCheck";
 import type { UpdateModeRequest } from "@afkfleet/ui/generated/UpdateModeRequest";
 import type { UpdateServerSettingsRequest } from "@afkfleet/ui/generated/UpdateServerSettingsRequest";
 import type { UserPage } from "@afkfleet/ui/generated/UserPage";
@@ -375,6 +377,18 @@ export class TauriApiClient implements ApiClient {
 
   setWindowTheme(theme: WindowTheme): Promise<void> {
     return this.#call("set_window_theme", { theme });
+  }
+
+  checkUpdate(): Promise<UpdateCheck> {
+    return this.#call("check_update");
+  }
+
+  installUpdate(): Promise<void> {
+    return this.#call("install_update");
+  }
+
+  appVersion(): Promise<AppVersion> {
+    return this.#call("app_version");
   }
 
   async watchEvents(onUpdate: (update: LiveUpdateMessage) => void): Promise<void> {

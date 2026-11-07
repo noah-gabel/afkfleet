@@ -7,6 +7,7 @@ import type { AccountResponse } from "../generated/AccountResponse";
 import type { AgentPage } from "../generated/AgentPage";
 import type { AgentResponse } from "../generated/AgentResponse";
 import type { ApiErrorDetails } from "../generated/ApiErrorDetails";
+import type { AppVersion } from "../generated/AppVersion";
 import type { AuditPage } from "../generated/AuditPage";
 import type { BotCommandResponse } from "../generated/BotCommandResponse";
 import type { BotModeRequest } from "../generated/BotModeRequest";
@@ -56,6 +57,7 @@ import type { ServerSettingsResponse } from "../generated/ServerSettingsResponse
 import type { SessionPage } from "../generated/SessionPage";
 import type { SetupStepResponse } from "../generated/SetupStepResponse";
 import type { StepUpRequest } from "../generated/StepUpRequest";
+import type { UpdateCheck } from "../generated/UpdateCheck";
 import type { UpdateModeRequest } from "../generated/UpdateModeRequest";
 import type { UpdateServerSettingsRequest } from "../generated/UpdateServerSettingsRequest";
 import type { UserPage } from "../generated/UserPage";
@@ -329,6 +331,18 @@ export class FakeApiClient implements ApiClient {
 
   async setWindowTheme(theme: WindowTheme): Promise<void> {
     return this.#handler("setWindowTheme", [theme])(theme);
+  }
+
+  async checkUpdate(): Promise<UpdateCheck> {
+    return this.#handler("checkUpdate", [])();
+  }
+
+  async appVersion(): Promise<AppVersion> {
+    return this.#handler("appVersion", [])();
+  }
+
+  async installUpdate(): Promise<void> {
+    return this.#handler("installUpdate", [])();
   }
 
   async leaveAccount(id: string): Promise<void> {

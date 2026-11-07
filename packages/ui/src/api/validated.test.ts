@@ -32,6 +32,9 @@ function client() {
   const ok = async () => undefined as never;
   const fake = new FakeApiClient({
     setWindowTheme: ok,
+    checkUpdate: ok,
+    installUpdate: ok,
+    appVersion: ok,
     serverProfile: ok,
     setServerProfile: ok,
     checkServer: ok,
@@ -169,6 +172,22 @@ describe("validated, the admin screens' calls (ADR-0020, S89)", () => {
     expect(await refusedFields(api.userGrants("x", "y", 0))).toEqual(["id", "before", "limit"]);
     expect(await refusedFields(api.sharedAccounts("x", "y", 0))).toEqual(["id", "before", "limit"]);
     expect(await refusedFields(api.agents("y", 0))).toEqual(["before", "limit"]);
+  });
+});
+
+describe("validated, the updater's calls (ADR-0022, S27, U37)", () => {
+  it("passes all three through: they take no input", async () => {
+    const { fake, api } = client();
+
+    await api.checkUpdate();
+    await api.installUpdate();
+    await api.appVersion();
+
+    expect(fake.calls).toEqual([
+      { method: "checkUpdate", args: [] },
+      { method: "installUpdate", args: [] },
+      { method: "appVersion", args: [] },
+    ]);
   });
 });
 

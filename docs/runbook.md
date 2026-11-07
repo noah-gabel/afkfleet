@@ -1,6 +1,6 @@
 # Runbook
 
-An operator's guide to running afkfleet on a Linux host with Docker, beside whatever else the host runs. It names no hosting provider: where a step depends on yours, it says so in general terms.
+An operator's guide to running afkfleet on a Linux host with Docker, beside whatever else the host runs. It names no hosting provider: where a step depends on yours, it says so in general terms. What your friends do in the app (installing it, connecting to your server, registering with an invite, 2FA) is in [Using the afkfleet app](using-the-app.md): hand them that link.
 
 > **Work in progress (Phase 12).** This guide grows with Phase 12's groups ([ADR-0022](adr/0022-deployment-and-phase-12-refinements.md)). So far it covers backups (also in the compose project, and pulled off the host over SFTP), restoring one on a host install, and the metrics, also read inside the compose project. The install with Docker Compose (`deploy/setup.sh`), updates, a restore in the compose project, the uninstall and the rest of operations follow, and P12.6 finishes it.
 
@@ -49,6 +49,11 @@ sudo sh host/sftp-backups.sh install --key /path/to/your_key.pub
 - If a step fails after it has written something (the drop-in fails `sshd -t`, an earlier setting would win over one of its values, sshd's settings would change for anyone else, adding the account or reloading sshd fails), it removes exactly what it added and exits 1, so the host is as it was.
 - A backups' folder other than the default is given with `--backups /path/to/backups`.
 - Success: `ok: the account afkfleet-backup reads … over SFTP, read-only`, then this host's key fingerprint. Keep your own SSH session open until a new login works.
+- `install` checks the account's settings for one test address. If an earlier sshd setting is tied to addresses (a `Match Address` block), check them for your PC's own address too:
+  ```sh
+  sudo sshd -T -C user=afkfleet-backup,host=<your PC's name>,addr=<your PC's address> | grep -E '^(chrootdirectory|forcecommand|permittty|allowtcpforwarding|disableforwarding) '
+  ```
+  Success: `chrootdirectory` names the backups' folder's parent, `forcecommand internal-sftp -R -d /backups`, `permittty no`, `allowtcpforwarding no` and `disableforwarding yes`. Anything else means that earlier block wins for your address: change it, or run `uninstall`.
 
 **On your PC** (Windows' built-in OpenSSH client, or any other):
 ```sh

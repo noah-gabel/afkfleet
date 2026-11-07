@@ -23,6 +23,13 @@ import { entryLines, fingerprint, main } from "./tree-fingerprint.mjs";
 const UNIX =
   process.platform === "win32" ? "Windows can't take a folder's permissions away" : false;
 
+/**
+ * The cases that need a folder nobody may read: not on Windows, and not as root, who reads a
+ * folder whatever its mode (PR #97's review: the throwaway container ran them as root).
+ */
+const UNREADABLE =
+  UNIX || (process.getuid?.() === 0 ? "root reads a folder whatever its mode" : false);
+
 /** The temporary repositories made so far, removed after each test. */
 const made = [];
 
@@ -348,7 +355,7 @@ describe("fingerprint", () => {
   });
 
   it("stops when a folder it must list can't be read, rather than missing it", {
-    skip: UNIX,
+    skip: UNREADABLE,
   }, () => {
     const dir = repo();
     mkdirSync(join(dir, "new"));

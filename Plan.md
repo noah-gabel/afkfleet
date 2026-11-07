@@ -256,7 +256,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Desktop shell | `tauri`, `tauri-build` | **2.12.3** (≥ 2.11.1), dfo; 2.7.2 | desktop | 2.11.1 fixes CVE-2026-42184 (`is_local_url` origin bypass on Windows). `tauri-build` is the required build-dependency (approved in P0). The desktop crate enables only `wry` and `compression`: never `dynamic-acl` (runtime `add_capability`), `devtools`, `common-controls-v6` (its TaskDialogIndirect import breaks Windows test executables, which lack the Common Controls v6 manifest), or the Linux-only `x11`/`dbus`; the CLI adds `custom-protocol` for `tauri build`. Dev only: `test`, for the ACL test ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
 | Open the device-code URL | `tauri-plugin-opener` | 2.7.0 (its build-dependency `tauri-plugin` 2.7.1 in Cargo.lock, so tauri-utils stays 2.10.1) | desktop | Called only from Rust: its free `open_url`, from one command without arguments, on the link fleet-client's `VerifiedLink` checked. Never registered, so the webview gets none of its commands ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)) |
 | Single instance | `tauri-plugin-single-instance` | 2.5.3 | desktop | Registered first. No JavaScript API, so no capability grants it anything ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
-| Signed auto-update | `tauri-plugin-updater` | 2.13.1, dfo | desktop | Its default `rustls-tls` feature forces the ring provider; TLS comes from the workspace `reqwest` instead |
+| Signed auto-update | `tauri-plugin-updater` | **2.14.1**, dfo (and `minisign-verify` 0.3.0 in Cargo.lock) | desktop | Its default `rustls-tls` feature forces the ring provider; TLS comes from the workspace `reqwest` 0.13 instead, and `system-proxy` and `zip` stay off too (`tauri-hardening.mjs` pins its features to none). Registered, but none of its commands is granted: two commands of the app's own check and install, against the committed public key, with `requireSignedVersion` (P12.5; [ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U25, S27). Cargo.lock also lists its macOS-only `tar`, `filetime`, `osakit` and `objc2-osa-kit`, never built for Windows |
 | OS credential store | `keyring-core` + `windows-native-keyring-store` | 1.0.0, 1.1.0 (keyring v4 family) | desktop | Refresh token storage: one entry per server origin, `Local` persistence, entries built from an explicit store (no global default). The Windows store without default features, so no `search` and no regex (P8.4, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
 
 ### Rust: testing
@@ -305,7 +305,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
   - cargo-nextest 0.9.146, cargo-llvm-cov 0.9.1, cargo-deny 0.20.2, cargo-insta 1.49.0
   - sqlx-cli **0.9.0** (P6), SQLite-only: `cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features sqlite`, the same in CI and the README
   - Later: cargo-chef 0.1.78 (P5), cargo-mutants 27.1.0 and cargo-fuzz 0.13.2 (P13)
-- **Frontend tooling:** pnpm 12.9.1 (`packageManager`) and Biome 2.5.15 from P0.8; every other package is pinned in the phase that introduces it, exactly (no `^`), with `pnpm-lock.yaml` as the lock. From P8.6 `pnpm-workspace.yaml` sets `minimumReleaseAge: 4320`: pnpm resolves no release younger than 3 days and checks the whole lockfile at every install; exceptions only in `minimumReleaseAgeExclude`, with a comment and the user's approval. The Tauri CLI is `@tauri-apps/cli` 2.12.2, a dev-dependency of `apps/desktop` (approved in P8.2, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
+- **Frontend tooling:** pnpm 12.9.1 (`packageManager`) and Biome 2.5.15 from P0.8; every other package is pinned in the phase that introduces it, exactly (no `^`), with `pnpm-lock.yaml` as the lock. From P8.6 `pnpm-workspace.yaml` sets `minimumReleaseAge: 4320`: pnpm resolves no release younger than 3 days and checks the whole lockfile at every install; exceptions only in `minimumReleaseAgeExclude`, with a comment and the user's approval. The Tauri CLI is `@tauri-apps/cli` 2.12.4, a dev-dependency of `apps/desktop` (approved in P8.2, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md); 2.12.4 for NSIS 3.13 and a clean uninstall, P12.5, [ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U26).
 - **Runtime & hosting:**
   - Docker + Docker Compose
   - Caddy 2 (TLS for the public API): the official `caddy:2.11.7-alpine`, pinned by multi-arch index digest in the compose files, the newest release at least 7 days old when chosen (P12.2; ADR-0022, U13); it serves the `probe` service's busybox `wget` and the smoke test's stand-in proxy too
@@ -316,7 +316,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
   - **ShellCheck** 0.11.0 (GPL-3.0) for `deploy/`'s POSIX sh scripts, in CI through `taiki-e/install-action` (P12.2; ADR-0022, U15)
   - the screenshot baselines' image (P11.11, group L4), pinned by multi-arch index digest in `deploy/docker/shots.Dockerfile`, the one place it's named: `mcr.microsoft.com/playwright:v1.64.0-noble`, its tag always `@playwright/test`'s exact version, so a Playwright bump moves the tag and the digest together and renews the baselines (`scripts/shots.test.mjs` holds the two equal; [ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U97, S130)
 - **Windows build dependencies:** MSVC Build Tools ("Desktop development with C++"), NASM (for aws-lc-rs). CMake isn't needed for non-FIPS builds.
-- **Automation:** GitHub Actions (CI). No Dependabot or Renovate: `cargo deny` and `pnpm audit` flag vulnerable dependencies in CI (also on a weekly schedule), and dependency updates are done by hand in their own PR.
+- **Automation:** GitHub Actions (CI). `actions/upload-artifact` v7.0.2 and `actions/download-artifact` v8.0.2 (MIT), pinned by SHA, are approved for the release workflow alone, to hand files between its jobs (P12.5; [ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U31). No Dependabot or Renovate: `cargo deny` and `pnpm audit` flag vulnerable dependencies in CI (also on a weekly schedule), and dependency updates are done by hand in their own PR.
 
 ## 6. Fault-tolerance model
 
@@ -4319,14 +4319,16 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Introduces:** `tauri-plugin-updater`. Tools: cargo-chef, Docker Compose, Caddy (optional, [ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U5).
 
 > Note (P12, Phase 12's planning, 2026-11-05) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md)):
-> - **Four group branches.** Phase 12 is built in group PRs like Phases 2–11, each after the previous PR is merged: features first, then what packages them, then the release. Each group aims at about 5,300 lines; one that grows past it is split at its plan review.
+> - **Group branches** (four at the planning; at D's plan review D was split into D1 and D2, and E was added, [ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), R27, U35). Phase 12 is built in group PRs like Phases 2–11, each after the previous PR is merged: features first, then what packages them, then the release. Each group aims at about 5,300 lines; one that grows past it is split at its plan review.
 >
 >   | Group | Branch | Tasks |
 >   |---|---|---|
 >   | A | `p12/p12.3-start-screen-and-backups` | The start screen's way out (the user's finding, below), then P12.3 (ticked here) |
 >   | B | `p12/p12.4-metrics` | P12.4 (ticked here) |
 >   | C | `p12/p12-stack` | P12.1, P12.2 and P12.7: the images, the compose project with both proxy paths, the nightly smoke test, the setup script (ticked here) |
->   | D | `p12/p12.5-release` | P12.5 and P12.6: the installer and updater, the release workflow, the runbook finished, the DoD's kit (ticked here) |
+>   | D1 | `p12/p12.5-release` | PR #97's follow-ups, then P12.5: the installer, the updater, the maintainer's signing step and the rehearsal, the release workflow; the friends' and the maintainer's guides (ticked here) |
+>   | D2 | `p12/p12.6-runbook` | P12.6 and the DoD's kit: the host's release bundle and `setup.sh fetch`, the operations on the volumes, dynamic DNS, the runbook finished, the Minecraft version bump in `docs/releasing.md` (ticked there) |
+>   | E | `p12/tidy-up` | P12.8: the repository tidied for readability, with no behaviour change (ticked there) |
 >
 > - **The user's frame for the phase** (U1, U2):
 >   - No paid services are required.
@@ -4472,12 +4474,19 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The agent:** `metrics_endpoint`, a responder of its own (4 connections, 5 s each, a 2 KiB head, nothing from a request logged), and the outbox's three counters, sampled with the diagnostics every 5 s.
   > - **Totals only:** no label is per user, per bot or per agent. The ingest note's "per agent" stays in housekeeping's minute line, which names the agent (S11).
   > - **The docs:** README's Metrics lists every key metric with its labels; the runbook's Metrics says how to read them from the host and what to watch.
-- [ ] **P12.5** Tauri release:
+- [x] **P12.5** Tauri release:
   - NSIS installer.
   - Updater key pair; the private key is kept **offline**.
   - An update manifest, hosted on GitHub Releases.
   - No Authenticode signing: the installer is unsigned, and README and the runbook explain Windows' "Windows protected your PC" ("More info", "Run anyway") ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U1).
   - CI builds the installer on a Windows runner.
+
+  > Note (P12.5, group D1) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U25–U33, S22, S24, S27, R19–R26, "As built (group D1)"): **as built.**
+  > - **The installer:** NSIS, per user (no administrator prompt), WebView2's download bootstrapper, publisher "afkfleet", unsigned. `just app-installer` refuses to start while a signing key's variable is set, builds with `--no-sign`, and prints the installer's SHA-256; CI's `tauri-build` job runs it on every pull request.
+  > - **The updater:** `tauri-plugin-updater` 2.14.1 without default features, the committed public key (ID `D2C6CEB25F9F2CB0`; the private key and its password never left the user's PC), `releases/latest/download/latest.json`, `requireSignedVersion`, the passive installer. Its plugin commands are never granted: the app's own `check_update` and `install_update` are, and updates are on only in a release build whose updater points at the release's manifest alone (and in the rehearsal's debug build, whose updater points only at loopback): the policy reads the build's endpoints, not its identifier, so the check exe holds no real identifier. The UI checks at each start and on Profile's Updates, and installs only after "Install and restart".
+  > - **The signing step and the rehearsal** are the user's alone: `just updater-sign` (the key by path, the password at a hidden prompt, into the CLI's environment alone) and `just update-rehearsal` (a throwaway key, a separate product on loopback).
+  > - **The release workflow** (`.github/workflows/release.yml`): a tag vX.Y.Z on main; the guard requires CI green on that commit; each build job tests as Stack does and saves the images by ID, with no package permission; each push job, on a fresh runner that checks out `scripts/release.mjs` alone and runs no build tool, loads and checks them, then logs in, pushes `X.Y.Z-<arch>` and logs out (PR #98's review); the merge job makes `X.Y.Z` from the digests; the installer is built from scratch; a job with `contents: write` and no repository code drafts the release. The maintainer signs and publishes by `docs/releasing.md`.
+  > - **Deviations:** README and the runbook don't explain SmartScreen: the friends' guide `docs/using-the-app.md` does (U34). Cargo.lock gains six entries, not two (four are macOS-only). The signing step prompts for the password itself instead of leaving it to the CLI's prompt (S24). The pushed images are checked by their platform and release labels instead of an image-ID comparison (R24). A tag the registry denies reading counts as absent (the first release's packages don't exist yet). The updater's on/off policy reads the build's endpoints instead of its identifier (S27, R20), as the check exe's guard (ADR-0020, U87) refused a binary holding the identifier constants.
 - [ ] **P12.6** `docs/runbook.md`:
   - install, configure, bootstrap the Owner
   - enroll an agent
@@ -4485,6 +4494,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - **Minecraft version upgrade** (azalea + nightly + test-server bump)
   - restore a backup
   - incident response: revoke sessions, disable users and agents
+
+  > Note (P12.6, from group D's planning, the user's change) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U34, R29): **docs for three readers.** The runbook is the operators' guide alone: nothing about GitHub settings, tags, signing or the updater's key. The **Minecraft version upgrade** is the maintainer's code work, so it goes into `docs/releasing.md` (D2), with every note below about it. What friends do (installing the app, SmartScreen, "Connecting to a server, for friends") is in `docs/using-the-app.md`, written in D1. D2 moves README's operator material into the runbook, leaving a pointer.
 
   > Note (P12.6, from Phase 5, group D, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): The **Minecraft version upgrade** section carries ADR-0003's bump procedure, whose verify step now runs `just ci`, `just test-slow` and `just demo-agent` (1 h), with the demo's `summary.txt` in the bump's pull request.
 
@@ -4550,6 +4561,12 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P12.7, from Phase 12, group B) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S9, S10): the smoke test scrapes both metrics endpoints from inside the project's network, and checks that `/metrics` through Caddy and through the other proxy path reaches neither.
 
   > Note (P12.7, Phase 12's group C) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S19, U5, U20, U21): **as built.** fleet-integration's `slow_smoke_with_caddy`, `slow_smoke_behind_a_container_proxy` and `slow_smoke_behind_a_host_proxy` bring the production project up from a copy of `deploy/`, with a `.env` and an override of their own (offline accounts allowed there alone, U20), under project names of their own. Beyond the five steps (the Owner created with `--password-stdin`, the login through fleet-client with the full 2FA flow), they check the client's real address and a forged `X-Forwarded-For`; no `ticket`, `q`, password, TOTP secret or recovery code in any log after forced 502s; both metrics ports from inside and neither through any path; `.env`'s settings in the server's environment; the database and a backup across a recreate; memory and pids under 75 % of the limits (U21); Caddy's one capability; the image alone refusing to start; and every exit clean. The Stack workflow runs them nightly on arm64 and amd64, with `deploy/setup.sh init` doing the setup there; `just test-stack` and `just test-slow` run them elsewhere, the test doing the same steps itself.
+
+- [ ] **P12.8** Tidy-up (group E, `p12/tidy-up`, after D2's merge; [ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U35): the repository tidied for readability, with no behaviour change. Its plan first lists what it would move, merge, shorten or delete, each with why, for the user's approval. Candidates:
+  - README's length and order;
+  - an index for `docs/`;
+  - stale notes, dead scripts or recipes, and outdated comments;
+  - Plan.md's finished phases condensed, as long as every note an ADR or a comment points to stays findable.
 
 **DoD:**
 - A clean afkfleet install (no earlier afkfleet state) on an existing Linux host that keeps its other services, following only the runbook.

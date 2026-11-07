@@ -1,6 +1,6 @@
 // The profile (Plan.md P8.7, ADR-0016): the user's own account, its warnings, this PC's theme
-// (P11.10), the two flows (changing the password, replacing the authenticator) and the session
-// list.
+// (P11.10) and its updates (P12.5), the two flows (changing the password, replacing the
+// authenticator) and the session list.
 import { Link } from "@tanstack/react-router";
 
 import { useMe } from "../../../api/queries";
@@ -8,6 +8,7 @@ import { ScreenState } from "../../../components/ScreenState";
 import { Button } from "../../../components/ui/button";
 import { formatTime } from "../../../lib/time";
 import { roleLabel } from "../../shell/nav";
+import { UpdatesSection } from "../../updates/components/UpdatesSection";
 import { SecurityWarnings } from "./SecurityWarnings";
 import { SessionList } from "./SessionList";
 import { ThemeSection } from "./ThemeSection";
@@ -49,6 +50,7 @@ export function ProfileOverview() {
             </dl>
           </section>
           <ThemeSection />
+          <UpdatesSection />
           <section
             aria-labelledby="password-heading"
             className="flex flex-col gap-2 rounded-lg border bg-card p-3"

@@ -36,6 +36,12 @@ const CODES: Record<CommandErrorCode, true> = {
   no_verification_link: true,
   verification_link_open: true,
   ipc: true,
+  update_unreachable: true,
+  update_manifest: true,
+  update_invalid: true,
+  update_install: true,
+  no_update: true,
+  update_busy: true,
 };
 
 /** `invalid_input`'s fixed sentence: `CommandErrorCode::InvalidInput.message()`'s. */

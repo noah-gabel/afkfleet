@@ -20,6 +20,12 @@ linux_exclude := if os() == "linux" { "--exclude " + desktop } else { "" }
 stable := "1.99.0"
 stable_crates := "-p fleet-core -p fleet-testkit -p fleet-runtime -p fleet-startup -p fleet-proto -p fleet-server -p fleet-api-types -p fleet-client" +(if os() == "linux" { "" } else { " -p " + desktop })
 
+# The release's image labels (ADR-0022, S22, R24): the release workflow sets them for the whole
+# image job, so `just images` and `just test-stack`'s own build make the same image; empty here.
+release_version := env_var_or_default("AFKFLEET_IMAGE_VERSION", "")
+release_revision := env_var_or_default("AFKFLEET_IMAGE_REVISION", "")
+release_created := env_var_or_default("AFKFLEET_IMAGE_CREATED", "")
+
 # The throwaway database `cargo sqlx prepare` checks queries against. Absolute,
 # because rustc runs the query macros in the workspace root, not in the crate.
 sqlx_db := "sqlite:" + justfile_directory() / "target" / "sqlx-prepare.db"
@@ -170,8 +176,8 @@ mc-down:
 # stages, so the second build reuses those layers (ADR-0022, S13). Nothing is pushed.
 # Build the server's and the agent's images as afkfleet-server:dev and afkfleet-agent:dev (needs Docker).
 images:
-    docker build --file deploy/docker/server.Dockerfile --tag afkfleet-server:dev .
-    docker build --file deploy/docker/agent.Dockerfile --tag afkfleet-agent:dev .
+    docker build --file deploy/docker/server.Dockerfile --tag afkfleet-server:dev --build-arg "VERSION={{ release_version }}" --build-arg "REVISION={{ release_revision }}" --build-arg "CREATED={{ release_created }}" .
+    docker build --file deploy/docker/agent.Dockerfile --tag afkfleet-agent:dev --build-arg "VERSION={{ release_version }}" --build-arg "REVISION={{ release_revision }}" --build-arg "CREATED={{ release_created }}" .
 
 # The images are built first, so no build eats into a timed test, and
 # AFKFLEET_SMOKE_IMAGES_BUILT tells the tests they're this source's. Every project
@@ -384,6 +390,28 @@ dev-app:
 app-build *args:
     pnpm --filter @afkfleet/desktop tauri build {{ args }}
 
+# The NSIS installer, target/release/bundle/nsis/afkfleet_X.Y.Z_x64-setup.exe: built with no
+# signing key (it refuses one in the environment) and no updater signature, then its SHA-256 and
+# name printed as SHA256SUMS lists them (ADR-0022, S22, U1, U31). The AI builds it and never runs
+# it; signing it for the updater is the maintainer's step on their own PC (docs/releasing.md).
+app-installer:
+    node scripts/app-installer.mjs
+
+# The user only; the AI never runs it. Signs a release's installer for the updater on the
+# maintainer's PC: the key by its path, outside the repository; the password typed hidden and
+# handed to the CLI in its environment alone; the signature bound to the version. Prints only the
+# signature file's path, latest.json beside it, in target/updater-sign/v<version>/ (ADR-0022,
+# S24, U1; docs/releasing.md).
+updater-sign key installer sha256 version:
+    node scripts/updater-sign.mjs "{{ key }}" "{{ installer }}" "{{ sha256 }}" "{{ version }}"
+
+# The user only; the AI never runs it. Rehearses an update on this PC with a throwaway key: two
+# debug installers of "afkfleet rehearsal" (an identifier and a product of their own, so they never
+# touch the installed afkfleet), 0.0.2 signed and served on loopback until Ctrl+C, and the steps
+# printed (ADR-0022, R20).
+update-rehearsal:
+    node scripts/update-rehearsal.mjs
+
 # The debug exe the AI launches, under its own identifier from its very first launch, so it can
 # never reach the user's running app, its single-instance lock, its profile or its Credential
 # Manager entries (ADR-0020, U87). The config's path is absolute, as the CLI may change folders.
@@ -391,7 +419,7 @@ app-build *args:
 # real identifier, so the second line copies this one to target/app-check/afkfleet-check.exe, the
 # only file the AI launches, and refuses any other identifier (S99).
 app-build-check:
-    pnpm --filter @afkfleet/desktop tauri build --debug --config "{{ justfile_directory() }}/apps/desktop/src-tauri/tauri.check.conf.json"
+    pnpm --filter @afkfleet/desktop tauri build --debug --no-bundle --config "{{ justfile_directory() }}/apps/desktop/src-tauri/tauri.check.conf.json"
     node scripts/app-check.mjs
 
 # Render the desktop app's icon.ico from apps/desktop/src-tauri/icons/ at every Windows size (needs pnpm install).

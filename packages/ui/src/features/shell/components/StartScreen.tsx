@@ -1,7 +1,8 @@
 // The start screen (Plan.md P8.6, ADR-0017): what `/` shows when the launch leads nowhere
 // else. While the server can't be reached it waits (the banner retries) and offers the server
 // settings and a logout on this PC, so a server that moved or is gone for good never leaves
-// the user stuck (ADR-0022, S1, U7). For any other error it shows the error and a way out:
+// the user stuck (ADR-0022, S1, U7). Its bottom line names the app's version (U37), as far from
+// the window's bottom as the login screen's, so it doesn't move between the two. For any other error it shows the error and a way out:
 // try again, the server settings, or log out, so a session the app can't use (a keychain
 // entry it can't read) never does either. Both logouts are `logout`, which removes the stored
 // session before it tries the server and says so when the server wasn't told. While one runs,
@@ -15,22 +16,26 @@ import { Alert, AlertDescription } from "../../../components/ui/alert";
 import { Button } from "../../../components/ui/button";
 import type { CommandError } from "../../../generated/CommandError";
 import { CERTIFICATE_HELP } from "../../server/certificateHelp";
+import { AppVersionLine } from "../../updates/components/AppVersionLine";
 import { useLogout } from "../hooks/useLogout";
 
 /** The start screen. */
 export function StartScreen() {
   const outcome = useLoaderData({ from: "/" });
   return (
-    <main className="flex flex-1 items-center justify-center p-8">
-      <div className="flex w-full max-w-md flex-col gap-4">
-        <div className="flex items-center gap-3">
-          <Logo size={32} />
-          <h1 className="text-2xl tracking-tight">
-            <Wordmark />
-          </h1>
+    <main className="flex flex-1 flex-col items-center px-8 pt-8 pb-6">
+      <div className="flex w-full flex-1 items-center justify-center">
+        <div className="flex w-full max-w-md flex-col gap-4">
+          <div className="flex items-center gap-3">
+            <Logo size={32} />
+            <h1 className="text-2xl tracking-tight">
+              <Wordmark />
+            </h1>
+          </div>
+          {outcome.kind === "unreachable" ? <Waiting /> : <Failed error={outcome.error} />}
         </div>
-        {outcome.kind === "unreachable" ? <Waiting /> : <Failed error={outcome.error} />}
       </div>
+      <AppVersionLine />
     </main>
   );
 }

@@ -71,6 +71,9 @@
     "allow-user-grants",
     "allow-shared-accounts",
     "allow-leave-account",
-    "allow-set-window-theme"
+    "allow-set-window-theme",
+    "allow-check-update",
+    "allow-install-update",
+    "allow-app-version"
   ]
 }

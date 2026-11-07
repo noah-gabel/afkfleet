@@ -1,7 +1,9 @@
 //! The production compose project, as its files are written (Plan.md
 //! P12.2; ADR-0022, S14–S17, U18–U20); P12.7's smoke tests run it:
 //! - every long-running service is hardened: the nonroot user, a read-only
-//!   root, no capability, no new privilege, rotated logs, no swap, limits
+//!   root, no capability, no new privilege, rotated logs, no swap, limits;
+//!   no service sets the anchor's keys again, the one-shot services have
+//!   small fixed limits, and every tmpfs is `noexec,nosuid,nodev`
 //! - the server mounts every folder its config names, the setup service
 //!   writes the keys and never the database, the agent reads the CA alone
 //! - each service's grace period outlasts its worst-case shutdown
@@ -12,9 +14,11 @@
 //! - the server's metrics port is bound to its fixed fleet address (U19),
 //!   and each proxy path trusts exactly the address its network gives the
 //!   proxy (S16)
-//! - nothing is published but each path's own port, never a metrics port
-//! - Caddy is pinned the same everywhere, proxies only the app's routes and
-//!   deletes the ticket and `q` from every logged URI
+//! - nothing is published but each path's own port, never a metrics port:
+//!   every service of every file has exactly its ports
+//! - Caddy is pinned the same everywhere, proxies only the app's routes,
+//!   drops its `Server` header and deletes the ticket and `q` from every
+//!   logged URI
 //! - nothing under `deploy/` but the development configs allows offline
 //!   accounts (U20)
 // Integration tests are test code, but clippy only applies the test allowances
@@ -29,7 +33,7 @@ use std::time::Duration;
 use fleet_server::cli::serve::{RUNTIME_SHUTDOWN, ShutdownTimeouts};
 use fleet_server::config::HttpConfig;
 use fleet_server::http::rate_limit::TrustedProxies;
-use fleet_testkit::compose::{list, service, value};
+use fleet_testkit::compose::{block, list, service, value};
 
 const COMPOSE: &str = include_str!("../../../deploy/compose.yaml");
 const EDGE: &str = include_str!("../../../deploy/compose.edge.yaml");
@@ -72,6 +76,118 @@ fn trimmed<'a>(lines: &[&'a str]) -> Vec<&'a str> {
 /// A duration in seconds as compose writes it (`30s`).
 fn secs(text: &str) -> Duration {
     Duration::from_secs(text.strip_suffix('s').unwrap().parse().unwrap())
+}
+
+/// Every compose file of the release, by name.
+const FILES: [(&str, &str); 6] = [
+    ("compose.yaml", COMPOSE),
+    ("compose.edge.yaml", EDGE),
+    ("compose.caddy.yaml", CADDY),
+    ("compose.loopback.yaml", LOOPBACK),
+    ("compose.grpc.yaml", GRPC),
+    ("compose.agent.yaml", REMOTE),
+];
+
+/// The names of the services `text` defines, in order.
+fn services(text: &str) -> Vec<&str> {
+    block(text, "services")
+        .into_iter()
+        .filter_map(|line| {
+            let name = line.strip_prefix("  ")?.strip_suffix(':')?;
+            (!name.starts_with([' ', '#'])).then_some(name)
+        })
+        .collect()
+}
+
+/// The keys a service's `lines` set at the service's own level.
+fn own_keys<'a>(lines: &[&'a str]) -> Vec<&'a str> {
+    lines
+        .iter()
+        .filter_map(|line| {
+            let rest = line.strip_prefix("    ")?;
+            if rest.starts_with([' ', '#', '-']) {
+                return None;
+            }
+            rest.split_once(':').map(|(key, _)| key)
+        })
+        .collect()
+}
+
+/// The anchor's keys that a service of compose.yaml, or an override of one,
+/// would replace by setting them itself (PR #97's review).
+const ANCHORED: [&str; 5] = ["user", "read_only", "cap_drop", "security_opt", "logging"];
+
+/// Every service of compose.yaml takes the anchor and sets none of its keys
+/// again, and no path's override sets one or `restart` on the server: a key
+/// of its own silently replaces the anchor's, with nothing in the file to
+/// show it.
+#[test]
+fn no_service_sets_the_anchors_keys_again() {
+    for name in services(COMPOSE) {
+        let lines = service(COMPOSE, name);
+        assert!(trimmed(&lines).contains(&"<<: *hardened"), "{name}");
+        let own = own_keys(&lines);
+        for key in ANCHORED {
+            assert!(!own.contains(&key), "{name} sets {key} itself");
+        }
+    }
+    for (file, text) in [
+        ("compose.edge.yaml", EDGE),
+        ("compose.loopback.yaml", LOOPBACK),
+        ("compose.grpc.yaml", GRPC),
+    ] {
+        for name in services(text) {
+            let own = own_keys(&service(text, name));
+            for key in ANCHORED.iter().chain(&["restart"]) {
+                assert!(!own.contains(key), "{file}'s {name} sets {key}");
+            }
+        }
+    }
+}
+
+/// The one-shot services run with small fixed limits, never `.env` knobs:
+/// `setup` makes a key and a PKI, `probe` reads one page (PR #97's review).
+#[rstest::rstest]
+#[case::setup("setup", "128m", "0.5", "64")]
+#[case::probe("probe", "32m", "0.25", "16")]
+fn the_one_shot_services_have_small_fixed_limits(
+    #[case] name: &str,
+    #[case] memory: &str,
+    #[case] cpus: &str,
+    #[case] pids: &str,
+) {
+    let lines = service(COMPOSE, name);
+
+    assert_eq!(value(&lines, "mem_limit"), Some(memory));
+    assert_eq!(value(&lines, "memswap_limit"), Some(memory));
+    assert_eq!(value(&lines, "cpus"), Some(cpus));
+    assert_eq!(value(&lines, "pids_limit"), Some(pids));
+}
+
+/// Every tmpfs of every file mounts `noexec,nosuid,nodev`, written as a
+/// list, so nothing written there runs (PR #97's review).
+#[test]
+fn every_tmpfs_is_noexec_nosuid_and_nodev() {
+    let mut mounts = 0;
+    for (file, text) in FILES {
+        for name in services(text) {
+            let lines = service(text, name);
+            assert_eq!(value(&lines, "tmpfs"), None, "{file}'s {name}: a list");
+            for mount in list(&lines, "tmpfs") {
+                let options: Vec<&str> = mount
+                    .split_once(':')
+                    .map_or_else(Vec::new, |(_, options)| options.split(',').collect());
+                for flag in ["noexec", "nosuid", "nodev"] {
+                    assert!(options.contains(&flag), "{file}'s {name}: {mount}");
+                }
+                mounts += 1;
+            }
+        }
+    }
+    assert_eq!(
+        mounts, 6,
+        "server, agent, setup, caddy (2), the remote agent"
+    );
 }
 
 #[test]
@@ -337,31 +453,56 @@ fn each_path_trusts_exactly_its_proxys_address() {
 
 /// compose.yaml publishes nothing; each path's file its own port alone, the
 /// host's API on loopback only; no metrics port anywhere.
+/// A service's name and the ports it publishes, as written.
+type Published = (&'static str, &'static [&'static str]);
+
+/// Every service of every file, with exactly the ports it publishes: each
+/// path's own, never a metrics port, nothing else (PR #97's review: a list
+/// per service, not a text search for `"9480:`).
 #[test]
 fn nothing_is_published_but_each_paths_own_port() {
-    for name in ["server", "agent", "setup", "probe"] {
-        assert_eq!(
-            list(&service(COMPOSE, name), "ports"),
-            Vec::<&str>::new(),
-            "{name}"
-        );
-    }
-    assert_eq!(
-        list(&service(LOOPBACK, "server"), "ports"),
-        ["\"127.0.0.1:${AFKFLEET_HTTP_PORT:-8080}:8080\""]
-    );
-    assert_eq!(
-        list(&service(GRPC, "server"), "ports"),
-        ["\"${AFKFLEET_GRPC_PUBLISH:-7443}:7443\""]
-    );
-    assert_eq!(
-        list(&service(CADDY, "caddy"), "ports"),
-        ["\"80:80\"", "\"443:443\""]
-    );
-    assert_eq!(list(&service(REMOTE, "agent"), "ports"), Vec::<&str>::new());
-    for file in [COMPOSE, EDGE, CADDY, LOOPBACK, GRPC, REMOTE] {
-        for port in ["9480:", "9481:"] {
-            assert!(!file.contains(&format!("\"{port}")), "{port} is published");
+    let none: &[&str] = &[];
+    let expected: [(&str, &str, &[Published]); 6] = [
+        (
+            "compose.yaml",
+            COMPOSE,
+            &[
+                ("server", none),
+                ("agent", none),
+                ("setup", none),
+                ("probe", none),
+            ],
+        ),
+        ("compose.edge.yaml", EDGE, &[("server", none)]),
+        (
+            "compose.caddy.yaml",
+            CADDY,
+            &[("caddy", &["\"80:80\"", "\"443:443\""])],
+        ),
+        (
+            "compose.loopback.yaml",
+            LOOPBACK,
+            &[(
+                "server",
+                &["\"127.0.0.1:${AFKFLEET_HTTP_PORT:-8080}:8080\""],
+            )],
+        ),
+        (
+            "compose.grpc.yaml",
+            GRPC,
+            &[("server", &["\"${AFKFLEET_GRPC_PUBLISH:-7443}:7443\""])],
+        ),
+        ("compose.agent.yaml", REMOTE, &[("agent", none)]),
+    ];
+    for (file, text, published) in expected {
+        let names: Vec<&str> = published.iter().map(|(name, _)| *name).collect();
+        assert_eq!(services(text), names, "{file}'s services");
+        for (name, ports) in published {
+            let lines = service(text, name);
+            assert_eq!(value(&lines, "ports"), None, "{file}'s {name}: a list");
+            assert_eq!(list(&lines, "ports"), *ports, "{file}'s {name}");
+            assert_eq!(value(&lines, "expose"), None, "{file}'s {name}");
+            assert_eq!(list(&lines, "expose"), none, "{file}'s {name}");
         }
     }
 }
@@ -417,6 +558,7 @@ fn caddy_proxies_only_the_apps_routes_and_logs_neither_ticket_nor_q() {
         "tls internal",
         "import tls_{$AFKFLEET_TLS}",
         "Strict-Transport-Security \"max-age=31536000\"",
+        "-Server",
     ] {
         assert!(lines.contains(&expected), "the Caddyfile lacks {expected}");
     }
@@ -482,13 +624,11 @@ fn nothing_under_deploy_allows_offline_accounts() {
             continue;
         };
         checked += 1;
-        let text = text.to_ascii_lowercase().replace(' ', "");
+        // Spaces and either quote go, so `= true`, `: "true"` and `: 'true'`
+        // all read alike (PR #97's review).
+        let text = text.to_ascii_lowercase().replace([' ', '"', '\''], "");
         assert!(!text.contains("allow_offline=true"), "{}", file.display());
-        assert!(
-            !text.contains("allow_offline:\"true\"") && !text.contains("allow_offline:true"),
-            "{}",
-            file.display()
-        );
+        assert!(!text.contains("allow_offline:true"), "{}", file.display());
     }
     assert!(checked > 10, "{checked}");
 }

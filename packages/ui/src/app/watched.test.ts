@@ -162,6 +162,37 @@ describe("watched", () => {
     expect(events.recovered).toHaveBeenCalledTimes(1);
   });
 
+  it("leaves the banner alone for the updater's calls: they ask GitHub, never the server (S27)", async () => {
+    const { client, stores, events } = setup({
+      checkUpdate: async () => ({ state: "up_to_date", current: "0.1.0" }),
+      installUpdate: async () => {
+        throw fakeApiError("update_unreachable");
+      },
+      appVersion: async () => ({ version: "0.1.0" }),
+    });
+    stores.connection.getState().fail("down");
+
+    await client.checkUpdate();
+    await expect(client.installUpdate()).rejects.toBeInstanceOf(ApiError);
+    await client.appVersion();
+
+    expect(stores.connection.getState().status).toBe("down");
+    expect(events.recovered).not.toHaveBeenCalled();
+    expect(events.sessionEnded).not.toHaveBeenCalled();
+  });
+
+  it("raises no banner for an update that can't reach GitHub", async () => {
+    const { client, stores } = setup({
+      checkUpdate: async () => {
+        throw fakeApiError("update_unreachable");
+      },
+    });
+
+    await expect(client.checkUpdate()).rejects.toBeInstanceOf(ApiError);
+
+    expect(stores.connection.getState().status).not.toBe("down");
+  });
+
   it("takes no banner down when the window's theme is set: it reaches no server (S94)", async () => {
     const { client, stores, events } = setup({ setWindowTheme: async () => {} });
     stores.connection.getState().fail("down");
