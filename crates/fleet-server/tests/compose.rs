@@ -701,6 +701,24 @@ fn env_example_lists_every_variable_the_compose_files_read() {
     assert!(checked > 20, "{checked}");
 }
 
+/// `env.example` names the two images in comments alone: a release's files
+/// pin their own images by digest as the compose files' defaults, so a host
+/// `.env` sets one only to run other images (ADR-0022, S23, S34).
+#[test]
+fn env_example_names_the_images_in_comments_alone() {
+    for name in ["AFKFLEET_SERVER_IMAGE", "AFKFLEET_AGENT_IMAGE"] {
+        let lines: Vec<&str> = ENV_EXAMPLE
+            .lines()
+            .filter(|line| line.trim_start_matches('#').starts_with(&format!("{name}=")))
+            .collect();
+        assert_eq!(lines.len(), 1, "{name}: {lines:?}");
+        assert!(
+            lines.iter().all(|line| line.starts_with('#')),
+            "{name} is set: {lines:?}"
+        );
+    }
+}
+
 /// A remote agent's compose file names, in its header, every variable it
 /// reads: its host has no env.example of its own.
 #[test]

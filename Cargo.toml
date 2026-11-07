@@ -13,6 +13,13 @@ license = "GPL-3.0-or-later"
 publish = false
 repository = "https://github.com/noah-gabel/afkfleet"
 
+# The oldest release a host can update from with `sh setup.sh fetch` (ADR-0022, S23, S33): the
+# bundle's RELEASE carries it, and scripts/deploy-bundle.mjs refuses one above `version`. A
+# release's version PR raises it when an update needs a step an older install never ran
+# (docs/releasing.md). Cargo ignores this table.
+[workspace.metadata.afkfleet]
+updates_from = "0.1.0"
+
 # A dependency is declared here when a crate first uses it, never in advance: cargo
 # warns about unused workspace dependencies. Plan.md §5 lists the verified version and
 # any feature constraints for every registry crate (pinned in P0.3).
