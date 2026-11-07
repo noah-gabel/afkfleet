@@ -581,6 +581,19 @@ fn env_file(spec: Spec, net: Net, backups: Option<&Path>) -> String {
     env
 }
 
+/// `deploy/compose.grpc.yaml`'s one port entry for the server, as written
+/// there (`- "${AFKFLEET_GRPC_PUBLISH:-7443}:7443"`).
+fn grpc_port_entry() -> String {
+    let text = fs::read_to_string(repo().join("deploy/compose.grpc.yaml")).unwrap();
+    let entries: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("- \"") && line.ends_with(":7443\""))
+        .collect();
+    assert_eq!(entries.len(), 1, "compose.grpc.yaml's ports: {entries:?}");
+    entries.first().unwrap().to_string()
+}
+
 /// The server's setting the `.env` sets, which must reach its container.
 pub(crate) const SETTING: &str = "AFKFLEET_SERVER__DATABASE__BACKUP_KEEP=7";
 
@@ -603,6 +616,11 @@ fn override_file(spec: Spec, setup: Setup, backups: Option<&Path>) -> String {
     }
     if path == ProxyPath::Host {
         server.push_str("    ports: !override\n      - \"127.0.0.1::8080\"\n");
+        // `!override` drops every file's ports, compose.grpc.yaml's too: its
+        // own entry comes back as it is, so the file is still what's tested.
+        if spec.grpc.is_some() {
+            let _ = writeln!(server, "      {}", grpc_port_entry());
+        }
     }
     let probe_backups = match backups {
         Some(dir) => format!(
@@ -627,4 +645,38 @@ fn override_file(spec: Spec, setup: Setup, backups: Option<&Path>) -> String {
         yaml.push_str("volumes:\n  smoke-backups:\n");
     }
     yaml
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The host path's `ports: !override` replaces every file's ports, so
+    /// with remote agents it must carry `compose.grpc.yaml`'s own entry back:
+    /// without it the gRPC port was never published (PR #99's first Stack
+    /// run).
+    #[test]
+    fn the_host_paths_override_keeps_the_grpc_files_port() {
+        let spec = Spec {
+            path: ProxyPath::Host,
+            project: "afkfleet-ops-old-host",
+            net: 50,
+            make_backups: true,
+            ops: true,
+            grpc: Some(("ops-grpc.test", 17443)),
+        };
+        let grpc = fs::read_to_string(repo().join("deploy/compose.grpc.yaml")).unwrap();
+        let entry = grpc
+            .lines()
+            .map(str::trim)
+            .find(|line| line.starts_with("- \"") && line.ends_with(":7443\""))
+            .unwrap();
+
+        let yaml = override_file(spec, Setup::Script, None);
+
+        assert!(
+            yaml.lines().any(|line| line.trim() == entry),
+            "{entry} isn't in:\n{yaml}"
+        );
+    }
 }
