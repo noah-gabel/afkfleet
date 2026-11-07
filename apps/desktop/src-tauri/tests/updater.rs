@@ -57,6 +57,9 @@ struct Served {
     manifest: Mutex<Option<Vec<u8>>>,
     /// Whether the installer's last byte is changed on its way out.
     tamper: AtomicBool,
+    /// When set, the installer streams without end and with no length, and
+    /// the bytes it got out go here once the client stops reading.
+    endless: Mutex<Option<mpsc::Sender<u64>>>,
     /// Set when the test ends, so the server stops.
     stop: AtomicBool,
 }
@@ -120,6 +123,12 @@ fn answer(mut stream: TcpStream, served: &Served) {
     }
     let head = String::from_utf8_lossy(&head);
     let path = head.split(' ').nth(1).unwrap_or_default().to_owned();
+    if path == format!("/{INSTALLER}")
+        && let Some(sent) = served.endless.lock().unwrap().take()
+    {
+        let _ = sent.send(stream_without_end(stream));
+        return;
+    }
     let body = match path.as_str() {
         "/latest.json" => served.manifest.lock().unwrap().clone(),
         name if name == format!("/{INSTALLER}") => {
@@ -148,6 +157,26 @@ fn answer(mut stream: TcpStream, served: &Served) {
     let _ = stream.write_all(&reply);
 }
 
+/// Streams zeros with no length until the client stops reading, or 512 MiB
+/// went out; how many bytes it got out.
+fn stream_without_end(mut stream: TcpStream) -> u64 {
+    const MOST: u64 = 512 * 1024 * 1024;
+    let chunk = vec![0_u8; 64 * 1024];
+    let size = u64::try_from(chunk.len()).unwrap();
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+    let mut sent = 0_u64;
+    if stream
+        .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
+        .is_err()
+    {
+        return sent;
+    }
+    while sent < MOST && stream.write_all(&chunk).is_ok() {
+        sent += size;
+    }
+    sent
+}
+
 impl Release {
     /// The fixture's release on a fresh loopback server, `/latest.json`
     /// answering its signed manifest, and the app over its public key.
@@ -161,6 +190,7 @@ impl Release {
             dir: dir.path().to_path_buf(),
             manifest: Mutex::new(Some(std::fs::read(dir.path().join("latest.json")).unwrap())),
             tamper: AtomicBool::new(false),
+            endless: Mutex::new(None),
             stop: AtomicBool::new(false),
         });
         let serving = Arc::clone(&served);
@@ -317,6 +347,33 @@ async fn a_missing_manifest_is_unreachable() {
     assert_eq!(
         check(&release.updates()).await.map(|found| found.is_some()),
         Err(UpdateFailure::Unreachable)
+    );
+}
+
+/// The real cap stops a download while it streams: a body with no length
+/// that never ends is refused once it passes 64 MiB, and the server sees the
+/// client stop reading, so the whole of it is never held (PR #98's review).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_cap_stops_a_download_while_it_streams_past_64_mib() {
+    let release = Release::new();
+    let (sent, got) = mpsc::channel();
+    *release.served.endless.lock().unwrap() = Some(sent);
+    let updates = release.updates();
+
+    let started = std::time::Instant::now();
+    let refused = download(&updates).await;
+    let elapsed = started.elapsed();
+    let streamed = got
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the server never saw the client stop reading");
+
+    assert_eq!(refused, Err(UpdateFailure::Invalid));
+    assert!(elapsed < WAIT, "it ran until the bound: {elapsed:?}");
+    let cap = afkfleet_desktop::update::MAX_DOWNLOAD_BYTES;
+    assert!(streamed > cap, "it stopped before the cap: {streamed}");
+    assert!(
+        streamed < 4 * cap,
+        "it read far past the cap before stopping: {streamed}"
     );
 }
 
