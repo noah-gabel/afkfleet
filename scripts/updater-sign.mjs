@@ -40,7 +40,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { installerName, SIGNING_VARIABLES } from "./app-installer.mjs";
+import { installerName } from "./app-installer.mjs";
 
 /** How long the CLI may take to sign, the password already given. */
 const SIGN_TIMEOUT_MS = 120_000;
@@ -139,16 +139,27 @@ export function readHidden(prompt, input, output) {
 }
 
 /**
- * Signs `file` with the pinned CLI at `cli`: the key by its path, `version` into the trusted
- * comment unless null, `password` in the child's environment alone (null: none, and stdin isn't a
- * terminal, so the CLI takes an empty one, as throwaway test keys have). Every signing variable
- * of the parent is left out. The CLI's stdout, the signature in base64, is dropped.
+ * A signing variable the CLI would read: every `TAURI_SIGNING_*` and `TAURI_PRIVATE_KEY*`, in
+ * any case, since Windows' variable names ignore it.
  */
-export function signFile({ cli, key, file, version, password }) {
-  const env = { ...process.env };
-  for (const name of SIGNING_VARIABLES) {
-    delete env[name];
-  }
+const SIGNING_VARIABLE = /^TAURI_(SIGNING_|PRIVATE_KEY)/i;
+
+/**
+ * Signs `file` with the pinned CLI (`cli`, its entry script): the key by its path, the version
+ * bound into the signature unless `version` is null. The password reaches the CLI in that one
+ * child's `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` alone, set only when one is given (null: none,
+ * and with stdin not a terminal the CLI takes an empty one, as throwaway test keys have), never as an
+ * argument (the user's acceptance, ADR-0022, S24 and PR #98's review); every other signing
+ * variable of `env` is left out of the child's. `spawn` and `env` stand in for the real ones in a
+ * test. Its exit status and stderr; the CLI's stdout, the signature, is dropped.
+ */
+export function signFile(
+  { cli, key, file, version, password },
+  { spawn = spawnSync, env: parent = process.env } = {},
+) {
+  const env = Object.fromEntries(
+    Object.entries(parent).filter(([name]) => !SIGNING_VARIABLE.test(name)),
+  );
   if (password !== null) {
     env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD = password;
   }
@@ -157,7 +168,7 @@ export function signFile({ cli, key, file, version, password }) {
     args.push("--app-version", version);
   }
   args.push(file);
-  const result = spawnSync(process.execPath, args, {
+  const result = spawn(process.execPath, args, {
     env,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
@@ -172,10 +183,14 @@ function repository(cargoToml) {
   return section?.match(/^repository = "([^"]*)"$/m)?.[1] ?? null;
 }
 
-/** Whether `inner` lies in `outer` (both real paths) or is it. */
+/**
+ * Whether `inner` lies in `outer` (both real paths) or is it. Only a first path part that is ".."
+ * itself leaves `outer`: a folder named "..keys" inside it is still inside (PR #98's review).
+ */
 function within(outer, inner) {
   const relative = path.relative(outer, inner);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  const first = relative.split(/[\\/]/)[0];
+  return relative === "" || (first !== ".." && !path.isAbsolute(relative));
 }
 
 /** The refusal for `args`, before anything runs, or null. */

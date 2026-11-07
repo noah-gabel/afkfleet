@@ -95,9 +95,9 @@ function sink() {
 
 /**
  * main() in `root`: `sign` stands in for the CLI unless `real` (then the pinned CLI signs, with
- * an empty password), a terminal unless `tty` is false.
+ * an empty password) or `sign` is given, a terminal unless `tty` is false.
  */
-function run(root, args, { real = false, tty = true } = {}) {
+function run(root, args, { real = false, tty = true, sign = undefined } = {}) {
   const out = sink();
   const err = sink();
   const signed = [];
@@ -109,12 +109,14 @@ function run(root, args, { real = false, tty = true } = {}) {
     stdinIsTTY: tty,
     now: () => new Date("2026-11-07T12:34:56.789Z"),
     readPassword: async () => (real ? "" : "a-password"),
-    signFile: real
-      ? (options) => signFile({ ...options, password: null })
-      : (options) => {
-          signed.push(options);
-          return { status: 0, stderr: "" };
-        },
+    signFile:
+      sign ??
+      (real
+        ? (options) => signFile({ ...options, password: null })
+        : (options) => {
+            signed.push(options);
+            return { status: 0, stderr: "" };
+          }),
   });
   return Promise.resolve(code).then((exit) => ({
     code: exit,
@@ -213,6 +215,10 @@ describe("updater-sign", () => {
     const { file, sha } = download();
     const inside = path.join(root, "afkfleet-updater.key");
     writeFileSync(inside, "not a real key");
+    // A folder whose name only starts with two dots is still inside (PR #98's review).
+    mkdirSync(path.join(root, "..keys"));
+    const dotted = path.join(root, "..keys", "afkfleet-updater.key");
+    writeFileSync(dotted, "not a real key");
     const cases = [
       [[keys.one.key, file, sha, "0.2"], {}, /X\.Y\.Z/],
       [[keys.one.key, file, sha, "0.3.0"], {}, /afkfleet_0\.3\.0_x64-setup\.exe/],
@@ -220,6 +226,7 @@ describe("updater-sign", () => {
       [["one.key", file, sha, "0.2.0"], {}, /absolute/],
       [[keys.one.key, "afkfleet_0.2.0_x64-setup.exe", sha, "0.2.0"], {}, /absolute/],
       [[inside, file, sha, "0.2.0"], {}, /inside the repository/],
+      [[dotted, file, sha, "0.2.0"], {}, /inside the repository/],
       [[keys.dir, file, sha, "0.2.0"], {}, /isn't a file/],
       [[keys.one.key, file, sha, "0.2.0"], { tty: false }, /terminal/],
     ];
@@ -316,6 +323,110 @@ describe("updater-sign", () => {
     assert.match(result.err, /key/);
     assert.equal(result.out, "");
     assert.ok(!existsSync(path.join(root, "target", "updater-sign", "v0.2.0")));
+  });
+
+  it("refuses a signature whose trusted comment names another version or file, and leaves nothing", async () => {
+    // Real signatures by the committed key, made for what they name: another version of this
+    // installer, and this version of another file.
+    const elsewhere = mkdtempSync(path.join(tmpdir(), "afkfleet-updater-other-"));
+    made.push(elsewhere);
+    const sameName = path.join(elsewhere, "afkfleet_0.2.0_x64-setup.exe");
+    writeFileSync(sameName, "the setup exe");
+    const signedFor = (file, version) => {
+      const result = signFile({ cli: CLI, key: keys.one.key, file, version, password: null });
+      assert.equal(result.status, 0, result.stderr);
+      return readFileSync(`${file}.sig`, "utf8");
+    };
+    const otherVersion = signedFor(sameName, "0.1.9");
+    const otherFile = path.join(elsewhere, "afkfleet_0.1.9_x64-setup.exe");
+    writeFileSync(otherFile, "the setup exe");
+    const otherName = signedFor(otherFile, "0.2.0");
+
+    for (const signature of [otherVersion, otherName]) {
+      const root = repo(keys.one.pubkey);
+      const { file, sha } = download();
+      const result = await run(root, [keys.one.key, file, sha, "0.2.0"], {
+        sign: (options) => {
+          writeFileSync(`${options.file}.sig`, signature);
+          return { status: 0, stderr: "" };
+        },
+      });
+
+      assert.equal(result.code, 1, result.err);
+      assert.match(result.err, /doesn't name this installer and version/);
+      assert.equal(result.out, "");
+      assert.ok(!existsSync(path.join(root, "target", "updater-sign", "v0.2.0")));
+    }
+  });
+
+  it("hands the CLI the key by path and the version, never a password argument", () => {
+    const calls = [];
+    const spawn = (command, args, options) => {
+      calls.push({ command, args, env: options.env });
+      return { status: 0, stderr: "" };
+    };
+
+    signFile(
+      {
+        cli: "cli.js",
+        key: "C:/keys/a.key",
+        file: "C:/out/f.exe",
+        version: "0.2.0",
+        password: "s3cret-pw",
+      },
+      { spawn, env: { PATH: "/bin" } },
+    );
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].command, process.execPath);
+    assert.deepEqual(calls[0].args, [
+      "cli.js",
+      "signer",
+      "sign",
+      "--private-key-path",
+      "C:/keys/a.key",
+      "--app-version",
+      "0.2.0",
+      "C:/out/f.exe",
+    ]);
+    for (const arg of calls[0].args) {
+      assert.ok(arg !== "-p" && !arg.startsWith("--password"), arg);
+      assert.ok(!arg.includes("s3cret-pw"), arg);
+    }
+  });
+
+  it("strips every signing variable of its own, setting the password's alone, and only when given", () => {
+    const parent = {
+      PATH: "/bin",
+      TAURI_SIGNING_PRIVATE_KEY: "a key",
+      TAURI_SIGNING_PRIVATE_KEY_PATH: "a path",
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "an older password",
+      TAURI_SIGNING_ANYTHING_NEW: "x",
+      TAURI_PRIVATE_KEY: "a legacy key",
+      TAURI_PRIVATE_KEY_PATH: "a legacy path",
+      TAURI_PRIVATE_KEY_PASSWORD: "a legacy password",
+      tauri_signing_private_key: "in other case",
+      Tauri_Private_Key_Password: "in mixed case",
+    };
+    const envs = [];
+    const spawn = (_command, _args, options) => {
+      envs.push(options.env);
+      return { status: 0, stderr: "" };
+    };
+    const options = { cli: "cli.js", key: "C:/keys/a.key", file: "C:/out/f.exe", version: "0.2.0" };
+
+    signFile({ ...options, password: "s3cret-pw" }, { spawn, env: parent });
+    signFile({ ...options, password: null }, { spawn, env: parent });
+
+    const signing = (env) =>
+      Object.keys(env).filter((name) => /^tauri_(signing_|private_key)/i.test(name));
+    assert.deepEqual(signing(envs[0]), ["TAURI_SIGNING_PRIVATE_KEY_PASSWORD"]);
+    assert.equal(envs[0].TAURI_SIGNING_PRIVATE_KEY_PASSWORD, "s3cret-pw");
+    assert.deepEqual(signing(envs[1]), []);
+    for (const env of envs) {
+      assert.equal(env.PATH, "/bin");
+    }
+    assert.equal(parent.TAURI_SIGNING_PRIVATE_KEY, "a key", "the parent's own are left alone");
   });
 
   it("signs without a version when asked: the signature then carries none", () => {
