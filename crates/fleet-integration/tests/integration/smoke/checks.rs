@@ -104,6 +104,94 @@ pub(crate) fn series(render: &str, name: &str) -> Option<f64> {
     })
 }
 
+/// One line of `afkfleet-server agent list` (its header's `id`, `name` and
+/// `state` columns).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AgentLine {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) state: String,
+}
+
+/// `agent list`'s lines after its header; `None` when the header isn't
+/// fleet-server's own.
+pub(crate) fn agents(list: &str) -> Option<Vec<AgentLine>> {
+    let mut lines = list.lines().filter(|line| !line.trim().is_empty());
+    if lines.next()? != fleet_server::cli::agent::LIST_HEADER {
+        return None;
+    }
+    lines
+        .map(|line| {
+            let mut columns = line.split('\t');
+            Some(AgentLine {
+                id: columns.next()?.to_owned(),
+                name: columns.next()?.to_owned(),
+                state: columns.next()?.to_owned(),
+            })
+        })
+        .collect()
+}
+
+/// The regular files of a ustar stream (`docker cp … -`), by name without a
+/// leading `./`, with their bytes.
+pub(crate) fn tar_files(tar: &[u8]) -> Vec<(String, Vec<u8>)> {
+    let mut found = Vec::new();
+    let mut at = 0;
+    while let Some(head) = tar.get(at..at + 512) {
+        if head.iter().all(|byte| *byte == 0) {
+            break;
+        }
+        let field = |offset: usize, length: usize| {
+            let bytes = head.get(offset..offset + length).unwrap_or_default();
+            let end = bytes
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(bytes.len());
+            String::from_utf8_lossy(bytes.get(..end).unwrap_or_default()).into_owned()
+        };
+        let size = usize::from_str_radix(field(124, 12).trim(), 8).unwrap_or(0);
+        let name = field(0, 100);
+        let kind = head.get(156).copied().unwrap_or(0);
+        if kind == b'0' || kind == 0 {
+            let data = tar
+                .get(at + 512..at + 512 + size)
+                .unwrap_or_default()
+                .to_vec();
+            found.push((name.trim_start_matches("./").to_owned(), data));
+        }
+        at += 512 + size.div_ceil(512) * 512;
+    }
+    found
+}
+
+/// The stamp a restore or a renewal named, right after `aside-` (a file set
+/// aside) or `forget-aside ` (the command it prints), the first one in
+/// `text`: never a backup's own time.
+pub(crate) fn stamp_in(text: &str) -> Option<String> {
+    let is_stamp = |word: &str| {
+        word.len() == 16
+            && word.get(8..9) == Some("T")
+            && word.ends_with('Z')
+            && word
+                .chars()
+                .enumerate()
+                .all(|(at, c)| at == 8 || at == 15 || c.is_ascii_digit())
+    };
+    let mut starts: Vec<usize> = ["aside-", "forget-aside "]
+        .iter()
+        .flat_map(|marker| {
+            text.match_indices(marker)
+                .map(move |(at, _)| at + marker.len())
+        })
+        .collect();
+    starts.sort_unstable();
+    starts
+        .into_iter()
+        .filter_map(|start| text.get(start..start + 16))
+        .find(|word| is_stamp(word))
+        .map(str::to_owned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,5 +290,75 @@ mod tests {
         assert_eq!(series(render, "a_total{x=\"y\"}"), Some(3.0));
         assert_eq!(series(render, "b"), Some(1.5));
         assert_eq!(series(render, "c"), None);
+    }
+
+    #[test]
+    fn agents_read_ids_names_and_states_after_the_header() {
+        let list = format!(
+            "{}\n01900000-0000-7000-8000-000000000001\tlocal\tenabled\t0\t50\t0.1.0\t-\t-\t-\n01900000-0000-7000-8000-000000000002\tops-remote\tdisabled\t0\t50\t-\t-\t-\t-\n",
+            fleet_server::cli::agent::LIST_HEADER
+        );
+
+        let found = agents(&list).unwrap();
+
+        assert_eq!(
+            found,
+            [
+                AgentLine {
+                    id: "01900000-0000-7000-8000-000000000001".to_owned(),
+                    name: "local".to_owned(),
+                    state: "enabled".to_owned(),
+                },
+                AgentLine {
+                    id: "01900000-0000-7000-8000-000000000002".to_owned(),
+                    name: "ops-remote".to_owned(),
+                    state: "disabled".to_owned(),
+                },
+            ]
+        );
+        assert_eq!(agents("id\tname\n"), None, "another header");
+    }
+
+    /// A ustar header for `name` of `size` bytes, `kind` '0' or '5'.
+    fn header(name: &str, size: usize, kind: u8) -> Vec<u8> {
+        let mut head = vec![0_u8; 512];
+        head.get_mut(..name.len())
+            .unwrap()
+            .copy_from_slice(name.as_bytes());
+        let octal = format!("{size:011o}");
+        head.get_mut(124..135)
+            .unwrap()
+            .copy_from_slice(octal.as_bytes());
+        *head.get_mut(156).unwrap() = kind;
+        head
+    }
+
+    #[test]
+    fn tar_files_read_each_regular_file_and_skip_folders() {
+        let mut tar = header("./", 0, b'5');
+        tar.extend(header("./vault-key-1", 3, b'0'));
+        let mut data = b"key".to_vec();
+        data.resize(512, 0);
+        tar.extend(data);
+        tar.extend(vec![0_u8; 1024]);
+
+        assert_eq!(
+            tar_files(&tar),
+            [("vault-key-1".to_owned(), b"key".to_vec())]
+        );
+    }
+
+    #[test]
+    fn a_stamp_is_found_in_a_line_or_a_file_name() {
+        assert_eq!(
+            stamp_in("moved aside: afkfleet.db as afkfleet.db.aside-20261107T120000Z\n").as_deref(),
+            Some("20261107T120000Z")
+        );
+        assert_eq!(
+            stamp_in("then: sh setup.sh forget-aside 20261108T090000Z").as_deref(),
+            Some("20261108T090000Z")
+        );
+        assert_eq!(stamp_in("afkfleet-backup-20261106T000000Z.db"), None);
+        assert_eq!(stamp_in("afkfleet.db.aside-2026110T120000Z"), None);
     }
 }

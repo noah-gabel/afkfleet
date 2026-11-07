@@ -51,14 +51,14 @@ impl Drop for Running {
     }
 }
 
-/// Reads `pipe` to its end on a thread; the text arrives once it closes,
+/// Reads `pipe` to its end on a thread; the bytes arrive once it closes,
 /// which the process's end or its kill guarantees.
-fn drain(mut pipe: impl Read + Send + 'static) -> mpsc::Receiver<String> {
+fn drain(mut pipe: impl Read + Send + 'static) -> mpsc::Receiver<Vec<u8>> {
     let (sender, receiver) = mpsc::sync_channel(1);
     thread::spawn(move || {
-        let mut text = String::new();
-        let _ = pipe.read_to_string(&mut text);
-        let _ = sender.send(text);
+        let mut bytes = Vec::new();
+        let _ = pipe.read_to_end(&mut bytes);
+        let _ = sender.send(bytes);
     });
     receiver
 }
@@ -70,8 +70,23 @@ pub struct Finished {
     pub success: bool,
     /// Its exit code, if it exited.
     pub code: Option<i32>,
-    /// Everything it printed on stdout.
+    /// Everything it printed on stdout, as text (bytes that aren't UTF-8
+    /// replaced).
     pub stdout: String,
+    /// Everything it printed on stderr.
+    pub stderr: String,
+}
+
+/// How a finished call ended, its stdout as the bytes it printed: a tar
+/// stream `docker cp … -` writes, say.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FinishedBytes {
+    /// Whether it exited with 0.
+    pub success: bool,
+    /// Its exit code, if it exited.
+    pub code: Option<i32>,
+    /// Every byte it printed on stdout.
+    pub stdout: Vec<u8>,
     /// Everything it printed on stderr.
     pub stderr: String,
 }
@@ -83,10 +98,28 @@ pub struct Finished {
 /// [`DockerError`] when it can't start, doesn't end within `deadline`, or
 /// can't be awaited.
 pub fn finish(
-    mut command: Command,
+    command: Command,
     stdin: Option<&[u8]>,
     deadline: Duration,
 ) -> Result<Finished, DockerError> {
+    let finished = finish_bytes(command, stdin, deadline)?;
+    Ok(Finished {
+        success: finished.success,
+        code: finished.code,
+        stdout: String::from_utf8_lossy(&finished.stdout).into_owned(),
+        stderr: finished.stderr,
+    })
+}
+
+/// [`finish`], keeping stdout's bytes as they came.
+///
+/// # Errors
+/// As [`finish`].
+pub fn finish_bytes(
+    mut command: Command,
+    stdin: Option<&[u8]>,
+    deadline: Duration,
+) -> Result<FinishedBytes, DockerError> {
     let description = format!("{command:?}");
     let mut child = command
         .stdin(if stdin.is_some() {
@@ -118,11 +151,11 @@ pub fn finish(
         .map(|mut child| child.wait())
         .transpose()
         .map_err(|error| DockerError(format!("{description} couldn't be awaited: {error}")))?;
-    Ok(Finished {
+    Ok(FinishedBytes {
         success: status.is_some_and(|status| status.success()),
         code: status.and_then(|status| status.code()),
         stdout,
-        stderr,
+        stderr: String::from_utf8_lossy(&stderr).into_owned(),
     })
 }
 
@@ -202,6 +235,18 @@ impl Compose {
     /// As [`finish`].
     pub fn run(&self, args: &[&str], deadline: Duration) -> Result<Finished, DockerError> {
         finish(self.command(args), None, deadline)
+    }
+
+    /// Runs `args` until they end, keeping stdout's bytes as they came.
+    ///
+    /// # Errors
+    /// As [`finish`].
+    pub fn run_bytes(
+        &self,
+        args: &[&str],
+        deadline: Duration,
+    ) -> Result<FinishedBytes, DockerError> {
+        finish_bytes(self.command(args), None, deadline)
     }
 
     /// Runs `args` with `stdin` on its standard input until they end.
