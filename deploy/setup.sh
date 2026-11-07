@@ -11,6 +11,10 @@
 #                              what restore and renew-cert set aside: listed, or
 #                              STAMP's deleted
 #   sh setup.sh renew-cert     the server's certificate renewed from the same CA
+#   sudo sh setup.sh keys-backup [DEST]
+#                              the keys' copy: a root-only folder, names printed
+#   sudo sh setup.sh keys-restore DIR
+#                              a new host's keys and CA from that copy
 #
 # Exit codes: 0 done, 1 refused or failed (it says why), 2 usage error.
 #
@@ -63,6 +67,8 @@ AGENTS_HEADER="id${TAB}name${TAB}state${TAB}bots${TAB}capacity${TAB}version${TAB
 CREATED=""
 # What this run left for a look, for the message after a failure.
 LEFT=""
+# keys-restore's staging folder while it exists, removed by refuse too.
+STAGE=""
 
 say() {
 	printf '%s\n' "$*"
@@ -81,11 +87,14 @@ refuse() {
 	if [ -n "$LEFT" ]; then
 		printf 'afkfleet setup: %s\n' "$LEFT" >&2
 	fi
+	if [ -n "$STAGE" ]; then
+		rm -rf "$STAGE"
+	fi
 	exit 1
 }
 
 usage() {
-	printf 'usage: sh setup.sh check|init|update|fetch X.Y.Z|restore NAME|forget-aside [STAMP]|renew-cert\n' >&2
+	printf 'usage: sh setup.sh check|init|update|fetch X.Y.Z|restore NAME|forget-aside [STAMP]|renew-cert|keys-backup [DEST]|keys-restore DIR\n' >&2
 	exit 2
 }
 
@@ -282,13 +291,21 @@ check_docker() {
 	if [ "$major" -lt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -lt 24 ]; }; then
 		refuse "Docker Compose $version is too old: afkfleet needs 2.24 or newer"
 	fi
+	# keys-restore's `docker cp -a` keeps the server's user (a uid:gid) only
+	# from Engine 28.0 on: an older one is found here, at the install, never
+	# in the middle of a restore (ADR-0022, U40).
+	engine=$(docker version --format '{{.Server.Version}}' 2>/dev/null) || engine=""
+	case ${engine%%.*} in
+	"" | *[!0-9]*) refuse "Docker Engine's version can't be read ($engine): afkfleet needs 28.0 or newer" ;;
+	esac
+	[ "${engine%%.*}" -ge 28 ] || refuse "Docker Engine $engine is too old: afkfleet needs 28.0 or newer"
 	options=$(docker info --format '{{.SecurityOptions}}' 2>/dev/null || true)
 	case $options in
 	*rootless* | *userns*)
 		refuse "Docker runs rootless or with user namespaces here: the backups' folder can't belong to the server's user (65532) that way"
 		;;
 	esac
-	ok "Docker and Compose $version"
+	ok "Docker $engine and Compose $version"
 }
 
 # Sets IMAGE to the image the variable $1 runs: RELEASE's $2, pinned by its
@@ -436,15 +453,29 @@ project() {
 	docker compose config --format json 2>/dev/null | sed -n 's/^ *"name": "\([^"]*\)".*/\1/p' | head -n 1
 }
 
+# Nothing of the project may exist yet; with $1 = restored, init also takes
+# the state keys-restore and restore leave on a new host (S39): no container,
+# and exactly the keys', the CA's, the certificate's and the database's
+# volumes, no agent identity. RESTORED says which it found.
 check_clean() {
 	name=$(project)
 	[ -n "$name" ] || refuse "docker compose can't read compose.yaml with this .env"
 	containers=$(docker ps -a -q --filter "label=com.docker.compose.project=$name")
 	volumes=$(docker volume ls -q --filter "label=com.docker.compose.project=$name")
-	if [ -n "$containers" ] || [ -n "$volumes" ]; then
-		refuse "the project $name has containers or volumes already: init is for a first install only (an existing install is updated with: sh setup.sh update)"
+	RESTORED=no
+	if [ -z "$containers" ] && [ -z "$volumes" ]; then
+		ok "nothing of the project $name exists yet"
+		return 0
 	fi
-	ok "nothing of the project $name exists yet"
+	if [ "${1:-}" = restored ] && [ -z "$containers" ]; then
+		found=$(printf '%s\n' "$volumes" | sort | tr '\n' ' ')
+		if [ "$found" = "${name}_ca ${name}_data ${name}_keys ${name}_tls " ]; then
+			RESTORED=yes
+			ok "the project $name holds restored keys, a CA and a database: init makes no key and no PKI"
+			return 0
+		fi
+	fi
+	refuse "the project $name has containers or volumes already: init is for a first install only, or a new host keys-restore and restore made ready (an existing install is updated with: sh setup.sh update)"
 }
 
 # The backups' folder: owned by the server's user, owner-only, in a folder
@@ -517,15 +548,17 @@ init() {
 	if [ "$PROXY" = caddy ]; then
 		check_ports caddy
 	fi
-	check_clean
+	check_clean restored
 	check_backups
-	CREATED="$CREATED the project's volumes"
-	docker compose run --rm -T setup vault create-key --config "$SERVER_CONFIG" || refuse "the vault key couldn't be created"
-	ok "the vault key, in the keys volume (copy it off this host separately: see the runbook)"
-	# shellcheck disable=SC2046 # one name per line, each its own argument
-	set -- $(pki_names)
-	docker compose run --rm -T setup pki init --config "$SERVER_CONFIG" "$@" || refuse "the PKI couldn't be created"
-	ok "the CA and the server's certificate"
+	if [ "$RESTORED" = no ]; then
+		CREATED="$CREATED the project's volumes"
+		docker compose run --rm -T setup vault create-key --config "$SERVER_CONFIG" || refuse "the vault key couldn't be created"
+		ok "the vault key, in the keys volume (copy it off this host separately: see the runbook)"
+		# shellcheck disable=SC2046 # one name per line, each its own argument
+		set -- $(pki_names)
+		docker compose run --rm -T setup pki init --config "$SERVER_CONFIG" "$@" || refuse "the PKI couldn't be created"
+		ok "the CA and the server's certificate"
+	fi
 	docker compose up --detach --wait server || refuse "the server didn't become healthy: docker compose logs server says why"
 	ok "the server is healthy"
 	status=0
@@ -760,6 +793,155 @@ renew_cert() {
 	say "Once the agents are back online: sh setup.sh forget-aside $when"
 }
 
+# Whether every folder above $1 that exists belongs to root and lets no
+# group or other write, up to /.
+root_path() {
+	path=$1
+	while [ "$path" != / ]; do
+		path=$(dirname "$path")
+		[ -d "$path" ] || continue
+		info=$(stat -c '%u:%g %a' "$path")
+		[ "${info%%:*}" = 0 ] || return 1
+		! others_write "${info##* }" || return 1
+	done
+	return 0
+}
+
+# The keys' copy $1 (R22): the folder, its keys/ and its ca/ root's with mode
+# 700; in them only ca.key and vault-key-<n>, and ca.crt, each a regular
+# file of root's with mode 600; and the CA's pair and the active vault key
+# there.
+check_copy() {
+	for folder in "$1" "$1/keys" "$1/ca"; do
+		if [ -L "$folder" ] || [ ! -d "$folder" ]; then
+			refuse "$folder isn't a folder: a keys' copy holds keys/ and ca/"
+		fi
+		info=$(stat -c '%u:%g %a' "$folder")
+		[ "$info" = "0:0 700" ] || refuse "${folder#"$1"/} must belong to root with mode 700, not $info"
+	done
+	for entry in "$1"/* "$1"/.[!.]* "$1"/keys/* "$1"/keys/.[!.]* "$1"/ca/* "$1"/ca/.[!.]*; do
+		if [ ! -e "$entry" ] && [ ! -L "$entry" ]; then
+			continue
+		fi
+		relative=${entry#"$1"/}
+		case $relative in
+		keys | ca) continue ;;
+		keys/ca.key | ca/ca.crt) ;;
+		keys/vault-key-*)
+			case ${relative#keys/vault-key-} in
+			"" | *[!0-9]*) refuse "$relative isn't a file of the keys' copy" ;;
+			esac
+			;;
+		*) refuse "$relative isn't a file of the keys' copy: it holds keys/ca.key, keys/vault-key-<n> and ca/ca.crt alone" ;;
+		esac
+		if [ -L "$entry" ] || [ ! -f "$entry" ]; then
+			refuse "$relative isn't a regular file"
+		fi
+		info=$(stat -c '%u:%g %a' "$entry")
+		[ "$info" = "0:0 600" ] || refuse "$relative must belong to root with mode 600, not $info"
+	done
+	active=$(env_value AFKFLEET_SERVER__VAULT__ACTIVE_KEY_ID)
+	[ -n "$active" ] || active=1
+	for need in keys/ca.key "keys/vault-key-$active" ca/ca.crt; do
+		[ -f "$1/$need" ] || refuse "the keys' copy $1 has no $need"
+	done
+}
+
+# The names in the keys' copy $1, on one line.
+copy_names() {
+	names=""
+	for entry in "$1"/keys/* "$1"/ca/*; do
+		[ -f "$entry" ] && names="$names ${entry#"$1"/}"
+	done
+	printf '%s' "${names# }"
+}
+
+# keys-backup [DEST] (ADR-0022, U22, S39, R22): the keys volume's vault keys
+# and CA key, and the CA's certificate, copied from the server's container
+# into DEST (/root/afkfleet-keys-<stamp> by default), a root-only folder of
+# root-only files that must not exist yet, in folders only root can change,
+# never in the backups' SFTP folder. It prints names, never a key.
+keys_backup() {
+	[ "$(id -u)" = 0 ] || refuse "keys-backup runs as root (sudo sh setup.sh keys-backup): the copy is root's alone"
+	check_docker
+	check_env
+	dest=${1:-/root/afkfleet-keys-$(stamp_now)}
+	backups_path "$dest" || refuse "$dest must be an absolute path of letters, digits and ._-, without //, . or .. parts or a trailing /"
+	if [ -e "$dest" ] || [ -L "$dest" ]; then
+		refuse "$dest exists already: keys-backup never writes over anything"
+	fi
+	case $dest/ in
+	"$(dirname "$BACKUPS")"/*) refuse "$dest is inside the backups' SFTP folder, which the backups' account reads: the keys never go there" ;;
+	esac
+	root_path "$dest" || refuse "every folder above $dest must belong to root and let no one else write: only root may reach the copy"
+	server=$(docker compose ps -a -q server)
+	[ -n "$server" ] || refuse "the server has no container here: keys-backup copies an installed afkfleet's keys"
+	mkdir -m 700 "$dest" "$dest/keys" "$dest/ca" || refuse "$dest couldn't be made"
+	LEFT="the copy so far is in $dest: remove it (rm -r $dest) before you try again"
+	docker compose cp server:/keys/. "$dest/keys" || refuse "the keys couldn't be copied"
+	docker compose cp server:/ca/. "$dest/ca" || refuse "the CA's certificate couldn't be copied"
+	check_copy "$dest"
+	LEFT=""
+	ok "the keys' copy is in $dest: $(copy_names "$dest")"
+	say "Copy it off this host as the runbook's The keys' copy says, and keep it offline, apart from the backups; never print its files."
+}
+
+# keys-restore DIR (S39, R30): on a new host, before init, the keys' copy
+# DIR into new keys and ca volumes as the server's user, owner-only, then a
+# server certificate from that CA for this host's names. The copy is staged
+# in a root-only folder of setup.sh's own, owned by the server's user, so
+# `docker cp -a` gives it that user however the Engine reads -a; the stage is
+# removed after the copy, and on a failure.
+keys_restore() {
+	[ "$(id -u)" = 0 ] || refuse "keys-restore runs as root (sudo sh setup.sh keys-restore <folder>): the copy is root's alone"
+	backups_path "$1" || refuse "$1 must be an absolute path of letters, digits and ._-, without //, . or .. parts or a trailing /"
+	check_docker
+	check_env
+	check_mounted
+	check_images
+	if [ "$PROXY" = caddy ]; then
+		check_ports caddy
+	fi
+	check_clean
+	check_backups
+	check_copy "$1"
+	stage=.afkfleet-keys-restore
+	if [ -e "$stage" ] || [ -L "$stage" ]; then
+		refuse "$stage exists: an earlier keys-restore stopped there; remove it (rm -r $stage) and run again"
+	fi
+	mkdir -m 700 "$stage" || refuse "$stage couldn't be made"
+	STAGE=$stage
+	mkdir -m 700 "$stage/keys" "$stage/ca" || refuse "$stage couldn't be made"
+	for entry in "$1"/keys/* "$1"/ca/*; do
+		[ -f "$entry" ] || continue
+		relative=${entry#"$1"/}
+		cp "$entry" "$stage/$relative" || refuse "$relative couldn't be staged"
+		chown 65532:65532 "$stage/$relative" || refuse "$relative couldn't be given to the server's user"
+		chmod 600 "$stage/$relative" || refuse "$relative couldn't be made owner-only"
+	done
+	CREATED="$CREATED the project's volumes"
+	docker compose --profile setup create setup || refuse "the setup service couldn't be created"
+	container=$(docker compose ps -a -q setup)
+	[ -n "$container" ] || refuse "the setup service's container isn't there"
+	docker cp -a "$stage/keys/." "$container:/keys" || refuse "the keys couldn't be copied into their volume"
+	docker cp -a "$stage/ca/." "$container:/ca" || refuse "the CA's certificate couldn't be copied into its volume"
+	docker rm -f "$container" >/dev/null || refuse "the setup service's container couldn't be removed"
+	rm -rf "$stage"
+	STAGE=""
+	ok "the keys and the CA are in this host's volumes, as the server's user"
+	# shellcheck disable=SC2046 # one name per line, each its own argument
+	set -- $(pki_names)
+	docker compose run --rm -T setup pki server-cert --config "$SERVER_CONFIG" "$@" ||
+		refuse "a server certificate couldn't be made from the restored CA"
+	ok "a server certificate from the same CA: agents keep their identities"
+	say ""
+	say "Next, as the runbook's Restoring a backup says:"
+	say "  1. Put the backup in the backups' folder as the server's user: sudo install -o 65532 -g 65532 -m 600 <the backup> <the backups' folder>/"
+	say "  2. sh setup.sh restore <its name>"
+	say "  3. Disable the old host's local agent: docker compose run --rm maintenance agent disable --config $SERVER_CONFIG --id <its id>"
+	say "  4. sudo sh setup.sh init"
+}
+
 # Downloads $1 into $2 over HTTPS alone, at most 10 MiB and 5 minutes.
 download() {
 	curl --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --location --max-redirs 5 \
@@ -909,8 +1091,8 @@ fetch() {
 [ $# -ge 1 ] || usage
 case $1 in
 check | init | update | renew-cert) [ $# -eq 1 ] || usage ;;
-fetch | restore) [ $# -eq 2 ] || usage ;;
-forget-aside) [ $# -le 2 ] || usage ;;
+fetch | restore | keys-restore) [ $# -eq 2 ] || usage ;;
+forget-aside | keys-backup) [ $# -le 2 ] || usage ;;
 *) usage ;;
 esac
 cd "$(dirname "$0")" || exit 1
@@ -925,4 +1107,9 @@ forget-aside)
 	forget_aside "$@"
 	;;
 renew-cert) renew_cert ;;
+keys-backup)
+	shift
+	keys_backup "$@"
+	;;
+keys-restore) keys_restore "$2" ;;
 esac

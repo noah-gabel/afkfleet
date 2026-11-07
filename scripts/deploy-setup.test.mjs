@@ -65,7 +65,8 @@ afterEach(() => {
 
 /** The stub `docker`: records each call, answers by the first response whose words it starts with. */
 const STUB = `
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 const args = process.argv.slice(2);
 let stdin = "";
 try { stdin = readFileSync(0, "utf8"); } catch {}
@@ -73,6 +74,10 @@ appendFileSync(process.env.STUB_LOG, JSON.stringify({ args, stdin }) + "\\n");
 const responses = JSON.parse(readFileSync(process.env.STUB_RESPONSES, "utf8"));
 const joined = args.join(" ");
 const found = responses.find((response) => joined.startsWith(response.when)) ?? {};
+// A copy out of a container writes its files into the last argument, a folder.
+for (const [name, text] of Object.entries(found.writes ?? {})) {
+  writeFileSync(join(args.at(-1), name), text);
+}
 process.stdout.write(found.stdout ?? "");
 process.stderr.write(found.stderr ?? "");
 process.exit(found.code ?? 0);
@@ -81,6 +86,7 @@ process.exit(found.code ?? 0);
 /** The answers a healthy host gives; a case puts its own first. */
 const HEALTHY = [
   { when: "compose version --short", stdout: "2.38.2\n" },
+  { when: "version --format {{.Server.Version}}", stdout: "29.0.1\n" },
   { when: "info --format", stdout: "[name=seccomp,profile=builtin]\n" },
   {
     when: "compose config --format json",
@@ -157,6 +163,7 @@ function run(
     served = null,
     extraEnv = {},
     noCurl = false,
+    patterns = [],
   } = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), "afkfleet-setup-"));
@@ -189,8 +196,10 @@ function run(
     id: `#!/bin/sh\necho ${uid}\n`,
     // The last argument is the path: the backups' folder gets `stat`, a path `modes` names its
     // answer, any other `parentStat`.
-    stat: `#!/bin/sh\nfor last; do :; done\ncase $last in\n"${backups}") echo '${stat}' ;;\n${named}*) echo '${parentStat}' ;;\nesac\n`,
+    // `patterns` are [glob, answer] pairs, unquoted, after the exact paths.
+    stat: `#!/bin/sh\nfor last; do :; done\ncase $last in\n"${backups}") echo '${stat}' ;;\n${named}${patterns.map(([glob, answer]) => `${glob}) echo '${answer}' ;;\n`).join("")}*) echo '${parentStat}' ;;\nesac\n`,
     install: `#!/bin/sh\necho "install $*" >> "${join(dir, "install.log")}"\n`,
+    chown: `#!/bin/sh\necho "chown $*" >> "${join(dir, "install.log")}"\n`,
   };
   if (!noCurl) {
     scripts.curl = `#!/bin/sh\nexec "${process.execPath}" "${join(dir, "curl.mjs")}" "$@"\n`;
@@ -1530,6 +1539,283 @@ describe("setup.sh restore, forget-aside and renew-cert, against stubs", { skip:
     for (const result of [noServer, noTls]) {
       assert.equal(result.code, 1);
       assert.deepEqual(steps(result), []);
+    }
+  });
+});
+
+describe("Docker Engine 28.0 or newer (U40), against stubs", { skip: SH }, () => {
+  it("check and init refuse an older Engine, naming its version, and one whose version can't be read", () => {
+    for (const [answer, said] of [
+      ["27.5.1\n", /Docker Engine 27\.5\.1 is too old: afkfleet needs 28\.0 or newer/],
+      ["\n", /Docker Engine's version can't be read/],
+      ["dev\n", /Docker Engine's version can't be read/],
+    ]) {
+      for (const command of ["check", "init"]) {
+        const result = run([command], {
+          responses: [{ when: "version --format {{.Server.Version}}", stdout: answer }],
+        });
+
+        assert.equal(result.code, 1, `${command} ${answer}`);
+        assert.match(result.stderr, said, answer);
+        assert.ok(!joined(result.calls).some((call) => /^compose (run|up)/.test(call)));
+      }
+    }
+  });
+
+  it("takes 28.0", () => {
+    const result = run(["check"], {
+      responses: [{ when: "version --format {{.Server.Version}}", stdout: "28.0.0\n" }],
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /ok: Docker 28\.0\.0 and Compose 2\.38\.2/);
+  });
+});
+
+/** The keys' copy's files, as `docker compose cp` writes them for the stub. */
+const KEYS = {
+  "ca.key": "-----BEGIN PRIVATE KEY-----\nsecret-ca-key\n",
+  "vault-key-1": "secret-vault-key\n",
+};
+const CA = { "ca.crt": "-----BEGIN CERTIFICATE-----\npublic-ca-crt\n" };
+
+/** The copy's answers: each volume's files written into the destination. */
+const COPIES = [
+  { when: "compose cp server:/keys/.", writes: KEYS },
+  { when: "compose cp server:/ca/.", writes: CA },
+];
+
+describe("setup.sh keys-backup and keys-restore, against stubs", { skip: SH }, () => {
+  /** keys-backup as root into `dest(folder)`, everything in the copy root's 600/700 by default. */
+  function backupInto(dest, options = {}) {
+    return run(["keys-backup", ...(dest === null ? [] : [dest])], {
+      uid: "0",
+      responses: [...(options.responses ?? []), ...COPIES],
+      // A case's own patterns first: the stub's `case` takes the first match.
+      patterns: [
+        ...(options.patterns ?? []),
+        ["*/copy", "0:0 700"],
+        ["*/copy/keys", "0:0 700"],
+        ["*/copy/ca", "0:0 700"],
+        ["*/copy/*/*", "0:0 600"],
+      ],
+      ...options.run,
+    });
+  }
+
+  it("keys-backup copies the keys and the CA from the server's container, never to stdout, and prints names alone", () => {
+    const dir = mkdtempSync(join(tmpdir(), "afkfleet-keys-"));
+    made.push(dir);
+    const copied = backupInto(join(dir, "copy"));
+
+    assert.equal(copied.code, 0, copied.stderr);
+    const cps = joined(copied.calls).filter((call) => call.startsWith("compose cp"));
+    assert.deepEqual(cps, [
+      `compose cp server:/keys/. ${join(dir, "copy", "keys")}`,
+      `compose cp server:/ca/. ${join(dir, "copy", "ca")}`,
+    ]);
+    assert.ok(!copied.calls.some((call) => call.args.at(-1) === "-"), "never to stdout");
+    assert.match(copied.stdout, /keys\/ca\.key/);
+    assert.match(copied.stdout, /keys\/vault-key-1/);
+    assert.match(copied.stdout, /ca\/ca\.crt/);
+    assert.doesNotMatch(copied.stdout + copied.stderr, /secret-/, "a key's text was printed");
+  });
+
+  it("keys-backup refuses without root, an existing folder, or a folder above that others can write", () => {
+    const dir = mkdtempSync(join(tmpdir(), "afkfleet-keys-"));
+    made.push(dir);
+    mkdirSync(join(dir, "taken"));
+    for (const [label, result, said] of [
+      ["no root", run(["keys-backup", join(dir, "copy")], { responses: COPIES }), /runs as root/],
+      ["an existing folder", backupInto(join(dir, "taken")), /exists already/],
+      [
+        "a folder above others can write",
+        backupInto(join(dir, "copy"), { run: { parentStat: "0:0 777" } }),
+        /every folder above/,
+      ],
+      [
+        "a folder above that isn't root's",
+        backupInto(join(dir, "copy"), { run: { parentStat: "1000:1000 755" } }),
+        /every folder above/,
+      ],
+    ]) {
+      assert.equal(result.code, 1, label);
+      assert.match(result.stderr, said, label);
+      assert.ok(!joined(result.calls).some((call) => call.startsWith("compose cp")), label);
+    }
+  });
+
+  it("keys-backup refuses a folder inside the backups' SFTP folder, and an install without a server", () => {
+    const dir = mkdtempSync(join(tmpdir(), "afkfleet-keys-"));
+    made.push(dir);
+    const chrootInside = run(["keys-backup", join(dir, "srv", "keys")], {
+      uid: "0",
+      responses: COPIES,
+      backupsDir: () => join(dir, "srv", "backups"),
+      makeBackups: false,
+    });
+    const noServer = backupInto(join(dir, "copy"), {
+      responses: [{ when: "compose ps -a -q server", stdout: "" }],
+    });
+
+    assert.equal(chrootInside.code, 1);
+    assert.match(chrootInside.stderr, /inside the backups' SFTP folder/);
+    assert.equal(noServer.code, 1);
+    assert.match(noServer.stderr, /no container/);
+  });
+
+  it("keys-backup refuses a copied file that isn't root's 600, or a copy without a needed file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "afkfleet-keys-"));
+    made.push(dir);
+    const loose = backupInto(join(dir, "copy"), {
+      patterns: [["*/copy/keys/ca.key", "0:0 644"]],
+    });
+    const missing = run(["keys-backup", join(dir, "copy2")], {
+      uid: "0",
+      responses: [{ when: "compose cp server:/keys/.", writes: { "ca.key": "x\n" } }, COPIES[1]],
+      patterns: [
+        ["*/copy2", "0:0 700"],
+        ["*/copy2/keys", "0:0 700"],
+        ["*/copy2/ca", "0:0 700"],
+        ["*/copy2/*/*", "0:0 600"],
+      ],
+    });
+
+    assert.equal(loose.code, 1);
+    assert.match(loose.stderr, /keys\/ca\.key must belong to root with mode 600/);
+    assert.equal(missing.code, 1);
+    assert.match(missing.stderr, /has no keys\/vault-key-1/);
+  });
+
+  /** A root-only copy in a folder of its own, as keys-backup leaves one; `change` edits it. */
+  function copyFolder(change = () => {}) {
+    const dir = mkdtempSync(join(tmpdir(), "afkfleet-keys-"));
+    made.push(dir);
+    const copy = join(dir, "copy");
+    mkdirSync(join(copy, "keys"), { recursive: true });
+    mkdirSync(join(copy, "ca"));
+    for (const [name, text] of Object.entries(KEYS)) {
+      writeFileSync(join(copy, "keys", name), text);
+    }
+    for (const [name, text] of Object.entries(CA)) {
+      writeFileSync(join(copy, "ca", name), text);
+    }
+    change(copy);
+    return copy;
+  }
+
+  /** keys-restore as root of `copy`, every file root's 600 and folder 700 unless `patterns` say. */
+  function restoreFrom(copy, options = {}) {
+    return run(["keys-restore", copy], {
+      uid: "0",
+      responses: [
+        ...(options.responses ?? []),
+        { when: "compose ps -a -q setup", stdout: "5e7up000\n" },
+      ],
+      patterns: [
+        ...(options.patterns ?? []),
+        [`${copy}`, "0:0 700"],
+        [`${copy}/keys`, "0:0 700"],
+        [`${copy}/ca`, "0:0 700"],
+        [`${copy}/*/*`, "0:0 600"],
+      ],
+    });
+  }
+
+  it("keys-restore stages the copy as the server's user, copies it in with -a, then makes a server certificate", () => {
+    const copy = copyFolder();
+
+    const result = restoreFrom(copy);
+
+    assert.equal(result.code, 0, result.stderr);
+    const docker = joined(result.calls).filter((call) =>
+      /^(compose --profile setup create|cp -a|rm -f|compose run)/.test(call),
+    );
+    assert.deepEqual(docker, [
+      "compose --profile setup create setup",
+      "cp -a .afkfleet-keys-restore/keys/. 5e7up000:/keys",
+      "cp -a .afkfleet-keys-restore/ca/. 5e7up000:/ca",
+      "rm -f 5e7up000",
+      "compose run --rm -T setup pki server-cert --config /etc/afkfleet/server.toml --dns server --dns fleet.afkfleet.test --ip 192.0.2.10",
+    ]);
+    const changed = readFileSync(join(result.dir, "install.log"), "utf8");
+    assert.match(changed, /chown 65532:65532 .*\.afkfleet-keys-restore\/keys\/ca\.key/);
+    assert.ok(!existsSync(join(result.dir, ".afkfleet-keys-restore")), "the staging folder is gone");
+    assert.match(result.stdout, /sh setup\.sh restore/);
+  });
+
+  it("keys-restore refuses without root, a loose copy, an unknown file, a missing one, or a project that isn't clean", () => {
+    const cases = [
+      ["no root", run(["keys-restore", copyFolder()]), /runs as root/],
+      ["a loose folder", restoreFrom(copyFolder(), { patterns: [["*/copy/keys", "0:0 755"]] }), /must belong to root with mode 700/],
+      ["a loose file", restoreFrom(copyFolder(), { patterns: [["*/copy/ca/ca.crt", "1000:1000 600"]] }), /must belong to root with mode 600/],
+      ["an unknown file", restoreFrom(copyFolder((copy) => writeFileSync(join(copy, "keys", "server.key"), "x"))), /keys\/server\.key isn't a file of the keys' copy/],
+      ["a missing file", restoreFrom(copyFolder((copy) => rmSync(join(copy, "ca", "ca.crt")))), /has no ca\/ca\.crt/],
+      [
+        "a project with volumes",
+        restoreFrom(copyFolder(), {
+          responses: [{ when: "volume ls -q --filter label=com.docker.compose.project=afkfleet", stdout: "afkfleet_keys\n" }],
+        }),
+        /a first install only|not a clean/,
+      ],
+    ];
+    for (const [label, result, said] of cases) {
+      assert.equal(result.code, 1, label);
+      assert.match(result.stderr, said, label);
+      assert.ok(!joined(result.calls).some((call) => call.startsWith("cp -a")), label);
+      assert.ok(!existsSync(join(result.dir, ".afkfleet-keys-restore")), `${label}: staging left`);
+    }
+  });
+
+  it("keys-restore removes its staging folder when the copy into the volume fails", () => {
+    const result = restoreFrom(copyFolder(), {
+      responses: [{ when: "cp -a .afkfleet-keys-restore/keys/.", code: 1 }],
+    });
+
+    assert.equal(result.code, 1);
+    assert.ok(!existsSync(join(result.dir, ".afkfleet-keys-restore")));
+    assert.match(result.stderr, /this run created/);
+  });
+
+  it("init on a restored state skips the vault key and the PKI, and enrolls the local agent", () => {
+    const result = run(["init"], {
+      responses: [
+        {
+          when: "volume ls -q --filter label=com.docker.compose.project=afkfleet",
+          stdout: "afkfleet_tls\nafkfleet_keys\nafkfleet_data\nafkfleet_ca\n",
+        },
+      ],
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(
+      joined(result.calls).filter((call) => /^compose (run|up|exec)/.test(call)),
+      [
+        "compose up --detach --wait server",
+        "compose exec -T server /usr/local/bin/afkfleet-server agent create-enrollment-token --config /etc/afkfleet/server.toml",
+        "compose run --rm -T --no-deps agent enroll --config /etc/afkfleet/agent.toml",
+        "compose up --detach --wait",
+      ],
+    );
+    assert.match(result.stdout, /restored/);
+  });
+
+  it("init refuses another set of volumes, or containers beside them", () => {
+    for (const [label, responses] of [
+      ["with the agent's identity", [{ when: "volume ls -q", stdout: "afkfleet_ca\nafkfleet_data\nafkfleet_keys\nafkfleet_tls\nafkfleet_agent-data\n" }]],
+      ["without the database", [{ when: "volume ls -q", stdout: "afkfleet_ca\nafkfleet_keys\nafkfleet_tls\n" }]],
+      [
+        "with a container",
+        [
+          { when: "volume ls -q", stdout: "afkfleet_ca\nafkfleet_data\nafkfleet_keys\nafkfleet_tls\n" },
+          { when: "ps -a -q --filter", stdout: "0123abcd\n" },
+        ],
+      ],
+    ]) {
+      const result = run(["init"], { responses });
+
+      assert.equal(result.code, 1, label);
+      assert.ok(!joined(result.calls).some((call) => /^compose (run|up|exec)/.test(call)), label);
     }
   });
 });
