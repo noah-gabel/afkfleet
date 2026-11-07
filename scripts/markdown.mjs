@@ -1,15 +1,18 @@
 // Reads Markdown for the docs' checks (ADR-0022, S45, S49): GitHub's heading anchors,
 // fenced blocks, links and inline code. A line inside a fence is code, never a heading, a
-// link or inline code. Only backtick fences are read, which are all the docs use: a fence
-// opens with three or more backticks and an optional language, at any indent (inside a
-// list item too), and closes with at least as many backticks alone on a line; an unclosed
-// one runs to the end, as CommonMark has it. Headings are ATX headings (`#` to `######`
+// link or inline code. A fence opens with three or more backticks or tildes and an
+// optional language, at any indent (inside a list item too), and closes with at least as
+// many of the same character alone on a line; an unclosed one runs to the end, as
+// CommonMark has it. Headings are ATX headings (`#` to `######`
 // and a space). Line numbers count from 1.
 //
 // Used by scripts/runbook-commands.mjs and the docs' tests. Tests: scripts/markdown.test.mjs.
 
-/** A fence's opening line: its indent, its backticks and its info string. */
-const OPENING = /^(\s*)(`{3,})([^`]*)$/;
+/**
+ * A fence's opening line: its indent, its backticks or tildes, and its info string (a
+ * backtick fence's holds no backtick).
+ */
+const OPENING = /^(\s*)(?:(`{3,})([^`]*)|(~{3,})(.*))$/;
 
 /** An ATX heading: its level's hashes and its text, closing hashes allowed. */
 const HEADING = /^(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/;
@@ -38,8 +41,8 @@ function walk(markdown) {
   all.forEach((text, index) => {
     const line = index + 1;
     if (open !== null) {
-      const close = /^\s*(`{3,})\s*$/.exec(text);
-      if (close !== null && close[1].length >= open.ticks) {
+      const close = /^\s*(`{3,}|~{3,})\s*$/.exec(text);
+      if (close !== null && close[1][0] === open.char && close[1].length >= open.ticks) {
         open.block.closed = true;
         blocks.push(open.block);
         open = null;
@@ -52,11 +55,13 @@ function walk(markdown) {
     }
     const opening = OPENING.exec(text);
     if (opening !== null) {
+      const fence = opening[2] ?? opening[4];
       open = {
-        ticks: opening[2].length,
+        char: fence[0],
+        ticks: fence.length,
         indent: opening[1].length,
         block: {
-          info: opening[3].trim().split(/\s+/)[0] ?? "",
+          info: (opening[3] ?? opening[5]).trim().split(/\s+/)[0] ?? "",
           line,
           closed: false,
           body: [],

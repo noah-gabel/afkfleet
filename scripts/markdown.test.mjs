@@ -124,6 +124,27 @@ describe("fences", () => {
     ]);
   });
 
+  it("reads ~~~ fences too, each closed only by its own kind", () => {
+    const markdown = ["~~~sh", "sh setup.sh check", "```", "~~", "~~~~", "`inline` outside"].join(
+      "\n",
+    );
+
+    assert.deepEqual(fences(markdown), [
+      {
+        info: "sh",
+        line: 1,
+        closed: true,
+        body: [
+          { line: 2, text: "sh setup.sh check" },
+          { line: 3, text: "```" },
+          { line: 4, text: "~~" },
+        ],
+        before: null,
+      },
+    ]);
+    assert.deepEqual(inlineCode(markdown), [{ code: "inline", line: 6 }]);
+  });
+
   it("says when a block is never closed, and gives no line before the first", () => {
     const [block] = fences("```\nopen");
 

@@ -138,6 +138,14 @@ describe("check", () => {
     ]);
   });
 
+  it("checks a ~~~ block's commands as it checks a ``` block's", () => {
+    const markdown = doc("~~~sh", "sh setup.sh check", "sh setup.sh status", "~~~");
+
+    assert.deepEqual(check(markdown, [CHECK], CONTEXT), [
+      "line 3: `sh setup.sh status` is run by no test in the table, and its block isn't marked",
+    ]);
+  });
+
   it("refuses a tabled line in a marked block", () => {
     const markdown = doc(MARKER, "```sh", "sh setup.sh check", "```");
 
