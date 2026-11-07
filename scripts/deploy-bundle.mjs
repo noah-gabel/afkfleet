@@ -17,14 +17,16 @@
 //
 // Reproducible: the tar is a ustar of our own, its entries in byte order, 0:0 with no names,
 // files 0644 and folders 0755 (the runbook runs `sh setup.sh`), every entry dated `created`, so
-// the same inputs give the same tar on every platform; gzip's header carries no name or time and
-// says Unix. It refuses a link, anything but a regular file, a CR, a name over 99 bytes, and a
-// file in deploy/host/ or deploy/prod/ that isn't on its list.
+// the same inputs give the same tar on every platform. The .tar.gz around it is Node's zlib at
+// level 9, its header carrying no name or time and saying Unix: the same with the same Node,
+// but another zlib may compress the same tar to other bytes. It refuses a link (the file, or
+// any folder on its way), anything but a regular file, a CR, a name over 99 bytes, and a file in
+// deploy/host/ or deploy/prod/ that isn't on its list.
 //
 // Exit codes: 0 done, 1 refused (it says why on stderr), 2 usage error.
 // Tests: scripts/deploy-bundle.test.mjs.
 import { createHash } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -227,7 +229,10 @@ function gzip(tar) {
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
-/** A shipped file's bytes from `root`, refused unless it's a regular file without a CR. */
+/**
+ * A shipped file's bytes from `root`, refused unless it's a regular file without a CR, reached
+ * through no link: its real path is the one its name gives.
+ */
 function readShipped(root, source) {
   const file = path.join(root, source);
   const stat = lstatSync(file);
@@ -237,6 +242,9 @@ function readShipped(root, source) {
   if (!stat.isFile()) {
     throw new Refusal(`${source} isn't a regular file`);
   }
+  if (realpathSync(file) !== path.join(realpathSync(root), source)) {
+    throw new Refusal(`${source}'s path is a link, or goes through one`);
+  }
   const bytes = readFileSync(file);
   if (bytes.includes(0x0d)) {
     throw new Refusal(`${source} holds a CR: the repository's files are LF only`);
@@ -244,8 +252,20 @@ function readShipped(root, source) {
   return bytes;
 }
 
-/** Refuses a file in deploy/host/ or deploy/prod/ that isn't on the list. */
+/**
+ * Refuses deploy/, deploy/host/ or deploy/prod/ as a link or anything but a folder, and a file
+ * in deploy/host/ or deploy/prod/ that isn't on the list.
+ */
 function checkListedFolders(root) {
+  for (const folder of ["deploy", ...LISTED_FOLDERS.map((listed) => `deploy/${listed}`)]) {
+    const stat = lstatSync(path.join(root, folder));
+    if (stat.isSymbolicLink()) {
+      throw new Refusal(`${folder} is a link: the bundle reads the repository's own folders`);
+    }
+    if (!stat.isDirectory()) {
+      throw new Refusal(`${folder} isn't a folder`);
+    }
+  }
   for (const folder of LISTED_FOLDERS) {
     for (const file of readdirSync(path.join(root, "deploy", folder))) {
       const name = `${folder}/${file}`;

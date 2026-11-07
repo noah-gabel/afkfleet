@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   copyFileSync,
+  cpSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -389,6 +390,18 @@ describe("its refusals", () => {
       return;
     }
     assert.throws(() => buildBundle(inputs(root)), /Caddyfile is a link/);
+  });
+
+  it("refuses a link anywhere on a shipped file's path: deploy/prod or deploy as a link", () => {
+    for (const folder of ["deploy/prod", "deploy/host", "deploy"]) {
+      const root = copyRoot();
+      const elsewhere = join(temporary(), "moved");
+      cpSync(join(root, folder), elsewhere, { recursive: true });
+      rmSync(join(root, folder), { recursive: true });
+      symlinkSync(elsewhere, join(root, folder), "junction");
+
+      assert.throws(() => buildBundle(inputs(root)), /is a link/, folder);
+    }
   });
 
   it("refuses a name over 99 bytes", () => {
