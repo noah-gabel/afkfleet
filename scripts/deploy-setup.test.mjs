@@ -2132,6 +2132,37 @@ describe("setup.sh keys-backup and keys-restore, against stubs", { skip: SH }, (
   });
 });
 
+/** The runbook's uninstall line for the release's images: each by its digest, from RELEASE. */
+const UNINSTALL_IMAGES = String.raw`docker image rm "$(sed -n 's/^server_image=\([^:@]*\):[^@]*@/\1@/p' RELEASE)" "$(sed -n 's/^agent_image=\([^:@]*\):[^@]*@/\1@/p' RELEASE)"`;
+
+describe("the runbook's uninstall line for the images, against a stub docker", { skip: SH }, () => {
+  it("the runbook's uninstall removes the release's two images by their digests", () => {
+    const dir = mkdtempSync(join(tmpdir(), "afkfleet-uninstall-"));
+    made.push(dir);
+    mkdirSync(join(dir, "bin"));
+    writeFileSync(join(dir, "RELEASE"), releaseText());
+    writeFileSync(
+      join(dir, "bin", "docker"),
+      `#!/bin/sh\nprintf '%s\\n' "$@" > "${join(dir, "args")}"\n`,
+    );
+    chmodSync(join(dir, "bin", "docker"), 0o755);
+
+    const done = spawnSync("/bin/sh", ["-c", UNINSTALL_IMAGES], {
+      cwd: dir,
+      env: { PATH: `${join(dir, "bin")}:${process.env.PATH}` },
+      encoding: "utf8",
+    });
+
+    assert.equal(done.status, 0, done.stderr);
+    assert.deepEqual(readFileSync(join(dir, "args"), "utf8").split("\n").filter(Boolean), [
+      "image",
+      "rm",
+      `ghcr.io/noah-gabel/afkfleet-server@sha256:${"a".repeat(64)}`,
+      `ghcr.io/noah-gabel/afkfleet-agent@sha256:${"b".repeat(64)}`,
+    ]);
+  });
+});
+
 /** A remote agent's `.env`, as the runbook's Agents on other hosts gives it. */
 const AGENT_ENV = () =>
   [

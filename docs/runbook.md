@@ -29,6 +29,11 @@ Every service runs as the nonroot user (65532) with a read-only root, no capabil
 ## Before you start
 
 - **Docker Engine 28.0 or newer with Compose v2.24 or newer,** rootful: `setup.sh` refuses rootless Docker and user-namespace remapping, since the backups' folder must belong to the server's user (65532). It checks all of this and names what it found.
+- **Your own account may run Docker:** this guide runs `docker` and `setup.sh` as your user, which must be in the `docker` group. That group is root-equivalent (whoever is in it controls the host), so add only your own account, then log in again; or run each of those commands with `sudo` instead. Success: `groups` lists `docker`.
+  > **Not run by afkfleet's tests:** it changes the host's users and groups.
+  ```sh
+  sudo usermod -aG docker <you>
+  ```
 - **`curl`, `sha256sum` and `tar`** on the host, for the install and updates.
 - **A domain name** pointing at the host's IPv4 address (an A record) if afkfleet's own Caddy gets the HTTPS certificate: Let's Encrypt checks it over port 80. afkfleet listens on IPv4 alone. A free dynamic-DNS subdomain works ([The host](#the-host)).
 - **The host's clock in sync** (NTP; [Time](#time)).
@@ -45,7 +50,19 @@ Success: [Installing](#installing)'s `check` says `ok: Docker <version> and Comp
 
 ### The firewall
 
-Open TCP 80 and 443 in your provider's firewall and the host's, for afkfleet's Caddy (Let's Encrypt needs 80). With an existing proxy, it's your proxy's ports instead. Open 7443 only if agents run on other hosts ([Agents on other hosts](#agents-on-other-hosts)), and only to their addresses. Never open 8080, 9480 or 9481: they're the API behind the proxy and the metrics, and afkfleet publishes none of them. `setup.sh`'s `check` says whether 80 and 443 are free on the host, but free on the host isn't reachable from outside: only your firewalls decide that.
+Open TCP 80 and 443 in your provider's firewall and the host's, for afkfleet's Caddy (Let's Encrypt needs 80): they're meant to be open to everyone. With an existing proxy, it's your proxy's ports instead. 8080, 9480 and 9481 are the API behind the proxy and the metrics: afkfleet never publishes them, so no firewall needs to open them.
+
+**Docker's published ports go around the host's own firewall.** Docker writes its own packet-filter rules for each port it publishes, ahead of ufw's and firewalld's, so a ufw or firewalld rule doesn't limit them. That matters for 7443, which agents on other hosts dial ([Agents on other hosts](#agents-on-other-hosts)) and nobody else should reach. Limit it to the agents' addresses:
+- in your provider's firewall, in front of the host: 7443 allowed from the agents' addresses alone;
+- or in Docker's `DOCKER-USER` chain, which Docker checks first and leaves to you: for example a rule that drops 7443 from every address but one agent's (the same with `ip6tables` if the host has IPv6; keep it across reboots your distribution's way). Success: the chain lists it (`iptables -L DOCKER-USER -n`, as root), and 7443 doesn't answer from another address;
+- and, on a host with several addresses, publish 7443 on one alone: `AFKFLEET_GRPC_PUBLISH=192.0.2.10:7443` in `.env`.
+
+> **Not run by afkfleet's tests:** it changes the host's packet filter.
+```sh
+sudo iptables -I DOCKER-USER -p tcp -m conntrack --ctorigdstport 7443 --ctdir ORIGINAL ! --ctorigsrc 192.0.2.20 -j DROP
+```
+
+`setup.sh`'s `check` says whether 80 and 443 are free on the host, but free on the host isn't reachable from outside: only your provider's firewall decides that.
 
 ### A domain that follows the host's address
 
@@ -97,7 +114,7 @@ WantedBy=timers.target
 sudo systemctl daemon-reload
 sudo systemctl enable --now afkfleet-dns.timer
 sudo systemctl start afkfleet-dns.service
-journalctl -u afkfleet-dns.service -n 5
+sudo journalctl -u afkfleet-dns.service -n 5
 ```
 
 Success: the journal shows the service ending with `Deactivated successfully` after your service's own answer (often `good` or `nochg`). A failure shows curl's error, such as `The requested URL returned error: 401`: the token or the URL is wrong; fix the file with `sudoedit` again. Without systemd, root's crontab can run the same every 5 minutes, one line added in its editor:
@@ -189,8 +206,8 @@ About eleven commands from a host with Docker, each with what success looks like
 ## First login and inviting friends
 
 1. In the app (installed by [Using the afkfleet app](using-the-app.md)), connect to `https://<your domain>`, log in as the Owner, and set up 2FA. Success: Home opens.
-2. **Invites:** under **Admin › Invites**, make one per friend and send it with the address. An invite works once and expires.
-3. **A server without a public domain:** if your HTTPS certificate isn't from a public certificate authority (your own proxy's own CA, say), hand your friends that CA's certificate as a file, and its SHA-256 fingerprint another way (in person, or in another chat). Never hand out `ca.crt` from afkfleet's `ca` volume: that's the agents' CA, not HTTPS's. The friends' guide tells them to compare the fingerprint before they log in.
+2. **Invites:** under **Admin › Invites**, make one per friend and send it with the address. An invite works once and expires. Success: its code shows this once, and the list shows it pending until the friend registers.
+3. **A server without a public domain:** if your HTTPS certificate isn't from a public certificate authority (your own proxy's own CA, say), hand your friends that CA's certificate as a file, and its SHA-256 fingerprint another way (in person, or in another chat). Never hand out `ca.crt` from afkfleet's `ca` volume: that's the agents' CA, not HTTPS's. The friends' guide tells them to compare the fingerprint before they log in. Success: openssl prints one line, `sha256 Fingerprint=` and the fingerprint you hand over.
    > **Not run by afkfleet's tests:** the CA is your own proxy's, not afkfleet's.
    ```sh
    openssl x509 -in your-https-ca.crt -noout -fingerprint -sha256
@@ -328,7 +345,24 @@ rm ~/afkfleet-keys-out/afkfleet-keys.tar
 rmdir ~/afkfleet-keys-out
 ```
 
-**Keep it offline,** apart from the backups, as the updater's key is kept: two copies on two offline media (two USB drives in different places, say), never in a cloud folder, an email or a chat. The root-only folder on the host can stay; once the offline copies are made, you may remove it as root ([Uninstalling](#uninstalling) gives the command).
+**Keep it offline,** apart from the backups, as the updater's key is kept: two copies on two offline media (two USB drives in different places, say), never in a cloud folder, an email or a chat. On your PC, copy it to each medium and take each copy's SHA-256 (put each medium's drive for `<first medium>` and `<second medium>`, such as `E:`). Success: both print the host's hash.
+
+> **Not run by afkfleet's tests:** they handle the keys on your PC and its offline media.
+```powershell
+Copy-Item afkfleet-keys.tar <first medium>\afkfleet-keys.tar
+Copy-Item afkfleet-keys.tar <second medium>\afkfleet-keys.tar
+Get-FileHash <first medium>\afkfleet-keys.tar
+Get-FileHash <second medium>\afkfleet-keys.tar
+```
+
+Only once both match, delete the PC's copy: the keys live on the two media alone. Success: no output, and the file is gone.
+
+> **Not run by afkfleet's tests:** they handle the keys on your PC and its offline media.
+```powershell
+Remove-Item afkfleet-keys.tar
+```
+
+The root-only folder on the host can stay; once the offline copies are made, you may remove it as root ([Uninstalling](#uninstalling) gives the command).
 
 **Bringing it back** to a new host, for [Restoring a backup on a new host](#on-a-new-host): the same staging, then the same comparison, before anything else. On the new host, the folder and the file, yours alone (0700 and 0600) before anything is written. Success: no output.
 
@@ -338,10 +372,11 @@ install -d -m 700 ~/afkfleet-keys-in
 install -m 600 /dev/null ~/afkfleet-keys-in/afkfleet-keys.tar
 ```
 
-On your PC, the copy over your login to the new host, and its SHA-256 there. Success: `scp` shows the file at 100%, and `Get-FileHash` prints the hash you noted when it left the old host.
+On your PC, the copy from one of the media, over your login to the new host, and its SHA-256. Success: `scp` shows the file at 100%, and `Get-FileHash` prints the hash you noted when it left the old host.
 
 > **Not run by afkfleet's tests:** they move the keys between your own SSH login on the host and your PC.
 ```powershell
+Copy-Item <first medium>\afkfleet-keys.tar afkfleet-keys.tar
 scp afkfleet-keys.tar <you>@<new host>:afkfleet-keys-in/afkfleet-keys.tar
 Get-FileHash afkfleet-keys.tar
 ```
@@ -351,6 +386,13 @@ On the new host, its SHA-256, before anything else. Success: the same hash as `G
 > **Not run by afkfleet's tests:** they move the keys between your own SSH login on the host and your PC.
 ```sh
 sha256sum ~/afkfleet-keys-in/afkfleet-keys.tar
+```
+
+Once they match, the transfer is done: delete the PC's copy (the media keep theirs). Success: no output, and the file is gone.
+
+> **Not run by afkfleet's tests:** they handle the keys on your PC and its offline media.
+```powershell
+Remove-Item afkfleet-keys.tar
 ```
 
 Only then, unpack it as root, where `keys-restore` reads it: the files keep their root owner and owner-only modes. Success: no output, and `/root/afkfleet-keys-YYYYMMDDTHHMMSSZ` exists.
@@ -402,9 +444,26 @@ The old host is gone, and you have a backup (pulled by your PC) and [the keys' c
    ```sh
    sudo sh setup.sh keys-restore /root/afkfleet-keys-YYYYMMDDTHHMMSSZ
    ```
-2. **The backup,** copied into the backups' folder as the server's user, owner-only. Success: no output.
+2. **The backup,** staged as the keys' copy is: a folder and a file yours alone (0700 and 0600) before anything is written, the copy from your PC into it, then into the backups' folder as the server's user, owner-only, and the staged copy deleted. On the new host, the folder and the file. Success: no output.
+   > **Not run by afkfleet's tests:** they move a backup between your own SSH login on the host and your PC.
    ```sh
-   sudo install -o 65532 -g 65532 -m 600 afkfleet-backup-YYYYMMDDTHHMMSSZ.db /srv/afkfleet-backups/backups/
+   install -d -m 700 ~/afkfleet-backup-in
+   install -m 600 /dev/null ~/afkfleet-backup-in/afkfleet-backup-YYYYMMDDTHHMMSSZ.db
+   ```
+   On your PC, the copy over your login. Success: `scp` shows the file at 100%.
+   > **Not run by afkfleet's tests:** they move a backup between your own SSH login on the host and your PC.
+   ```powershell
+   scp afkfleet-backup-YYYYMMDDTHHMMSSZ.db <you>@<new host>:afkfleet-backup-in/afkfleet-backup-YYYYMMDDTHHMMSSZ.db
+   ```
+   On the new host, into the backups' folder. Success: no output.
+   ```sh
+   sudo install -o 65532 -g 65532 -m 600 ~/afkfleet-backup-in/afkfleet-backup-YYYYMMDDTHHMMSSZ.db /srv/afkfleet-backups/backups/
+   ```
+   Then the staged copy and its folder deleted. Success: no output, and the folder is gone.
+   > **Not run by afkfleet's tests:** they move a backup between your own SSH login on the host and your PC.
+   ```sh
+   rm ~/afkfleet-backup-in/afkfleet-backup-YYYYMMDDTHHMMSSZ.db
+   rmdir ~/afkfleet-backup-in
    ```
 3. **The restore,** which ends with no server running (there was none). Success: as above, ending with `Then: sudo sh setup.sh init`; start afkfleet no other way here, since `init` enrolls this host's agent.
    ```sh
@@ -480,14 +539,14 @@ AFKFLEET_GRPC_NAMES=fleet.example.com
 AFKFLEET_GRPC_PUBLISH=7443
 ```
 
-`init` gives these names to the certificate; on an installed host, renew it for them ([Renewing the server certificate](#renewing-the-server-certificate)). Open 7443 to the agents' addresses alone ([The firewall](#the-firewall)). Then publish the port, and copy the CA's certificate out (it's public: agents pin it):
+`init` gives these names to the certificate; on an installed host, renew it for them ([Renewing the server certificate](#renewing-the-server-certificate)). Limit 7443 to the agents' addresses as [The firewall](#the-firewall) says: the host's own firewall doesn't limit a port Docker publishes. Then publish the port, and copy the CA's certificate out (it's public: agents pin it). Success: every service healthy, compose saying `Successfully copied` for `ca.crt`, which now lies beside `.env`.
 
 ```sh
 docker compose up --detach --wait
 docker compose cp server:/ca/ca.crt ./ca.crt
 ```
 
-**On the agent's host,** unpack the same release's files into a folder of their own (`~/afkfleet-agent`, as in [Installing](#installing)'s steps 1–3), put `ca.crt` beside them, and give it to the agent's user once, as root (the agent refuses a CA file others can read):
+**On the agent's host,** unpack the same release's files into a folder of their own (`~/afkfleet-agent`, as in [Installing](#installing)'s steps 1–3), put `ca.crt` beside them, and give it to the agent's user once, as root (the agent refuses a CA file others can read). Success: no output, and `ls -n ca.crt` shows `-rw-------` and `65532 65532`.
 
 ```sh
 sudo chown 65532:65532 ca.crt
@@ -535,7 +594,7 @@ The agent's bots dial public Minecraft servers and never the host's own networks
    ```ini
    AFKFLEET_AGENT__CONTROL_PLANE__PRIVATE_TARGETS=["<its subnet>"]
    ```
-2. Let the agent join that network in a `compose.override.yaml` beside `.env`, and add `:compose.override.yaml` to the end of `COMPOSE_FILE`:
+2. Let the agent join that network in a `compose.override.yaml` beside `.env`, and add `:compose.override.yaml` to the end of `COMPOSE_FILE`. Success: `COMPOSE_FILE` ends with `:compose.override.yaml`, and the file holds exactly these lines with your network's name:
    ```yaml
    services:
      agent:
@@ -638,7 +697,7 @@ docker compose exec server /usr/local/bin/afkfleet-server agent release --config
 
 After an agent was compromised, every account whose bot it held counts as exposed until about 24 hours after its last `bot.unassign`, `bot.detach` or `agent.disable`: the server's "a session was granted" lines narrow it where they're kept. Link those accounts again (their Microsoft tokens rotate).
 
-**All public dialling off** at once (U10): set it to `false` in `.env`, then recreate the agent. Its bots then dial no public Minecraft server until you set it back.
+**All public dialling off** at once (U10): set it to `false` in `.env`, then recreate the agent. Its bots then dial no public Minecraft server until you set it back. Success: compose says the agent is `Recreated`, then `Started`; a bot pointed at a public server then ends with `connect_failed` and `blocked`.
 
 ```ini
 AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS=false
@@ -665,9 +724,15 @@ docker compose down --volumes --remove-orphans
 sudo sh host/sftp-backups.sh uninstall
 ```
 
-Then the folders, the keys' copies under `/root` (each by its name), the dynamic-DNS update if you made one, and the images. Success: `Untagged` and `Deleted` lines for the two images, nothing else.
+Then the release's two images, still from the folder: they were pulled by digest, so they carry no tag, and each goes by the digest reference `RELEASE` names. Success: for each, an `Untagged:` line with its `…@sha256:` reference, then `Deleted:` lines.
 
-> **Not run by afkfleet's tests:** they delete the host's backups, folders and keys' copies, and images other projects might share.
+```sh
+docker image rm "$(sed -n 's/^server_image=\([^:@]*\):[^@]*@/\1@/p' RELEASE)" "$(sed -n 's/^agent_image=\([^:@]*\):[^@]*@/\1@/p' RELEASE)"
+```
+
+Then the folders, the keys' copies under `/root` (each by its name) and the dynamic-DNS update if you made one. Success: no output.
+
+> **Not run by afkfleet's tests:** they delete the host's backups, folders and keys' copies.
 ```sh
 cd ~
 rm -r ~/afkfleet
@@ -676,7 +741,6 @@ sudo rm -r /root/afkfleet-keys-YYYYMMDDTHHMMSSZ
 sudo systemctl disable --now afkfleet-dns.timer
 sudo rm /etc/systemd/system/afkfleet-dns.service /etc/systemd/system/afkfleet-dns.timer
 sudo rm -r /etc/afkfleet-dns
-docker image rm ghcr.io/noah-gabel/afkfleet-server:X.Y.Z ghcr.io/noah-gabel/afkfleet-agent:X.Y.Z
 ```
 
 Close the firewall openings you made ([The firewall](#the-firewall)).

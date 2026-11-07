@@ -233,7 +233,7 @@ export const TESTED = [
     literal: 'self.setup_sh_ok(&["keys-restore", &folder], Root::Sudo)',
   },
   {
-    line: "sudo install -o 65532 -g 65532 -m 600 afkfleet-backup-YYYYMMDDTHHMMSSZ.db /srv/afkfleet-backups/backups/",
+    line: "sudo install -o 65532 -g 65532 -m 600 ~/afkfleet-backup-in/afkfleet-backup-YYYYMMDDTHHMMSSZ.db /srv/afkfleet-backups/backups/",
     test: NEW_HOST,
     file: STEPS,
     literal: '.args(["-n", "install", "-o", "65532", "-g", "65532", "-m", "600"])',
@@ -357,6 +357,12 @@ export const TESTED = [
     test: NEW_HOST,
     file: OPS,
     literal: 'old.ok(&["stop"], SLOW)',
+  },
+  {
+    line: String.raw`docker image rm "$(sed -n 's/^server_image=\([^:@]*\):[^@]*@/\1@/p' RELEASE)" "$(sed -n 's/^agent_image=\([^:@]*\):[^@]*@/\1@/p' RELEASE)"`,
+    test: setupCase("the runbook's uninstall removes the release's two images by their digests"),
+    file: SETUP_TESTS,
+    literal: "const UNINSTALL_IMAGES = String.raw`docker image rm",
   },
   {
     line: "docker compose down --volumes --remove-orphans",

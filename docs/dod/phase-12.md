@@ -28,11 +28,11 @@ Phase 12 is done when both checks below pass (Plan.md, Phase 12's DoD; ADR-0022,
 
 1. **The prerequisites.**
    - **Do:** [Before you start](../runbook.md#before-you-start).
-   - **Success:** Docker Engine 28.0 or newer and Compose 2.24 or newer, rootful; `curl`, `sha256sum` and `tar` on the host; the domain's A record points at the host; NTP on.
+   - **Success:** Docker Engine 28.0 or newer and Compose 2.24 or newer, rootful; your own account in the `docker` group (or every Docker command run with sudo); `curl`, `sha256sum` and `tar` on the host; the domain's A record points at the host; NTP on.
    - **Outcome:** ☐ pass ☐ fail — notes: ____
 2. **The host's firewall, and its domain if the address changes.**
    - **Do:** [The host](../runbook.md#the-host).
-   - **Success:** 80 and 443 open in your provider's firewall and the host's, 8080, 9480 and 9481 open nowhere; with dynamic DNS, the update's journal ends `Deactivated successfully`.
+   - **Success:** 80 and 443 open in your provider's firewall and the host's, 8080, 9480 and 9481 open nowhere; with remote agents, 7443 limited to their addresses in the provider's firewall or Docker's `DOCKER-USER` chain; with dynamic DNS, the update's journal ends `Deactivated successfully`.
    - **Outcome:** ☐ pass ☐ fail — notes: ____
 3. **The proxy path,** chosen before the install's step 4.
    - **Do:** [Choosing a proxy path](../runbook.md#choosing-a-proxy-path).
@@ -52,7 +52,7 @@ Phase 12 is done when both checks below pass (Plan.md, Phase 12's DoD; ADR-0022,
    - **Outcome:** ☐ pass ☐ fail — notes: ____
 7. **The keys' copy, off the host.**
    - **Do:** [The keys' copy](../runbook.md#the-keys-copy), its way off the host (not the way back).
-   - **Success:** the SHA-256 on the host and on your PC are the same; the host's transfer folder is gone; the copy is on two offline media.
+   - **Success:** the SHA-256 on the host and on your PC are the same; the host's transfer folder is gone; the copy is on two offline media, each copy's SHA-256 the host's; then the PC's copy is deleted.
    - **Outcome:** ☐ pass ☐ fail — notes: ____
 8. **The metrics.**
    - **Do:** [Metrics](../runbook.md#metrics), both `probe` commands.
