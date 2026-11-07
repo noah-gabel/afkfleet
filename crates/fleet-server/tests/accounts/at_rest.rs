@@ -3,8 +3,10 @@
 //! - **"The DB contains only ciphertext":** after a link, a link again and a
 //!   refresh, no token or code is in the database's files, while it's open
 //!   (the WAL holds the recent writes) and after it closed.
-//! - **"`rotate-key` works on a copy of the DB":** the README's procedure on
-//!   a copy with a linked account, run by the real binary; the copy then
+//! - **"`rotate-key` works on a copy of the DB":** the rotation's steps (a
+//!   new active key, `rotate-key` with the server stopped, `status`; the
+//!   runbook's form is in `docs/runbook.md`) on a copy with a linked
+//!   account, run by the real binary; the copy then
 //!   works with the new key alone, and the original is untouched.
 
 use std::collections::BTreeMap;

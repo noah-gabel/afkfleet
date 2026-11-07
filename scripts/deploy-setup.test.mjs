@@ -1213,7 +1213,12 @@ describe("setup.sh fetch, against a stub curl", { skip: SH }, () => {
     assert.equal(readFileSync(join(folder, "RELEASE"), "utf8"), installed.release);
     assert.match(first.stderr, /RELEASE still says 0\.1\.0/);
 
-    rmSync(join(folder, ".afkfleet-fetch"), { recursive: true, force: true });
+    // The runbook's line, run where the operator runs it.
+    const removed = spawnSync("/bin/sh", ["-c", "rm -r .afkfleet-fetch"], {
+      cwd: folder,
+      encoding: "utf8",
+    });
+    assert.equal(removed.status, 0, removed.stderr);
     const again = spawnSync("/bin/sh", ["setup.sh", "fetch", NEW], {
       cwd: folder,
       env: {
@@ -1268,6 +1273,23 @@ function readEntries(tar) {
 }
 
 describe("the runbook's install lines, on a real bundle", { skip: SH }, () => {
+  /** The runbook's first lines: the install's folder, made and entered (S37). */
+  const FOLDER_LINES = ["mkdir ~/afkfleet", "cd ~/afkfleet"];
+
+  it("the runbook's folder lines make ~/afkfleet and enter it", () => {
+    const home = mkdtempSync(join(tmpdir(), "afkfleet-home-"));
+    made.push(home);
+    const done = spawnSync("/bin/sh", ["-c", [...FOLDER_LINES, "pwd"].join("\n")], {
+      cwd: tmpdir(),
+      env: { ...process.env, HOME: home },
+      encoding: "utf8",
+    });
+
+    assert.equal(done.status, 0, done.stderr);
+    assert.equal(done.stdout, `${join(home, "afkfleet")}\n`);
+    assert.ok(statSync(join(home, "afkfleet")).isDirectory());
+  });
+
   /** The lines the runbook's install runs on the host, X.Y.Z and its version in place (S37). */
   const INSTALL_LINES = (version) => [
     `grep ' afkfleet-deploy-${version}.tar.gz$' SHA256SUMS | sha256sum -c -`,
@@ -1740,21 +1762,45 @@ describe("setup.sh keys-backup and keys-restore, against stubs", { skip: SH }, (
     ]);
     const changed = readFileSync(join(result.dir, "install.log"), "utf8");
     assert.match(changed, /chown 65532:65532 .*\.afkfleet-keys-restore\/keys\/ca\.key/);
-    assert.ok(!existsSync(join(result.dir, ".afkfleet-keys-restore")), "the staging folder is gone");
+    assert.ok(
+      !existsSync(join(result.dir, ".afkfleet-keys-restore")),
+      "the staging folder is gone",
+    );
     assert.match(result.stdout, /sh setup\.sh restore/);
   });
 
   it("keys-restore refuses without root, a loose copy, an unknown file, a missing one, or a project that isn't clean", () => {
     const cases = [
       ["no root", run(["keys-restore", copyFolder()]), /runs as root/],
-      ["a loose folder", restoreFrom(copyFolder(), { patterns: [["*/copy/keys", "0:0 755"]] }), /must belong to root with mode 700/],
-      ["a loose file", restoreFrom(copyFolder(), { patterns: [["*/copy/ca/ca.crt", "1000:1000 600"]] }), /must belong to root with mode 600/],
-      ["an unknown file", restoreFrom(copyFolder((copy) => writeFileSync(join(copy, "keys", "server.key"), "x"))), /keys\/server\.key isn't a file of the keys' copy/],
-      ["a missing file", restoreFrom(copyFolder((copy) => rmSync(join(copy, "ca", "ca.crt")))), /has no ca\/ca\.crt/],
+      [
+        "a loose folder",
+        restoreFrom(copyFolder(), { patterns: [["*/copy/keys", "0:0 755"]] }),
+        /must belong to root with mode 700/,
+      ],
+      [
+        "a loose file",
+        restoreFrom(copyFolder(), { patterns: [["*/copy/ca/ca.crt", "1000:1000 600"]] }),
+        /must belong to root with mode 600/,
+      ],
+      [
+        "an unknown file",
+        restoreFrom(copyFolder((copy) => writeFileSync(join(copy, "keys", "server.key"), "x"))),
+        /keys\/server\.key isn't a file of the keys' copy/,
+      ],
+      [
+        "a missing file",
+        restoreFrom(copyFolder((copy) => rmSync(join(copy, "ca", "ca.crt")))),
+        /has no ca\/ca\.crt/,
+      ],
       [
         "a project with volumes",
         restoreFrom(copyFolder(), {
-          responses: [{ when: "volume ls -q --filter label=com.docker.compose.project=afkfleet", stdout: "afkfleet_keys\n" }],
+          responses: [
+            {
+              when: "volume ls -q --filter label=com.docker.compose.project=afkfleet",
+              stdout: "afkfleet_keys\n",
+            },
+          ],
         }),
         /a first install only|not a clean/,
       ],
@@ -1802,12 +1848,27 @@ describe("setup.sh keys-backup and keys-restore, against stubs", { skip: SH }, (
 
   it("init refuses another set of volumes, or containers beside them", () => {
     for (const [label, responses] of [
-      ["with the agent's identity", [{ when: "volume ls -q", stdout: "afkfleet_ca\nafkfleet_data\nafkfleet_keys\nafkfleet_tls\nafkfleet_agent-data\n" }]],
-      ["without the database", [{ when: "volume ls -q", stdout: "afkfleet_ca\nafkfleet_keys\nafkfleet_tls\n" }]],
+      [
+        "with the agent's identity",
+        [
+          {
+            when: "volume ls -q",
+            stdout:
+              "afkfleet_ca\nafkfleet_data\nafkfleet_keys\nafkfleet_tls\nafkfleet_agent-data\n",
+          },
+        ],
+      ],
+      [
+        "without the database",
+        [{ when: "volume ls -q", stdout: "afkfleet_ca\nafkfleet_keys\nafkfleet_tls\n" }],
+      ],
       [
         "with a container",
         [
-          { when: "volume ls -q", stdout: "afkfleet_ca\nafkfleet_data\nafkfleet_keys\nafkfleet_tls\n" },
+          {
+            when: "volume ls -q",
+            stdout: "afkfleet_ca\nafkfleet_data\nafkfleet_keys\nafkfleet_tls\n",
+          },
           { when: "ps -a -q --filter", stdout: "0123abcd\n" },
         ],
       ],

@@ -8,9 +8,11 @@
 //!   install with the backups' folder left to `sudo sh setup.sh init`, the
 //!   Owner, `check`, `update`; a write, a backup, another write; the server
 //!   killed; `restore` moves the database and its `-wal` aside, never
-//!   opened, and ends stopped; the start it prints brings back the first
-//!   write alone; `forget-aside` removes exactly the aside files; then
-//!   `renew-cert`, the vault key's rotation, incident response and the
+//!   opened, and ends stopped; `files put-back` undoes it, and a second
+//!   `restore` does it again; the start it prints brings back the first
+//!   write alone; `forget-aside` removes exactly the aside and undone files;
+//!   then `renew-cert`, the vault key's rotation, the first look at the
+//!   services (`ps`, the agent's last lines), incident response and the
 //!   uninstall by label, with nothing of the project left.
 //! - **A new host from the keys' copy** (`afkfleet-ops-old-host`, then
 //!   `-new-host`): on the old host the install, the Owner, a write, a backup
@@ -75,16 +77,24 @@ async fn slow_ops_restore_after_a_crash() {
     account(&owner, "OpsAfter").await;
     stack.ok(&["kill", "server"], QUICK);
 
-    let stamp = stack.restore(&backup);
+    let undone = stack.restore(&backup);
+    assert_restored(&mut stack, &undone);
+    // Undone with the runbook's command for a refused restore: the crash's
+    // database and its -wal back in place, the restored one set apart.
+    stack.ok(&["run", "--rm", "-T", "files", "put-back", &undone], SLOW);
     let data = stack.listing("data");
     assert!(
-        data.contains(&format!("afkfleet.db-wal.aside-{stamp}")),
-        "the crash's -wal wasn't moved aside:\n{data}"
+        data.contains(&format!("afkfleet.db.undone-{undone}")),
+        "{data}"
     );
     assert!(
-        !data.lines().any(|line| line.ends_with(" afkfleet.db-wal")),
-        "a live -wal is left beside the restored database:\n{data}"
+        data.lines().any(|line| line.ends_with(" afkfleet.db-wal")),
+        "the crash's -wal isn't back:\n{data}"
     );
+
+    let stamp = stack.restore(&backup);
+    assert_ne!(stamp, undone);
+    assert_restored(&mut stack, &stamp);
     stack.start();
     let at = url(&mut stack);
     owner.again(&at, Trust::System, &stack).await;
@@ -94,8 +104,12 @@ async fn slow_ops_restore_after_a_crash() {
 
     let backups_before = backups_hash(&mut stack, &backup);
     stack.forget_aside(&stamp);
+    stack.forget_aside(&undone);
     let data = stack.listing("data");
-    assert!(!data.contains(&format!(".aside-{stamp}")), "{data}");
+    assert!(
+        !data.contains(".aside-") && !data.contains(".undone-"),
+        "{data}"
+    );
     assert_eq!(backups_hash(&mut stack, &backup), backups_before);
 
     let renewed = stack.renew_cert(&[]);
@@ -112,9 +126,35 @@ async fn slow_ops_restore_after_a_crash() {
     let at = url(&mut stack);
     owner.again(&at, Trust::System, &stack).await;
 
+    first_look(&mut stack);
     incident_response(&mut stack, &local);
     stack.uninstall();
     stack.transcript.assert_clean();
+}
+
+/// After `restore` NAME under `stamp`, with the server stopped: the crash's
+/// `-wal` moved aside with its database, never opened, and no live `-wal`
+/// left beside the restored one.
+fn assert_restored(stack: &mut Stack, stamp: &str) {
+    let data = stack.listing("data");
+    assert!(
+        data.contains(&format!("afkfleet.db-wal.aside-{stamp}")),
+        "the crash's -wal wasn't moved aside:\n{data}"
+    );
+    assert!(
+        !data.lines().any(|line| line.ends_with(" afkfleet.db-wal")),
+        "a live -wal is left beside the restored database:\n{data}"
+    );
+}
+
+/// The runbook's first look at a service that won't start or keeps
+/// restarting: every service's state, then the agent's last 50 lines.
+fn first_look(stack: &mut Stack) {
+    let states = stack.ok(&["ps"], QUICK);
+    assert!(states.contains("(healthy)"), "{states}");
+    let logs = stack.ok(&["logs", "--tail", "50", "agent"], QUICK);
+    let lines = logs.lines().count();
+    assert!((1..=50).contains(&lines), "{lines} lines:\n{logs}");
 }
 
 /// Incident response, as the runbook's commands: every agent listed beside
@@ -212,7 +252,9 @@ async fn slow_ops_new_host_from_the_keys_copy() {
         path: ProxyPath::Host,
         project: "afkfleet-ops-new-host",
         net: 60,
-        make_backups: true,
+        // keys-restore makes the backups' folder, as init would, before the
+        // runbook copies the backup into it.
+        make_backups: false,
         ops: true,
         grpc,
     });
@@ -409,8 +451,12 @@ impl Remote {
         for file in ["compose.agent.yaml", "prod/agent.remote.toml"] {
             std::fs::copy(repo().join("deploy").join(file), dir.path().join(file)).unwrap();
         }
-        let ca = file_of(server, "ca", "ca.crt");
-        std::fs::write(dir.path().join("ca.crt"), ca).unwrap();
+        // The runbook's copy of the CA's certificate, on the server's host.
+        let target = dir.path().join("ca.crt");
+        server.ok(
+            &["cp", "server:/ca/ca.crt", target.to_str().unwrap()],
+            QUICK,
+        );
         for args in [
             &["-n", "chown", "65532:65532"][..],
             &["-n", "chmod", "600"][..],

@@ -49,6 +49,7 @@ const REMOTE: &str = include_str!("../../../deploy/compose.agent.yaml");
 const CADDYFILE: &str = include_str!("../../../deploy/Caddyfile");
 const PROD: &str = include_str!("../../../deploy/prod/server.toml");
 const ENV_EXAMPLE: &str = include_str!("../../../deploy/env.example");
+const RUNBOOK: &str = include_str!("../../../docs/runbook.md");
 /// The smoke test's stand-in proxy, pinned as Caddy is.
 const STAND_IN: &str = include_str!("../../fleet-integration/tests/integration/smoke/edge.yaml");
 
@@ -425,7 +426,10 @@ fn the_files_service_reaches_the_database_the_server_pair_and_the_backups_alone(
         assert!(written.contains(&expected), "{expected}");
     }
     assert_eq!(
-        written.iter().filter(|line| **line == "nocopy: true").count(),
+        written
+            .iter()
+            .filter(|line| **line == "nocopy: true")
+            .count(),
         2
     );
     assert_eq!(
@@ -486,10 +490,7 @@ fn the_keys_and_the_ca_are_read_only_but_for_setup_and_never_on_caddys_image() {
             }
         }
     }
-    assert_eq!(
-        checked, 6,
-        "server (2), agent, setup (2), maintenance"
-    );
+    assert_eq!(checked, 6, "server (2), agent, setup (2), maintenance");
 }
 
 /// The server's grace outlasts its worst-case shutdown with the largest
@@ -826,7 +827,10 @@ fn env_example_names_the_images_in_comments_alone() {
     for name in ["AFKFLEET_SERVER_IMAGE", "AFKFLEET_AGENT_IMAGE"] {
         let lines: Vec<&str> = ENV_EXAMPLE
             .lines()
-            .filter(|line| line.trim_start_matches('#').starts_with(&format!("{name}=")))
+            .filter(|line| {
+                line.trim_start_matches('#')
+                    .starts_with(&format!("{name}="))
+            })
             .collect();
         assert_eq!(lines.len(), 1, "{name}: {lines:?}");
         assert!(
@@ -849,28 +853,44 @@ fn the_remote_agents_header_names_every_variable_it_reads() {
     }
 }
 
-/// Every setting the runbook tells an operator to change is a line of
-/// `env.example` (U18), and public dialling is on with no line at all
-/// (U10).
+/// The whole `AFKFLEET_*` names in `text`, each once; a prefix the runbook
+/// gives as a pattern (`AFKFLEET_SERVER__<SECTION>__<KEY>`) is left out.
+fn afkfleet_names(text: &str) -> Vec<&str> {
+    let mut names = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("AFKFLEET_") {
+        let tail = rest.get(at..).unwrap();
+        let end = tail
+            .find(|c: char| !(c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
+            .unwrap_or(tail.len());
+        let name = tail.get(..end).unwrap();
+        if !name.ends_with('_') {
+            names.push(name);
+        }
+        rest = tail.get(end..).unwrap();
+    }
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+/// Every setting the runbook names is a line of `env.example` (U18), or,
+/// for a remote agent's own host, named in compose.agent.yaml's header; and
+/// public dialling is on with no line at all (U10).
 #[test]
 fn env_example_lists_every_setting_the_runbook_names() {
-    for key in [
-        "AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__2",
-        "AFKFLEET_SERVER__VAULT__ACTIVE_KEY_ID",
-        "AFKFLEET_SERVER__DATABASE__BACKUP_KEEP",
-        "AFKFLEET_SERVER__DATABASE__BACKUP_INTERVAL_HOURS",
-        "AFKFLEET_SERVER__CHAT__RETENTION_DAYS",
-        "AFKFLEET_SERVER__CHAT__MAX_LINES_PER_BOT",
-        "AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS",
-        "AFKFLEET_AGENT__CONTROL_PLANE__PRIVATE_TARGETS",
-        "AFKFLEET_SERVER_MEMORY",
-        "AFKFLEET_AGENT_MEMORY",
-        "AFKFLEET_FLEET_SUBNET",
-        "AFKFLEET_EDGE_SUBNET",
-        "AFKFLEET_BACKUPS_DIR",
-    ] {
-        assert!(env_example_names(key), "{key}");
+    let header: String = REMOTE
+        .lines()
+        .take_while(|line| line.starts_with('#'))
+        .collect();
+    let names = afkfleet_names(RUNBOOK);
+    for name in &names {
+        assert!(
+            env_example_names(name) || header.contains(name),
+            "the runbook names {name}"
+        );
     }
+    assert!(names.len() > 20, "{names:?}");
     assert!(
         ENV_EXAMPLE
             .lines()
