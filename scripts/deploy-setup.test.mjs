@@ -91,6 +91,7 @@ const HEALTHY = [
     stdout: `${BUNDLE}\n`,
   },
   { when: "compose ps -q server", stdout: "0123abcd\n" },
+  { when: "compose ps -a -q server", stdout: "0123abcd\n" },
   { when: "inspect --format {{.State.Health.Status}}", stdout: "healthy\n" },
   {
     when: "compose exec -T server /usr/local/bin/afkfleet-server backup",
@@ -1311,5 +1312,224 @@ describe("the runbook's install lines, on a real bundle", { skip: SH }, () => {
     });
 
     assert.notEqual(done.status, 0);
+  });
+});
+
+/** `agent list`'s header, as fleet-server prints it (cli::agent::LIST_HEADER). */
+const AGENTS_HEADER =
+  "id\tname\tstate\tbots\tcapacity\tversion\tlast_seen_at\tnot_after\tcreated_at";
+
+/** An `agent list` of `rows`, each [id, name, state]. */
+function agentList(rows) {
+  const lines = rows.map(([id, name, state]) => `${id}\t${name}\t${state}\t0\t50\t-\t-\t-\t-`);
+  return `${[AGENTS_HEADER, ...lines].join("\n")}\n`;
+}
+
+const NAME = "afkfleet-backup-20261106T000000Z.db";
+/** A stamp as setup.sh makes one. */
+const STAMPED = /\b\d{8}T\d{6}Z\b/;
+
+/** The compose calls of `result` that run, start, stop or exec something. */
+function steps(result) {
+  return joined(result.calls).filter((call) => /^compose (run|up|stop|exec|kill)/.test(call));
+}
+
+/** `steps(result)` with each stamp as STAMP. */
+function stamped(result) {
+  return steps(result).map((call) => call.replace(STAMPED, "STAMP"));
+}
+
+describe("setup.sh restore, forget-aside and renew-cert, against stubs", { skip: SH }, () => {
+  it("restore with the server healthy: saves the agents, stops, restores, re-disables, starts", () => {
+    const result = run(["restore", NAME], {
+      responses: [
+        {
+          when: "compose exec -T server /usr/local/bin/afkfleet-server agent list",
+          stdout: agentList([
+            ["a1", "lost", "disabled"],
+            ["a2", "local", "enabled"],
+          ]),
+        },
+        {
+          when: "compose run --rm -T maintenance agent list",
+          stdout: agentList([
+            ["a1", "lost", "enabled"],
+            ["a2", "local", "enabled"],
+          ]),
+        },
+      ],
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(stamped(result), [
+      "compose exec -T server /usr/local/bin/afkfleet-server agent list --config /etc/afkfleet/server.toml",
+      "compose stop agent server",
+      "compose run --rm -T maintenance --version",
+      `compose run --rm -T files restore-in STAMP ${NAME}`,
+      "compose run --rm -T maintenance migrate --config /etc/afkfleet/server.toml",
+      "compose run --rm -T maintenance vault status --config /etc/afkfleet/server.toml",
+      "compose run --rm -T maintenance agent list --config /etc/afkfleet/server.toml",
+      "compose run --rm -T maintenance agent disable --config /etc/afkfleet/server.toml --id a1",
+      "compose up --detach --wait",
+    ]);
+    assert.match(result.stdout, /sh setup\.sh forget-aside \d{8}T\d{6}Z/);
+    assert.match(result.stdout, /disable users again/);
+  });
+
+  it("restore after a crash, with no healthy server, ends stopped and says how to start", () => {
+    const result = run(["restore", `/backups/${NAME}`], {
+      responses: [{ when: "compose ps -q server", stdout: "" }],
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(stamped(result), [
+      "compose stop agent server",
+      "compose run --rm -T maintenance --version",
+      `compose run --rm -T files restore-in STAMP ${NAME}`,
+      "compose run --rm -T maintenance migrate --config /etc/afkfleet/server.toml",
+      "compose run --rm -T maintenance vault status --config /etc/afkfleet/server.toml",
+      "compose run --rm -T maintenance agent list --config /etc/afkfleet/server.toml",
+    ]);
+    assert.match(result.stdout, /docker compose up --detach --wait/);
+    assert.match(result.stdout, /agent disable/);
+    assert.match(result.stdout, /sh setup\.sh forget-aside \d{8}T\d{6}Z/);
+  });
+
+  it("restore refuses an agent list it can't read, changing nothing", () => {
+    const result = run(["restore", NAME], {
+      responses: [
+        {
+          when: "compose exec -T server /usr/local/bin/afkfleet-server agent list",
+          stdout: "id\tname\n",
+        },
+      ],
+    });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /agent list can't be read/);
+    assert.deepEqual(stamped(result), [
+      "compose exec -T server /usr/local/bin/afkfleet-server agent list --config /etc/afkfleet/server.toml",
+    ]);
+  });
+
+  it("restore refuses another name, a partial copy or a path, changing nothing", () => {
+    for (const name of [
+      "afkfleet.db",
+      `${NAME}.partial`,
+      `.${NAME}`,
+      `/srv/${NAME}`,
+      `../${NAME}`,
+      "afkfleet-backup-2026110T000000Z.db",
+    ]) {
+      const result = run(["restore", name]);
+
+      assert.equal(result.code, 1, name);
+      assert.match(result.stderr, /a backup's name/, name);
+      assert.deepEqual(steps(result), [], name);
+    }
+  });
+
+  it("restore refuses while a fetch's folder is there, or without the key volumes", () => {
+    const fetching = run(["restore", NAME], {
+      prepare: (dir) => mkdirSync(join(dir, ".afkfleet-fetch")),
+    });
+    const noKeys = run(["restore", NAME], {
+      responses: [{ when: "volume inspect afkfleet_keys", code: 1 }],
+    });
+
+    for (const result of [fetching, noKeys]) {
+      assert.equal(result.code, 1);
+      assert.deepEqual(steps(result), []);
+    }
+    assert.match(noKeys.stderr, /keys/);
+  });
+
+  /** The healthy server's agent list: one enabled agent. */
+  const SAVED = {
+    when: "compose exec -T server /usr/local/bin/afkfleet-server agent list",
+    stdout: agentList([["a2", "local", "enabled"]]),
+  };
+
+  it("restore stops with the server down when migrate refuses, naming put-back", () => {
+    const result = run(["restore", NAME], {
+      responses: [SAVED, { when: "compose run --rm -T maintenance migrate", code: 1 }],
+    });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /newer server/);
+    assert.match(result.stderr, /files put-back \d{8}T\d{6}Z/);
+    assert.ok(!steps(result).some((call) => call.startsWith("compose up")));
+  });
+
+  it("restore stops with the server down when a vault key is missing (vault status's exit 3)", () => {
+    const result = run(["restore", NAME], {
+      responses: [SAVED, { when: "compose run --rm -T maintenance vault status", code: 3 }],
+    });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /vault key/);
+    assert.ok(!steps(result).some((call) => call.startsWith("compose up")));
+  });
+
+  it("forget-aside lists the aside files without a stamp, and forgets one stamp's with the server healthy", () => {
+    const list = run(["forget-aside"]);
+    const forget = run(["forget-aside", "20261107T120000Z"]);
+
+    assert.equal(list.code, 0, list.stderr);
+    assert.deepEqual(steps(list), ["compose run --rm -T files list"]);
+    assert.equal(forget.code, 0, forget.stderr);
+    assert.deepEqual(steps(forget), ["compose run --rm -T files forget 20261107T120000Z"]);
+  });
+
+  it("forget-aside refuses a malformed stamp, and a server that isn't healthy", () => {
+    const malformed = run(["forget-aside", "2026-11-07"]);
+    const unhealthy = run(["forget-aside", "20261107T120000Z"], {
+      responses: [{ when: "inspect --format {{.State.Health.Status}}", stdout: "starting\n" }],
+    });
+
+    for (const result of [malformed, unhealthy]) {
+      assert.equal(result.code, 1);
+      assert.deepEqual(steps(result), []);
+    }
+  });
+
+  it("renew-cert moves the pair aside, issues a new one for the same names, and starts", () => {
+    const result = run(["renew-cert"]);
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(stamped(result), [
+      "compose stop server",
+      "compose run --rm -T files tls-aside STAMP",
+      "compose run --rm -T setup pki server-cert --config /etc/afkfleet/server.toml --dns server --dns fleet.afkfleet.test --ip 192.0.2.10",
+      "compose up --detach --wait",
+    ]);
+    assert.match(result.stdout, /sh setup\.sh forget-aside \d{8}T\d{6}Z/);
+  });
+
+  it("renew-cert puts the old pair back and starts the server when the new one fails", () => {
+    const result = run(["renew-cert"], {
+      responses: [{ when: "compose run --rm -T setup pki server-cert", code: 1 }],
+    });
+
+    assert.equal(result.code, 1);
+    assert.deepEqual(stamped(result).slice(-2), [
+      "compose run --rm -T files tls-back STAMP",
+      "compose up --detach --wait server",
+    ]);
+    assert.match(result.stderr, /the old certificate is back/);
+  });
+
+  it("renew-cert refuses without the server's container or the certificate's volume", () => {
+    const noServer = run(["renew-cert"], {
+      responses: [{ when: "compose ps -a -q server", stdout: "" }],
+    });
+    const noTls = run(["renew-cert"], {
+      responses: [{ when: "volume inspect afkfleet_tls", code: 1 }],
+    });
+
+    for (const result of [noServer, noTls]) {
+      assert.equal(result.code, 1);
+      assert.deepEqual(steps(result), []);
+    }
   });
 });

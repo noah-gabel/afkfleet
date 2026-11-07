@@ -6,6 +6,11 @@
 #   sh setup.sh init           a first install's one-time steps, then afkfleet started
 #   sh setup.sh fetch X.Y.Z    a newer release's files, checked, into this folder
 #   sh setup.sh update         a backup with the running server, then the new images
+#   sh setup.sh restore NAME   the backup NAME as the database, the old one aside
+#   sh setup.sh forget-aside [STAMP]
+#                              what restore and renew-cert set aside: listed, or
+#                              STAMP's deleted
+#   sh setup.sh renew-cert     the server's certificate renewed from the same CA
 #
 # Exit codes: 0 done, 1 refused or failed (it says why), 2 usage error.
 #
@@ -47,6 +52,12 @@ RELEASES=https://github.com/noah-gabel/afkfleet/releases/download
 # fetch's own folder: made by it, never there before it, removed after a
 # success and left for a look after a failure.
 FETCH=.afkfleet-fetch
+# `afkfleet-server agent list`'s header (fleet-server's cli::agent::LIST_HEADER;
+# a test holds them equal), its tab and a newline.
+TAB=$(printf '\t')
+NL='
+'
+AGENTS_HEADER="id${TAB}name${TAB}state${TAB}bots${TAB}capacity${TAB}version${TAB}last_seen_at${TAB}not_after${TAB}created_at"
 
 # What this run created, for the message after a failure.
 CREATED=""
@@ -74,7 +85,7 @@ refuse() {
 }
 
 usage() {
-	printf 'usage: sh setup.sh check|init|update|fetch X.Y.Z\n' >&2
+	printf 'usage: sh setup.sh check|init|update|fetch X.Y.Z|restore NAME|forget-aside [STAMP]|renew-cert\n' >&2
 	exit 2
 }
 
@@ -589,6 +600,166 @@ update() {
 	ok "afkfleet is updated"
 }
 
+# Whether $1 is a stamp, YYYYMMDDTHHMMSSZ, as files.sh takes one.
+stamp() {
+	case $1 in
+	[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z) return 0 ;;
+	esac
+	return 1
+}
+
+# Now in UTC, as a stamp.
+stamp_now() {
+	date -u +%Y%m%dT%H%M%SZ
+}
+
+# The project's volume $1 must exist: files and maintenance never make one.
+need_volume() {
+	name=$(project)
+	[ -n "$name" ] || refuse "docker compose can't read compose.yaml with this .env"
+	docker volume inspect "${name}_$1" >/dev/null 2>&1 ||
+		refuse "the volume ${name}_$1 isn't here: on a new host, keys-restore comes first (the runbook's Restoring a backup)"
+}
+
+# Whether the server runs and is healthy.
+server_healthy() {
+	id=$(docker compose ps -q server)
+	[ -n "$id" ] || return 1
+	[ "$(docker inspect --format '{{.State.Health.Status}}' "$id")" = healthy ]
+}
+
+# The state the agent list $1 (`agent list`'s lines) gives the agent $2.
+agent_state() {
+	while IFS=$TAB read -r id _ state _ || [ -n "$id" ]; do
+		if [ "$id" = "$2" ]; then
+			printf '%s' "$state"
+			return 0
+		fi
+	done <<EOF
+$1
+EOF
+}
+
+# The agents $1 (an `agent list` from before the restore) has disabled and
+# $2 (the restored one) has enabled, one ID per line.
+disabled_since() {
+	while IFS=$TAB read -r id _ state _ || [ -n "$id" ]; do
+		[ "$state" = disabled ] || continue
+		case $id in
+		"" | *[!0-9a-f-]*) continue ;;
+		esac
+		[ "$(agent_state "$2" "$id")" != enabled ] || printf '%s\n' "$id"
+	done <<EOF
+$1
+EOF
+}
+
+# restore NAME (ADR-0022, S8, S40): the backup NAME, from the backups'
+# folder, as the database. The old database, its -wal and -shm move aside,
+# never deleted; then migrate, vault status and the agents, each through the
+# maintenance service with the server stopped. With a healthy server first,
+# every agent disabled since the backup is disabled again and afkfleet
+# starts; after a crash or on a new host it ends stopped and says what's next.
+restore() {
+	backup=${1#/backups/}
+	case $backup in
+	afkfleet-backup-*.db) inner=${backup#afkfleet-backup-} ;;
+	*) inner="" ;;
+	esac
+	stamp "${inner%.db}" || refuse "$1 isn't a backup's name: afkfleet-backup-YYYYMMDDTHHMMSSZ.db, as the backups' folder lists it"
+	[ ! -e "$FETCH" ] || refuse "$FETCH is here: a fetch didn't finish; look inside, remove it (rm -r $FETCH), then restore"
+	check_docker
+	check_env
+	need_volume keys
+	need_volume tls
+	saved=""
+	if server_healthy; then
+		saved=$(docker compose exec -T server /usr/local/bin/afkfleet-server agent list --config "$SERVER_CONFIG") ||
+			refuse "the server's agents can't be listed: nothing was changed"
+		[ "${saved%%"$NL"*}" = "$AGENTS_HEADER" ] || refuse "the server's agent list can't be read: nothing was changed"
+	fi
+	docker compose stop agent server || refuse "the agent and the server couldn't be stopped: nothing was restored"
+	docker compose run --rm -T maintenance --version >/dev/null || refuse "the server's image can't run here: nothing was restored"
+	when=$(stamp_now)
+	docker compose run --rm -T files restore-in "$when" "$backup" ||
+		refuse "$backup couldn't be put in place: the database is as it was, or aside under $when (sh setup.sh forget-aside lists it)"
+	ok "$backup is the database; the old one is aside under $when"
+	docker compose run --rm -T maintenance migrate --config "$SERVER_CONFIG" ||
+		refuse "the backup is from a newer server than this one, or can't be read: the server stays stopped; put the old database back with: docker compose run --rm files put-back $when"
+	status=0
+	docker compose run --rm -T maintenance vault status --config "$SERVER_CONFIG" || status=$?
+	case $status in
+	0) ok "every secret opens with this host's vault keys" ;;
+	3) refuse "the backup's secrets need a vault key this host doesn't configure (vault status above says which): the server stays stopped; put that key back (the runbook's Rotating the vault key), or the old database with: docker compose run --rm files put-back $when" ;;
+	*) refuse "vault status failed: the server stays stopped" ;;
+	esac
+	restored=$(docker compose run --rm -T maintenance agent list --config "$SERVER_CONFIG") ||
+		refuse "the restored agents can't be listed: the server stays stopped"
+	printf '%s\n' "$restored"
+	if [ -z "$saved" ]; then
+		say ""
+		say "The server is stopped. Before you start it, disable every agent you disabled since this backup was taken (it has them enabled):"
+		say "  docker compose run --rm maintenance agent disable --config $SERVER_CONFIG --id <its id>"
+		say "Then start afkfleet: docker compose up --detach --wait"
+	else
+		for id in $(disabled_since "$saved" "$restored"); do
+			docker compose run --rm -T maintenance agent disable --config "$SERVER_CONFIG" --id "$id" ||
+				refuse "the agent $id couldn't be disabled again: the server stays stopped; disable it, then start afkfleet (docker compose up --detach --wait)"
+			ok "the agent $id is disabled again, as it was before the restore"
+		done
+		docker compose up --detach --wait || refuse "afkfleet didn't come up healthy: docker compose ps and docker compose logs say why"
+		ok "afkfleet runs on $backup"
+	fi
+	say ""
+	say "In the app, redo what was done after the backup was taken: disable users again, end sessions and revoke grants again; whoever changed their password or 2FA since must change it once more."
+	say "Once all is well: sh setup.sh forget-aside $when"
+}
+
+# forget-aside [STAMP] (S40): without a stamp, the aside files listed; with
+# one, exactly that stamp's deleted, only while the server is healthy.
+forget_aside() {
+	if [ $# -eq 1 ]; then
+		stamp "$1" || refuse "$1 isn't a stamp: YYYYMMDDTHHMMSSZ, as restore and renew-cert printed it"
+	fi
+	check_docker
+	check_env
+	if [ $# -eq 0 ]; then
+		docker compose run --rm -T files list || refuse "the aside files can't be listed"
+		return 0
+	fi
+	server_healthy || refuse "the server isn't running and healthy: check the restore or the renewal first, then forget what's aside"
+	docker compose run --rm -T files forget "$1" || refuse "what's aside under $1 couldn't be deleted"
+	ok "what was aside under $1 is gone"
+}
+
+# renew-cert (S41): the server's certificate renewed from the same CA, for
+# `server` and AFKFLEET_GRPC_NAMES' names, so no agent enrolls again; the old
+# pair moved aside first, and back when the new one fails.
+renew_cert() {
+	check_docker
+	check_env
+	[ -n "$(docker compose ps -a -q server)" ] ||
+		refuse "the server has no container here: renew-cert renews an installed afkfleet's certificate"
+	need_volume tls
+	docker compose stop server || refuse "the server couldn't be stopped: nothing changed"
+	when=$(stamp_now)
+	if ! docker compose run --rm -T files tls-aside "$when"; then
+		docker compose up --detach --wait server || true
+		refuse "the old certificate couldn't be moved aside: nothing changed"
+	fi
+	# shellcheck disable=SC2046 # one name per line, each its own argument
+	set -- $(pki_names)
+	if ! docker compose run --rm -T setup pki server-cert --config "$SERVER_CONFIG" "$@"; then
+		docker compose run --rm -T files tls-back "$when" ||
+			refuse "a new certificate couldn't be made, and the old one is still aside under $when: docker compose run --rm files tls-back $when"
+		docker compose up --detach --wait server || true
+		refuse "a new certificate couldn't be made; the old certificate is back and the server started"
+	fi
+	docker compose up --detach --wait || refuse "afkfleet didn't come up healthy: docker compose logs server says why"
+	ok "the server's certificate is new, from the same CA: no agent enrolls again"
+	say "Once the agents are back online: sh setup.sh forget-aside $when"
+}
+
 # Downloads $1 into $2 over HTTPS alone, at most 10 MiB and 5 minutes.
 download() {
 	curl --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --location --max-redirs 5 \
@@ -737,8 +908,9 @@ fetch() {
 
 [ $# -ge 1 ] || usage
 case $1 in
-check | init | update) [ $# -eq 1 ] || usage ;;
-fetch) [ $# -eq 2 ] || usage ;;
+check | init | update | renew-cert) [ $# -eq 1 ] || usage ;;
+fetch | restore) [ $# -eq 2 ] || usage ;;
+forget-aside) [ $# -le 2 ] || usage ;;
 *) usage ;;
 esac
 cd "$(dirname "$0")" || exit 1
@@ -747,4 +919,10 @@ check) check ;;
 init) init ;;
 update) update ;;
 fetch) fetch "$2" ;;
+restore) restore "$2" ;;
+forget-aside)
+	shift
+	forget_aside "$@"
+	;;
+renew-cert) renew_cert ;;
 esac
