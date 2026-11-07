@@ -4553,6 +4553,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Tests:** `smoke::ops::slow_ops_restore_after_a_crash` and `smoke::ops::slow_ops_new_host_from_the_keys_copy` in `just test-stack`, which CI runs with `setup.sh` itself; setup.sh's and files.sh's stub tests under dash.
   > - **The Minecraft version upgrade** is the maintainer's, in `docs/releasing.md` (U34): ADR-0003's steps, numbers kept, and ADR-0003 points there.
   > - **Deviations:** `put-back` and `tls-back` keep what they replace as `.undone-STAMP`, which `forget-aside` deletes too; the runbook's Owner line is marked as run by no test (it asks at a terminal; the tests use `--password-stdin`); more of the runbook's commands run in tests than S46 listed; PR #98's updater note was half right (a newer release without a Windows entry is `update_manifest`).
+  > - **PR #99's review** (ADR-0022, "PR #99's review (group D2)"): a remote agent's folder takes `check` and `update` (no backup); a restore marks its stamp finished after the migration, and `forget-aside` refuses a stamp that isn't, whatever the server's health; a new host's restore ends with `init`; fetch and keys-restore hardened; the firewall, the keys' copy on the PC, a new host's backup staging, the docker group and the uninstall's images in the runbook; every safety check held by a test shown red by its mutation.
 - [x] **P12.7** 🔴 Compose smoke test in CI, run nightly:
   1. `up`
   2. health checks pass
