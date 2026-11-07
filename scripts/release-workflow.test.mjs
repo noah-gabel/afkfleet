@@ -2,7 +2,8 @@
 // tag-only trigger and a queue that never drops a release, each job's permissions and bounds, no
 // secret and no environment, the approved actions alone, the guard asking for CI, the build jobs
 // testing exactly as the Stack workflow does with no package permission, and every job that can
-// write (push, merge, release) pinned whole: its keys, every step word for word, and no build tool.
+// write (push, merge, release) and the bundle job, whose file runs as root on hosts, pinned whole:
+// its keys, every step word for word, and no build tool.
 // The push jobs load the tested images on a fresh runner and run no repository code but
 // release.mjs, which they alone check out. The scripts it runs are tested in
 // scripts/release.test.mjs and scripts/app-installer.test.mjs.
@@ -256,12 +257,48 @@ const MERGE_STEPS = [
   ),
 ];
 
+/** The bundle job, every step word for word (ADR-0022, S23, S32, R25). */
+const BUNDLE_STEPS = [
+  step(
+    CHECKOUT,
+    "        with:",
+    "          persist-credentials: false",
+    "          sparse-checkout: |",
+    "            scripts/deploy-bundle.mjs",
+    "            /deploy/",
+    "            /LICENSE",
+    "            /Cargo.toml",
+    "          sparse-checkout-cone-mode: false",
+  ),
+  SETUP_NODE,
+  step(
+    "      - name: The host's release files",
+    "        run: |",
+    '          mkdir "$RUNNER_TEMP/bundle"',
+    '          node scripts/deploy-bundle.mjs "$VERSION" "$CREATED" "$SERVER_DIGEST" "$AGENT_DIGEST" "$RUNNER_TEMP/bundle"',
+  ),
+  step(
+    UPLOAD,
+    "        with:",
+    "          name: bundle",
+    `          path: \${{ runner.temp }}/bundle/afkfleet-deploy-\${{ needs.guard.outputs.version }}.tar.gz`,
+    "          if-no-files-found: error",
+    "          retention-days: 7",
+  ),
+];
+
 /** The release job, every step word for word. */
 const RELEASE_STEPS = [
   step(
     DOWNLOAD,
     "        with:",
     "          name: installer",
+    `          path: \${{ runner.temp }}/files`,
+  ),
+  step(
+    DOWNLOAD,
+    "        with:",
+    "          name: bundle",
     `          path: \${{ runner.temp }}/files`,
   ),
   step(
@@ -274,8 +311,10 @@ const RELEASE_STEPS = [
     "      - name: SHA256SUMS",
     `        working-directory: \${{ runner.temp }}/files`,
     "        run: |",
-    `          test "$(ls -A)" = "afkfleet_\${VERSION}_x64-setup.exe"`,
-    `          sha256sum -- "afkfleet_\${VERSION}_x64-setup.exe" > SHA256SUMS`,
+    '          test "$(ls -A | wc -l)" -eq 2',
+    `          test -f "afkfleet_\${VERSION}_x64-setup.exe"`,
+    `          test -f "afkfleet-deploy-\${VERSION}.tar.gz"`,
+    `          sha256sum -- "afkfleet_\${VERSION}_x64-setup.exe" "afkfleet-deploy-\${VERSION}.tar.gz" > SHA256SUMS`,
     "          cat SHA256SUMS",
     '          cat SHA256SUMS >> "$GITHUB_STEP_SUMMARY"',
   ),
@@ -291,7 +330,7 @@ const RELEASE_STEPS = [
     '            echo "::error::A release v$VERSION exists already, published or draft: nothing is overwritten."',
     "            exit 1",
     "          fi",
-    `          gh release create "v$VERSION" --draft --verify-tag --notes-file "$RUNNER_TEMP/notes/notes.md" "afkfleet_\${VERSION}_x64-setup.exe" SHA256SUMS`,
+    `          gh release create "v$VERSION" --draft --verify-tag --notes-file "$RUNNER_TEMP/notes/notes.md" "afkfleet_\${VERSION}_x64-setup.exe" "afkfleet-deploy-\${VERSION}.tar.gz" SHA256SUMS`,
   ),
 ];
 
@@ -304,7 +343,10 @@ describe("the release workflow", () => {
       "concurrency:\n  group: release\n  cancel-in-progress: false\n  queue: max",
     );
     assert.equal(block(workflow, "env"), block(stack, "env"));
-    assert.deepEqual([...all.keys()], ["guard", "build", "push", "merge", "installer", "release"]);
+    assert.deepEqual(
+      [...all.keys()],
+      ["guard", "build", "push", "merge", "bundle", "installer", "release"],
+    );
   });
 
   it("grants each job exactly its permissions, and bounds each", () => {
@@ -313,6 +355,7 @@ describe("the release workflow", () => {
       build: [["contents: read"], 150],
       push: [["contents: read", "packages: write"], 30],
       merge: [["contents: read", "packages: write"], 15],
+      bundle: [["contents: read"], 10],
       installer: [["contents: read"], 60],
       release: [["contents: write"], 10],
     };
@@ -338,7 +381,7 @@ describe("the release workflow", () => {
       assert.equal(workflow.includes(banned), false, banned);
     }
     const checkouts = [...workflow.matchAll(/- uses: actions\/checkout@/g)].length;
-    assert.equal(checkouts, 5, "every job but release checks out");
+    assert.equal(checkouts, 6, "every job but release checks out");
     assert.equal([...workflow.matchAll(/^ {10}persist-credentials: false$/gm)].length, checkouts);
     assert.equal(
       [...workflow.matchAll(TOKEN)].length,
@@ -367,11 +410,14 @@ describe("the release workflow", () => {
     for (const [name, text] of all) {
       const writes = /: write$/m.test(key(text, "permissions") ?? "");
       const token = text.match(TOKEN) !== null;
-      if (["push", "merge", "release"].includes(name)) {
-        assert.ok(writes, `${name} writes`);
+      // The bundle job writes nothing, but its file runs as root on every host (S32).
+      if (["push", "merge", "release", "bundle"].includes(name)) {
         for (const each of steps(text)) {
           assert.equal(BUILD_TOOL.test(runOf(each)), false, `${name}: ${each}`);
         }
+      }
+      if (["push", "merge", "release"].includes(name)) {
+        assert.ok(writes, `${name} writes`);
       } else {
         assert.equal(writes, false, `${name} writes nothing`);
       }
@@ -544,6 +590,37 @@ describe("the merge job", () => {
   });
 });
 
+describe("the bundle job", () => {
+  const bundle = job("bundle");
+
+  it("is pinned whole: its keys, and every step word for word, with nothing to write", () => {
+    assert.deepEqual(keys(bundle), [
+      "name",
+      "needs",
+      "runs-on",
+      "timeout-minutes",
+      "permissions",
+      "env",
+      "steps",
+    ]);
+    assert.equal(key(bundle, "name"), "    name: bundle");
+    assert.equal(key(bundle, "needs"), "    needs: [guard, merge]");
+    assert.equal(key(bundle, "runs-on"), "    runs-on: ubuntu-24.04");
+    assert.equal(
+      key(bundle, "env"),
+      step(
+        "    env:",
+        `      VERSION: \${{ needs.guard.outputs.version }}`,
+        `      CREATED: \${{ needs.guard.outputs.created }}`,
+        `      SERVER_DIGEST: \${{ needs.merge.outputs.server_digest }}`,
+        `      AGENT_DIGEST: \${{ needs.merge.outputs.agent_digest }}`,
+      ),
+    );
+    assert.deepEqual(steps(bundle), BUNDLE_STEPS);
+    assert.equal(bundle.match(TOKEN), null, "no token");
+  });
+});
+
 describe("the installer job", () => {
   const installer = job("installer");
   const found = steps(installer);
@@ -582,7 +659,7 @@ describe("the release job", () => {
       "env",
       "steps",
     ]);
-    assert.equal(key(release, "needs"), "    needs: [guard, merge, installer]");
+    assert.equal(key(release, "needs"), "    needs: [guard, merge, installer, bundle]");
     assert.equal(key(release, "runs-on"), "    runs-on: ubuntu-24.04");
     assert.equal(
       key(release, "env"),

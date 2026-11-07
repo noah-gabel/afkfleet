@@ -13,10 +13,12 @@
 #   one step logs in, pushes X.Y.Z-<arch> (never over a tag that exists) and logs out.
 # - merge: each X.Y.Z index made from the pushed digests, never from the per-architecture tags,
 #   and checked; then the draft's body.
+# - bundle: the host's release files (scripts/deploy-bundle.mjs), their image lines pinned to the
+#   merge job's index digests, built where nothing can write; their file runs as root on hosts.
 # - installer: the NSIS installer, built with no signing key (`just app-installer`), its SHA-256
 #   in the log and the job's summary. No cache: a release is built from scratch.
 # - release: the only job that can write to the repository, and it runs no repository code: the
-#   installer and SHA256SUMS into a new draft release.
+#   installer, the bundle and SHA256SUMS into a new draft release.
 #
 # No tag is ever `latest` or `X.Y`, and none is overwritten: when a job failed, re-run the failed
 # jobs alone (docs/releasing.md). Third-party actions are pinned to full commit SHAs (version in
@@ -243,6 +245,46 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # The host's release files (ADR-0022, S23, S32, R25): the production files alone, their image
+  # lines pinned to the indexes the merge job made, built here with nothing to write and handed to
+  # the release job as an artifact. A sparse checkout of what the script reads; pinned whole by
+  # scripts/release-workflow.test.mjs, since the bundle's setup.sh runs as root on hosts.
+  bundle:
+    name: bundle
+    needs: [guard, merge]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
+      CREATED: ${{ needs.guard.outputs.created }}
+      SERVER_DIGEST: ${{ needs.merge.outputs.server_digest }}
+      AGENT_DIGEST: ${{ needs.merge.outputs.agent_digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/deploy-bundle.mjs
+            /deploy/
+            /LICENSE
+            /Cargo.toml
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: The host's release files
+        run: |
+          mkdir "$RUNNER_TEMP/bundle"
+          node scripts/deploy-bundle.mjs "$VERSION" "$CREATED" "$SERVER_DIGEST" "$AGENT_DIGEST" "$RUNNER_TEMP/bundle"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bundle
+          path: ${{ runner.temp }}/bundle/afkfleet-deploy-${{ needs.guard.outputs.version }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
   # As CI's tauri-build job builds it on every pull request, but from scratch: no Rust or pnpm
   # cache reaches a release. app-installer refuses any signing key's variable and prints the
   # installer's SHA-256, which the maintainer checks before signing (docs/releasing.md).
@@ -282,7 +324,7 @@ jobs:
   # and latest.json to the draft, then publishes it (docs/releasing.md).
   release:
     name: release
-    needs: [guard, merge, installer]
+    needs: [guard, merge, installer, bundle]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -296,13 +338,20 @@ jobs:
           path: ${{ runner.temp }}/files
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          name: bundle
+          path: ${{ runner.temp }}/files
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
           name: notes
           path: ${{ runner.temp }}/notes
+      # The installer's line first, where the friends' guide meets it, then the bundle's.
       - name: SHA256SUMS
         working-directory: ${{ runner.temp }}/files
         run: |
-          test "$(ls -A)" = "afkfleet_${VERSION}_x64-setup.exe"
-          sha256sum -- "afkfleet_${VERSION}_x64-setup.exe" > SHA256SUMS
+          test "$(ls -A | wc -l)" -eq 2
+          test -f "afkfleet_${VERSION}_x64-setup.exe"
+          test -f "afkfleet-deploy-${VERSION}.tar.gz"
+          sha256sum -- "afkfleet_${VERSION}_x64-setup.exe" "afkfleet-deploy-${VERSION}.tar.gz" > SHA256SUMS
           cat SHA256SUMS
           cat SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
       # gh release list shows drafts too (the token can write), so a second run never adds a
@@ -318,4 +367,4 @@ jobs:
             echo "::error::A release v$VERSION exists already, published or draft: nothing is overwritten."
             exit 1
           fi
-          gh release create "v$VERSION" --draft --verify-tag --notes-file "$RUNNER_TEMP/notes/notes.md" "afkfleet_${VERSION}_x64-setup.exe" SHA256SUMS
+          gh release create "v$VERSION" --draft --verify-tag --notes-file "$RUNNER_TEMP/notes/notes.md" "afkfleet_${VERSION}_x64-setup.exe" "afkfleet-deploy-${VERSION}.tar.gz" SHA256SUMS

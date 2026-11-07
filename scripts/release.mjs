@@ -32,7 +32,7 @@
 // those two digests, linux/arm64 and linux/amd64. It writes both index digests to GITHUB_OUTPUT,
 // then tries an anonymous pull of each and warns while the packages still need a login.
 //
-// notes: the draft release's body, as approved (ADR-0022, U33), on stdout.
+// notes: the draft release's body, as approved (ADR-0022, U33, U38), on stdout.
 //
 // Exit codes: 0 done, 1 refused (it says why on stderr), 2 usage error. Tests:
 // scripts/release.test.mjs; the workflow's shape: scripts/release-workflow.test.mjs.
@@ -64,6 +64,11 @@ export function installerName(version) {
   return `afkfleet_${version}_x64-setup.exe`;
 }
 
+/** The host's release files' name for `version`: deploy-bundle.mjs's, which a test holds equal. */
+export function bundleName(version) {
+  return `afkfleet-deploy-${version}.tar.gz`;
+}
+
 /**
  * Cargo.toml's `[workspace.package] version` when it's X.Y.Z, else null: app-installer.mjs's,
  * which a test holds equal. A copy, so this file imports nothing of the repository's.
@@ -85,13 +90,18 @@ export function parseTag(ref) {
   return found !== null && VERSION.test(found[1]) ? found[1] : null;
 }
 
-/** The draft release's body (ADR-0022, U33). */
+/**
+ * The draft release's body (ADR-0022, U33; the host's files and the runbook at the release's
+ * tag, U38).
+ */
 export function notes({ version, owner, server, agent }) {
   return [
     `afkfleet ${version}`,
     "",
     `Desktop app for Windows: ${installerName(version)}`,
     `How to install and use it: ${SOURCE}/blob/main/docs/using-the-app.md`,
+    `Files for hosting the server: ${bundleName(version)}`,
+    `How to host it: ${SOURCE}/blob/v${version}/docs/runbook.md`,
     "Server images:",
     `  ${REGISTRY}/${owner}/afkfleet-server:${version}@${server}`,
     `  ${REGISTRY}/${owner}/afkfleet-agent:${version}@${agent}`,
