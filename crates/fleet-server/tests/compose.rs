@@ -3,7 +3,8 @@
 //! - every long-running service is hardened: the nonroot user, a read-only
 //!   root, no capability, no new privilege, rotated logs, no swap, limits;
 //!   no service sets the anchor's keys again, the one-shot services have
-//!   small fixed limits, and every tmpfs is `noexec,nosuid,nodev`
+//!   small fixed limits, and every tmpfs is `noexec,nosuid,nodev`, takes
+//!   none of them back and is never a volume's long-syntax tmpfs
 //! - the server mounts every folder its config names, the setup service
 //!   writes the keys and never the database, the agent reads the CA alone
 //! - each service's grace period outlasts its worst-case shutdown
@@ -165,7 +166,9 @@ fn the_one_shot_services_have_small_fixed_limits(
 }
 
 /// Every tmpfs of every file mounts `noexec,nosuid,nodev`, written as a
-/// list, so nothing written there runs (PR #97's review).
+/// list, so nothing written there runs (PR #97's review), and none takes
+/// one back with `exec`, `suid` or `dev`, which would win as the later
+/// option (PR #98's review).
 #[test]
 fn every_tmpfs_is_noexec_nosuid_and_nodev() {
     let mut mounts = 0;
@@ -180,6 +183,9 @@ fn every_tmpfs_is_noexec_nosuid_and_nodev() {
                 for flag in ["noexec", "nosuid", "nodev"] {
                     assert!(options.contains(&flag), "{file}'s {name}: {mount}");
                 }
+                for flag in ["exec", "suid", "dev"] {
+                    assert!(!options.contains(&flag), "{file}'s {name}: {mount}");
+                }
                 mounts += 1;
             }
         }
@@ -188,6 +194,23 @@ fn every_tmpfs_is_noexec_nosuid_and_nodev() {
         mounts, 6,
         "server, agent, setup, caddy (2), the remote agent"
     );
+}
+
+/// No service mounts a tmpfs in a volume's long syntax (`type: tmpfs`),
+/// whose options can't say `noexec`, `nosuid` or `nodev`, so the check
+/// above would miss it (PR #98's review).
+#[test]
+fn no_volume_is_a_long_syntax_tmpfs() {
+    for (file, text) in FILES {
+        for line in text.lines() {
+            let line = line.split('#').next().unwrap_or_default();
+            let words: String = line.split_whitespace().collect();
+            assert!(
+                !words.contains("type:tmpfs"),
+                "{file}: a long-syntax tmpfs: {line}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -451,14 +474,14 @@ fn each_path_trusts_exactly_its_proxys_address() {
     assert!(!PROD.contains("trusted_proxies ="));
 }
 
-/// compose.yaml publishes nothing; each path's file its own port alone, the
-/// host's API on loopback only; no metrics port anywhere.
 /// A service's name and the ports it publishes, as written.
 type Published = (&'static str, &'static [&'static str]);
 
-/// Every service of every file, with exactly the ports it publishes: each
-/// path's own, never a metrics port, nothing else (PR #97's review: a list
-/// per service, not a text search for `"9480:`).
+/// compose.yaml publishes nothing; each path's file its own port alone, the
+/// host's API on loopback only; no metrics port anywhere. Every service of
+/// every file, with exactly the ports it publishes: each path's own, never a
+/// metrics port, nothing else (PR #97's review: a list per service, not a
+/// text search for `"9480:`).
 #[test]
 fn nothing_is_published_but_each_paths_own_port() {
     let none: &[&str] = &[];
@@ -624,9 +647,11 @@ fn nothing_under_deploy_allows_offline_accounts() {
             continue;
         };
         checked += 1;
-        // Spaces and either quote go, so `= true`, `: "true"` and `: 'true'`
-        // all read alike (PR #97's review).
-        let text = text.to_ascii_lowercase().replace([' ', '"', '\''], "");
+        // Spaces, tabs and either quote go, so `= true`, `:\t"true"` and
+        // `: 'true'` all read alike (PR #97's and PR #98's reviews).
+        let text = text
+            .to_ascii_lowercase()
+            .replace([' ', '\t', '"', '\''], "");
         assert!(!text.contains("allow_offline=true"), "{}", file.display());
         assert!(!text.contains("allow_offline:true"), "{}", file.display());
     }

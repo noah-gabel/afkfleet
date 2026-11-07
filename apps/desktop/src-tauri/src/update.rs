@@ -15,8 +15,9 @@
 //!   and `install_update` takes no argument: it installs exactly that kept
 //!   release, taken out first, so a failure leaves nothing kept.
 //! - **Bounded:** a check 20 s (5 s to connect), a download 5 minutes and at
-//!   most 64 MiB, each also under an outer timeout; the install's start 30 s.
-//!   One check or install at a time: another call meanwhile is
+//!   most 64 MiB, each also under an outer timeout; the install's start 30 s,
+//!   claimed once, so a start the main thread reaches only after that never
+//!   runs (S30). One check or install at a time: another call meanwhile is
 //!   `update_busy`.
 //! - **The session survives the restart.** Before installing, the live events
 //!   watch stops, every running command finishes (the connection's write
@@ -24,7 +25,12 @@
 //!   the next start resumes the session with the newest token. The plugin
 //!   checks the signature again, starts the installer (passive: a progress
 //!   bar, then the app restarts) and the app exits. A failure gives
-//!   everything back, and the UI restarts its watch.
+//!   everything back; one after the watch stopped answers `update_install`,
+//!   the one code the UI starts its watch again for (S29).
+//! - **A release without a Windows entry:** tauri-plugin-updater compares
+//!   the versions first (since 2.14.0), so a release that isn't newer is no
+//!   update whatever its platforms, and a newer one without this platform
+//!   can't be read (`update_manifest`).
 //!
 //! The signature is checked against the public key in `tauri.conf.json`, which
 //! also binds it to the version (`requireSignedVersion`); the private key
@@ -117,15 +123,18 @@ pub enum UpdateFailure {
     /// another status, or didn't answer in time.
     #[error("GitHub couldn't be reached")]
     Unreachable,
-    /// The manifest can't be read: not JSON, no Windows release, or a version
-    /// that isn't one or is too long.
+    /// The manifest can't be read: not JSON, a newer release without a
+    /// Windows entry, or a version that isn't one or is too long. A release
+    /// that isn't newer is no update, whatever its platforms.
     #[error("the update's manifest can't be read")]
     Manifest,
     /// The download failed its checks: its signature, the version it was
     /// signed for, or its size.
     #[error("the download failed its checks")]
     Invalid,
-    /// The installer couldn't be written or started.
+    /// The install failed after the live watch stopped: the installer
+    /// couldn't be written or started, or the plugin's second check of the
+    /// downloaded bytes failed.
     #[error("the installer couldn't be written or started")]
     Install,
 }
@@ -171,8 +180,8 @@ pub trait Updates: Send + Sync + 'static {
     /// successful install starts the installer and exits.
     ///
     /// # Errors
-    /// [`UpdateFailure::Invalid`] when the bytes fail their checks again, or
-    /// [`UpdateFailure::Install`].
+    /// [`UpdateFailure::Install`]; [`Updater::install`] answers
+    /// `update_install` for any failure here.
     fn install(
         &self,
         release: Self::Release,
@@ -271,8 +280,11 @@ impl<U: Updates> Updater<U> {
     ///
     /// # Errors
     /// `no_update` when no checked release is kept (or updates are off);
-    /// `update_busy` while another check or install runs; the download's or
-    /// the install's failure as its code.
+    /// `update_busy` while another check or install runs; the download's
+    /// failure as its code, `update_unreachable` or `update_invalid`, with
+    /// the live watch still running; `update_install` for any failure after
+    /// the watch stopped, so the UI starts it again on that code alone
+    /// (ADR-0022, S29).
     pub async fn install<F: StoreFactory>(&self, app: &AppState<F>) -> Result<(), CommandError> {
         if !self.on {
             return Err(CommandError::new(CommandErrorCode::NoUpdate));
@@ -299,7 +311,7 @@ impl<U: Updates> Updater<U> {
         }
         let installed = self.port.install(release, bytes).await;
         drop(conn);
-        installed.map_err(|failure| CommandError::new(failure.code()))
+        installed.map_err(|_| CommandError::new(CommandErrorCode::UpdateInstall))
     }
 }
 
@@ -416,18 +428,64 @@ impl<R: Runtime> Updates for PluginUpdates<R> {
         // On the main thread, as Windows' shell calls want (ADR-0018's
         // opener runs there too). On success the plugin starts the installer
         // and the app exits.
-        let (sent, answered) = tokio::sync::oneshot::channel();
-        self.app
-            .run_on_main_thread(move || {
-                let _ = sent.send(release.install(&bytes));
-            })
-            .map_err(|_| UpdateFailure::Install)?;
-        match tokio::time::timeout(INSTALL_TIMEOUT, answered).await {
-            Ok(Ok(Ok(()))) => Ok(()),
-            Ok(Ok(Err(error))) => Err(install_failure(&error)),
-            Ok(Err(_)) | Err(_) => Err(UpdateFailure::Install),
-        }
+        // Any failure here comes after the live watch stopped, so it's
+        // `Install` alone: the plugin's second check of the same bytes too
+        // (S29).
+        on_main_thread(
+            |job| self.app.run_on_main_thread(job).is_ok(),
+            move || release.install(&bytes).map_err(|_| UpdateFailure::Install),
+            INSTALL_TIMEOUT,
+        )
+        .await
     }
+}
+
+/// A job for the main thread.
+type MainJob = Box<dyn FnOnce() + Send + 'static>;
+
+/// Runs `work` on the main thread through `dispatch`, which answers whether
+/// the main thread took the job, and waits at most `bound` for the main
+/// thread to start it (ADR-0022, S30).
+///
+/// The work is claimed once: by the main thread to run it, or by the bound
+/// to drop it, whichever comes first. A job the main thread reaches only
+/// after the bound finds nothing to run, so an install the UI was told
+/// failed can't exit the app later. A job the main thread took in time is
+/// waited for to its end, however long it runs.
+async fn on_main_thread<D, W>(dispatch: D, work: W, bound: Duration) -> Result<(), UpdateFailure>
+where
+    D: FnOnce(MainJob) -> bool,
+    W: FnOnce() -> Result<(), UpdateFailure> + Send + 'static,
+{
+    let claim = Arc::new(Mutex::new(Some(work)));
+    let taken = Arc::clone(&claim);
+    let (sent, mut answered) = tokio::sync::oneshot::channel();
+    let job: MainJob = Box::new(move || {
+        if let Some(work) = take(&taken) {
+            let _ = sent.send(work());
+        }
+    });
+    if !dispatch(job) {
+        return Err(UpdateFailure::Install);
+    }
+    if let Ok(answer) = tokio::time::timeout(bound, &mut answered).await {
+        return answer.unwrap_or(Err(UpdateFailure::Install));
+    }
+    if take(&claim).is_some() {
+        // The main thread never reached it: dropped, never run.
+        return Err(UpdateFailure::Install);
+    }
+    // No timeout: the main thread took the work in time and is installing.
+    // Its answer comes once the plugin returns (on success the app exits
+    // first); answering sooner would give the connection back while the
+    // installer can still exit the app.
+    answered.await.unwrap_or(Err(UpdateFailure::Install))
+}
+
+/// Takes the work out of `claim`. A poisoned lock still holds a whole value:
+/// the guard is held only to take it.
+fn take<T>(claim: &Mutex<Option<T>>) -> Option<T> {
+    claim.lock().unwrap_or_else(PoisonError::into_inner).take()
 }
 
 /// A failed check: no answer, or one that can't be read. The plugin reads the
@@ -451,19 +509,6 @@ fn download_failure(error: &Error) -> UpdateFailure {
     }
 }
 
-/// A failed install: the bytes failed their checks again, or the installer
-/// couldn't be written or started.
-fn install_failure(error: &Error) -> UpdateFailure {
-    match error {
-        Error::Minisign(_)
-        | Error::Base64(_)
-        | Error::SignatureUtf8(_)
-        | Error::SignedVersionMismatch { .. }
-        | Error::MissingSignedVersion => UpdateFailure::Invalid,
-        _ => UpdateFailure::Install,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use core::pin::pin;
@@ -471,16 +516,25 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::task::{Context, Poll, Waker};
 
-    use fleet_client::VerifiedLink;
+    use fleet_api_types::app::{ServerProfileRequest, ServerProfileResponse};
+    use fleet_client::{
+        Client, ClientConfig, LiveStop, MemoryStore, ServerUrl, SessionStore as _, StoreError,
+        Trust, VerifiedLink,
+    };
     use rstest::rstest;
+    use secrecy::{ExposeSecret, SecretString};
     use serde_json::{Value, json};
     use tempfile::TempDir;
+    use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::Notify;
 
     use super::*;
     use crate::keychain::KeychainFactory;
     use crate::profile::PROFILE_FILE;
     use crate::state::{LinkOpener, OpenError};
+
+    /// How long a step over a loopback socket may take here.
+    const WAIT: Duration = Duration::from_secs(10);
 
     /// A release the stand-in found: its version.
     struct Found(String);
@@ -878,5 +932,363 @@ mod tests {
         assert_eq!(off.app_version().version.as_str(), "0.1.0");
         assert_eq!(off.port.checks.load(Ordering::SeqCst), 0);
         assert_eq!(updater.port.checks.load(Ordering::SeqCst), 1);
+    }
+
+    /// The stop of a live events watch nobody drives.
+    fn live_stop() -> LiveStop {
+        let client = Client::new(
+            ClientConfig {
+                server: ServerUrl::parse("https://example.com").unwrap(),
+                trust: Trust::System,
+            },
+            MemoryStore::new(),
+        )
+        .unwrap();
+        client.live_events().stopper()
+    }
+
+    /// `app` with a running watch: its stop.
+    fn watching<F: StoreFactory>(app: &AppState<F>) -> LiveStop {
+        let watch = live_stop();
+        let _ = app.live.lock().unwrap().register(watch.clone());
+        watch
+    }
+
+    /// An updater on that found 0.2.0, kept for the install.
+    async fn found() -> Updater<StandIn> {
+        let updater = on(StandIn::default());
+        updater.port.finds(Ok(Some("0.2.0")));
+        updater.check().await.unwrap();
+        updater
+    }
+
+    /// Rust stops the live events watch only once the download is checked,
+    /// and every failure after that answers `update_install`: the one code
+    /// the UI starts its watch again for (ADR-0022, S29).
+    #[rstest]
+    #[case::the_second_signature_check(UpdateFailure::Invalid)]
+    #[case::the_installer(UpdateFailure::Install)]
+    #[tokio::test]
+    async fn an_install_that_fails_after_the_watch_stopped_answers_update_install(
+        #[case] failure: UpdateFailure,
+    ) {
+        let dir = TempDir::new().unwrap();
+        let app = app(&dir);
+        let watch = watching(&app);
+        let updater = found().await;
+        *updater.port.installed.lock().unwrap() = Err(failure);
+
+        let failed = updater.install(&app).await;
+
+        assert!(watch.is_stopped(), "the watch kept running");
+        assert_eq!(code(failed), CommandErrorCode::UpdateInstall);
+    }
+
+    #[rstest]
+    #[case::unreachable(UpdateFailure::Unreachable, CommandErrorCode::UpdateUnreachable)]
+    #[case::invalid(UpdateFailure::Invalid, CommandErrorCode::UpdateInvalid)]
+    #[tokio::test]
+    async fn a_failed_download_leaves_the_watch_running(
+        #[case] failure: UpdateFailure,
+        #[case] expected: CommandErrorCode,
+    ) {
+        let dir = TempDir::new().unwrap();
+        let app = app(&dir);
+        let watch = watching(&app);
+        let updater = found().await;
+        *updater.port.downloaded.lock().unwrap() = Err(failure);
+
+        let failed = updater.install(&app).await;
+
+        assert!(!watch.is_stopped(), "a failed download stopped the watch");
+        assert_eq!(code(failed), expected);
+    }
+
+    /// Every client of the app shares one store, so a test can put a refresh
+    /// token where the switched-to client finds it.
+    struct Shared(MemoryStore);
+
+    impl StoreFactory for Shared {
+        type Store = MemoryStore;
+
+        fn for_origin(&self, _origin: &ServerUrl) -> Result<MemoryStore, StoreError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    /// A loopback stand-in for the server: `/health/live` answers at once;
+    /// `POST /api/v1/auth/refresh` says it arrived, then answers a new pair
+    /// once released; anything else is a 404. One request per connection.
+    struct Server {
+        url: String,
+        refresh_arrived: Arc<Notify>,
+        release: Arc<Notify>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl Drop for Server {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    impl Server {
+        async fn start() -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let (refresh_arrived, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+            let (arrived, released) = (Arc::clone(&refresh_arrived), Arc::clone(&release));
+            let task = tokio::spawn(async move {
+                while let Ok((socket, _)) = listener.accept().await {
+                    let request = read_request(&socket).await;
+                    let answer = if request.starts_with("GET /health/live ") {
+                        reply("200 OK", "")
+                    } else if request.starts_with("POST /api/v1/auth/refresh ") {
+                        arrived.notify_one();
+                        released.notified().await;
+                        reply(
+                            "200 OK",
+                            r#"{"access_token":"afk_at_1","refresh_token":"afk_rt_1","access_expires_in":900,"refresh_expires_in":604800}"#,
+                        )
+                    } else {
+                        reply("404 Not Found", "")
+                    };
+                    write_all(&socket, &answer).await;
+                }
+            });
+            Self {
+                url,
+                refresh_arrived,
+                release,
+                task,
+            }
+        }
+    }
+
+    /// An HTTP/1.1 answer with `status` and the JSON `body`, closing the
+    /// connection.
+    fn reply(status: &str, body: &str) -> Vec<u8> {
+        format!(
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
+    }
+
+    /// One request off `socket`, its body read to its length, as text.
+    async fn read_request(socket: &TcpStream) -> String {
+        let mut bytes = Vec::new();
+        let mut total = None;
+        while total.is_none_or(|total| bytes.len() < total) {
+            if total.is_none()
+                && let Some(end) = bytes.windows(4).position(|four| four == b"\r\n\r\n")
+            {
+                let head = String::from_utf8_lossy(bytes.get(..end).unwrap()).to_lowercase();
+                let body = head
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length:"))
+                    .map_or(0, |length| length.trim().parse::<usize>().unwrap());
+                total = Some(end + 4 + body);
+                continue;
+            }
+            socket.readable().await.unwrap();
+            let mut chunk = [0_u8; 1024];
+            match socket.try_read(&mut chunk) {
+                Ok(0) => break,
+                Ok(read) => bytes.extend_from_slice(chunk.get(..read).unwrap()),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) => panic!("{error}"),
+            }
+        }
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    /// Writes all of `bytes` to `socket`.
+    async fn write_all(socket: &TcpStream, mut bytes: &[u8]) {
+        while !bytes.is_empty() {
+            socket.writable().await.unwrap();
+            match socket.try_write(bytes) {
+                Ok(written) => bytes = bytes.get(written..).unwrap(),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) => panic!("{error}"),
+            }
+        }
+    }
+
+    /// On a live session the install stops the live events watch, then waits
+    /// for fleet-client's refresh in flight to save its rotated token before
+    /// it installs, so the next start resumes with the newest token
+    /// (ADR-0022, S27; PR #98's review).
+    #[tokio::test]
+    async fn an_install_on_a_live_session_stops_its_watch_and_waits_for_the_refresh_in_flight() {
+        let dir = TempDir::new().unwrap();
+        let store = MemoryStore::new();
+        let app = AppState::load(
+            dir.path().join(PROFILE_FILE),
+            Shared(store.clone()),
+            Arc::new(NeverOpens),
+        );
+        let server = Server::start().await;
+        let switched = tokio::time::timeout(
+            WAIT,
+            app.set_server_profile(ServerProfileRequest {
+                url: server.url.clone(),
+                ca_pem: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(switched, Ok(ServerProfileResponse::Switched { .. })),
+            "{switched:?}"
+        );
+        store.save(&SecretString::from("afk_rt_0")).await.unwrap();
+        let watch = watching(&app);
+        // With no access token, a call refreshes first, and the refresh is in
+        // flight until the server answers.
+        let client = app.conn.read().await.client().unwrap().clone();
+        let calling = tokio::spawn(async move { client.me().await.is_ok() });
+        tokio::time::timeout(WAIT, server.refresh_arrived.notified())
+            .await
+            .unwrap();
+        let updater = found().await;
+
+        let mut installing = pin!(updater.install(&app));
+        let mut context = Context::from_waker(Waker::noop());
+        let first = installing.as_mut().poll(&mut context);
+        let stopped = watch.is_stopped();
+        let before = updater.port.installs.lock().unwrap().len();
+        server.release.notify_one();
+        // Before the await: a finished future can't be polled again.
+        assert!(
+            matches!(first, Poll::Pending),
+            "it didn't wait for the refresh"
+        );
+        let installed = tokio::time::timeout(WAIT, installing).await.unwrap();
+        let stored = store.load().await.unwrap();
+
+        assert!(stopped, "the watch kept running");
+        assert_eq!(before, 0);
+        assert_eq!(installed, Ok(()));
+        assert_eq!(*updater.port.installs.lock().unwrap(), ["0.2.0"]);
+        assert_eq!(
+            stored.as_ref().map(ExposeSecret::expose_secret),
+            Some("afk_rt_1")
+        );
+        let _ = tokio::time::timeout(WAIT, calling).await.unwrap();
+    }
+
+    /// A stand-in main thread: it keeps the job it's given, to run it when
+    /// the test says.
+    #[derive(Default)]
+    struct HeldMain(Mutex<Option<MainJob>>);
+
+    impl HeldMain {
+        fn hold(&self, job: MainJob) -> bool {
+            *self.0.lock().unwrap() = Some(job);
+            true
+        }
+    }
+
+    /// Counts the installs it's asked for.
+    fn counting(
+        installs: &Arc<AtomicUsize>,
+    ) -> impl FnOnce() -> Result<(), UpdateFailure> + Send + use<> {
+        let installs = Arc::clone(installs);
+        move || {
+            installs.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    /// The bound gives up on a start the main thread hasn't reached, and that
+    /// start never installs when the main thread reaches it later, so a
+    /// failure the UI was told about can't exit the app afterwards
+    /// (ADR-0022, S30).
+    #[tokio::test(start_paused = true)]
+    async fn an_install_the_main_thread_takes_after_its_bound_never_runs() {
+        let main = HeldMain::default();
+        let installs = Arc::new(AtomicUsize::new(0));
+
+        let answer =
+            on_main_thread(|job| main.hold(job), counting(&installs), INSTALL_TIMEOUT).await;
+        let late = main.0.lock().unwrap().take().unwrap();
+        late();
+
+        assert_eq!(answer, Err(UpdateFailure::Install));
+        assert_eq!(
+            installs.load(Ordering::SeqCst),
+            0,
+            "the late start installed"
+        );
+    }
+
+    /// A start the main thread took in time is waited for past the bound: it
+    /// may still exit the app, so the connection isn't given back before it
+    /// answers (S30).
+    #[tokio::test(start_paused = true)]
+    async fn an_install_the_main_thread_took_in_time_is_waited_for_past_its_bound() {
+        let (entering, entered) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let thread = Mutex::new(None);
+
+        let mut installing = pin!(on_main_thread(
+            |job| {
+                *thread.lock().unwrap() = Some(std::thread::spawn(job));
+                // Back once the main thread runs it, so it took the start.
+                entered.recv_timeout(WAIT).unwrap();
+                true
+            },
+            move || {
+                entering.send(()).unwrap();
+                released.recv_timeout(WAIT).unwrap();
+                Ok(())
+            },
+            INSTALL_TIMEOUT,
+        ));
+        let mut context = Context::from_waker(Waker::noop());
+        let started = installing.as_mut().poll(&mut context);
+        tokio::time::advance(INSTALL_TIMEOUT + Duration::from_secs(1)).await;
+        let past = installing.as_mut().poll(&mut context);
+        release.send(()).unwrap();
+        // Before the await: a finished future can't be polled again.
+        assert!(started.is_pending());
+        assert!(
+            past.is_pending(),
+            "it gave up on a start the main thread runs"
+        );
+        // No tokio timeout: paused time would jump past it while the thread
+        // answers. The thread's own real-time bound ends the wait instead (its
+        // panic drops the answer's sender).
+        let answer = installing.await;
+        thread.lock().unwrap().take().unwrap().join().unwrap();
+
+        assert_eq!(answer, Ok(()));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_install_answered_in_time_is_its_answer() {
+        let installs = Arc::new(AtomicUsize::new(0));
+        let run = |job: MainJob| {
+            job();
+            true
+        };
+
+        let installed = on_main_thread(run, counting(&installs), INSTALL_TIMEOUT).await;
+        let failed = on_main_thread(run, || Err(UpdateFailure::Install), INSTALL_TIMEOUT).await;
+
+        assert_eq!(installed, Ok(()));
+        assert_eq!(failed, Err(UpdateFailure::Install));
+        assert_eq!(installs.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_start_the_main_thread_refuses_is_an_install_failure() {
+        let installs = Arc::new(AtomicUsize::new(0));
+
+        let answer = on_main_thread(|_job| false, counting(&installs), INSTALL_TIMEOUT).await;
+
+        assert_eq!(answer, Err(UpdateFailure::Install));
+        assert_eq!(installs.load(Ordering::SeqCst), 0);
     }
 }

@@ -75,7 +75,9 @@ rstest.workspace = true
 tauri = { workspace = true, features = ["test"] }
 # A fresh folder for each test's profile file and server database.
 tempfile.workspace = true
-tokio = { workspace = true, features = ["macros", "net", "rt", "time"] }
+# `test-util`: paused time for the install's bound on the main thread (ADR-0022, S30), as the
+# workspace's other members' tests enable it.
+tokio = { workspace = true, features = ["macros", "net", "rt", "test-util", "time"] }
 # The authenticator app: codes from the enroll answer's otpauth URI.
 totp-rs = { workspace = true, features = ["otpauth"] }
 

@@ -97,13 +97,17 @@ pub enum CommandErrorCode {
     /// GitHub: no connection, a TLS failure, a timeout or another status
     /// (ADR-0022, S27).
     UpdateUnreachable,
-    /// The update's manifest can't be read: not JSON, no Windows release, or
-    /// a version that isn't one.
+    /// The update's manifest can't be read: not JSON, a newer release
+    /// without a Windows entry, or a version that isn't one. A release that
+    /// isn't newer is no update, whatever its platforms.
     UpdateManifest,
     /// The download failed its checks: its signature, the version it was
-    /// signed for, or its size. Nothing was installed.
+    /// signed for, or its size. Nothing was installed, and the live events
+    /// watch kept running.
     UpdateInvalid,
-    /// The downloaded installer couldn't be written or started.
+    /// The install failed after the live events watch stopped: the downloaded
+    /// installer couldn't be written or started, or its second check failed.
+    /// The UI starts its watch again on this code alone (ADR-0022, S29).
     UpdateInstall,
     /// There's no checked update to install: check again first.
     NoUpdate,

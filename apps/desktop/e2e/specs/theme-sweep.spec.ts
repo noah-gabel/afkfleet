@@ -75,6 +75,10 @@ async function updateStates(page: Page, backend: FakeBackend): Promise<void> {
     has: page.getByRole("heading", { name: "Updates", level: 2 }),
   });
   await nav(page, "Profile");
+  // The failed install dropped the release Rust kept, so Profile offers it again only once a
+  // check finds it (ADR-0022, S28).
+  await expect(updates.getByRole("button", { name: "Install and restart" })).toHaveCount(0);
+  await updates.getByRole("button", { name: "Check for updates" }).click();
   await expect(updates.getByText("afkfleet 0.2.0 is available.")).toBeVisible();
   await bothThemes(page, "profile, updates, available", { height: 1300 });
 

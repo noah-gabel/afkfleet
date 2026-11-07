@@ -16,7 +16,8 @@
 //! - changed bytes, another key's signature, a version raised in the
 //!   manifest after signing, and a signature without a version each fail
 //!   the download's checks;
-//! - the app's own version is no update; a manifest that isn't JSON can't be
+//! - the app's own version is no update, with or without a Windows entry; a
+//!   newer release without one, and a manifest that isn't JSON, can't be
 //!   read; a missing one is unreachable; a download over the cap is refused.
 //!
 //! It needs `node` and `pnpm install` (the CLI). It runs on real time, as
@@ -322,6 +323,38 @@ async fn a_signature_without_a_version_fails_the_downloads_checks() {
 async fn the_apps_own_version_is_no_update() {
     let release = Release::new();
     release.serve("latest.json", |manifest| {
+        manifest["version"] = json!("0.1.0");
+    });
+
+    assert!(check(&release.updates()).await.unwrap().is_none());
+}
+
+/// A manifest whose release has no Windows entry: the plugin compares the
+/// versions first (since 2.14.0) and looks for this platform only for a
+/// newer one, so a release that isn't newer is no update whatever its
+/// platforms, and a newer one without a Windows entry can't be read
+/// (`TargetsNotFound`; PR #98's review).
+fn without_windows(manifest: &mut Value) {
+    let windows = manifest["platforms"]["windows-x86_64"].clone();
+    manifest["platforms"] = json!({ "linux-x86_64": windows });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_newer_release_without_a_windows_entry_cant_be_read() {
+    let release = Release::new();
+    release.serve("latest.json", without_windows);
+
+    assert_eq!(
+        check(&release.updates()).await.map(|found| found.is_some()),
+        Err(UpdateFailure::Manifest)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_release_that_isnt_newer_is_no_update_without_a_windows_entry_too() {
+    let release = Release::new();
+    release.serve("latest.json", |manifest| {
+        without_windows(manifest);
         manifest["version"] = json!("0.1.0");
     });
 
