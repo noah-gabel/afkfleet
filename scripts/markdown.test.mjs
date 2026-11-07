@@ -9,7 +9,13 @@ import { fences, headings, inlineCode, links, sections, slug } from "./markdown.
 import { ROOT } from "./threat-model-citations.mjs";
 
 /** The guides whose links must resolve, from the repository's root. */
-const GUIDES = ["README.md", "docs/runbook.md", "docs/using-the-app.md", "docs/releasing.md"];
+const GUIDES = [
+  "README.md",
+  "docs/runbook.md",
+  "docs/using-the-app.md",
+  "docs/releasing.md",
+  "docs/dod/phase-12.md",
+];
 
 /**
  * The links in `file` (from the repository's root) that don't resolve: a relative link

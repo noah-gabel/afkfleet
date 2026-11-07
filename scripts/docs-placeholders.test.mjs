@@ -13,8 +13,16 @@ import { describe, it } from "node:test";
 
 import { ROOT } from "./threat-model-citations.mjs";
 
-/** The guides checked, from the repository's root. */
-const GUIDES = ["docs/runbook.md", "docs/using-the-app.md", "docs/releasing.md"];
+/**
+ * The guides checked, from the repository's root: the operators', the friends', the
+ * maintainer's and the DoD's kit. README is the developers', naming their tools' sites.
+ */
+const GUIDES = [
+  "docs/runbook.md",
+  "docs/using-the-app.md",
+  "docs/releasing.md",
+  "docs/dod/phase-12.md",
+];
 
 /**
  * A host name ending in a common top-level domain, and not part of a longer dotted name
