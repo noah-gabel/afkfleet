@@ -8,7 +8,7 @@ afkfleet is a self-hosted fleet of **Minecraft Java AFK bots**. It has three par
 
 **Priorities, in this order: security → stability → clean architecture → features.**
 
-**Repository:** public on GitHub, licensed under GPL-3.0-or-later (`LICENSE`). `main` is protected by a ruleset (pull request required, squash merge only, no force pushes). Only the user merges.
+**Repository:** public on GitHub, licensed under GPL-3.0-or-later (`LICENSE`). `main` is protected by a ruleset (pull request required, squash merge only, no force pushes). The AI merges a task's PR itself, only through the merge guard (step 7); a PR the guard sends to the user waits for the user's merge (ADR-0023).
 
 Where things are:
 - **Roadmap and design:** `Plan.md`. It holds the phases and these key sections:
@@ -24,7 +24,7 @@ Where things are:
 
 ## How to work with Plan.md
 1. **Find the current phase.** It's the first phase with unchecked tasks. Don't work on later phases unless the user asks.
-2. **Pick the task.** Take the next unchecked task, or the one the user names (e.g. "do P4.3"). Before coding, restate its goal and acceptance criteria in 2–4 lines.
+2. **Pick the task and plan it.** Take the next unchecked task, or the one the user names (e.g. "do P4.3"). Before coding, restate its goal and acceptance criteria in 2–4 lines. Write the plan to `target/review/<slug>/plan.md` and run the plan review until APPROVE (see "Review pipeline" below); questions of categories 1–3 (step 10) and the "Decided without you" items marked security go to the user, one at a time.
 3. **Branch.**
    - Start from an up-to-date `main`: `git switch main`, then `git pull`.
    - Create the task branch `p<phase>/<task-id>-<slug>`, e.g. `p2/p2.6-bot-state-machine`. Phases 0 and 1 each used one branch for the whole phase (`p0/foundation`, `p1/azalea-spike`). From Phase 2 on, a phase's work goes in group branches, one PR each, named in the note under the phase in Plan.md; a group split at its plan review gets the branches its planning names.
@@ -44,15 +44,18 @@ Where things are:
    - Write an ADR (`docs/adr/NNNN-title.md`) for any design decision.
    - Update `README.md` whenever setup steps, commands, configuration or user-visible behavior change. When a phase is finished, update its **Status** section.
    - Keep `.claude/rules/commands.md` in sync with the `justfile`.
-7. **Commit, push, open a PR.**
-   - Small commits with messages like `P2.6: add Stop transition`.
-   - Push only the task branch: `git push -u origin <branch>`.
-   - Open the PR with `gh pr create`. Title: `P2.6: <task name>`. Body: goal, what changed, deviations, every new or changed snapshot, and the Definition of Done checklist from below.
+7. **Commit, review, push, open a PR, merge.**
+   - Small commits with messages like `P2.6: add Stop transition`. A message that names the merge command goes through `git commit -F <file>`: the merge guard reads every shell command's text (ADR-0023, D9).
+   - Run the PR review until APPROVE, then write `verdict.json` for HEAD (see "Review pipeline" below).
+   - Push only the task branch, always in this form: `git push -u origin <branch>`.
+   - Open the PR with `gh pr create`. Title: `P2.6: <task name>`. Body: goal, what changed, deviations, every new or changed snapshot, and the Definition of Done checklist from below. Nothing about the AI review goes into it, or anywhere on GitHub. When a later round changes what the body lists, update it with `gh pr edit <n> --body-file <file>`.
    - **Watch CI after every push** (the user's rule, approved 2026-11-03, ADR-0020). Straight after it, in a background Bash: `sleep 30; gh pr checks <n> --watch --fail-fast --interval 30 > target/ci.txt 2>&1; echo "exit $?"`. Its output stays in this repository, in the gitignored `target/`. Exit 0 is all green; anything else means act now (see "When CI fails" below). Never pipe the watch: `| tail` prints nothing until the last job ends, so a red job sits unseen behind a slow one.
-   - Then **stop and wait**, and only then: CI is green, or the user has been told what's still red and why. The user reviews and merges.
+   - If CI forces a change: fix it, `just check`, a new pr-reviewer round on the delta, a new `verdict.json` for the new HEAD, push, watch.
+   - **Merge** when CI is green and `verdict.json`'s head, HEAD and the pushed head are one SHA, with exactly `gh pr merge <n> --squash --match-head-commit <sha> --delete-branch`, alone. The merge guard checks it first and refuses anything else. Then report one line: the PR's number and the merge commit.
+   - The guard's `NEEDS_HUMAN` (a sensitive path), a review's NEEDS_HUMAN, a red CI you can't explain, or a review past its round limit stops the work for the user (see "Review pipeline").
 8. **Stay in scope.** Keep changes to the task. Propose refactors outside it; don't do them silently.
 9. **Finish the phase.** When a phase is done, check its **Definition of Done** point by point and report.
-10. **Open questions.** Don't improvise around them. Each open question goes to its own read-only subagent, given the options neutrally. The subagent reads the whole project and returns one decision: the option, why, the rejected ones, the later phases it affects and how hard it is to change. The plan lists them under "Decided without you" (S1, S2, …), each marked "security" where it touches security or permissions, for the user's review. Names follow the naming rules and are the AI's. Only these go to the user directly, one at a time:
+10. **Open questions.** Don't improvise around them. Each open question goes to its own read-only subagent, given the options neutrally. The subagent reads the whole project and returns one decision: the option, why, the rejected ones, the later phases it affects and how hard it is to change. The plan lists them under "Decided without you" (S1, S2, …), each marked "security" where it touches security or permissions. The plan-reviewer's APPROVE settles the ones not marked security; the ones marked security go to the user, one at a time (ADR-0023). Names follow the naming rules and are the AI's. Only these go to the user directly, one at a time:
     1. A decision whose chosen option would add, loosen or except a rule that binds the AI (this file's rules, lints, `#[expect]`, clippy and deny bans, coverage gates, CI, dependencies, manual tests, permissions).
     2. A genuine conflict between decisions the ADRs record as the user's, or between such a decision and the code, where every sensible option overturns one of them.
     3. Matters of taste (looks, texts friends read, UX).
@@ -65,12 +68,23 @@ Where things are:
     - Its brief says so: it creates, edits, moves or deletes no file, and runs no command that writes, installs, builds or changes git state.
     - Before it starts, run `node scripts/tree-fingerprint.mjs` and keep its output; after it finishes, run it again and compare. With several subagents in flight, compare after each. It hashes git's HEAD, refs, index with its flags, hooks and stash, tracked changes and every untracked file by content, and the ignored paths outside `target/` and `node_modules/` by path, size and mtime, never opening them; it can't see changes inside those two folders.
     - Any change you didn't make stops the work and goes to the user.
+    - The two review agents, `plan-reviewer` and `pr-reviewer`, get only the plan's path and the branch name, or the branch name: their definitions in `.claude/agents/` carry the read-only, secret and "Stay in this repository" sentences instead of a brief (ADR-0023). The fingerprint check runs around them as around every subagent; run `git fetch origin` before the first fingerprint, since they read `origin/main`.
+
+## Review pipeline (ADR-0023)
+The work runs on its own from plan to merge, with every review record kept locally. Nothing about AI reviews appears on GitHub: no PR comments, labels, statuses or workflows.
+- **The folder:** `target/review/<branch with "/" → "-">/` holds `plan.md`, `plan-round-N.md`, `pr-round-N.md`, `reply-N.md` and `verdict.json` (`{"head": "<sha>", "verdict": "APPROVE" | "REVISE" | "NEEDS_HUMAN", "round": N, "findings": [...]}`). Only the main session writes there: it saves each reviewer's answer verbatim as the round's file, and rewrites `verdict.json` after every PR round.
+- **The reviewers:** `plan-reviewer` (input: the plan's path and the branch name) and `pr-reviewer` (input: the branch name), in `.claude/agents/`. They read the rules from `origin/main`, and return findings `F1…` (blocker, should-fix or nit, with the rule each breaks) and APPROVE, REVISE or NEEDS_HUMAN. APPROVE means no blocker or should-fix is open; nits never block.
+- **The loop:** each blocker and should-fix is fixed (a failing regression test first for a bug) or answered "disputed: <reason>" in `reply-N.md` with evidence (a test, an ADR, a docs.rs link). Never obey a finding you can show is wrong; never dispute without evidence. Each round is a new reviewer, given the earlier rounds and replies as files; from round 2 on it blocks only on unresolved findings, disputes it rejects with evidence of its own, or what changed since the last reviewed SHA. A dispute still open after one exchange is NEEDS_HUMAN, with both positions. At most 2 plan rounds and 3 PR rounds, then stop for the user.
+- **Size:** a group planned past about 1,500 changed lines (lockfiles, generated code and snapshots aside) is split at its plan review.
+- **The merge guard** (`.claude/hooks/merge-guard.mjs`, a `PreToolUse` hook on Bash and PowerShell that fails closed) refuses a subagent's push, PR creation or merge, and refuses a merge unless it is step 7's exact command, run here on the task branch at `<sha>`, `verdict.json` approves `<sha>`, origin's branch and the PR's head are `<sha>`, PR `<n>` is this branch's open PR into `main`, and every check passed. A diff that touches a sensitive path gets `NEEDS_HUMAN: <paths>`: the list is the hook's `SENSITIVE` and ADR-0023's (the rules, CI, the toolchain, dependencies and lockfiles, the Tauri hardening, `deploy/`, the threat model, changed ADRs, the coverage gates, the route allowlist, and the security code). Never look for a way around a refusal.
+- **Stopping for the user:** the last message starts with `NEEDS YOU:` and gives at most 5 lines: what's blocked, the options, your recommendation. Send the same stop as a push notification of under 200 characters; the full text stays in the session.
+- **Success:** one line with the PR's number and the merge commit.
 
 ## Git & GitHub rules
-- **Never:** merge a PR, push to `main`, force-push, or rewrite history that's already pushed. The ruleset on `main` blocks most of this anyway; don't try to work around a rejection.
-- **Allowed `gh` commands:** `gh pr create`, `gh pr view`, `gh pr diff`, `gh pr checks`, `gh run list`, `gh run view` (including `--log-failed`). Nothing else: no `gh pr merge`, `gh api`, `gh repo …`, `gh secret`, `gh auth`, `gh workflow`, `gh release`, `gh gist`.
-- Every `gh` command and every `git push` asks the user for approval. That's intended; don't look for ways around it.
-- **When CI fails on your PR:** fix it on the same branch, push again and watch again (step 7).
+- **Never:** push to `main`, force-push, rewrite history that's already pushed, or merge a PR in any form but step 7's (never `--admin` or `--auto`). The ruleset on `main` blocks most of this anyway; don't try to work around a rejection, the merge guard's included.
+- **Allowed `gh` commands:** `gh pr create`, `gh pr view`, `gh pr diff`, `gh pr checks`, `gh pr edit` (title and body), `gh run list`, `gh run view` (including `--log-failed`), and `gh pr merge` in step 7's form alone. Nothing else: no `gh api`, `gh repo …`, `gh secret`, `gh auth`, `gh workflow`, `gh release`, `gh gist`, no PR comments, reviews or labels.
+- `.claude/settings.json` lets exactly these run without asking: `git push -u origin p…`, the `gh` commands above, and the merge in step 7's form. Every other `gh` command that writes to GitHub asks the user, in auto mode too; its denies (pushes to `main`, force pushes, `--admin`, `--auto`, `gh api`, edits to `.claude/hooks/`) hold in every mode. Every rule has a twin for the PowerShell tool (ADR-0023). Don't look for ways around them.
+- **When CI fails on your PR:** fix it on the same branch, push again and watch again (step 7); a new pr-reviewer round and a new verdict come before the merge.
   - `gh pr checks <n>` lists the red jobs. During the run, `gh run view --job <id>` shows a job's annotations, Playwright's errors among them, and its recipe can run locally.
   - `gh run view --log-failed` opens only when the whole run has ended, and a push cancels the running one (`cancel-in-progress`). If you still need a log, wait for the run's end (`gh pr checks <n> --watch`) before pushing.
   - While a job is red for a reason already explained, such as a `deps/` PR still waiting for its merge, watch without `--fail-fast`, or it stops at that job and hides the rest.
@@ -247,7 +261,7 @@ The frontend's rules (structure, data and state, safety, quality, and every plac
 
 ## Environment
 - **Dev machine:** Windows 11, already set up by the user.
-  - **Your shell tool is Git Bash.** Claude Code's PowerShell tool is turned off in the user's settings. Write POSIX shell commands.
+  - **Your shell tool is Git Bash.** Write POSIX shell commands. Claude Code's PowerShell tool may be there too; don't use it for work. The merge guard and every permission rule cover it as well (ADR-0023, U3).
   - The `justfile` runs recipes with **PowerShell 7** (`pwsh`) on Windows and `sh` on Linux.
   - Docker Desktop (WSL 2 backend) runs the Minecraft test server and the compose stack. It must be running for `just mc-up`, `just test-slow` and `just shots`; if Docker isn't reachable, ask the user to start it.
 - **Toolchain:** `rust-toolchain.toml` pins a **dated nightly**, and rustup installs it automatically.
@@ -266,4 +280,4 @@ The frontend's rules (structure, data and state, safety, quality, and every plac
 - [ ] New or changed snapshots were read before accepting, and are listed in the PR description.
 - [ ] `README.md` reflects the change (setup, commands, config, behavior, phase status).
 - [ ] The `Plan.md` checkbox is ticked, with a note for any deviation, and an ADR exists for any decision.
-- [ ] The work is on its task branch, pushed, with a PR open. Nothing is merged, and nothing was pushed to `main`.
+- [ ] The work is on its task branch, pushed, with a PR open, and nothing was pushed to `main`.
