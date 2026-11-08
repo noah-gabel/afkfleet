@@ -19,4 +19,4 @@
 - [ ] New or changed snapshots were read before accepting, and are listed in the PR description.
 - [ ] `README.md` reflects the change (setup, commands, config, behavior, phase status).
 - [ ] The `Plan.md` checkbox is ticked, with a note for any deviation, and an ADR exists for any decision.
-- [ ] The work is on its task branch, pushed, with a PR open. Nothing is merged, and nothing was pushed to `main`.
+- [ ] The work is on its task branch, pushed, with a PR open, and nothing was pushed to `main`.
