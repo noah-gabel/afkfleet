@@ -3,9 +3,11 @@
 // Every git and gh call goes through an injected `run`, and every file read through an injected
 // `readFile`, so no test touches this repository's git state, its target/review/ or the network.
 // A call the scenario doesn't expect throws, which the guard turns into a refusal. The
-// command-line tests feed the real hook only commands it refuses or passes before any call.
+// command-line tests feed the real hook only commands it refuses or passes before any call. The
+// settings' tests pin .claude/settings.json, which runs the hook and holds the permission rules.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { describe, it } from "node:test";
@@ -15,6 +17,7 @@ import { decide, dependencyLines, SENSITIVE, scan } from "../.claude/hooks/merge
 import { GATES } from "./coverage-gates.mjs";
 
 const HOOK = fileURLToPath(new URL("../.claude/hooks/merge-guard.mjs", import.meta.url));
+const SETTINGS = fileURLToPath(new URL("../.claude/settings.json", import.meta.url));
 
 const PROJECT = "C:/path/to/afkfleet";
 const BRANCH = "p13/p13.1-example";
@@ -817,5 +820,119 @@ describe("the sensitive list (D10, D14)", () => {
     );
 
     assert.deepEqual(missing, []);
+  });
+});
+
+describe("the settings (D14)", () => {
+  /** .claude/settings.json, read fresh. */
+  function settings() {
+    return JSON.parse(readFileSync(SETTINGS, "utf8"));
+  }
+
+  /** Each rule for the Bash tool, then its PowerShell twin (U3). */
+  function twins(rules) {
+    return rules.flatMap((rule) => [`Bash(${rule})`, `PowerShell(${rule})`]);
+  }
+
+  it("hold the hook and the permissions alone", () => {
+    assert.deepEqual(Object.keys(settings()).sort(), ["hooks", "permissions"]);
+    assert.deepEqual(Object.keys(settings().permissions).sort(), ["allow", "ask", "deny"]);
+  });
+
+  it("run the guard before every Bash and PowerShell call, failing closed (D8)", () => {
+    const project = "$" + "{CLAUDE_PROJECT_DIR}";
+
+    assert.deepEqual(settings().hooks, {
+      PreToolUse: [
+        {
+          matcher: "Bash|PowerShell",
+          hooks: [
+            {
+              type: "command",
+              command: "node",
+              args: [`${project}/.claude/hooks/merge-guard.mjs`],
+              onFailure: "block",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("allow exactly the pipeline's commands (ADR-0023, U2)", () => {
+    assert.deepEqual(
+      settings().permissions.allow,
+      twins([
+        "git push -u origin p*",
+        "gh pr create *",
+        "gh pr view *",
+        "gh pr checks *",
+        "gh pr diff *",
+        "gh pr edit *",
+        "gh run list *",
+        "gh run view *",
+        "gh pr merge * --squash --match-head-commit *",
+      ]),
+    );
+  });
+
+  it("ask for every other GitHub write, gh pr edit's outward flags included (U2, D12)", () => {
+    assert.deepEqual(
+      settings().permissions.ask,
+      twins([
+        "gh pr edit *--add-label*",
+        "gh pr edit *--add-reviewer*",
+        "gh pr edit *--add-assignee*",
+        "gh pr edit *--add-project*",
+        "gh pr edit *--milestone*",
+        "gh pr edit *--base*",
+        "gh pr comment *",
+        "gh pr review *",
+        "gh pr close *",
+        "gh pr reopen *",
+        "gh pr ready *",
+        "gh pr lock *",
+        "gh pr unlock *",
+        "gh pr update-branch *",
+        "gh pr revert *",
+        "gh issue *",
+        "gh label *",
+        "gh release *",
+        "gh repo *",
+        "gh workflow *",
+        "gh secret *",
+        "gh variable *",
+        "gh auth *",
+        "gh gist *",
+        "gh alias *",
+        "gh extension *",
+        "gh cache *",
+        "gh project *",
+        "gh run rerun *",
+        "gh run cancel *",
+        "gh run delete *",
+      ]),
+    );
+  });
+
+  it("deny pushes to main, force pushes, --admin, --auto, gh api and edits to the hooks", () => {
+    assert.deepEqual(settings().permissions.deny, [
+      ...twins([
+        "git push * main*",
+        "git push *:main*",
+        "git push *refs/heads/main*",
+        "git push --force*",
+        "git push *--force*",
+        "git push -f*",
+        "git push * -f*",
+        "git push *+*",
+        "gh pr merge * --admin*",
+        "gh pr merge *--admin*",
+        "gh pr merge * --auto*",
+        "gh pr merge *--auto*",
+        "gh api *",
+      ]),
+      "Edit(/.claude/hooks/**)",
+    ]);
   });
 });
