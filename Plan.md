@@ -1036,40 +1036,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** Self-healing bots, one supervised actor each, with modes and a watchdog. All of it is proven with fakes and paused time.
 **Introduces:** `governor`, `metrics`, `tokio-util` (only `CancellationToken`; Phase 3 didn't need it). Dev: `fleet-testkit`.
 
-> Note (P4):
-> - **Five group branches.** At the user's request, Phase 4 is built in group PRs like Phases 2 and 3. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
->
->   | Group | Branch | Tasks |
->   |---|---|---|
->   | A | `p4/p4.1-p4.3-spec-and-credentials` | P4.1, P4.3 |
->   | B | `p4/p4.4-p4.5-chat-queue-and-mode-runner` | P4.5, then P4.4: mode chat goes through the queue. The runtime clock and the governor clock land in P4.5, their first user |
->   | C | `p4/p4.2-p4.6-bot-actor-and-watchdog` | P4.2, P4.6 |
->   | D | `p4/p4.7-supervisor-and-fleet` | P4.7 |
->   | E | `p4/p4.8-p4.9-metrics-chaos-and-wrap-up` | P4.9, P4.8 and the phase wrap-up |
->
->   The queue and the mode runner are built against the fake before the actor, so the actor PR wires real pieces instead of placeholders.
-> - **Decisions.** The user answered the Phase 4 plan's open questions on 2026-10-08. [ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md) records them; the notes below summarize what changes a task.
-> - **Dependencies.** `governor` without default features plus `std` (no quanta, dashmap or jitter, so no rand 0.9 or getrandom 0.3 in normal dependencies), `tokio-util` without features, `metrics`, and `chrono` in fleet-runtime for `DateTime` only. No `metrics-util`.
-> - **Determinism.** `Fleet::new` takes a wall-clock anchor and a seed from its caller; the runtime never reads the wall clock or the OS's randomness. fleet-runtime's `clippy.toml` bans those entry points, so all time goes through tokio's clock, which paused-time tests control.
+> Note (P4): built in five groups (A–E), one PR each; their decisions, which the user answered on 2026-10-08, are in [ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md), with the dependencies and the determinism rule: `Fleet::new` takes a wall-clock anchor and a seed from its caller, and the runtime never reads the wall clock or the OS's randomness (fleet-runtime's `clippy.toml` bans those entry points).
 
 - [x] **P4.1** 🔴 `BotSpec` (account, server, mode, desired run state) and `BotSnapshot` (state, since, last disconnect reason, attempt, uptime).
 
-  > Note (P4.1, from Phase 2): open question, flagged and not yet decided: fleet-proto and fleet-server also need to build a `BotSpec` (Appendix C `AssignBot`), but they may only depend on `fleet-core`.
+  > Note (P4.1): `BotSpec { id, account, server, mode, desired, conflict_texts }` and `BotSnapshot { bot_id, state, since, last_disconnect }` are pure data in `fleet_core::bot`, without serde, so fleet-proto and fleet-server can build them; `attempt()` and `uptime(now)` are derived when read. The conflict texts, kick texts that count as a duplicate login for proxies that kick with plain text (ADR-0010), are at most 16 of 1–1024 characters, compared exactly, and `ConflictTexts::classify` applies them on top of the unchanged `DisconnectReason::classify` ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)).
 
-  > Note (P4.1, from group B): **Conflict texts.** A bot's spec gets an optional list of kick texts that count as a duplicate login, empty by default. Some proxies kick with plain text when a human logs in; BungeeCord/Waterfall in online mode probably does. The classifier compares the sanitized kick message exactly against the list, so vanilla servers still go by translation key. The list's limits and config keys are decided here (ADR-0010).
-
-  > Note (P4.1, from Phase 3, the user's request): **Chat format, flagged and not decided.** Next to the conflict texts, a server may later get a chat format for plugin chat that arrives as system messages, such as `[CLAN] Name : message`. It extracts the sender for display only:
-  > - A parsed sender is marked as parsed from the text. Like every chat sender, it's never used for any permission or trigger decision.
-  > - *(corrected in the group B review)* Chat senders are server-attributed, not verified. azalea 0.16 never verifies chat signatures, and fleet-mc shows a Player packet's `unsigned_content`, so even a Player packet's UUID and text are only what the server claims. A feature that needs a trustworthy sender must verify the signature and use the signed body, in its own ADR.
-  > - fleet-mc keeps the whole sanitized text of system messages, so this stays possible (P3.5, ADR-0011).
-
-  > Note (P4.1, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Where.** `BotSpec` and `BotSnapshot` are pure data in `fleet_core::bot`, without serde, so fleet-proto and fleet-server can build them.
-  > - **`BotSpec`** is `{ id, account, server, mode, desired, conflict_texts }`. The account is `BotAccount::Offline(McUsername)` or `BotAccount::Online(AccountId)`, and it never changes for a bot. The mode is the resolved `ModeDefinition`.
-  > - **`BotSnapshot`** is `{ bot_id, state, since, last_disconnect }`; `attempt()` and `uptime(now)` are derived when read, so nothing goes stale between state changes.
-  > - **Conflict texts.** `DisconnectReason::classify(&self)` stays unchanged, since fleet-mc calls it. `ConflictTexts::classify` applies the texts on top of it, for every kick that `classify()` calls Transient, whatever its key; a key that means Permanent, Conflict or AuthInvalid wins. `transition()` takes `&BotRules { retry, conflict_texts }` instead of `&RetryPolicy`.
-  > - **Limits.** At most 16 texts of 1–1024 characters, compared exactly and case-sensitively, taken as written. A text with a character the kick sanitizer strips is rejected; errors name the index, never the text.
-  > - **The chat format** is deferred to the server side (P11.9). *Scheduled at Phase 11's group H planning ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S66): in group H4, after the per-server conflict texts. Planned at H4's planning: the per-server texts in H4 (S74–S78), the chat format in H7 (S79, S80, U55, U59).*
+  > Note (P4.1, the chat format): chat senders are server-attributed, never verified (ADR-0011). The display-only chat format for plugin chat went to the server side (P11.9), scheduled at Phase 11's group H planning ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S66): the per-server texts in H4 (S74–S78), the chat format in H7 (S79, S80, U55, U59).
 - [x] **P4.2** 🔴 `BotActor`:
   - `tokio::select!` over the inbox (`Start`, `Stop`, `UpdateSpec`, `SendChat`, `Reset`, `Resume`), session events, timers and cancellation.
   - It executes the core `Effect`s and computes retry delays with `RetryPolicy`.
@@ -1084,157 +1057,48 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - changing the server reconnects
   - changing the mode does **not** reconnect
 
-  > Note (P4.2, from Phase 2) (ADR-0010):
-  > - **Clock.** The actor's clock derives `DateTime<Utc>` from tokio's `Instant`, anchored at startup, so paused time drives `transition`, the breaker and `ModePlan`.
-  > - **Leaving a state** cancels that state's timer or session request.
-  > - **`SessionClosed`** is sent once teardown has finished or timed out.
-  > - **Restart** and a server change go through `Stopping{restart}`.
+  > Note (P4.2): Deviation: the inbox has no `Start` or `Stop`. It takes one `BotCommand` per `Fleet` call (`UpdateSpec`, `Restart`, `Reset`, `Resume`, `SendChat`), and the bot starts and stops only as the spec's desired state says, so the two can never disagree; "`Stop` during backoff" is an `UpdateSpec` with desired = Stopped ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)).
 
-  > Note (P4.2, from the group A review): **Half-open breaker.** `CircuitBreaker::permits` doesn't limit the half-open state to one attempt. The actor makes one attempt at a time and reports its outcome before it asks again.
+  > Note (P4.2): the actor executes the core effects and the breaker effects (ADR-0010), publishes every state change, `Died` and `Alert` as `FleetEvent`s, applies the ready session events before any input that ends a session, and tears sessions down off its loop ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)). From the group A review: `CircuitBreaker::permits` doesn't limit the half-open state to one attempt; the actor makes one attempt at a time and reports its outcome before it asks again.
 
-  > Note (P4.2, from group B) (ADR-0010):
-  > - **Breaker effects.** The actor runs `RecordFailure`, `RecordSuccess` and `ResetBreaker` on its `CircuitBreaker`, in order. Then for `ScheduleRetry{n}` it waits `RetryPolicy::delay(n)`, or until the breaker's cool-down ends if that's later.
-  > - **Session events.** Only the current session's events reach `transition()`. Once `Disconnect` has run, the actor drops that session's events, and it sends `SessionClosed` for it only if no newer session has connected since.
-  > - **Session requests.** Every `RequestSession` gets exactly one answer; a timeout becomes `SessionUnavailable{retryable: true}`.
-  > - **Published events.** Every state change, plus `Died`, goes out as an event for the app (P4.7, P11). `Notify` is only for alerts that need a human.
-  > - **Paused and Failed.** `Start` and `Stop` are no-ops there, so applying a spec's desired run state leaves them alone. A server change to a Paused or Failed bot takes effect at Resume or Reset.
-
-  > Note (P4.2, from P3.9): **Not decided: re-apply holds after a respawn.** A death ends a `HoldUse` hold, and only a new join runs the at-start steps again. So an at-start hold comes back after a reconnect but not after a respawn (ADR-0011).
-
-  > Note (P4.2, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Holds after a respawn** aren't re-applied; that's a known limit. A repeating `HoldUse{on: true}` step does re-apply a hold after a death. P11.4 decides about "on respawn" steps. *Decided in Phase 11, group C ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S20): an opt-in `on_respawn` schedule after a respawn the server confirmed, built in C3.*
-  > - **A failed `respawn()`** is retried every 5 s while the session lives; the first failure logs at `warn`, the retries at `debug`. After 12 failed calls in a row the session ends with the new `DisconnectReason::RespawnFailed` (Transient, added to fleet-core in this task), so the bot reconnects and respawns on join. *(Since Phase 11, [ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S23: an `Ok` the server doesn't confirm within 5 s counts as a failure too.)*
-  > - **Events.** `FleetEvent { bot_id, at, kind }` with `StateChanged(BotSnapshot)`, `Died`, `ChatReceived`, `ChatSent{ticket}` and `ChatFailed{ticket, reason}`, on one bounded `broadcast` per fleet.
-  > - **The session-request timeout** is 30 s, a `RuntimeConfig` default. *(150 s from Phase 11, ADR-0020, S1, PR #59's review: longer than the server may take to mint a session, so a bot asking fresh after a refused login takes the session minted for it.)*
-
-  > Note (P4.2, from group B, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **`FleetEvent` already exists** (P4.5), with every kind above plus `ModeChatSent{message}`.
-  > - **Order.** At `StartMode` the actor opens the chat queue before it starts the mode runner. At `StopMode` or a disconnect it cancels the runner first and closes the queue after that, so mode chat never meets a closed queue. The runner and the queue's delivery get separate child tokens of the session's token.
-  > - **Spans.** The actor spawns the queue's `ChatDelivery` and the `ModeRunner` instrumented with the bot's span; neither opens one of its own.
-
-  > Note (P4.2, from group C, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Deviation: the inbox has no Start or Stop.** It takes one `BotCommand` per `Fleet` call: `UpdateSpec`, `Restart`, `Reset`, `Resume` and `SendChat` (with a `oneshot` reply). Start and Stop come only from the spec's desired state, when the actor starts and on every `UpdateSpec`, so the two can never disagree. `Restart` runs Stop then Start inside the actor, so a full inbox can't leave it half done, and it does nothing while the desired state is Stopped. "Stop during backoff" is an `UpdateSpec` with desired = Stopped.
-  > - **API.** `BotActor::new(BotActorParts { spec, connector, credentials, retry, config, clock, rng, events, bucket, tickets, snapshot, breaker })` returns the actor and its `BotInbox` (`try_send`, `InboxError::{Full, Closed}`); `run(cancel)` returns an `ActorExit`. The caller owns the snapshot and breaker `watch`es: the breaker watch's current value is where the actor starts, and the actor writes a copy after each breaker effect. The `RetryPolicy` is passed in; `ResetBreaker` is `record_success()`, which leaves the breaker as a new one.
-  > - **In-flight work.** The session request, the retry timer and the respawn retry are futures the actor owns and polls in its `select!`; leaving the state drops them, which cancels them. `connect()` is bounded by the connect timeout, a new `RuntimeConfig` field (Appendix A's key); running out is `ConnectFailed(TimedOut)`.
-  > - **Teardown** runs as a task in the actor's `JoinSet`, so the actor keeps serving its inbox and timers. Each session has a generation; a finished teardown is `SessionClosed` only while no newer session has connected. It takes no timeout and no token of its own, because the port guarantees `disconnect()` finishes (the second exception in CLAUDE.md's task rule).
-  > - **A server change or `Restart`** goes through `Stopping{restart}` while Connecting or Online. In AwaitingSession or Backoff it starts a new run at once, dropping the backoff, the pending request and the breaker's cool-down. A spec for another bot or account is ignored and logged at `error`.
-  > - **Order.** The `select!` is biased: cancellation, finished tasks, inbox, session-request answer, retry timer, respawn retry, then the session's events last, so a chat flood can't hold up the rest. Before every input that ends a session (Restart, an `UpdateSpec` that changes the server or sets desired = Stopped, cancellation, a closed inbox, the respawn retry's last failure, a crash exit), the actor applies the session events that are already ready, at most `session_drain` = 67 (fleet-mc's 64 plus 3 lifecycle events). So a queued duplicate-login kick always pauses the bot first (§6 row 3).
-  > - **Ending.** Cancellation or a closed inbox stops the bot through `transition()`, waits for every teardown and returns `ActorExit::Stopped`. A runner, delivery or teardown that panics is logged at `error` (the task, never the payload); the actor tears the session down without a state change and returns `ActorExit::TaskCrashed{task}`, so the last published state stays.
-  > - **Respawn** retries 5 s after each failed call; `Closed` ends the retry at `debug` and never counts; each death warns on its first failure.
-  > - **Events and logs.** `Notify` is published as the new `FleetEventKind::Alert(BotNotification)`, right after its `StateChanged`. No event for the starting state: the snapshot watch gets Stopped. `last_disconnect` changes only when a session ends on its own. State changes log at `info`; a session that ends on its own and is retried, a session-request timeout and a retryable credential error at `warn` (a kick's text only at `debug`); Paused at `warn`, Failed at `error`.
-  > - **Tests.** fleet-testkit's fake session gained `fail_respawn`, `succeed_respawn` and `delay_disconnect`. Crashes come from a test-only wrapper in fleet-runtime's `tests/`, as for P4.8.
-
-  > Note (P4.2, found and fixed in P4.7) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **Reset and Resume ignored the desired state.** A Paused bot whose spec said desired = Stopped connected again on Resume, and a Failed one on Reset. Both now feed their event and then apply the desired state, as `UpdateSpec` does: with desired = Stopped the bot passes `AwaitingSession{1}` and ends Stopped, and the session request is dropped before the provider is ever asked. A regression test covers both.
-
-  > Note (P4.2, found and fixed in P4.8) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **A crashing actor stopped reading its inbox.** After its mode runner, chat delivery or a teardown panicked, the actor waited for its teardowns, which can take seconds, before it returned `TaskCrashed`. Meanwhile a `send_chat` forwarded to it ended `TimedOut` after 5 s, and a Reset, Resume or Restart was answered `Ok`, then lost with the actor: a resumed Paused bot came back Paused. The P4.8 plan found it.
-  > - **The fix.** `crash()` now closes the inbox first, so the supervisor's next forward is refused at once (`Busy`), and drops the commands already queued, which answers a waiting `send_chat` with `Busy` too.
-  > - **Known limit.** A command that reaches the inbox in the same instant as the crash is still lost, as with a panic of the actor itself. The chaos test treats a call in the same instant as a crash of that bot as possibly lost.
-  > - **Test.** A regression test in `tests/fleet/supervisor.rs` first failed with `TimedOut` for `send_chat` and `Ok` for `resume`. It now checks that `send_chat`, `resume` and `restart` answer `Busy` without the clock moving.
+  > Note (P4.2, later changes): holds aren't re-applied after a respawn (ADR-0011) until Phase 11's opt-in `on_respawn` schedule ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S20); an `Ok` from `respawn()` that the server doesn't confirm within 5 s counts as a failure (S23); the session-request timeout is 150 s, not 30 s (S1, PR #59's review). Found and fixed in P4.7 and P4.8 ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): Reset and Resume apply the desired state, and a crashing actor closes its inbox first.
 - [x] **P4.3** 🔴 `SessionCredentialProvider` port:
   - In standalone mode it returns offline credentials.
   - In managed mode it asks the control plane (Phase 10).
   - On an expired token it refreshes once, then goes to `Failed(Auth)`.
 
-  > Note (P4.3, from Phase 2): The "refresh once" is driven by the core state machine. The first `AuthInvalid` emits `RequestSession{fresh: true}`, and the provider must bypass any token cache for it. The second goes to `Failed(Auth)` (ADR-0010).
-
-  > Note (P4.3, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The port lives in `fleet_core::mc`, so fleet-testkit can provide its fake: `session(SessionRequest { bot_id, account, fresh })` returns `SessionCredentials` or `CredentialError { retryable }`. `OfflineCredentials` lives in fleet-runtime, the managed implementation in fleet-agent (P10.6). The runtime doesn't check `expires_at`.
+  > Note (P4.3): the port lives in `fleet_core::mc`, so fleet-testkit provides its fake; `OfflineCredentials` is in fleet-runtime, the managed implementation in fleet-agent (P10.6). The "refresh once" is the core state machine's: the first `AuthInvalid` emits `RequestSession{fresh: true}`, which bypasses any token cache, and the second goes to `Failed(Auth)` (ADR-0010, [ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)).
 - [x] **P4.4** 🔴 `ModeRunner` drives the core `ModePlan` through the `SessionHandle`.
   - A failed action is logged and skipped, never fatal.
   - It stops cleanly on disconnect or mode change.
   - Tests assert the timing on a paused clock.
 
-  > Note (P4.4, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Logging.** A failed action logs at `warn` for the first failure of each kind per session, then at `debug`.
-  > - **A mode change** lets go first (`HoldUse{on:false}`, `Sneak{on:false}`), then starts the new plan with its at-start steps. The slot stays, and an equal definition changes nothing.
-
-  > Note (P4.4, from group B, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Shape.** One `ModeRunner` task per Online session. The actor starts it at `StartMode` with a `CancellationToken` and a `watch::Receiver<ModeDefinition>`. A changed definition lets go and restarts the plan inside the same task, so the warn-once memory lasts the whole session. The runner ends at cancellation, when the session has ended (a call fails with `Closed`), or when the owner drops the `watch` sender.
-  > - **Cancellation** interrupts a tick's actions; a mode change waits until they're done.
-  > - **Logging.** Failed actions and refused mode chat (`RateLimited`, `QueueFull`) share the runner's warn-once log; the queue's delivery keeps its own for failed sends. *(the user's addition)* Mode chat that finds the queue closed (`NotOnline`) always logs at `debug`, so a disconnect can't produce a spurious warning. *(PR #15 review)* The same goes for a session call that fails with `Closed`: the runner stops at `debug`, and the delivery logs a mode-chat send the ended session refuses at `debug` too.
-  > - **Timing.** The runner wakes at most once per sleep, and a late tick doesn't catch up (P2.8). tokio's timer rounds a deadline up to the next millisecond, which the jitter test allows for.
-  > - **Tests** read log levels through a small level-recording subscriber in the test file: fleet-testkit's log capture doesn't record levels.
+  > Note (P4.4): one `ModeRunner` task per Online session; a failed action logs at `warn` for the first failure of each kind per session, then at `debug`; a mode change lets go first (`HoldUse{on:false}`, `Sneak{on:false}`), then restarts the plan in the same task; the runner wakes at most once per sleep, and a late tick doesn't catch up (P2.8) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)).
 - [x] **P4.5** 🔴 Outbound chat queue:
   - bounded at 16, with one governor token bucket per bot
   - when the bucket or queue is full it returns `RateLimited` or `QueueFull` **instead of blocking**
   - user chat and mode chat share it
   - governor's clock is injected, so the tests run on controlled time (see §8)
 
-  > Note (P4.5, from Phase 3, group E): **flagged, not decided.** `send_chat` can fail with `SessionError::ChatUnavailable` when an online session can't sign chat for a server that enforces it. The session stays up, and a later call may succeed. This task decides what the queue does then, for user chat and mode chat (ADR-0011).
-  >
-  > Mode chat with a command that takes message arguments (`/me`, `/msg`, `/tell`, `/w`, `/say`, `/teammsg`) is rejected by a server that enforces secure chat, while `send_chat` returns `Ok`. That's undecided here too; see P11.3's note. *Decided in Phase 11 ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S2): fleet-mc refuses it with `ChatUnavailable`, so the mode's step is skipped at `debug`.*
+  > Note (P4.5): admission takes a queue slot, then a token from the bucket (one message per 3 s, burst 3), which outlives the sessions and actor restarts; `send_chat` returns a ticket, and the outcome comes later as `ChatSent` or `ChatFailed`; `ChatUnavailable` drops the message; refused mode chat is skipped and logged ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)). A temporary probe proved that every ban on chrono's and rand's clock and OS-randomness paths in fleet-runtime's `clippy.toml` fires (PR #14's review, as ADR-0010's probe did).
 
-  > Note (P4.5, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Admission.** The bucket (one message per 3 s, burst 3) is checked when a message is queued. User chat while the bot isn't Online returns `NotOnline`.
-  > - **Results.** `send_chat` returns a ticket once queued; the outcome comes later as `ChatSent` or `ChatFailed`. Queued messages fail with `ChatFailed{Disconnected}` on a disconnect. A failed send doesn't refund its token.
-  > - **`ChatUnavailable`** drops the message: user chat gets `ChatFailed{ChatUnavailable}`, mode chat is logged at `debug` and skipped. No retry.
-  > - **Mode chat** that's rate-limited or finds the queue full is skipped and logged.
-  > - **Commands with message arguments** get nothing special here; P11.3's rule applies to mode chat too.
-
-  > Note (P4.5, from the PR #14 review, the user's request): **Prove the chrono and rand bans.** fleet-runtime's `clippy.toml` lists chrono's and rand's clock and OS-randomness paths with `allow-invalid`, which would hide a path that doesn't resolve. When chrono and rand become fleet-runtime dependencies, show a red clippy run proving that each banned chrono and rand path fires. That means `chrono::Utc::now` and `Local::now`, rand's `rng`, `random`, `random_iter`, `random_range`, `random_bool`, `random_ratio`, `fill` and `make_rng`, and the `ThreadRng` and `SysRng` types. Use a temporary probe, never committed, with the features that make these paths exist enabled only for the probe, as ADR-0010's probe did (ADR-0013).
-
-  > Note (P4.5, from group B, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Events now.** `FleetEvent { bot_id, at, kind }` is defined here with all its kinds, so the queue's `ChatDelivery` publishes `ChatSent` and `ChatFailed` on the fleet's `broadcast` itself, stamped by the `RuntimeClock`. A new kind, **`ModeChatSent{message}`**, reports mode chat that was sent; mode chat that isn't sent is only logged.
-  > - **Tickets** come from one fleet-wide counter, `ChatTickets`, so a ticket never repeats while the agent runs, even across actor restarts.
-  > - **`ChatFailure`** is `Disconnected`, `ChatUnavailable`, `TimedOut`, `SessionBusy` or `NotInWorld`. A message still queued at a close, or a send that finds the session `Closed`, is `Disconnected`.
-  > - **Admission** reserves a queue slot before it takes a token, so a refused message uses up neither.
-  > - **Mode chat that's refused** (`RateLimited`, `QueueFull`) or fails in the session logs at `warn` the first time per kind and session, then at `debug`. `ChatUnavailable` is always `debug`, since fleet-mc already warns once per session. *(PR #15 review)* So is `Closed`: it only means the session has ended, so a disconnect that catches mode chat in flight or still queued can't produce a spurious warning. The text is never logged.
-  > - **The bucket** (`ChatBucket`) is shared and outlives the sessions, so a reconnect doesn't refill it, and the supervisor keeps it across actor restarts (P4.7).
-  > - **Shape.** `ChatQueue::open(session, events, clock, cancel)` returns the session's `ChatDelivery`, which the actor spawns, and a `ModeChat` handle for the mode runner. `close()` cancels the delivery, which fails what's still queued. A send that's already running finishes, since every `SessionHandle` call has its own timeout. The settings are `RuntimeConfig` fields.
-  > - **Naming.** The delivery task is `ChatDelivery`, not `ChatSender`: fleet-core's incoming chat already has a `ChatSender`.
-
-  > Note (P4.5, from group B): **The bans are proven.** chrono arrived in P4.5 and rand in P4.4. A temporary probe, never committed, then enabled chrono's `clock` and rand's `thread_rng` (which brings `std_rng` and `sys_rng`) for fleet-runtime only and used each banned path. Clippy flagged all 12 with their reasons: `disallowed_methods` for `chrono::Utc::now`, `chrono::Local::now`, `rand::rng`, `random`, `random_iter`, `random_range`, `random_bool`, `random_ratio`, `fill` and `make_rng`, and `disallowed_types` for `rand::rngs::ThreadRng` and `SysRng`. The files were restored afterwards.
+  > Note (P4.5, from Phase 3): mode chat with a command that takes message arguments got nothing special here (ADR-0011); decided in Phase 11: fleet-mc refuses it with `ChatUnavailable`, so the mode's step is skipped at `debug` ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S2).
 - [x] **P4.6** 🔴 Watchdog, while Online (fault table in ADR-0008 §5):
   - no `Tick` for `watchdog_timeout`: raise `WatchdogTimeout`, tear the session down and reconnect
   - no packet from the server for `packet_liveness_timeout`: tear the session down and treat it as a transient disconnect
 
   Both timeouts come from `[runtime]` in the agent config (Appendix A).
 
-  > Note (P4.6, from group E, the user's decision): The session's `Liveness` holds the two stamps, and the comparison lives here. When both stamps are stale, the tick stall wins: `WatchdogTimeout`, not `LivenessTimeout`, because a hung host thread stops both (ADR-0010).
-
-  > Note (P4.6, from the Phase 4 plan) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The watchdog checks every 1 s, a `RuntimeConfig` default.
-
-  > Note (P4.6, from group C, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **In the actor.** The watchdog is a timer in the actor's `select!`, armed when the bot goes Online and dropped when it leaves. The first check comes 1 s after the join, and each check arms the next one a period later.
-  > - **Stale** means at least the timeout old: with 30 s and a 1 s period, a stall is caught 30–31 s after the last tick or packet. The check reads tokio's clock as a std `Instant` and uses `saturating_duration_since`, never the banned `elapsed()`. A tick stall is `WatchdogTimeout`, a packet stall `Disconnected(LivenessTimeout)`; when both are stale the tick wins.
-  > - **Ready session events go first,** as before every session-ending input (P4.2): a queued duplicate-login kick pauses the bot instead of a trip that would reconnect it.
-  > - **Settings.** `watchdog_timeout` and `packet_liveness_timeout` (30 s each) are `RuntimeConfig` fields for Appendix A's keys; `watchdog_period` (1 s) is a default only, and a zero period counts as 1 ms. A trip is recorded in `last_disconnect` and logs at `warn` like any session that ends on its own.
-  > - **Tests** are in `tests/bot_actor.rs`, next to the actor's helpers, instead of a separate file: sharing those helpers through `tests/common` would leave them unused in the other test files.
+  > Note (P4.6): a timer in the actor's `select!` checks every 1 s while Online; a stamp is stale at its timeout (30 s each), so a stall is caught 30–31 s after the last tick or packet; when both are stale the tick stall wins (`WatchdogTimeout`), since a hung host thread stops both; the ready session events go first, so a queued duplicate-login kick pauses the bot instead (ADR-0010, [ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)).
 - [x] **P4.7** 🔴 `Supervisor` and `Fleet` handle:
   - actors run in a `JoinSet` or `TaskTracker`
   - panics are detected and the actor restarted, within the intensity limit
   - API: `apply(spec)`, `remove(id)`, `send_chat`, `snapshot_all`, `subscribe`
   - graceful shutdown: cancel, then disconnect every bot within the timeout
 
-  > Note (P4.7, from Phase 2):
-  > - **Restart limit.** "5 restarts in 10 min" uses the core `FailureWindow` and ends with the core `CrashLoop` event (ADR-0010).
-  > - **Open question, flagged and not yet decided.** `Paused` (a human is playing) and `Failed` must survive an actor or agent restart. Otherwise a fresh `Start` kicks the human (§6 row 3).
+  > Note (P4.7): actors run in tokio's `JoinSet` with child tokens; the API adds `reset`, `resume`, `restart`, `snapshot` and `shutdown`, and `apply(spec, restore: Option<StickyState>)`. Restarts never skip the backoff: the supervisor keeps each bot's spec, snapshot, restart window, breaker copy and `ChatBucket`, and `fleet_core::bot::restore` decides the restored state; a panic or a crashed task counts in the window (`FailureWindow`, ADR-0010), and the 6th within 10 min ends in `CrashLoop` ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)).
 
-  > Note (P4.7, from Phase 3): The abandoned-thread limit lives in fleet-mc: above it, `connect()` returns `HostUnavailable`. Ending the agent process at the limit is P5.3's job (ADR-0011).
-
-  > Note (P4.7, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Inside.** Actors run in tokio's `JoinSet` with child `CancellationToken`s. The `Fleet` handle talks to the supervisor task over a bounded queue with a reply timeout.
-  > - **API.** Also `reset`, `resume`, `restart` (a no-op when desired = Stopped), `snapshot(id)` and `shutdown(timeout)`; bots start and stop only through the desired state. `apply(spec, restore: Option<StickyState>)` refuses a new bot above `max_bots` (`AtCapacity`) and a changed account (`AccountChanged`). `remove` returns once accepted; until the `Removed` event, `apply` for that bot returns `Busy`.
-  > - **Restarts never skip the backoff.** The supervisor keeps each bot's spec, snapshot, restart window and a copy of its circuit breaker, which the actor publishes after each breaker effect. A pure `fleet_core::bot::restore` turns AwaitingSession, Connecting, Online and Backoff into `Backoff{attempt}` with `ScheduleRetry` (`Backoff{1}` after a stable Online); Paused, Failed and Stopped stay, and Stopping becomes Stopped. A panic isn't a breaker failure.
-  > - **Crash loop.** The 6th panic within 10 min starts the actor once more with `CrashLoop` first. If it panics again, the supervisor publishes `Failed(CrashLoop)` itself and starts an actor only on Reset.
-  > - **Agent restarts.** The server is the source of truth (P10.5); the standalone agent persists nothing, a documented limit.
-
-  > Note (P4.7, from group B, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **The chat bucket survives a restart.** The supervisor keeps each bot's `ChatBucket`, like its breaker copy, and hands the same one to a restarted actor, so a crash doesn't refill it. It also owns the fleet's `ChatTickets` and gives every actor a clone, so a ticket never repeats.
-
-  > Note (P4.7, from group C, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **A crashed task counts like a panic.** When the actor's mode runner, chat delivery or a teardown panics, `run()` returns `ActorExit::TaskCrashed{task}` instead of panicking itself. The supervisor counts that in the restart window exactly like a panic, so it restarts with the backoff and ends in `CrashLoop` after the 6th within 10 min. The actor leaves its last published state, so `restore()` works on it as after a real panic.
-  > - **The actor's inbox** takes one `BotCommand` per `Fleet` call: `UpdateSpec`, `Restart`, `Reset`, `Resume` and `SendChat`. Bots start and stop only through the spec's desired state; `restart` is the `Restart` command, which the actor ignores while desired = Stopped.
-  > - **The supervisor owns the `watch`es.** It creates each bot's snapshot and breaker `watch` and passes the senders in `BotActorParts`; the breaker watch's current value is where a new actor starts.
-  > - **A restored starting point.** `BotActorParts` will need one for a restarted actor: the `Transition` from `fleet_core::bot::restore()` (e.g. Backoff with `ScheduleRetry`), or a sticky Paused or Failed from `apply`'s restore. Today the actor starts Stopped and applies the desired state. P4.7 decides what the actor publishes for a restored state.
-
-  > Note (P4.7, from group D, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Shape.** `Fleet::new(FleetParts)` returns `(Fleet, Supervisor)` after checking the chat quota and every channel capacity against tokio's limits (`FleetSetupError`). The caller runs `supervisor.run(cancel)` in a task it owns; a cancelled token or every `Fleet` dropped shuts down within `RuntimeConfig::shutdown_timeout` (10 s).
-  > - **Calls.** A full supervisor queue is `Busy` at once, no answer within 5 s is `TimedOut`, and an ended supervisor is `ShuttingDown`. One `BotCommand` per call by `try_send`; a refused one is `Busy` and stores no spec. `send_chat` returns `SendChatError { Fleet, Chat }`.
-  > - **`apply`.** New: `AccountInUse` when a live bot's account clashes (`BotAccount::clashes_with`: offline names ignore ASCII case), `Busy` when only a removing bot holds it, `AtCapacity` at `max_bots` (every known bot counts until `Removed`). Known: `AccountChanged` compares exactly, an equal spec isn't forwarded, a restore is ignored. `StickyState` lives in `fleet_core::bot`.
-  > - **Starting points.** `BotActorParts.start: Transition`: Stopped, a sticky state, `restore()`, or `CrashLoop` on the restored state. Only a start state that differs from the `watch` is published (a sticky start without an `Alert`); `last_disconnect` carries over. `restore()` of a stable Online also records a success.
-  > - **Crashes.** A panic, a `TaskCrashed` and an unexpected exit (logged at `error`) count in the window; a restart logs at `warn` in the bot's span, the crash loop at `error`. After the crash-loop actor crashes too, calls act like a Failed actor's, and `reset` starts a new one. The window is cleared only by a `reset` while the bot is crash-looped: its actor was started for a crash loop, or it has none. *(PR #17 review)* That goes by the supervisor's own record, since a Reset can come before the crash-loop actor has published `Failed(CrashLoop)`.
-  > - **Removal** publishes `StateChanged(Stopped)` only for a bot its actor stops through `transition()`; a Paused, Failed or crash-looped bot gets only `Removed`, so P10.5 keeps the server's stored state. While removing: `apply` is `Busy`, the other commands `UnknownBot`, a second `remove` `Ok`, and reads still show the bot.
-  > - **Shutdown** returns `ShutdownReport { stopped, aborted, crashed }`; calls meanwhile are `ShuttingDown`, and an accepted removal still publishes `Removed`.
-  > - **Tests** are the folder crate `tests/fleet/` (`main.rs`, `panicky.rs`, `supervisor.rs`).
+  > Note (P4.7): Paused and Failed survive an agent restart because the server is the source of truth (P10.5); the standalone agent persists nothing, a documented limit ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)). Above fleet-mc's abandoned-thread limit `connect()` returns `HostUnavailable`; ending the agent there is P5.3's job (ADR-0011).
 - [x] **P4.8** 🔴 **Chaos property test.** Random sequences of these events, run with paused time:
   - transient and permanent kicks
   - connection failures
@@ -1248,90 +1112,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - Connect attempts stay inside the policy bounds (no reconnect storms).
   - The `Fleet` API always responds.
 
-  > Note (P4.8, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): A fixed 500 cases (`with_cases(500)`), as an exception to `PROPTEST_CASES`. Panics come from a test-only connector wrapper in fleet-runtime's `tests/`; the fakes stay panic-free. The storm invariant holds across actor panics too, with no exception for connects after a restart.
+  > Note (P4.8): a fixed 500 cases (`with_cases(500)`, an exception to `PROPTEST_CASES`) in `tests/fleet/chaos.rs`, with panics from the test-only `PanickyConnector`; the storm invariant leaves a deliberate new run's connects out of its bound; probes every 5 s catch the crash gap, and 8 coverage targets must each be reached ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)). Red runs, each a temporary break: the reverted crash-gap fix, `restore()` returning `Backoff{1}` for every state, and `restore()` without `ScheduleRetry` each failed with a shrunk one-bot case.
 
-  > Note (P4.8, from group C, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **Deliberate restarts start a new run.** A `Restart` or a server change starts a new run at once, in AwaitingSession and Backoff too, dropping the backoff and the breaker's cool-down, as Start, Reset and Resume already do. So the storm invariant must leave the connects of a deliberate new run out of its bound.
-
-  > Note (P4.8, from group D, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The chaos test becomes `tests/fleet/chaos.rs` in the fleet test crate and reuses `tests/fleet/panicky.rs`, whose `PanickyConnector` panics on chosen connects (the actor itself) or in a session's `perform` or `disconnect` (`TaskCrashed`).
-
-  > Note (P4.8, from group E, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Cases.**
-  >   - **Size.** 1–3 bots (`AfkBot1`–`AfkBot3`), 1–30 steps, and 0–90 s of paused time after each step. Settings are Appendix A's defaults.
-  >   - **Faults:**
-  >     - transient, permanent and duplicate-login kicks
-  >     - failed connects (`Refused`, `Unresolvable`, `Other`, `HostUnavailable`), a connect that never joins (the test fails it after the connect timeout, as fleet-mc would), auth rejections, retryable, refused and stuck credentials
-  >     - a hung session, a dead link, a tick stall, and teardowns of 0–20 s, so new sessions often connect while an old one still tears down
-  >     - panics in connect, perform or teardown, and a crash burst of 1–8 panics on the next connects; at most 8 crashes per bot
-  >   - **Calls:** spec updates (`afk` ↔ a cheap mode with a jump every 5 s and chat every 60 s, two placeholder servers, the desired state), Restart, Reset, Resume, `send_chat`, `snapshot`, `snapshot_all`, and remove plus re-add. The re-add works as P10.5 does: it retries on `Busy` until `Removed`, and restores a Paused or Failed last state.
-  > - **Per-bot scripts in the test.** `panicky.rs` scripts connects and panics per bot and logs every connect and panic. `credentials.rs` (`ScriptedCredentials`) answers per bot. A "server" task joins each new session unless the bot's script says otherwise. fleet-testkit is unchanged.
-  > - **The model.**
-  >   - A fault counts only once it has landed: the event was queued, the scripted answer used, or the panic fired.
-  >   - A bot leaves the class that must end Online when a non-transient fault lands, and comes back on a Reset (Failed) or Resume (Paused) answered `Ok`. A call in the same instant as a crash of its bot doesn't bring it back (see the P4.2 note).
-  > - **Invariants:**
-  >   - **No panic escapes:** the supervisor's task ends without a panic at the final shutdown.
-  >   - **Healing:** a bot that should run, with only transient faults and at most 5 fired crashes, ends Online; with 6 or more it may end `Failed(CrashLoop)`.
-  >   - **No storms,** on the events and the connect log:
-  >     - `AwaitingSession{1}` only after a deliberate call.
-  >     - `AwaitingSession{m≥2}` only after `Backoff{m−1}`, at least `bounds(m−1).0` later.
-  >     - `Backoff{n}` keeps the attempt it came from, or is `Backoff{1}` after a stable Online.
-  >     - Each connect follows its own published `Connecting`, so none while Paused or Failed. The fresh-token retry is allowed.
-  >     - A `Lagged` on the test's receiver or the connector's fails the case.
-  >   - **The API answers** before the clock moves and never `TimedOut`. `Busy` is allowed. The final shutdown answers within its timeout plus the reply timeout, and every call after it answers `ShuttingDown`.
-  >   - **Metrics:** the bots gauge equals `snapshot_all` after settling and is 0 after the shutdown. The reconnect counter equals the published `Connecting`s with attempt > 1 or `auth_retried`.
-  > - **Settling.** No new faults are injected; the scripted ones run out. It ends once every bot is in a state it stays in, with no stalled session left and no perform panic waiting on an Online bot. The cap is each scripted fault's worst wait (max backoff, breaker cool-down, timeouts, the slowest teardown) times the number of faults plus 3.
-  > - **Probes** *(added during the build, the user's decision)*. Every bot the test holds and isn't removing gets a `send_chat` every 5 s, during the pauses and the settling. Any answer but `TimedOut`, `ShuttingDown` or `UnknownBot` passes, if it comes before the clock moves. Without them, the test passed all 500 cases with the crash-gap fix reverted (P4.2's note), because random steps rarely call a bot whose crashed actor is still tearing down. The probes cost about 1.5 s.
-  > - **Coverage.**
-  >   - The test runs exactly 500 cases (`Config::with_cases(500)`, plus any seeds in the regressions file), and `PROPTEST_CASES=1000` still runs 500.
-  >   - It prints how many cases reached each target and fails if one is 0. Targets: a crash loop, a duplicate-login pause, the fresh-token retry, a sticky re-add, a teardown running at a connect, a tick trip, a packet trip, and *(the user's addition)* a probe while a session whose `perform` panicked is still inside its `disconnect()`, from the connector's own log.
-  >   - A typical run: crash loop 51, pause 134, fresh token 92, sticky re-add 48, teardown at a connect 58, tick trip 163, packet trip 124, probe in a crash teardown 65. To lift the last one, perform panics and slow teardowns weigh 6 instead of 3 and 4, and the probes run every 5 s instead of only after each step.
-  >   - Failures persist next to the file, as `tests/fleet/chaos.proptest-regressions`.
-  > - **Red runs** (temporary, uncommitted breaks, each restored afterwards):
-  >   - **Without the crash-gap fix:** "a Fleet call took time to answer", shrunk to one bot with `SlowTeardown(6)`, `Panic(Perform)` and a transient kick, all at pause 0. A probe reached the actor while it waited for its teardown.
-  >   - **`restore()` returning `Backoff{1}` for every state:** "Backoff{1} after Connecting { attempt: 3, … }", shrunk to one bot with a retryable credential refusal, a server change, stuck credentials and a connect panic.
-  >   - **`restore()` without `ScheduleRetry`:** "the fleet didn't settle within 5240s", shrunk to one bot with a crash burst of 1.
-  > - **Time.** The chaos test takes about 7–7.7 s, and `just test fleet-runtime` (288 tests) about 7.9 s.
-  > - **Helpers.** `awaiting`, `PAUSED` and `DUPLICATE_LOGIN` moved back from `harness.rs` to `supervisor.rs`, the only file that uses them.
-
-  > Note (P4.8, a bug found in Phase 6, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **The model missed a bot's last events.**
-  > - **Found.** CI's coverage job on PR #23 hit a case where `afkfleet_bot_reconnects_total` was 4 and the test's model 3. The case failed on Windows too, so it wasn't a platform difference.
-  > - **The cause was the test, not the runtime.** `settle()` absorbed the events first, then awaited the probes and `snapshot_all()`. In this case a bot's retry fell due in the instant the settle loop woke up. The bot then went `AwaitingSession{7}` → `Connecting{7}` → Online while the loop awaited, and the snapshots already showed Online, so `settle()` returned without the model ever seeing those three changes. Attempt 7 was a real reconnect, a connect the bot made on its own, so the counter's 4 was right; the model's storm checks had skipped those changes too.
-  > - **The fix.** `settle()` absorbs the events again right after `snapshot_all()`, before it judges the snapshots. The actor publishes each snapshot and its event in one synchronous step, so every state the snapshots show is absorbed. Neither the runtime nor what the metric counts changes.
-  > - **The regression test.** CI's seed is in `tests/fleet/chaos.proptest-regressions`, which proptest replays before the 500 new cases. The test failed on it (4 against 3) before the fix and passes after it.
+  > Note (P4.8, a bug found in Phase 6): the test's model missed a bot's last events, so on PR #23 the reconnect counter (4) disagreed with it (3); `settle()` now absorbs the events again after `snapshot_all()`, and CI's seed stays in `tests/fleet/chaos.proptest-regressions` ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)).
 - [x] **P4.9** Metrics: bots per state, reconnects, watchdog trips, actor restarts.
 
-  > Note (P4.9, from Phase 3): Also export fleet-mc's diagnostics: live and abandoned host threads, live Worlds, and dropped chat (ADR-0011).
+  > Note (P4.9): `afkfleet_bots{state}`, `afkfleet_bot_reconnects_total`, `afkfleet_watchdog_trips_total{kind}` and `afkfleet_actor_restarts_total`, with no `bot_id` label; every snapshot write moves the bots gauge, and `Fleet::new` registers every series at 0 in the recorder installed at that moment (see P5.3) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)). Deviation: fleet-mc's diagnostics (counters and gauges, ADR-0011) moved to P5.3, since fleet-runtime may depend only on fleet-core.
 
-  > Note (P4.9, from Phase 3, group B): `abandoned_threads()`, `dropped_chat()` and `ignored_action_bar()` only count up, so they're counters; `live_threads()` and `live_worlds()` are gauges (ADR-0011).
-
-  > Note (P4.9, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The metrics are `afkfleet_bots{state}`, `afkfleet_bot_reconnects_total`, `afkfleet_watchdog_trips_total{kind}` and `afkfleet_actor_restarts_total`, with no `bot_id` label. Tests install a hand-written recorder per test with metrics' thread-local `set_default_local_recorder`. **fleet-mc's diagnostics move to P5.3:** fleet-runtime may depend only on fleet-core (§4), so the two notes above are the agent's job.
-
-  > Note (P4.9, from group E, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **The bots gauge** changes with every snapshot write:
-  >   - The supervisor's `Entry` holds a `SnapshotOwner`, which isn't `Clone`. It counts the bot in its first state, and its `Drop` takes the bot out of its current one, so removing a bot or ending the supervisor does too.
-  >   - Actors publish through a clonable `SnapshotPublisher`, which `BotActorParts.snapshot` now takes instead of the raw `watch::Sender`. Each publish moves the bot from the old state's label to the new one. Dropping a publisher changes nothing.
-  >   - So no write can skip the gauge. P4.8's chaos test checks it against `snapshot_all` too.
-  > - **What counts:**
-  >   - **A reconnect:** every connect that isn't the first of a deliberate run (`attempt > 1 || auth_retried`), the fresh-token retry and failed connects included.
-  >   - **A watchdog trip:** only one that ends the session, after the drained events. It's labelled `kind="tick"` or `kind="packet"`.
-  >   - **An actor restart:** every actor the supervisor starts after a crash, the crash-loop start included. A new bot, a Reset, and a crash during removal, during a shutdown or after a crash loop don't count.
-  > - **Labels.** The 8 `state` labels come from a private, exhaustive match in fleet-runtime with no catch-all arm: `stopped`, `awaiting_session`, `connecting`, `online`, `backoff`, `paused`, `failed`, `stopping`. A new `BotState` variant doesn't compile without one, and fleet-core is unchanged.
-  > - **Registration.** `Fleet::new` describes the four metrics and registers every series at 0, in the recorder installed at that moment (see P5.3).
-  > - **Dependency.** `metrics` 0.24.6, whose only dependency is `rapidhash`.
-  > - **Tests:**
-  >   - `tests/fleet/metrics.rs` uses a hand-written recorder (`tests/fleet/recorder.rs`). The helpers it shares with `supervisor.rs` moved to `tests/fleet/harness.rs`.
-  >   - Three cases the `Fleet` can't reach are unit tests, with a second, `cfg(test)` recorder in `src/metrics.rs`: a crash of the crash-loop actor, the supervisor's own `Failed(CrashLoop)`, and a trip that the drained events overtake.
-  >   - Two temporary mutations, never committed, showed that the "doesn't count" tests catch the bug: counting a trip before the drain, and counting every crash as a restart.
-
-  > Note (Phase 4 wrap-up, group E) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **The Phase 4 DoD, checked on 2026-10-09:**
-  >   - **Coverage ≥ 85 %:** `just cov` gives fleet-runtime 98.25 % of lines (4666/4749), and the workspace 98.94 %; every gate passes.
-  >   - **The chaos test passes 500 cases:** it asserts the count itself, and still runs 500 with `PROPTEST_CASES=1000`.
-  >   - **`just test fleet-runtime` under 30 s:** 288 tests in about 7.9 s, the chaos test about 7.5 s of it.
-  > - **The phase's security list:**
-  >   - **Every channel is bounded:** the supervisor queue, the actor inboxes and the chat queues are `mpsc::channel`s with a capacity from `RuntimeConfig`, checked against tokio's limits; the events are one bounded `broadcast`; `watch` and `oneshot` hold one value. clippy bans `unbounded_channel`.
-  >   - **Chat only through a validated `ChatMessage`:** `Fleet::send_chat`, the queue and mode chat all take `fleet_core::chat::ChatMessage`.
-  >   - **No `unwrap`:** none, nor `expect` or `panic!`, outside test modules; the lints deny them.
-  > - **Later phases inherit** four new notes, in P5.3 and P5.6.
+> Note (Phase 4 wrap-up, group E): the DoD and the security list, checked on 2026-10-09: `just cov` gives fleet-runtime 98.25 % of lines; the chaos test passes 500 cases, also under `PROPTEST_CASES=1000`; `just test fleet-runtime` (288 tests) takes about 7.9 s; every channel is bounded, chat takes only a validated `ChatMessage`, and no `unwrap`, `expect` or `panic!` is outside test modules ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)).
 
 **Security:**
 - Every channel is bounded.
@@ -1349,19 +1137,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** `afkfleet-agent run --config agent.toml` runs a few dev bots (offline mode) against a local server. It survives server restarts and shuts down cleanly.
 **Introduces:** `clap`, `figment`, `garde`, `tracing-subscriber`, `metrics-exporter-prometheus`, `getrandom`, `rustls`. *(anyhow was planned here; group B didn't need it, so it arrives with the first `main.rs` that uses it, ADR-0014.)*
 
-> Note (P5):
-> - **Four group branches.** At the user's request, Phase 5 is built in group PRs like Phases 2–4. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
->
->   | Group | Branch | Tasks |
->   |---|---|---|
->   | A | `p5/p5.1-p5.2-config-and-telemetry` | P5.1, P5.2. fleet-agent is a library only, without a binary or a placeholder command |
->   | B | `p5/p5.3-p5.4-wiring-and-shutdown` | P5.3, P5.4: `afkfleet-agent run`, `just dev-agent`, `deploy/dev/agent.toml` |
->   | C | `p5/p5.5-p5.6-healthcheck-and-docker` | P5.5, P5.6: the healthcheck exists for the container |
->   | D | `p5/p5.7-e2e-and-wrap-up` | P5.7, the DoD demo and the phase wrap-up |
->
->   Each later group asks its own implementation-level questions in its session.
-> - **Decisions.** The user answered the Phase 5 plan's open questions on 2026-10-09. [ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md) records them; the notes below summarize what changes a task.
-> - **Dependencies.** `figment` (`toml`, `env`; `test` for `Jail` in tests), `garde` with `derive`, `tracing-subscriber` with `env-filter` and `json`, and `log` as a fleet-agent dev-dependency (group A). Group B adds `clap` (`derive`), `getrandom`, `metrics-exporter-prometheus` (no features), `rustls` (its defaults: aws-lc-rs), chrono's `now`, tokio's `rt-multi-thread` and `signal`, and fleet-testkit as a dev-dependency.
+> Note (P5): built in four groups (A–D), one PR each; their decisions, which the user answered on 2026-10-09, are in [ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md), with the dependencies.
 
 - [x] **P5.1** 🔴 Config (Appendix A):
   - loaded with figment from TOML plus `AFKFLEET_AGENT__…` env variables
@@ -1369,190 +1145,23 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `[standalone]` and `[control_plane]` are mutually exclusive
   - standalone mode only allows **offline** accounts
 
-  > Note (P5.1, from group C): `mode = "afk"` and `mode = "farm"` in `[[standalone.bots]]` map to `ModeDefinition::afk()` and `ModeDefinition::farm()`. Core has no lookup by name; this task adds it (ADR-0010).
+  > Note (P5.1): `fleet_agent::config::load` reads the file at exactly the given path, then `AFKFLEET_AGENT__…` overrides; unknown keys are errors; missing `[runtime]` and `[retry]` keys take Appendix A's values, among them `connect_timeout_secs` and `max_abandoned_threads` (ADR-0011) and `max_bots` and `shutdown_timeout_secs` ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)); each bot may list `conflict_texts`, bots whose accounts clash are refused (`BotAccount::clashes_with`), and modes go by name (`ModePreset`, ADR-0010); `name` is an `AgentName` ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)).
 
-  > Note (P5.1, from Phase 3): `[runtime]` gains `connect_timeout_secs` (default 30), which goes into `ConnectParams`, and `max_abandoned_threads` (default 3), which goes to `McHostPool` (Appendix A, ADR-0011).
-
-  > Note (P5.1, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): `[[standalone.bots]]` gains `conflict_texts = […]`, kick texts that count as a duplicate login; a missing key means an empty list (`ConflictTexts`, at most 16 entries of 1–1024 characters). P5 also supplies the runtime's wall-clock anchor and seed to `Fleet::new`.
-
-  > Note (P5.1, from P4.7) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): `[runtime] max_bots` and `shutdown_timeout_secs` map to `RuntimeConfig::max_bots` and `shutdown_timeout`. Two `[[standalone.bots]]` entries whose accounts clash are refused with a clear message, using `BotAccount::clashes_with` (offline names compare ignoring ASCII case), the same rule as the runtime's `AccountInUse`.
-
-  > Note (P5.1, from the Phase 5 plan, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
-  > - **Loading.** The file must exist at exactly the given path: figment's `Toml::file` would search parent directories and treat a missing file as empty, so `load` checks first and uses `Toml::file_exact`. `AFKFLEET_AGENT__…` variables override any key.
-  > - **Unknown keys are errors,** in the file and in the environment (`deny_unknown_fields`, and no `flatten`, which would silently turn it off). `[standalone]` and `[control_plane]` are two optional fields, and exactly one must be present.
-  > - **Optional keys.** Every `[runtime]` and `[retry]` key takes Appendix A's value when it's missing. `name` is required, and so are each bot's `username`, `server` and `mode`. `heartbeat_file` defaults to the OS temp directory's `afkfleet-agent.alive`, so `just dev-agent` works on Windows too.
-  > - **Ranges:**
-  >   - `[runtime]`: `max_bots` 1–1000, the watchdog and liveness timeouts 5–600 s, the connect timeout 5–300 s, `max_abandoned_threads` 1–100, the shutdown timeout 1–300 s.
-  >   - `[retry]`: the base delay 1–3600 s, the max delay 1–86 400 s (and at least twice the base), `stable_after_secs` **60**–86 400 s, `circuit_failures` 1–1000, the circuit window and cool-down 1–86 400 s.
-  >   - `stable_after_secs` starts at a minute, so a server that kicks the bot a few seconds after every join can't cause endless reconnects at the base delay, with the breaker never opening.
-  > - **`name`** is the new `fleet_core::value::AgentName`: 1–64 ASCII letters, digits, `-`, `_` and `.`, starting with a letter or digit. P10 sends it to the server.
-  > - **`heartbeat_file`** must be absolute. **`[control_plane]`** keys are typed and non-empty; P10 checks the URL and the files.
-  > - **Bots.**
-  >   - 1 to `max_bots` entries.
-  >   - Accounts that clash are refused on the later entry.
-  >   - Each entry is offline by construction: it only has a `username`.
-  >   - Entries get no `BotId`; P5.3 mints one at every start.
-  > - **Modes by name:** the new `fleet_core::mode::ModePreset { Afk, Farm }`, with exact lowercase names. Its error lists the valid names and never the input.
-  > - **Errors.**
-  >   - Parse errors (bad TOML, a wrong type, an unknown key) stop at the first. They name the key and the file or the environment variable; a TOML syntax error shows only its position.
-  >   - Validation then lists every problem at once, sorted by key, without echoing values.
-  >   - So texts are read as `String`s and required keys as `Option`s, and converted with the core constructors in the validation pass.
-
-  > Note (P5.1, as built, group A) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
-  > - **Shape.** `fleet_agent::config::load(path) -> Result<AgentConfig, ConfigError>`.
-  >   - `AgentConfig { name, runtime: RuntimeConfig, mc: McConfig, retry, circuit, heartbeat_file, mode: AgentMode }`, where `AgentMode` is `Standalone(Vec<StandaloneBot>)` or `ControlPlane(ControlPlaneConfig)`.
-  >   - `ConfigError` is `NotFound { path }`, `Parse(Box<ParseError>)` or `Invalid(Problems)`. Each `Problem` has a `KeyPath` and a `ProblemKind`.
-  > - **Deviation: garde checks only the ranges.** The texts go through fleet-core's constructors in a second pass, so every problem is reported at once.
-  > - **figment's error is never kept or printed.** Its own text shows a `default.` profile prefix, and for environment variables a key that isn't the variable's name. `ParseError` rebuilds the variable's name from the key path.
-  > - **Environment limits.** A value that reads as a number can't fill a text key: `AFKFLEET_AGENT__NAME=123` fails as a wrong type, so quote it as `'"123"'`. `[[standalone.bots]]` can only be replaced as a whole.
-  > - **A lint exception in tests** (the user's approval). figment's `Jail` fixes its closure's error type to `figment::Error`, which is larger than `clippy::result_large_err` allows, so every config test goes through one helper with an `#[expect]`.
-  > - **Tests:** `tests/config.rs` (39 cases, each in `figment::Jail`) plus unit tests of the error conversion and the key mapping. They were red against stubs first, as were `ModePreset`'s and `AgentName`'s.
+  > Note (P5.1): Deviation: garde checks only the ranges; the texts go through fleet-core's constructors in a second pass, so validation lists every problem at once, sorted by key, without echoing values ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)).
 - [x] **P5.2** Telemetry: pretty logs in dev and JSON in prod, an env filter, and a panic hook that logs through `tracing`.
 
-  > Note (P5.2, from Phase 3, group B review): **azalea's log targets stay at `warn`** in the default filter. azalea_client's disconnect plugin formats kick reasons at `info`, with azalea's own rendering, which grows exponentially on hostile nested translations (P3.5) and panics on a `%0$s` placeholder, since it computes `d - 1` on an unsigned digit with overflow checks on. A disabled level never formats, so neither can happen (ADR-0011).
-
-  > Note (P5.2, from Phase 3, group C, the user's decisions): **`azalea_auth` is capped at `info`**, whatever the operator's filter says. `azalea_auth::certs` logs the whole chat-signing certificate response at `trace`, private key included, in every online session. It's the same cap as fleet-server's (P9.3), and a test checks it (ADR-0011, threat model).
-
-  > Note (P5.2, from the Phase 5 plan, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
-  > - **A new `[log]` section** (Appendix A): `format = "json" | "pretty"` (default `json`) and `filter` (EnvFilter syntax, default `info`). `AFKFLEET_AGENT__LOG__…` overrides them; `RUST_LOG` has no effect. Logs go to stdout.
-  > - **JSON** puts the event's fields at the top level (`flatten_event`), with `span` and `spans`. CLAUDE.md forbids field names that would collide. **Pretty** is the single-line format, with colors only on a terminal.
-  > - **azalea's levels.** The filter is `(EnvFilter ∧ azalea cap ∧ azalea_auth cap) ∨ panic target`:
-  >   - EnvFilter gets `azalea=warn` in front unless the operator writes a plain `azalea` directive.
-  >   - A separate cap holds every `azalea…` target at `warn` unless an operator directive names it, so a target-free span directive like `[mc_session]=debug` can't lift azalea.
-  >   - `azalea_auth` stays at `info`.
-  >   - Panic reports always get through.
-  >   - One startup warning when the operator names an azalea target above `warn`.
-  > - **The panic hook** replaces the default one and logs one `error` event with the location, the thread and the payload.
-  >   - The payload is untrusted. It goes through fleet-core's new `text::sanitize_untrusted`, which makes each line break ` | `, and is cut at 1024 characters with ` [truncated]` appended.
-  >   - A backtrace is included only when `RUST_BACKTRACE` asks for one.
-  > - **The `log` bridge** (reqwest, rustls, hickory) is checked by a test: filters and caps see a `log` record's real target.
-
-  > Note (P5.2, as built, group A) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
-  > - **Shape.**
-  >   - `fleet_agent::telemetry::init(&LogConfig)` installs the global subscriber and the `log` bridge, the startup warning and the panic hook. It returns `TelemetryError::AlreadyInstalled` when a subscriber or logger is already there.
-  >   - `telemetry::layer(config, ansi, writer)` builds the layer, so tests can write into a buffer.
-  >   - The config gains `LogConfig { format: LogFormat, filter: LogFilter }`. `LogFilter` reads each directive with tracing-subscriber's own `Directive` parser and refuses a bad one by its index, without echoing it.
-  > - **Found in the build: azalea's default only lowers** (the user's decision).
-  >   - The `azalea=warn` in front of the operator's directives is more specific than their global level, so `filter = "off"` or `"error"` still let azalea's warnings through, and so did a filter without a global level.
-  >   - The default is now `warn`, or the operator's global level if that's lower (`off` when there's none).
-  > - **Found: EnvFilter applies a span directive's target to the span too.** So `azalea[x]=debug` means azalea's own spans named `x`. Inside such a span EnvFilter enables every target at that level, and the caps still hold: `azalea_auth` stays at `info` and azalea at what's named.
-  > - **Panic reports** have the target `afkfleet::panic`, a name no crate prefix shares, with the fields `thread`, `location`, `payload` and `backtrace`.
-  > - **fleet-core** makes `text` a public module that exposes only `sanitize_untrusted` and `UntrustedText`; the chat sanitizer's own items stay private.
-  > - **Tests.**
-  >   - Unit tests run the real layer in JSON into a buffer:
-  >     - 11 filters × 5 probe targets, including the span cases
-  >     - panic reports getting through `off`, `afkfleet::panic=off` and a filter without a global level
-  >     - the startup warning
-  >     - the JSON shape and the pretty format with and without colors
-  >     - the panic helpers
-  >   - `tests/telemetry_init.rs` covers the second `init` and the `log` bridge (`azalea_auth::certs` at `debug` is dropped, `info` is kept, `reqwest` at `debug` is kept).
-  >   - `tests/panic_hook.rs` panics on a named thread and checks the one event.
-  >   - Each was red against stubs first.
+  > Note (P5.2): a `[log]` section (`format` json or pretty, `filter`); azalea's targets stay at `warn` unless the operator names them, since azalea's kick rendering grows exponentially on hostile translations and can panic, and `azalea_auth` is capped at `info` whatever the filter says, since `azalea_auth::certs` logs the chat-signing private key at `trace` (ADR-0011, threat model); panic reports (`afkfleet::panic`) always get through, the payload sanitized and cut at 1024 characters ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)).
 - [x] **P5.3** Wiring: `McHostPool` + `AzaleaConnector` + `Fleet`, with the standalone spec source.
 
-  > Note (P5.3, from Phase 3): When `McHostPool::abandoned_threads()` reaches `max_abandoned_threads`, the agent shuts down and exits with an error, so Docker restarts it (§6 row 8). The library never ends the process itself (ADR-0011).
-
-  > Note (P5.3, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **fleet-mc's diagnostics** are exported here, since fleet-runtime can't read them: `abandoned_threads()`, `dropped_chat()` and `ignored_action_bar()` as counters, `live_threads()` and `live_worlds()` as gauges.
-  > - **Paused and Failed across an agent restart.** The standalone agent persists nothing, so a restart starts every bot again; that's a documented limit for a dev-only mode with offline accounts. In managed mode the server sends the sticky state (P10.5).
-
-  > Note (P5.3, from P4.7) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): `Fleet::new` returns the handle and the `Supervisor`; the agent runs `supervisor.run(cancel)` in a task it owns and reports a `FleetSetupError` at startup.
-
-  > Note (P5.3, from Phase 4, group E, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **A real seed.** The agent passes `Fleet::new` a random seed from `getrandom`, never a fixed one, so two agents never jitter their reconnects in lockstep.
-  > - **An unexpected end of the supervisor.** If the supervisor's task ends without a requested shutdown (a `JoinError` or an early return), the agent logs it at `error` and exits with an error code, so Docker restarts it, as at the abandoned-thread limit.
-  > - **The recorder first.** The agent installs the Prometheus recorder before it calls `Fleet::new`. The `metrics` crate sends the descriptions and the 0-series to the recorder installed at that moment; anything registered earlier goes to the no-op recorder and is lost (P4.9).
-
-  > Note (P5.3, from the Phase 5 plan, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
-  > - **`run` is generic** over the connector, an agent-side `HostDiagnostics` trait (fleet-mc's five numbers) and a shutdown future. Tests use fleet-testkit's `FakeConnector` and fakes on paused time, so the exits at the abandoned-thread limit and at the supervisor's end are tested.
-  > - **Bot IDs.** Each standalone bot gets a random `BotId::new_v7(anchor, getrandom bytes)` at every start. One `info` line per bot logs its ID with its username, server and mode.
-  > - **Metrics:** `install_recorder()` only, with no listener and no port; P12.4 adds the endpoint.
-  > - **Exit codes,** listed in the README and in `--help`:
-  >   - 0: clean shutdown after a signal
-  >   - 1: startup error
-  >   - 2: clap's usage errors
-  >   - 3: abandoned-thread limit
-  >   - 4: the supervisor ended unasked
-  > - **Fleet events.** One task logs `ChatReceived` and `ModeChatSent` at `debug`, and `Lagged` at `debug` with its count. Nothing else.
-  > - `run` refuses `[control_plane]` until P10.
-
-  > Note (P5.3, as built, group B) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
-  > - **Shape.**
-  >   - The binary is `afkfleet-agent` (`crates/fleet-agent/src/main.rs`); `fleet_agent::cli` holds its clap structs, so they're testable and group C can add `healthcheck`.
-  >   - `fleet_agent::run::run(RunParts { config, connector, diagnostics, anchor, seed }) -> Outcome { exit, report }`. `Exit` gives the exit code: `StartupFailed` 1, `AbandonedLimit` 3, `SupervisorFailed` 4 (0 comes with P5.4).
-  >   - `fleet_agent::diagnostics::HostDiagnostics` has one method, `sample() -> HostSample` (fleet-mc's five numbers), implemented for `AzaleaConnector`, which owns its `McHostPool`. main.rs passes one connector as both the connector and the diagnostics.
-  > - **main.rs** (the user's decisions):
-  >   - The order: `Cli::try_parse` (clap's own output and code), `config::load` (before any runtime exists: it reads a file), `telemetry::init`, the aws-lc-rs provider, the Prometheus recorder, a multi-threaded tokio runtime, `run`, `Runtime::shutdown_timeout(1 s)`, then the last line, "the agent stopped" with `exit_code`.
-  >   - Errors before logging exists go to stderr as one plain message through `writeln!` (no `#[expect(clippy::print_stderr)]`) and exit 1. Every later startup error is one `error` event, "the agent can't start", and exits 1.
-  >   - No anyhow: main.rs maps typed errors to codes itself.
-  >   - The anchor is `Utc::now()` (chrono's `now`), the seed `getrandom::u64()`.
-  >   - The Prometheus handle isn't kept: nothing serves it until P12.4, and with no histograms the recorder needs no upkeep.
-  > - **One deadline for a shutdown** (the user's decision): shutdown_timeout + reply_timeout from its start.
-  >   - `Fleet::shutdown` answers `Ok(report)`: the supervisor's task is joined by the deadline.
-  >   - `Busy` or `ShuttingDown`: a `warn`, the supervisor's token is cancelled (it then shuts down without a report), and its task is joined by the deadline.
-  >   - `TimedOut` has used up the deadline: the token is cancelled, and the run exits 4 at once.
-  >   - A supervisor that doesn't end by the deadline, or panics, is an `error` and exits 4. **Exit code 4 also means "didn't end when asked".**
-  >   - A bot the fleet refuses at startup is logged at `error` with its ID and username; the fleet shuts down the same way, and the run exits 1 (or 4).
-  > - **Diagnostics:** sampled at once and every 5 s (a constant; missed ticks are skipped). The counters `afkfleet_mc_abandoned_threads_total`, `afkfleet_mc_dropped_chat_total` and `afkfleet_mc_ignored_action_bar_total` take fleet-mc's totals with `absolute()`; `afkfleet_mc_host_threads` (abandoned threads that still run included) and `afkfleet_mc_worlds` are gauges. All are described and registered at 0 right after `Fleet::new`.
-  > - **Logs.**
-  >   - `run` enters the root span `agent{agent=…}` itself, so the bots' spans nest in it; main.rs logs its own lines in a span of the same name. fleet-mc's `mc_session` spans are created on host threads and stay roots.
-  >   - `info`: "starting a standalone bot" (`bot_id`, `username`, `server`, `mode`), "the agent is running" (`bots`), "the agent stopped" (`exit_code`, plus `stopped`, `aborted` and `crashed` with a report).
-  >   - `error`: "the abandoned-thread limit is reached; shutting down" (`abandoned`, `limit`); "the fleet's supervisor ended unasked" (`panicked`). A `JoinError` is never logged: its text carries the panic payload, which is untrusted and already logged, sanitized, by the panic hook.
-  >   - The event task logs "the bot received chat" (`kind`, `sender`, `text`, `truncated`), "the bot's mode sent chat" (`text`) and a lag (`skipped`) at `debug`. Chat text is a plain string field, so both formats escape its line breaks.
-  > - **Dev:** `deploy/dev/agent.toml` runs AfkBot1 and AfkBot2 on `afk` and AfkBot3 on `farm` against `127.0.0.1:25565`, with pretty logs; `just dev-agent` runs it.
-  > - **Tests.**
-  >   - `tests/run/`: the IDs and the startup lines, the span nesting, every startup error, the limit, the sampling period and the metrics, on fleet-testkit's `FakeConnector`, a fake diagnostics source and paused time.
-  >   - Unit tests: the specs, the watch, the event log, the metrics, and `finish` against a real `Fleet` whose supervisor a test task holds, runs, drops or panics. Each `finish` case checks the exit code and the paused time it ends at (15 s for `TimedOut` and a hung supervisor).
-  >   - `tests/cli.rs` runs the binary: a missing or invalid config exits 1 with the plain message on stderr, a usage error exits 2, `run --help` lists the codes, `--version`. Each run has its own deadline, and a guard kills the child.
-  >   - 48 tests were red against stubs first.
-  > - **Until P5.4,** the binary has no graceful stop: a signal ends it the default way.
+  > Note (P5.3): `afkfleet-agent run` wires a generic `run`, tested on fakes on paused time; it seeds `Fleet::new` from `getrandom`, installs the Prometheus recorder first, samples fleet-mc's diagnostics into metrics every 5 s, and exits 3 at the abandoned-thread limit (ADR-0011) or 4 when the supervisor ends unasked; the standalone agent persists no Paused or Failed state ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md), [ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)).
 - [x] **P5.4** 🔴 Signals (Ctrl+C, SIGTERM) trigger a graceful shutdown within `shutdown_timeout`.
 
-  > Note (P5.4, from P4.7) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): A signal calls `Fleet::shutdown(shutdown_timeout)`, or cancels the supervisor's token, which shuts down within `RuntimeConfig::shutdown_timeout`. `shutdown` returns a `ShutdownReport { stopped, aborted, crashed }` for the log.
+  > Note (P5.4): the first signal (SIGTERM or SIGINT on Linux, Ctrl+C or Ctrl+Break on Windows) calls `Fleet::shutdown(shutdown_timeout)` with one deadline and exits 0 with the report; a later signal is only logged ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md), [ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)). Deviation: `run` takes a signal source (`ShutdownSignals`), not a shutdown future, since one future can't show the second signal.
 
-  > Note (P5.4, from the Phase 5 plan, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): A signal calls `Fleet::shutdown(shutdown_timeout)` and logs the report. A second signal only logs that the shutdown is already running. Signals: SIGTERM and SIGINT on Linux, Ctrl+C and Ctrl+Break on Windows.
-
-  > Note (P5.4, as built, group B) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
-  > - **Deviation: a signal source, not a shutdown future** (the user's decision). One future can't show the second signal, so `run` takes a `fleet_agent::signals::ShutdownSignals` with a cancel-safe `recv() -> Signal`.
-  >   - `OsSignals::install()` registers SIGTERM and SIGINT (Unix) or Ctrl+C and Ctrl+Break (Windows). main.rs calls it inside the runtime, which tokio's signal handling needs, and before the fleet starts, so an early signal isn't lost. An error there is a startup error (exit 1).
-  >   - A stream that ends never makes a signal up: the source then waits forever, and so does the tests' channel fake once its sender is gone.
-  >   - Other platforms fail to build with a `compile_error!`.
-  > - **The first signal** logs "shutting down" with `signal` ("SIGTERM", "SIGINT", "Ctrl+C", "Ctrl+Break") and shuts down with P5.3's single deadline. The run ends with `Exit::Stopped`, code 0, even if bots had to be aborted. P5.3's fallbacks keep the code: `Busy` or `ShuttingDown` still give 0 once the supervisor ends; `TimedOut` or a hung supervisor give 4.
-  > - **A later signal** only logs "already shutting down" with `signal`, while the fleet shuts down and while its supervisor is awaited; the deadline doesn't move.
-  > - **Tests**, all red first on assertions, against stubs that compiled: a source that installed the real handlers but never yielded (so a signal was swallowed instead of ending the process), names that were wrong, and a watch and shutdown that ignored signals.
-  >   - Unit tests: the names, the source's stream merging (an ended stream leaves the other working; with both ended, nothing comes), the watch, and `finish` after a signal (each fallback, and repeats while the fleet shuts down and while the supervisor is awaited).
-  >   - `tests/run/signals.rs`: a signal stops the bots with exit 0 and the report; a bot slower than the shutdown timeout is aborted at 10 s, still exit 0; a second signal is only logged and doesn't change the 8 s shutdown; a signal sent before the start is handled once the agent runs; a source that ends never stops the agent.
-  >   - Unix only: `tests/signals.rs` (one test: `OsSignals` receives SIGTERM, then SIGINT, sent to its own process with `kill`) and `tests/cli.rs`'s SIGTERM test (the binary with one bot at `127.0.0.1:1`, `kill -TERM` after "the agent is running", exit 0 and "the agent stopped" with the report as the last line). Windows' Ctrl+C and Ctrl+Break can't be sent without unsafe code; `just dev-agent` exercises them.
-  >   - The Unix tests were run red and green in a Linux container, since the dev machine is Windows.
-  > Note (P5.4, from the manual test of PR #20, group C): On Windows, Ctrl+C during `just dev-agent` stopped the agent cleanly ("the agent stopped" with `exit_code=0`), but `just` then printed "error: recipe `dev-agent` failed … with exit code 1": Ctrl+C reaches `just`, PowerShell and `cargo` too. The recipe now has `[no-exit-message]`, so `just` prints no message of its own; it still exits non-zero, and the agent logs its own errors. The README says the agent's exit code is the one in "the agent stopped".
+  > Note (P5.4, from the manual test of PR #20, group C): Ctrl+C reaches `just`, PowerShell and `cargo` too, so `just dev-agent` has `[no-exit-message]`; it still exits non-zero, and the agent's own exit code is the one in "the agent stopped".
 - [x] **P5.5** 🔴 A `healthcheck` subcommand. The agent touches a heartbeat file every 10 s, and the check fails when the file is stale. This works in distroless images, which have no curl.
 
-  > Note (P5.5, from the Phase 5 plan, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
-  > - **Heartbeat.** The file is touched every 10 s, and only when `fleet.snapshot_all()` returns `Ok`. `Busy`, `TimedOut` and `ShuttingDown` never touch it: a hung supervisor's queue fills with timed-out calls, after which every call answers `Busy` at once. A test covers that case.
-  > - **`healthcheck --config <path>`** loads the same config. The file is stale when it's missing or 30 s old or more.
-  > - It exits only 0 or 1, since Docker reserves 2. clap usage errors for `healthcheck` map to 1 too.
-
-  > Note (P5.5, as built, group C) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md); the user answered group C's questions on 2026-10-09):
-  > - **Shape.**
-  >   - `fleet_agent::heartbeat` has `PERIOD` (10 s), `STALE_AFTER` (30 s), the `Heartbeat` port (`touch()`) and `FileHeartbeat`. A touch opens the file with `create(true).write(true).truncate(false)` and sets its modification time, in `spawn_blocking`. It never truncates or deletes the file, so a wrong path can't destroy data.
-  >   - `RunParts` gains `heartbeat: H`; main.rs passes `FileHeartbeat` on `heartbeat_file`, and tests pass a counting fake.
-  >   - `fleet_agent::healthcheck::check(path, now) -> Health` (`Fresh`, `Stale`, `Future`, `Missing` or `Unreadable`), with `exit_code()` and the one line it prints.
-  >   - `afkfleet-agent healthcheck --config <PATH>`. Its help lists codes 0 and 1. `cli::exit_code` turns clap's usage error into 1 when the first argument is `healthcheck`; `--help` and `--version` stay 0.
-  > - **The beat** is a task the run owns, with its own child token. It starts once "the agent is running" (a start that fails never beats) and is cancelled when the shutdown starts.
-  >   - It beats at once, then every 10 s, with missed ticks skipped. Each touch ends before the next beat.
-  >   - Logs, once per streak: `warn` "the fleet didn't answer the heartbeat" (`error`), then `info` "the fleet answers the heartbeat again"; `warn` "the heartbeat file can't be touched" (`file`, `error`), then `info` "the heartbeat file is touched again" (`file`). A wrong path shows up within a second of the start.
-  > - **The check** (the user's decisions):
-  >   - One line on stdout either way: `healthy: the heartbeat is N s old`, `unhealthy: the heartbeat file is N s old`, `unhealthy: no heartbeat file at <path>`, or `unhealthy: the heartbeat file at <path> can't be read: <error>`.
-  >   - stderr is left for errors that keep the check from running: a config that can't be loaded (the same text as `run`'s, exit 1) and usage errors.
-  >   - **A time in the future** counts as age 0 up to 30 s ahead, so a small clock correction never fails the check. Further ahead gives `unhealthy: the heartbeat file's time is N s in the future`: a healthy agent's next beat fixes it, and a hung agent can't look healthy for the length of a big backward jump.
-  > - **Tests**, red against stubs that compiled (a touch that did nothing, a beat that only waited for its token, a check that always answered healthy, clap's codes unchanged), then green:
-  >   - `healthcheck`'s unit tests: the 30 s limits in both directions, the lines and codes, a missing file, and on Unix a path through a file (`ENOTDIR`).
-  >   - The beat's unit tests, on a real `Fleet` and paused time: a beat at once and every 10 s; **no beat from a held supervisor through 70 beats, past the point where its full queue answers `Busy` at once**, with one `warn`; beats coming back with an `info`; a file streak; cancelling while a snapshot waits.
-  >   - `tests/run/heartbeat.rs`: the first beat right after "the agent is running", none once the shutdown starts, none after a failed start.
-  >   - `tests/heartbeat.rs`: `FileHeartbeat` on real files: it creates the file, moves an old time to now, keeps the content, and fails without its directory.
-  >   - `tests/cli.rs`: the binary's healthcheck for a fresh, a stale and a missing file, a missing config, a usage error (exit 1) and `--help` (exit 0). The Unix SIGTERM test also waits for its configured heartbeat file before it sends the signal, so the wiring is checked end to end.
-  >   - The Unix-only tests ran red and green in a Linux container.
-  >   - The shared test fleet of `run`'s unit tests moved into `run::testing`, used by `finish`'s tests and the beat's.
+  > Note (P5.5): a task the run owns touches the file every 10 s, only when `fleet.snapshot_all()` answers `Ok`, and never truncates or deletes it; `healthcheck --config <path>` loads the same config, exits only 0 or 1 (Docker reserves 2), and calls a file that's missing, 30 s old or more, or more than 30 s in the future unhealthy ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)).
 - [x] **P5.6** `deploy/docker/agent.Dockerfile`:
   - cargo-chef
   - a nightly builder
@@ -1560,162 +1169,25 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   Also `deploy/compose.dev.yaml` with an itzg server plus the agent.
 
-  > Note (P5.6, from Phase 4, group E, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The compose file gives the agent a `stop_grace_period` above `shutdown_timeout`, e.g. 15 s for the 10 s default, since `docker stop` kills a container after 10 s by default, before the fleet's graceful shutdown ends.
+  > Note (P5.6): Deviation: the runtime is `gcr.io/distroless/cc-debian13:nonroot`, not `cc-debian12`, whose images reached end of life in September 2026 under distroless's SUPPORT_POLICY.md (GoogleContainerTools/distroless#2129); the builder is `rust:1.99.0-slim-trixie`, so the binary's glibc matches ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)).
 
-  > Note (P5.6, from group B, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): The agent's worst-case shutdown is shutdown_timeout + reply_timeout, plus main.rs's 1 s runtime-shutdown bound. So `stop_grace_period` must be above that: **20 s** for the 10 s default, not the 15 s above. Otherwise Docker's SIGKILL replaces exit code 4 and the last line, "the agent stopped".
-
-  > Note (P5.6, as built, group C) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md); the user answered group C's questions on 2026-10-09):
-  > - **Deviation: `gcr.io/distroless/cc-debian13:nonroot`, not `cc-debian12`.** Under distroless's SUPPORT_POLICY.md, the Debian 12 `cc` images reached end of life in September 2026 (GoogleContainerTools/distroless#2129), so they get no more updates. Its README still has a Debian 12 table; group C wrongly gave the README as the reason, and group D corrected it. The builder is Debian 13 too (`rust:1.99.0-slim-trixie`), so the binary's glibc matches.
-  > - **Production is linux/arm64** (the user's requirement).
-  >   - Both base images are pinned by their multi-arch index digest, never by one platform's, and nothing in the Dockerfile names an architecture, so it builds natively on amd64 and arm64.
-  >   - deny.toml's `[graph] targets` gains `aarch64-unknown-linux-gnu`. `cargo deny check` stays clean, with no `ring` on aarch64.
-  >   - The arm64 builder stage was built under QEMU as a smoke check; a full arm64 build is P12.1's.
-  > - **`deploy/docker/agent.Dockerfile`:**
-  >   - `chef` installs cargo-chef 0.1.78 (`cargo install --locked`, with the image's stable toolchain), then copies `rust-toolchain.toml` alone and runs `rustup toolchain install`. Both are cached layers before any source, and the toolchain file stays the nightly's only pin.
-  >   - `planner` runs `cargo chef prepare`. `builder` cooks the dependencies, then builds `--release --locked --package fleet-agent --bin afkfleet-agent`.
-  >   - The runtime has static OCI labels (title, description, source, licenses), the binary at `/usr/local/bin/afkfleet-agent`, `CMD ["run", "--config", "/etc/afkfleet/agent.toml"]`, and `HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3` through `healthcheck` with the same path. A comment and the README say that another `--config` path needs the same override on the HEALTHCHECK.
-  > - **`.dockerignore`** is an allowlist: the workspace manifests, `rust-toolchain.toml`, `.cargo/config.toml` and `crates/`. After them, `.gitignore`'s secret patterns are excluded again at any depth.
-  > - **`deploy/compose.dev.yaml`** gains the `agent` service after `minecraft`, since fleet-mc's `pins` test reads the first `image:` line:
-  >   - `afkfleet-agent:dev`, built with `pull_policy: build`
-  >   - started once the server is healthy, so the bots don't use up their retries while its first start builds the world
-  >   - `deploy/dev/agent.compose.toml` mounted read-only at `/etc/afkfleet/agent.toml`
-  >   - `stop_grace_period: 20s` and `restart: on-failure`
-  >   - `read_only` with a 1 MiB tmpfs at `/tmp`, `cap_drop: [ALL]`, `no-new-privileges`, 512 MiB and 1 CPU
-  > - **`deploy/dev/agent.compose.toml`** runs AfkBot4 and AfkBot5 on `afk` and AfkBot6 on `farm` at `minecraft:25565`, with JSON logs, so it never logs out `just dev-agent`'s AfkBot1–3.
-  > - **`just stack-up`** builds the image and starts both services, waiting until they're healthy; `just mc-down` stops both.
-  > - `RUNTIME_SHUTDOWN` (1 s) moved from main.rs to `fleet_agent::run`, so a test can read it.
-  > - **`tests/deploy.rs`** (fast):
-  >   - Both dev configs load, inside `Jail` with an empty environment.
-  >   - Every compose bot joins `minecraft:25565`, and none clashes with a dev bot.
-  >   - The grace period exceeds the compose config's shutdown and reply timeouts plus `RUNTIME_SHUTDOWN`. With 15 s, the test failed.
-  >   - Compose mounts the config at `/etc/afkfleet/agent.toml`, and the Dockerfile's `ENTRYPOINT`, `CMD` and `HEALTHCHECK` use that path.
-  >   - The approved `in_jail` helper moved to `tests/common/jail.rs`; it's still one `#[expect]`.
-  > - **Demo:** `just stack-up` brought both services up healthy (`healthy: the heartbeat is 5 s old`), and AfkBot4–6 came online. `docker compose stop agent` ended in 0.4 s with exit code 0 and "the agent stopped" (`stopped: 3`) last, with no `warn` or `error` line.
+  > Note (P5.6): production is linux/arm64, so both base images are pinned by multi-arch index digest; `.dockerignore` is an allowlist; the compose agent, after `minecraft` in `deploy/compose.dev.yaml` since fleet-mc's `pins` test reads the first `image:` line, runs read-only with every capability dropped and a `stop_grace_period` of 20 s, above the worst-case shutdown of shutdown_timeout + reply_timeout + 1 s ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md), [ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)).
 - [x] **P5.7** 🔴 Slow end-to-end test:
   1. `compose up`, and all bots come Online.
   2. Restart the MC container; the bots reconnect within the policy.
   3. Stop the agent; the disconnect is clean.
 
-  > Note (P5.7, from the Phase 5 plan, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
-  > - **Shape.** A `slow_` test in `crates/fleet-agent/tests/` drives `docker compose` through `std::process::Command`, with its own project name. It reads the agent's JSON logs and RCON `list`, and checks the exit code and the `ShutdownReport`.
-  > - **The image is built first.** `just test-slow` builds it before the timed test, since a cold build can outlast the slow profile's 10 minutes.
-  > - **Clean-up.** The test runs `down -v` for its own project before it starts, and in a guard that also runs when the test panics.
+  > Note (P5.7): one `slow_compose_scenario` in `crates/fleet-agent/tests/slow_compose/` runs the dev stack as `afkfleet-e2e` with `deploy/compose.isolated.yaml` and five bots; it holds every reconnect wait to the retry policy's bounds and every bot to a deadline from the server's healthy moment, and shares `deploy/dev/stack-checks.json` with the demo ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)). No CI job builds the image on every PR: a PR that changes the Dockerfile, `.dockerignore`, `Cargo.lock` or `rust-toolchain.toml` runs the "Slow tests" workflow on its branch, which the user starts.
 
-  > Note (P5.7, from group C, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): **No CI job builds the image on every PR.** Instead, group D's PR, and every later PR that changes the Dockerfile, `.dockerignore`, `Cargo.lock` or `rust-toolchain.toml`, runs the "Slow tests" workflow on its branch before it's merged. The user starts it under Actions → Slow tests → Run workflow, so the image build is checked in CI.
-
-  > Note (P5.7, as built, group D) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md); the user answered group D's questions on 2026-10-09):
-  > - **Shape.** `crates/fleet-agent/tests/slow_compose/` (`main.rs`, `docker.rs`, `logs.rs`, `checks.rs`) holds one `slow_compose_scenario`. It runs the dev stack as the project `afkfleet-e2e`, with the new `deploy/compose.isolated.yaml` on top (`ports: !reset []` on minecraft), so it can run beside `just mc-up`. `!reset` needs Compose 2.24, which the test checks first.
-  >   - Every docker call runs from the repository root with a deadline.
-  >   - A guard runs `down -v --timeout 10` when the test ends or panics, and the same runs before the start, which covers a run nextest killed.
-  > - **Five bots.** `agent.compose.toml` gains AfkBot7 and AfkBot8 on `afk` (AfkBot6 stays on `farm`), so `just stack-up`, the test and the demo run the same five.
-  > - **The image.** `just test-slow` pulls the server image and builds the agent's (`compose build agent`) first. It then sets `AFKFLEET_E2E_IMAGE_BUILT=1` through a `$`-parameter; without it, the test stops at once, so it never tests an old image. The stack starts with `up --wait --no-build`.
-  > - **The steps:**
-  >   1. Every bot is Online (state lines and RCON `list`) within connect + bounds(1).max + connect + 1 s of "the agent is running": 71 s with the defaults.
-  >   2. `restart --no-deps minecraft`.
-  >      - **The healthy moment** is the end of the first good probe after the server's new StartedAt. It's polled from `docker inspect` at once, since Docker keeps only five probes.
-  >      - **Every bot is Online again** by bounds(n).max + connect + bounds(n+1).max + connect + 1 s from that moment, where n is its last Backoff before then. That allows one more failed attempt, since an attempt in flight when the probe passes can still fail.
-  >      - **Every wait** from `Backoff { attempt: n }` to the next `AwaitingSession` in the whole log lies in bounds(n), with 100 ms of slack below and 1 s above. A failure says whether the breaker may have been open.
-  >      - **The agent didn't restart:** its StartedAt and restart count are unchanged, and "the agent is running" appears once.
-  >   3. `stop agent`:
-  >      - exit code 0
-  >      - the last line is "the agent stopped" with exit_code 0, stopped 5, aborted 0 and crashed 0
-  >      - no WARN or ERROR from "shutting down" on
-  >      - RCON's list drops every bot within 5 s
-  >
-  >   Then the whole log must hold no ERROR and only the expected warnings, and every offending line is printed in full. Every check also asserts that it saw data (5 bots, a wait per bot after the restart, a probe, the bots on RCON's list).
-  > - **Shared numbers.** `deploy/dev/stack-checks.json` is shared with the demo. It holds:
-  >   - the expected warnings (target, message prefix, why)
-  >   - the bounds(n) table up to the capped window
-  >   - the connect timeout and the agent's grace period
-  >
-  >   `tests/deploy.rs` checks every number against `agent.compose.toml` and `compose.dev.yaml`. It also checks that the override unpublishes the port, and that minecraft's `stop_grace_period` is at least 30 s. It's now 60 s, so a stop is graceful: Docker's default 10 s could kill the server, and the bots would see reset sockets.
-  > - **The budget.** Before each deadline, elapsed + deadline + the agent's grace period + 60 s of teardown must fit the slow profile's limit, 600 s, read from `.config/nextest.toml`.
-  > - **Clocks.** The test judges only by Docker-VM timestamps (the agent's log, StartedAt, the probes). Its waits wake on the agent's next line (a `logs --follow` child) or after 250 ms, and never sleep.
-  > - **Found in the runs:**
-  >   - The restart took about 3 s.
-  >   - The bots saw `ConnectionClosed`, not the "Server closed" kick, so azalea's "Got disconnect packet" didn't appear. It stays expected, since a slower stop sends it.
-  >   - The server took joins a few seconds before its first good probe.
-  > - **Connection resets** (found by the demo's first run, after the runs above; the user's decisions). vanilla's shutdown sometimes resets a bot's socket before its kick, and azalea logs that at ERROR. The whole-log check allows that one error:
-  >   - only between the agent's last line before the restart and the server's healthy moment
-  >   - no more often than bot sessions ended there with `ConnectionClosed`
-  >
-  >   It's `expected_restart_errors` in `stack-checks.json`, shared with the demo; the DoD note explains it. `tests/deploy.rs` checks that every expected line names its target, prefix and reason. The checks' new unit tests were red against a stub first.
-  > - **Deviation:** the compose-file helpers stay in `tests/deploy.rs`, now for any service, since the scenario reads the agent's grace period from `stack-checks.json`. Only the `stack-checks.json` reader moved to `tests/common/`.
-  > - **Tests:**
-  >   - 52 fast unit tests of the helpers, red against stubs first.
-  >   - 6 new tests in `deploy.rs`, red against placeholder data first.
-  >   - The scenario was red against stub parsers ("every bot Online within 71s; last seen: Online in the log: {}"), and once against `stop_signal: SIGKILL` (exit 137). Then it passed in about 45 s.
+  > Note (P5.7): Deviation: the compose-file helpers stay in `tests/deploy.rs`; only the `stack-checks.json` reader moved to `tests/common/`.
 
 **DoD:** Demo with 5 bots AFK on a local server for 1 h, with one server restart in between. The logs show no errors except the expected disconnect warnings.
 
-> Note (DoD, from the Phase 5 plan, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): `just demo-agent` (logic in a script under `scripts/`) runs the demo and prints a summary:
-> - warn and error lines by target and count
-> - the state-change timeline
-> - reconnect times after the restart
-> - the shutdown report
->
-> The AI runs it in group D and puts its output in the PR; the user can re-run it, for example after a Minecraft-version bump.
+> Note (DoD): `just demo-agent [minutes]` (`scripts/demo-agent.mjs`) runs the stack for 60 minutes by default, restarts the server at half time, records the agent's memory and CPU, and prints a summary with a verdict, PASS or FAIL; raw data stays under `target/demo-agent/`, and only `summary.txt` goes into a pull request. The Minecraft-version bump runs it (ADR-0003's verify step) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)).
 
-> Note (DoD, from group C, the user's decision): The demo also records the agent's peak memory and CPU (`docker stats`), so P12.2's limits come from a measured value with headroom, not a guess.
+> Note (DoD): Deviation: during a server restart azalea can log a TCP reset at ERROR; the e2e test and the demo allow it only between the agent's last line before the restart and the server's healthy moment, at most once per session closed there with `ConnectionClosed` (`expected_restart_errors` in `stack-checks.json`) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)).
 
-> Note (DoD, as built, group D) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md); the user answered group D's questions on 2026-10-09):
-> - **`just demo-agent [minutes]`** runs `scripts/demo-agent.mjs`, which uses Node's built-ins only and is tested in `scripts/demo-agent.test.mjs`. It runs 60 minutes by default:
->   - It builds the agent's image, then runs the stack as the project `afkfleet-demo`, with `compose.isolated.yaml` on top.
->   - It restarts the server at half time (`restart --no-deps minecraft`) and stops the agent at the end.
->   - Last, it removes the stack (`down -v --timeout 10`), also after Ctrl+C or an error, once the logs are saved.
-> - **The summary:**
->   - where it was measured: `docker info`'s architecture, CPUs, OS and memory, plus the CPU model from `lscpu`, else `/proc/cpuinfo`, else "unknown"
->   - the agent's memory and CPU from a streamed `docker stats`: the peak, with its time relative to the restart, the mean and the p95. These are never judged.
->   - warn and error lines by target and count
->   - the state-change timeline
->   - each bot's reconnect after the restart
->   - the shutdown report
-> - **The verdict** is PASS (exit 0) or FAIL (exit 1). A FAIL lists each failed criterion with its lines:
->   - an ERROR line, except the connection resets a server restart may cause (below)
->   - a warning `stack-checks.json` doesn't expect, or a line that isn't the agent's JSON
->   - a bot not Online again by its deadline (the e2e test's formula, from the server's healthy moment)
->   - an agent restart
->   - a shutdown that isn't exit 0 with aborted 0 and crashed 0
->
->   A run under 60 minutes says "not the DoD run".
-> - **Too short to judge** (exit 2):
->   - Before the start: the minimum comes from `stack-checks.json`. Half the run must hold attempt 3's reconnect deadline plus the agent's stop, which is 7 minutes with the defaults.
->   - After the restart: if the deadlines it observes, plus the stop, don't fit in the time left, it saves the logs and stops.
-> - **Raw data** goes under `target/demo-agent/<UTC time>/`: `agent.log`, `minecraft.log`, `stats.jsonl` and `summary.txt`. Only `summary.txt` goes into a pull request, since `minecraft.log` holds the bots' container IPs.
-> - **Deviation, found in the first run** (the user's decisions): azalea logs a TCP reset at ERROR (`azalea_client::plugins::connection`, "Error reading packet from Client: IoError { … ConnectionReset …").
->   - **Why it happens.** A server that closes a socket with unread client data sends a TCP reset, and during vanilla's shutdown that can arrive before the "Server closed" kick. In the 8-minute check run, 2 bots got the kick and 3 were closed without it, one of them with a reset.
->   - **The agent recovers as designed:** `ConnectionClosed`, a backoff, and back Online in about 25 s.
->   - **The allowance.** `stack-checks.json` gains `expected_restart_errors` with that one entry. The e2e test and the demo accept it only:
->     - between the agent's last line before the restart and the server's healthy moment, both by the Docker VM's clock
->     - no more often than bot sessions ended in that window with `ConnectionClosed`, since each reset ends one live session, and azalea's line carries no bot ID
->
->     Every other ERROR, and this one at any other time, still fails. The summary reports how many were allowed.
-> - **The Minecraft-version bump** runs it: ADR-0003's verify step gains `just demo-agent` (1 h), with its `summary.txt` in the bump's pull request, and P12.6's runbook carries the step.
-
-> Note (DoD, the run, group D): `just demo-agent` ran on 2026-10-10 with its default 60 minutes. Its `summary.txt` is in the PR. **PASS:**
-> - 5 bots (four on `afk`, AfkBot6 on `farm`) came Online within a second, and the server restarted once, at minute 30.
-> - Every bot got the "Server closed" kick, and every bot was Online again 8–21 s later, well inside its deadline (attempts 2 and 3).
-> - The log holds no ERROR, and only the 16 expected disconnect warnings:
->   - 8 "the session ended; the bot connects again"
->   - 5 of azalea's "Got disconnect packet"
->   - 3 of azalea's "failed to create connection"
-> - The agent never restarted. Its stop gave exit code 0 and stopped 5, aborted 0, crashed 0.
-> - The agent's container peaked at 26.9 MiB and 6.59 % of one core (P12.2's note has the numbers).
-
-> Note (Phase 5 wrap-up, group D) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
-> - **The Phase 5 Goal, checked on 2026-10-10:**
->   - **"`afkfleet-agent run --config agent.toml` runs a few dev bots (offline mode) against a local server":** `just dev-agent` runs three bots on the host (group B), and the compose agent runs five in Docker (`just stack-up`, group C; five since group D).
->   - **"It survives server restarts":**
->     - The e2e test restarts the server, holds every wait between attempts to the retry policy and every bot to its deadline, and checks that the agent itself didn't restart.
->     - The hour-long demo did the same at minute 30.
->   - **"It shuts down cleanly":** in the e2e test and the demo, the stop gave exit code 0 and the report (stopped 5, aborted 0, crashed 0), and the server dropped every bot at once.
-> - **The Phase 5 DoD:** the demo above. It ran 5 bots, four of them AFK and one farming (the user's decision), for an hour against the local server, with one restart. Its logs show no error, only the expected disconnect warnings.
->   - **Deviation:** a restart can cause one error the DoD didn't foresee, azalea's connection reset. The e2e test and the demo accept it only during the restart, at most once per session closed there (the DoD note above). It didn't occur in this run.
-> - **Every task, P5.1–P5.7, is ticked.** The crates the phase introduces are in, except `anyhow`, which arrives with the first `main.rs` that needs it (ADR-0014).
-> - **Later phases inherit:**
->   - P12.2: the measured memory and CPU, as a baseline per bot
->   - P12.6: the demo in the Minecraft-version bump
->   - the notes for P10, P11.1, P12.1 and P12.4 that ADR-0014 lists
+> Note (DoD, the run and the Phase 5 wrap-up, group D): PASS on 2026-10-10, when the Goal was checked too: 5 bots (four on `afk`, AfkBot6 on `farm`) for an hour with one server restart at minute 30, every bot Online again 8–21 s later, no ERROR and only the 16 expected disconnect warnings, and a stop with exit code 0 (stopped 5, aborted 0, crashed 0); the agent's container peaked at 26.9 MiB and 6.59 % of one core (P12.2) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)).
 
 ---
 
@@ -1723,116 +1195,45 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** An HTTP service skeleton that is secure by default, with persistence, an error model and an audit trail, but no business endpoints yet.
 **Introduces:** `axum`, `axum-extra`, `tower`, `tower-http`, `sqlx`, `utoipa`, `utoipa-axum`, `ts-rs`, `serde_json`, `tokio-util`.
 
-> Note (P6):
-> - **Five group branches.** At the user's request, Phase 6 is built in group PRs like Phases 2–5. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
->
->   | Group | Branch | Tasks |
->   |---|---|---|
->   | A | `p6/p6.1-p6.2-layout-and-config` | The fleet-startup extraction, P6.1, P6.2. fleet-server is a library only, without a binary |
->   | B | `p6/p6.3-p6.8-persistence-and-audit` | P6.3, P6.4, P6.8, plus the time and randomness ports, the `sqlx-offline` job and `just db-prepare` |
->   | C | `p6/p6.5-p6.9-api-types-and-errors` | P6.9 first (ApiError's body DTO lives in fleet-api-types), then P6.5; the `ts-types-fresh` job and `just gen` |
->   | D | `p6/p6.6-p6.7-middleware-and-health` | P6.6, P6.7 |
->   | E | `p6/p6.10-p6.12-cli-and-wrap-up` | P6.10, P6.11, P6.12, the DoD integration test and the phase wrap-up |
->
->   Each later group asks its own implementation-level questions in its session.
-> - **Decisions.** The user answered the Phase 6 plan's open questions on 2026-10-10. [ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md) records them; the notes below summarize what changes a task.
-> - **fleet-startup** (the user's decision). A new crate holds the binaries' start-up code: the config loader with its key-path errors, the `[log]` types, the log layer and the panic hook (§4). Group A's first commit moves it out of fleet-agent with no change in behavior, and fleet-agent's tests pass with only import changes. Its filter always caps `azalea_auth` at `info` and lets panic reports through. A binary adds its own rules through `FilterRules`, which can't weaken those two; only the agent's `azalea=warn` rules stay in fleet-agent.
-> - **Time and randomness are injected ports** (the user's decision), from group B on. fleet-core gets `system::{Clock, SecureRandom, RandomError}`, fleet-testkit `ManualClock` and `SeededRandom`, and fleet-server's infra `SystemClock` and `OsRandom`:
->   - The seeded fake exists only in fleet-testkit, a dev-dependency everywhere, and a script under `scripts/` checks that no workspace member has fleet-testkit as a normal dependency. `OsRandom` is the only other implementation, and main.rs always wires it. The port's docs say every implementation must be cryptographically secure (security rule 4).
->   - `crates/fleet-server/clippy.toml` bans reading the clock or the OS's randomness directly; `SystemClock` and `OsRandom` each carry one approved `#[expect(clippy::disallowed_methods)]`.
->   - Tests never hard-code `SeededRandom`'s bytes or the IDs made from them, and snapshots redact them: rand doesn't promise `StdRng`'s output across versions.
->
->   As built (group B, the user's decisions, [ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
->   - **fleet-core `system`:** `Clock::now()` returns whole milliseconds (the precision the database stores and a v7 ID holds); `SecureRandom::fill`; `RandomError::{Os { code }, Unavailable}`; `random_bytes::<N>()`; and `mint::<I: V7Id>(at, random)`, where `define_id!` implements fleet-core's new `V7Id` trait for every ID type. The caller reads its clock once, so a record's creation time equals its ID's.
->   - **fleet-testkit:** `ManualClock` (`new`, `set`, `advance`, all truncating to ms) and `SeededRandom` (`fail_next` queues one failure that doesn't move the stream).
->   - **fleet-server `infra::system`:** `SystemClock` and `OsRandom`, each with its approved `#[expect]`.
->   - **Deviation: the testkit guard is `just testkit-check`, not a TOML-parsing script** (the user's decision). It asks Cargo: `cargo tree --workspace -e normal,build --target all -i fleet-testkit` must list nothing but fleet-testkit, so `workspace = true`, renames, target-specific tables and members anywhere are covered with no parser to maintain. `scripts/testkit-check.mjs` reads cargo's output and fails on any line it can't read; `just check`, `just ci` and the `deny` CI job run it.
->   - **The bans go further than planned** (the user's decision): uuid's self-minting functions and the `SysRng`/`ThreadRng` types too. A temporary probe, never committed, proved that all 28 entries fire with their reasons.
-> - **stable-check.** fleet-startup and fleet-server join `stable_crates` in group A, fleet-api-types in group C. P9.3 removes fleet-server when azalea-auth arrives.
-> - **Dependencies (group B, the user's approval).** New in `[workspace.dependencies]`: sqlx (0.9.0, no default features), async-trait (0.1.92) and tempfile (3.27.0, already in the lockfile). fleet-server gains fleet-core, async-trait, chrono (`now`), getrandom, log (only for sqlx's `LevelFilter`), secrecy, serde_json, sqlx (`runtime-tokio`, `sqlite-bundled`, `macros`, `migrate`, `uuid`), tokio (`fs`) and uuid; in dev, insta, proptest (`std`), tempfile and tokio (`macros`, `rt`). fleet-testkit gains chrono and rand (`std_rng`). fleet-core gains nothing.
-> - **Dependencies (group C, the user's approval).** New in `[workspace.dependencies]`, each without default features: ts-rs (12.0.1), axum (0.8.9) and tower (0.5.3), plus fleet-api-types by path. fleet-api-types uses fleet-core, serde (`derive`), thiserror and ts-rs (`serde-compat`); in dev, rstest, serde_json and tempfile. fleet-server gains fleet-api-types and axum (no features); in dev, tower (`util`), and insta gains `json`. Cargo.lock gains only ts-rs, ts-rs-macros and termcolor. ts-rs's `chrono-impl` and `uuid-impl` come with the first DTO that holds a time or an ID.
-> - **Dependencies (group D, the user's approval).** New in `[workspace.dependencies]`: tower-http (0.7.1; it has no default features). fleet-server gains tower-http (`catch-panic`, `timeout`, `limit`, `sensitive-headers`, `set-header`), tower as a normal dependency (no features, for `ServiceBuilder`), axum's `matched-path` and tokio's `time`; in dev, tokio's `test-util`. fleet-core gains the `RequestId` type, no dependency. Cargo.lock gains only tower-http 0.7.1, next to reqwest's 0.6.11.
-> - **Dependencies (group E, the user's approval).** New in `[workspace.dependencies]`: utoipa (6.0.0, without default features) and utoipa-axum (0.3.0). fleet-api-types gains utoipa (`macros`, and `preserve_order`, the user's approval during the build); fleet-server gains utoipa (`macros`), utoipa-axum, clap (`derive`) and tokio-util, axum's `tokio` and `http1`, and tokio's `rt`, `rt-multi-thread`, `macros`, `net` and `io-util`; fleet-startup gains tokio (`signal`, `macros`; in dev `rt`, `sync`, `time`, `test-util`), and fleet-agent drops tokio's `signal`, which fleet-startup now enables. Cargo.lock gains only utoipa, utoipa-gen, utoipa-axum and its macro helper pastey. No anyhow, and no hyper, hyper-util or reqwest as a direct dependency.
-> - **Dependencies.** Group A adds no external crate. fleet-startup uses figment (`toml`, `env`), serde, thiserror, tracing and tracing-subscriber (`env-filter`, `json`); fleet-testkit gains figment (`test`) and serde_json; fleet-server uses fleet-startup, garde (`derive`), serde (`derive`), thiserror and tracing.
+> Note (P6): built in five groups (A–E), one PR each; their decisions, which the user answered on 2026-10-10, are in [ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md), with the dependencies.
+> The phase also added the crate fleet-startup (the binaries' shared start-up code) and time and randomness as injected ports (`Clock`, `SecureRandom`), with `ManualClock` and `SeededRandom` in fleet-testkit, which `just testkit-check` keeps a dev-dependency everywhere.
 
 - [x] **P6.1** Module layout (see `CLAUDE.md`): `config`, `app` (services), `ports`, `infra/{sqlite,crypto}`, `http/{router,middleware,extractors,handlers,error}`, `grpc`, `cli`.
 
-  > Note (P6.1, as built, group A) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **Deviation: modules arrive with their code** (the user's decision). `crates/fleet-server` starts as a library whose crate doc describes the whole layout, each module with the task that fills it, and the layering (`http` handlers → `app` services → `ports` → `infra`). Group A adds `config` (P6.2); every other module arrives with the group that first puts code in it, so the tree has no empty modules.
-  > - **No binary yet.** `afkfleet-server` arrives with the CLI in P6.11 (group E).
-  > - fleet-server joins the justfile's `stable_crates` (P9.3 takes it out again).
+  > Note (P6.1): Deviation: modules arrive with their code; the crate doc describes the whole layout, the task that fills each module and the layering, so the tree has no empty modules ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 - [x] **P6.2** 🔴 Config:
   - figment + garde
   - secrets only via `*_file` paths
   - fail fast with a clear message
 
-  > Note (P6.2, from the Phase 6 plan, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **The agent's rules,** through fleet-startup's loader: the file must exist at exactly the given path, `AFKFLEET_SERVER__…` variables override any key, unknown keys are errors in the file and in the environment, parse errors stop at the first, and validation lists every problem at once, sorted by key, without echoing a value.
-  > - **Only Phase 6's keys.** Each later phase adds its own, so a key of a later phase is still an unknown key until then (Appendix A's note).
+  > Note (P6.2): the agent's rules through fleet-startup's loader, with `AFKFLEET_SERVER__…` overrides; only Phase 6's keys, so a key of a later phase is still an unknown key until then ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
   >
-  >   | Key | Default | Rule |
-  >   |---|---|---|
-  >   | `dev_mode` | `false` | When it's on, the server logs one `warn` at startup |
-  >   | `[http] bind` | `127.0.0.1:8080` | An IP address and a port other than 0 |
-  >   | `[http] request_timeout_secs` | 15 | 1–300 (1–19 since P8.1, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
-  >   | `[http] max_body_bytes` | 65536 | 1024–1048576 |
-  >   | `[database] path` | required | Absolute |
-  >   | `[log] format`, `filter` | `json`, `info` | As the agent's (P5.2) |
-  > - **Deviation: `bind` defaults to `127.0.0.1:8080`,** not Appendix A's `0.0.0.0:8080`, so a server started without it never listens on the network. The container config sets `0.0.0.0:8080` itself (P12).
-  > - **Port 0 is refused:** a server on a port the OS picks can't be reached by Caddy, and the healthcheck probes the configured port.
-  > - **`database.path` is required and absolute:** `/data/afkfleet.db` is a container path, and a relative path would resolve against wherever the server is started, so a start from another directory would silently create a fresh, empty database.
-  > - **The dev-mode warning:** "dev mode is on: development-only features are enabled; never run a production server in dev mode". It names no feature, so it stays true as later phases hang more on `dev_mode`.
-  > - **Secrets: the rule and a test now, the loader in P7.4.** A key whose name has a `_`-separated part `key`, `token`, `password`, `secret`, `passphrase`, `pepper` or `credential` (singular or plural) must end in `_file` or `_files`, or be on the test's allowlist with a reason. The test walks every key through serde's own field lists, so a new key can't escape it.
-  > - **`[log]`** is the agent's section from fleet-startup. The server's filter is `(EnvFilter ∧ azalea_auth cap) ∨ panic reports`, through fleet-startup's `NoRules`: no azalea default and no startup warning.
-
-  > Note (P6.2, as built, group A) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **Shape.** `fleet_server::config::load(path) -> Result<ServerConfig, ConfigError>`, with `ServerConfig { dev_mode, http: HttpConfig { bind, request_timeout, max_body_bytes }, database: DatabaseConfig { path }, log: LogConfig }`, `HttpConfig::DEFAULT_BIND`, `ENV_PREFIX` and `ServerConfig::warn_if_dev_mode()`.
-  >   - `ConfigError`, `Problems` and `Problem` are aliases of fleet-startup's generic types over the server's `ProblemKind`: `Missing`, `Empty`, `OutOfRange`, `NotAbsolute`, `SocketAddress`, `PortZero`, `LogFormat` and `LogFilter`. No message echoes a value.
-  >   - `fleet_startup::telemetry::NoRules` is the server's `FilterRules`: no defaults, a cap that lets everything through, no warning.
-  > - **A dependency edge beyond the plan's list** (the user's approval): `tracing-subscriber` as a fleet-server dev-dependency, so the dev-mode test checks the warning's level through fleet-startup's layer.
-  > - **Tests**, red against stubs that compiled (a `validate` that returned fixed defaults, a `warn_if_dev_mode` that did nothing, a `NoRules` cap that blocked everything, a key walker that found nothing): 40 of 106 failed on assertions, then all passed.
-  >   - `tests/config.rs` (31 cases, each through `fleet_testkit::jail::in_jail`): the defaults, every key, environment overrides, the bind forms, the dev-mode warning on and off, a missing file, unknown keys in the file and the environment, a later phase's section, a wrong type, the database path, bad binds and port 0, the range edges, bad log settings, and every problem at once without values.
-  >   - Unit tests: the secret-name rule (14 names), the walk finding every Phase 6 key, no key holding a secret, the allowlist's entries, and the problem list's text.
-  >   - fleet-startup: `NoRules` across 7 filters and 4 targets (`azalea_auth` stays at `info` under `trace`), panic reports under `off`, and no defaults or warning.
+  > | Key | Default | Rule |
+  > |---|---|---|
+  > | `dev_mode` | `false` | When it's on, the server logs one `warn` at startup |
+  > | `[http] bind` | `127.0.0.1:8080` | An IP address and a port other than 0 |
+  > | `[http] request_timeout_secs` | 15 | 1–300 (1–19 since P8.1, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
+  > | `[http] max_body_bytes` | 65536 | 1024–1048576 |
+  > | `[database] path` | required | Absolute |
+  > | `[log] format`, `filter` | `json`, `info` | As the agent's (P5.2) |
+  >
+  > Deviation: `bind` defaults to `127.0.0.1:8080`, not Appendix A's `0.0.0.0:8080`, so a server started without it never listens on the network. A key whose name has a secret word must end in `_file` or `_files`, or be on the test's allowlist; the loader comes in P7.4.
 - [x] **P6.3** SQLite setup:
   - `journal_mode=WAL`, `synchronous=NORMAL`, `foreign_keys=ON`, `busy_timeout=5s`
   - a **write pool with 1 connection** plus a read pool
   - migrations embedded with `sqlx::migrate!` and run at startup
   - offline data in `.sqlx/`, and a CI job running `cargo sqlx prepare --check`
-  > Note (P6.3, from group A, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **sqlx's statement logging is set explicitly** when the connection is configured: every statement at `debug`, slow statements at `warn`. sqlx has logged every statement at `info` in some versions, which the default `info` filter would let through on every request.
 
-  > Note (P6.3, as built, group B, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **Shape.** `infra::sqlite::open(&DatabaseConfig, DatabaseOptions) -> Result<Database, OpenError>` is the startup call: there's no binary yet, so "run at startup" means this function, which group E's `serve` and `migrate` call. It prepares the file, then `Database::connect` builds the write pool, runs every pending migration and builds the read pool.
-  > - **One function owns every per-connection setting,** `connect_options(base, PoolRole, &DatabaseOptions)`, for production and tests alike: `foreign_keys=ON`, `busy_timeout=5s`, `synchronous=NORMAL`, `trusted_schema=OFF` (the user's addition: no function with side effects runs from the schema), statements at `debug` and slow ones (from 250 ms) at `warn`, and `create_if_missing(false)`. The write connection adds WAL; the 4 read connections add `query_only=ON`, so a write through them fails instead of bypassing the single writer. Both pools wait at most 5 s for a connection.
-  > - **The file is open()'s job:** a missing folder stops startup (`MissingFolder`, nothing created); open() creates a missing file itself, `0600` on Unix, so sqlx never makes one with default permissions; and on Unix a database, `-wal` or `-shm` that group or others can use stops startup with the path, the fix (`chmod 600`) and the Docker Desktop bind-mount case in the message. That covers Phase 6's "only the service user reads the DB file".
-  > - **Migration errors** an operator must understand get their own variants: `EditedMigration { version }` and `NewerSchema { version }`.
-  > - **Timeouts** are documented in the module instead of a wrapper per query: the acquire timeout, `busy_timeout` and P6.6's request timeout bound every query; migrations are unbounded on purpose.
-  > - **Deviation: the offline data lives in `crates/fleet-server/.sqlx/`,** prepared from the crate without `--workspace`: only fleet-server uses sqlx, the Docker allowlist already includes `crates/`, and prepare compiles only fleet-server, never azalea. `SQLX_OFFLINE = "true"` in `.cargo/config.toml` pins every build to it. `just db-prepare` and `just db-check` (in `check` and `ci`) rebuild `target/sqlx-prepare.db` from the migrations, through an absolute URL, since rustc runs the macros in the workspace root.
-  > - **The `sqlx-offline` job** installs sqlx-cli pinned and SQLite-only, fetches `main`'s tip, and runs `just migrations-check` (a migration on `main` may never be modified, deleted or renamed) and `just db-check`.
-  > - **Tests** (`tests/database.rs`, `tests/database_logging.rs`, real time, never paused) were red against compiling stubs first: 15 of the 20 that run on Windows failed; the 3 Unix-only permission tests run in Linux CI.
+  > Note (P6.3): `infra::sqlite::open` prepares the file (a missing folder stops startup; a new file is `0600` on Unix, and one that group or others can use is refused), and `connect_options` sets every per-connection setting: `trusted_schema=OFF`, `query_only=ON` on the 4 read connections, and sqlx's statements at `debug`, slow ones at `warn` ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)). Deviation: the offline data lives in `crates/fleet-server/.sqlx/`; the `sqlx-offline` job runs `just migrations-check` and `just db-check`.
 - [x] **P6.4** 🔴 First migration and repositories for `users` and `audit_log`, tested with `#[sqlx::test]`.
 
-  > Note (P6.4, as built, group B, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **Schema conventions for every table:** STRICT; entity IDs as lowercase hyphenated v7 TEXT with a CHECK on the exact canonical form; times as `YYYY-MM-DDTHH:MM:SS.mmmZ` TEXT with a CHECK on the shape; CHECKs on closed sets only (`role`, `disabled`, `outcome`), never on sets later phases extend (`action`, `target_type`); append-only logs (`audit_log`, later `chat_messages`) keyed `INTEGER PRIMARY KEY AUTOINCREMENT` and ordered by ID only. IDs and times convert in one place (`infra/sqlite/convert.rs`); IDs are bound as `uuid::fmt::Hyphenated`, never as a plain `Uuid`, which sqlx would bind as a BLOB.
-  > - **Two migrations,** `0001_users.sql` (Appendix D in full, `username = lower(username)`, an algorithm-neutral PHC shape on `password_hash`, `password_changed_at` = `created_at` for a new user, and the partial unique index on `role` for `'owner'` from P7.1's note) and `0002_audit_log.sql` (`actor_user_id` references `users` without cascade, `actor_ip` canonical, target type and ID both set or both NULL, metadata NULL or a JSON object). No trigger blocks DELETE: P11.6 deletes old entries.
-  > - **The unit of work:** `ports::store::Store` hands out read handles (`users()`, `audit()`) and `write()`, a `WriteTx` started with `BEGIN IMMEDIATE`. Its `commit(entry)` records the audit entry and commits, so a change can't be committed unaudited; dropping it rolls back. There is no unaudited commit (P7 adds one with named exemptions, see P7.1's note). `StoreError::{Busy, Corrupt { table, column, rowid }, Unstorable { table, column }, Backend(source)}` names no sqlx type; `Corrupt` never carries the value.
-  > - **Users:** `insert`, `get` and `find_by_username`. `UsernameTaken` and `OwnerExists` are mapped from SQLite's code 2067 and its message, pinned by tests. `User` and `NewUser` live in `ports::users`; `PasswordHash` wraps a `SecretString` and checks the PHC shape the CHECK enforces.
-  > - **The audit vocabulary lives in fleet-core** (`audit`): `AuditAction` (a validated dotted name; each phase lists its constants in one `audit_actions!` block, group B none), `AuditOutcome`, `AuditTarget` with a tolerant `RecordedTarget`, and `AuditMetadata`, which never refuses an entry for its size: a text value is cut to the room left (ending in `…`), every free slot keeps room for the largest integer or boolean entry, and a `const` assertion checks that invariant, so the JSON never exceeds 4 KiB and recording never fails on metadata (the PR #25 review). `SECRET_WORDS` moved there from the config test, which now uses it too.
-  > - **Tests,** red first against compiling stubs (37 of 144 fleet-server tests failed, and 24 of the 27 store tests against migrations without their CHECKs): `tests/store.rs` (`#[sqlx::test]`, opened through `Database::connect` so the production settings apply), `tests/database.rs` (an edited migration, a full row through `open()`), `tests/migrations.rs` (the checksum snapshot) and the unit tests, including two property tests on the time conversion.
+  > Note (P6.4): the schema conventions for every table: STRICT; v7 TEXT IDs and millisecond UTC TEXT times, each with a CHECK; CHECKs only on closed sets; append-only logs (`audit_log`, later `chat_messages`) keyed `INTEGER PRIMARY KEY AUTOINCREMENT` and ordered by ID only, with no trigger blocking DELETE, since P11.6 deletes old entries ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
+  > The store's `write()` is a `WriteTx` whose `commit(entry)` records the audit entry, so a change can't be committed unaudited (P7 adds named exemptions, see P7.1's note); the audit vocabulary lives in fleet-core's `audit`.
 - [x] **P6.5** 🔴 `ApiError` maps each error to a status code and `{ "error": { "code", "message", "request_id", "fields"? } }`.
   - Internal errors are logged with the request ID and returned as a generic 500.
   - Every variant gets an insta snapshot.
 
-  > Note (P6.5, as built, group C, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **Thirteen codes,** one `ApiError` variant each, every code the plan names, so the envelope and the TypeScript union are complete in Phase 6; later phases add only domain-specific codes. `bad_request` 400, `unauthorized` 401, `forbidden` 403, `not_found` 404, `method_not_allowed` 405, `timeout` 408, `conflict` 409, `payload_too_large` 413, `unsupported_media_type` 415, `validation_failed` 422 (with `fields`), `rate_limited` 429, `internal` 500, `busy` 503.
-  > - **The message is a fixed sentence per code** (`ErrorCode::message()` in fleet-api-types, e.g. "The server is busy. Try again shortly."), never runtime data; a case that needs other words gets its own code.
-  > - **Headers:** a 401 always sends `WWW-Authenticate: Bearer`, with no realm and no error detail. A 429 sends `Retry-After` from the error's own delay, in whole seconds, rounded up. A 503 sends `Retry-After: 1` (`BUSY_RETRY_AFTER`), so the app has one retry rule for both.
-  > - **Conversions:** `StoreError::Busy` becomes `busy`, and `Corrupt`, `Unstorable` and `Backend` become `internal`. `AuthzError::NotFound` and `Forbidden` become 404 and 403, and `WrongResource` becomes `internal`, logged at `error` (P7.8's note). A garde `Report` becomes `validation_failed`, one field error per broken rule in garde's order and path notation (`steps[0].angle`).
-  > - **The request ID.** `IntoResponse` can't see the request, so `ApiError::into_response` sets the status and headers and leaves a private marker in the response's extensions, with an empty body. The `render_errors` middleware, which group D places inside the request-ID layer, reads the ID from the request's `x-request-id` (`REQUEST_ID_HEADER`) as a `BoundedText<64>`, takes the marker, logs, and writes the body with `serde_json::to_vec`. A response without a marker passes unchanged.
-  >   - A missing, empty or non-text ID is a wiring bug: the body says `"unknown"` and it's logged at `error`.
-  >   - If writing the body ever failed (it can't for these types), a fixed, hard-coded `internal` body with `request_id: "unknown"` is sent and the failure logged, never serde's text; a test checks that the fixed body equals what serde would write.
-  > - **Logging:** `internal` at `error`, with `request_id` and the whole source chain joined as "a: b: c" (e.g. "the database failed: disk I/O error"), cleaned by `sanitize_untrusted` and cut at 1024 characters; `busy` at `warn`, with `request_id`; 4xx codes not at all, since group D's trace layer logs every request's status.
-  > - **Tests**, red against stubs that compiled (every variant 500 and `internal`, conversions that all gave `internal`, a middleware that passed responses through): 51 of 57 failed on assertions, then all passed. 13 snapshots, one per variant, hold the status, the `content-type`, `retry-after` and `www-authenticate` headers and the body, through the middleware with a fixed request ID; they were read before accepting. A garde test struct (length and range rules) proves that the 422 body names rules, never values: `hunter2-secret`, `7654321` and `12345` appear nowhere in it, and garde's texts fit their caps uncut.
+  > Note (P6.5): thirteen codes, one `ApiError` variant each, each with a fixed message; a 401 sends `WWW-Authenticate: Bearer`, a 429 and a 503 `Retry-After`; `render_errors` writes the body with the request ID, from a marker the error leaves in the response's extensions; `internal` logs its sanitized source chain at `error`, `busy` at `warn` ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 - [x] **P6.6** 🔴 Middleware stack, in this documented order:
   1. request-id (set and propagate)
   2. trace (no bodies, sensitive headers redacted)
@@ -1843,116 +1244,35 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   Rate limiting is added in P7.
 
-  > Note (P6.6, from group C, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **`render_errors` goes inside the request-ID layer,** so every `ApiError` gets its ID. Errors that don't pass through `ApiError` (tower-http's timeout and body-limit responses, 405, the 404 fallback) must end up in the same `ErrorResponse` envelope with a `request_id`, e.g. by mapping them to `ApiError` or by having the middleware wrap any error status without a marker. A 405 keeps axum's `Allow` header. An integration test sends one request for each error the router can produce and asserts that every response has the JSON body with a `request_id`, so a missing body is caught, not just safe.
-  > - **The request ID is always generated by the server.** tower-http's `SetRequestIdLayer` keeps an `x-request-id` the client already sent, so the client's header is removed or overwritten before the ID is set; otherwise a client could choose the ID that gets logged and echoed back (fake or colliding IDs, log injection). The tests send a request with its own `x-request-id` and assert that the logged and returned ID is a fresh server-generated one. The ID fits `BoundedText<64>` unchanged: at most 64 characters, none that `sanitize_untrusted` strips.
+  > Note (P6.6): Deviations: the security headers sit outermost, so every response gets them (outermost first: sensitive headers, security headers, request ID, trace, `render_errors`, catch-panic, timeout, body limit); the request-ID and trace layers are the server's own, not tower-http's; and two security headers more than §7.6 listed, `Content-Security-Policy` and `X-Frame-Options` ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
-  > Note (P6.6, as built, group D, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **Deviation: the order.** The security headers sit outermost, so every response gets them, including those the layers below make themselves: a refused request, a timeout, a body-limit 413, a panic.
-  >   - **The stack, outermost first:** sensitive headers, security headers, request ID, trace, `render_errors`, catch-panic, timeout (`[http] request_timeout_secs`, 408), body limit (`[http] max_body_bytes`), then the router with its 404 and 405 fallbacks.
-  >   - `http::middleware::apply(routes, &HttpConfig, RequestIds)` adds them, and its module docs give each layer's reason.
-  > - **The request ID** is a version 7 `RequestId` (a new `define_id!` in fleet-core), minted with `system::mint` from the `Clock` and `SecureRandom` ports: lowercase hyphenated, 36 characters.
-  >   - **Deviation: the layer is the server's own,** not tower-http's `request-id`, which turns on uuid's `v4` and `rng`.
-  >   - It removes every `x-request-id` the client sent, then sets the new ID on the request and on the response, replacing any value a handler set.
-  >   - If minting fails, the request is refused with the internal error (`request_id: "unknown"`) and the cause is logged at `error`; the handler never runs.
-  > - **Deviation: two security headers more than §7.6 listed.** Every response carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` and `X-Frame-Options: DENY`. They're set with `overriding`, so a handler can't weaken them.
-  > - **Sensitive headers:** `Authorization`, `Proxy-Authorization` and `Cookie` on requests, and `Set-Cookie` on responses, are marked before anything else runs.
-  > - **Deviation: the trace layer is the server's own,** not tower-http's `trace`, whose response hook can't see the route.
-  >   - An `info` span `request` carries `request_id`, `method` and `route`. `method` is one of the nine standard methods or `"<other>"`. `route` is axum's `MatchedPath` template or `"<unmatched>"`, never the path a client sent or its query string.
-  >   - One line, "request finished", carries `status`, `latency_ms` (a float, to the microsecond) and, for an error, `code`. It's logged at `info`, or at `debug` for `/health/…`.
-  >   - It logs no header and no body. A test sends credentials and a JSON body with marker values, and no marker appears in any line at `debug`.
-  > - **The safety net:** `render_errors` gives every 4xx or 5xx without a marker the envelope.
-  >   - The code comes from the status. A status without a code of its own keeps its status and says `bad_request` (4xx) or `internal` (5xx). A bare 422 has `fields: []`.
-  >   - The old body is replaced, and `Content-Length` and `Content-Encoding` are removed. Every other header stays, such as axum's `Allow` and a limiter's `Retry-After`.
-  >   - A missing `WWW-Authenticate: Bearer` (401) or `Retry-After: 1` (503) is added.
-  >   - Every bare error status is logged at `error` as a wiring bug, except the timeout's 408 and the body limit's 413.
-  >   - The 404 and 405 fallbacks and the panic handler return `ApiError` themselves.
-  > - **A panic** answers with the internal error, whose source is the fixed "a request handler panicked". The payload reaches the log only through fleet-startup's panic hook, whose line carries the request span. That's tested with a stand-in hook in a test binary of its own, since the hook is process-wide.
-  > - **Group C's test changed:** `a_response_without_an_api_error_passes_unchanged` sent a bare 418 and expected it unchanged. The safety net now wraps a 418, so the test sends a 201 (`a_success_without_an_api_error_passes_unchanged`), and the 418 is one of the safety-net cases.
-  > - **Tests**, red against compiling stubs: pass-through ID and trace layers, no safety net, no security or sensitive headers, no timeout or body limit, and tower-http's default panic response. 53 of 110 failed on assertions, then all passed.
-  >   - `tests/middleware.rs` sends one request per error: 404, 405, 408, 413 by its length and when read, a panic, and a failed mint. It also sends one per bare status. Each gets a snapshot, 16 in all, read before accepting.
-  >   - The timeout's tests run on paused time.
+  > Note (P6.6): the request ID is a v7 `RequestId` the server mints after removing every `x-request-id` the client sent; `render_errors` gives every bare 4xx or 5xx the envelope; the trace span logs the route's template, never the path, query string, headers or body ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 - [x] **P6.7** 🔴 `GET /health/live` and `GET /health/ready` (DB ping), with no internal details in the response.
 
-  > Note (P6.7, as built, group D, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **Shape.** `http::router::router(AppState, &HttpConfig, RequestIds)` holds the two routes, without the `/api/v1` prefix (Appendix B), behind P6.6's stack.
-  >   - The handlers live in `http::handlers::health`.
-  >   - `ready` calls `app::health::HealthService::ready()`, which calls the new `Store::ping()`.
-  >   - `ping()` is `SELECT 1` (`query_scalar!`) on the read pool, so it never competes with the one write connection.
-  > - **Answers.** Both checks answer `200` with an empty body.
-  >   - `live` checks nothing else.
-  >   - A failed `ready` answers like any store failure, through `From<StoreError>`. A busy database (no read connection within the acquire timeout) gives `busy`: 503, `Retry-After: 1`, logged at `warn`. Any other failure gives `internal`: 500, its source chain logged at `error` with the request ID.
-  >   - No response holds anything of the cause.
-  > - **Bounded like every query:** the pools' 5 s acquire timeout, `busy_timeout` and the request timeout. There's no extra timeout.
-  > - **Logging.** The trace layer logs both routes at `debug`, so a probe every few seconds doesn't flood the log. A failed check is still logged by `render_errors`.
-  > - **Tests**, red against a `ping` that always failed and handlers that answered 500: 10 of 44 failed on assertions, then all passed.
-  >   - `tests/health.rs` runs in real time against a database from `#[sqlx::test]`. It covers 200 and `HEAD` for both routes, 405 with `Allow`, `live` with a closed database, `ready` busy (every read connection held, a 1 s acquire timeout), and `ready` with a closed database.
-  >   - It has 4 snapshots, read before accepting.
-  >   - `tests/store.rs` checks the ping: it succeeds, it doesn't wait for a held write connection, it's busy while every read connection is taken, and it's a backend error on a closed database.
+  > Note (P6.7): both routes answer `200` with an empty body, without the `/api/v1` prefix; `ready` pings the read pool (`SELECT 1`) through `HealthService`, and a busy database answers 503, any other failure 500; the trace layer logs both routes at `debug` ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 - [x] **P6.8** 🔴 Audit service:
   - append-only: the trait has only `record` and `list`
   - each entry: actor, IP, action, target, outcome, metadata (no secrets), timestamp
 
-  > Note (P6.8, as built, group B, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **`app::audit::AuditService { clock, store }`:** `entry(action, outcome)` returns a `NewAuditEntry` stamped with the `Clock` (milliseconds), with the builder methods `actor`, `ip`, `target` and `metadata`; `record(entry)` runs its own short write transaction (`write()`, then `commit(entry)`), for a failure or denial whose change was rolled back; `list(page)` reads through the read pool. A use case that changes state builds its entry here and passes it to `WriteTx::commit`, so every timestamp comes from one clock.
-  > - **Append-only** means the store has exactly two operations for the log, `AuditWrites::record` inside a `WriteTx` and `AuditReads::list` (P6.4's note); nothing updates or deletes an entry, and no trigger blocks P11.6's retention. *One exception since P11.6 ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), R50, R57):* the retention task deletes the log's oldest entries, a prefix by ID past `[audit] retention_days`, in a transaction of its own (`Store::retention_batch`) that nothing else opens; nothing ever updates an entry.
-  > - **No secrets:** the metadata's rules live in fleet-core's `AuditMetadata` (P6.4's note), checked when it's built.
-  > - **Tests** (`tests/audit_service.rs`, `ManualClock`, IDs minted from `SeededRandom` and compared with each other), red against a stub that stamped the epoch, recorded nothing and listed nothing: 5 of 6 failed.
+  > Note (P6.8): `app::audit::AuditService { clock, store }` stamps each entry with the `Clock`; `record(entry)` runs its own short write transaction for a failure or denial whose change was rolled back; the metadata's rules live in fleet-core's `AuditMetadata` ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
+  >
+  > **Append-only** means the store has exactly two operations for the log, `AuditWrites::record` inside a `WriteTx` and `AuditReads::list` (P6.4's note); nothing updates or deletes an entry, and no trigger blocks P11.6's retention. *One exception since P11.6 ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), R50, R57):* the retention task deletes the log's oldest entries, a prefix by ID past `[audit] retention_days`, in a transaction of its own (`Store::retention_batch`) that nothing else opens; nothing ever updates an entry.
 - [x] **P6.9** `fleet-api-types`:
   - DTOs with serde, garde and `ts-rs`
   - `#[serde(deny_unknown_fields)]` on request DTOs
   - `just gen` exports them to `packages/ui/src/generated/`
   - CI job `ts-types-fresh` fails on any diff
 
-  > Note (P6.9, as built, group C, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **What's in it.** The error envelope's DTOs (`ErrorResponse`, `ErrorBody`, `FieldError`, `ErrorCode`; P6.5) and three building blocks for every later DTO:
-  >   - **`SafeInt`**: the only way a 64-bit integer crosses the API. It's a range-checked `i64` within ±(2^53 − 1), the integers JavaScript reads exactly; reading a number outside that range fails. In TypeScript it's `export type SafeInt = number;`. `SafeInt::MAX` is the crate's own constant, and a test checks that it equals `AuditMetadata::MAX_INT`. Its serde is written by hand, since ts-rs can't read serde's `try_from`/`into` and warns about them on every build.
-  >   - **`Open<E>`**: a response value a later version may extend, such as `ErrorCode`. A value this version doesn't know still reads back, as text cleaned by `sanitize_untrusted` and cut at 64 characters; only a non-string fails. The server can build one only from a known value. `E` implements `OpenEnum` (`ALL`, `as_str`), and a field holding one carries `#[ts(as = "E")]`, so the TypeScript union lists exactly the known values.
-  >   - **`BoundedText<MAX>`**: response text, cleaned by `sanitize_untrusted` and cut at `MAX` characters both when built and when read, never failing on content. It has no TypeScript type of its own, so a field without `#[ts(type = "string")]` doesn't compile.
-  > - **Requests and responses.** Responses derive `Serialize` and `Deserialize` without `deny_unknown_fields`, so `fleet-client` reads them and a newer server's extra field doesn't break an older app; each round-trips in a test. Requests are `Deserialize` + garde + `deny_unknown_fields`, which the crate docs state. **Deviation:** Phase 6 has no request DTO, so garde joins fleet-api-types with P7's first one.
-  > - **The export.** `typescript::export(scratch)` writes the root DTOs through ts-rs's `export_all` with `Config::new()` (which ignores the `TS_RS_*` variables) into an empty scratch folder, and refuses one that isn't empty. No DTO carries `#[ts(export)]`, so tests never write files. One file per type, no index file.
-  >   - `just gen` (`typescript::write`) exports into a fresh temp folder inside `target/gen/`, then syncs `packages/ui/src/generated/` with it. The sync deletes only `.ts` files that start with ts-rs 12.0.1's exact header, and stops before deleting anything, naming the entry, if the folder holds any other file or a subfolder.
-  >   - `just gen-check` (`typescript::check`), in `just check` and `just ci`, compares the folder with a fresh export and names every missing, extra or changed file. CI's `ts-types-fresh` job (ubuntu, Rust only) runs it.
-  > - **`packages/ui/src/generated/`** holds only the generated files until P8.2 scaffolds `packages/ui` around it. With no package.json there, pnpm ignores it (checked: `pnpm -r ls` lists only the root). Biome already skips it, and `.gitattributes` marks it `linguist-generated`.
-  > - fleet-api-types joins `stable_crates`.
-  > - **Tests**, red against stubs that compiled (a `SafeInt` that took any value, text that wasn't cleaned, an `Open` that knew nothing, empty messages and names, an export, comparison and sync that did nothing): 54 of 81 failed on assertions, then all passed. Among them: a sync over a previous real ts-rs export (a stale `Probe.ts` included) proves that it recognizes ts-rs's real header, and every generated file is checked for `bigint`. After the implementation, the coverage report showed error paths without a test; their tests followed in their own commit, and one found a bug: `sync` noticed a subfolder in the scratch folder only after it had deleted and written files. It now checks both folders before changing anything.
+  > Note (P6.9): the error envelope's DTOs plus `SafeInt` (the only way a 64-bit integer crosses the API, within ±(2^53 − 1)), `Open<E>` (a value a later version may extend) and `BoundedText<MAX>`; `just gen` syncs one file per type, and `just gen-check` (CI's `ts-types-fresh`) compares ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)). Deviation: Phase 6 has no request DTO, so garde joins fleet-api-types with P7's first one.
 - [x] **P6.10** OpenAPI via utoipa. `/api/openapi.json` is served only when `dev_mode = true`.
 
-  > Note (P6.10, as built, group E, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **The schemas live in fleet-api-types,** always on like ts-rs: the DTOs derive `ToSchema` next to `TS`. `SafeInt` is a component of its own (an integer within ±(2^53 − 1)), as it's a type of its own in TypeScript. A `BoundedText<MAX>` field carries `#[schema(schema_with = BoundedText::<MAX>::schema)]` (a string with `maxLength` MAX; utoipa's derive can't read a const generic, so a field without it doesn't compile), an `Open<E>` field `#[schema(value_type = E)]`, and an optional field `#[schema(nullable = false)]`. `openapi::components()` lists the root DTOs, like the TypeScript export.
-  > - **Deviation: four fields lose their description.** utoipa doesn't carry a doc comment onto a `schema_with` field, so the text fields have no description in the document; the TypeScript keeps it.
-  > - **A test keeps the two exports equal:** a test-only renderer turns every component into the TypeScript declaration ts-rs writes and compares them (comments stripped, whitespace collapsed); the component names must equal the exported files; and what TypeScript can't express is checked directly: `SafeInt`'s range, every text field's cap against its constant, an open field's enum against `E::ALL`. The renderer fails on any construct it doesn't handle, and a test proves it on 15 of them. **Deviation: utoipa's `preserve_order`** (the user's approval during the build), since utoipa wrote properties alphabetically and ts-rs in field order.
-  > - **The document:** routes are registered through utoipa-axum's `OpenApiRouter` with `#[utoipa::path]` on each handler, so a route can't exist without its entry. Each operation lists its own statuses (`live` 200; `ready` 200, 500, and 503 with `Retry-After`) plus a `default` response with `ErrorResponse`. `info`: title "afkfleet", the crate's version, GPL-3.0-or-later, no contact and no servers. The document doesn't list itself.
-  > - **Serving:** `router()` takes `ApiDocs::{Served, Hidden}` (`ApiDocs::for_dev_mode`). In dev mode `GET /api/openapi.json` answers the document as JSON, written per request, behind the whole middleware stack; otherwise the route doesn't exist and the path answers exactly like an unknown one.
-  > - **Tests,** red against compiling stubs: in fleet-api-types 9 of 26 failed (an empty component list, `SafeInt` without its range, text without its cap); in fleet-server 8 of 9 (no route in dev mode, no schemas). One snapshot holds the whole document, read before accepting.
+  > Note (P6.10): the schemas live in fleet-api-types next to ts-rs, a test keeps them equal to the TypeScript export, and routes register through utoipa-axum's `OpenApiRouter`; outside dev mode the path answers exactly like an unknown one ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)). Deviations: four text fields lose their description, since utoipa doesn't carry a doc comment onto a `schema_with` field; utoipa's `preserve_order` (the user's approval during the build) keeps the field order.
 - [x] **P6.11** CLI skeleton: `serve`, `migrate`, `healthcheck`.
 
-  > Note (P6.11, from group A, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **The dev-mode warning.** `serve` calls `ServerConfig::warn_if_dev_mode()` right after logging starts.
-  > - **The healthcheck's address.** When `bind` is an unspecified address (`0.0.0.0` or `::`), as the container config will set, the healthcheck probes loopback (`127.0.0.1` or `::1`) on the same port instead: connecting to `0.0.0.0` only happens to work on Linux and fails on Windows.
-  > - **The dev config's database path must be absolute,** and a committed file can't hold one that works on every machine. How `just dev-server` provides it is group E's question, e.g. a `$`-parameter built from `justfile_directory()`.
-
-  > Note (P6.11, from group D) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `serve` builds `http::router::router` with `RequestIds` over `SystemClock` and `OsRandom` and the `Database` as the health service's store. The healthcheck probes `/health/ready`, whose only success is `200` with an empty body.
-
-  > Note (P6.11, as built, group E, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **The agent's shape** (ADR-0014): `afkfleet-server`; `fleet_server::cli` holds the clap structs and each command's logic; main.rs handles clap's errors (a `healthcheck` usage error exits 1), loads the config before any runtime, writes errors from before logging to stderr as one line, and **uses no anyhow**. `--config <PATH>` is required on every command.
-  > - **`serve`:** logging, `warn_if_dev_mode()`, a multi-threaded runtime, then inside it the stop signals and the bound listener, then `serve::run`, which opens the database (with its migrations) and serves `serve::app` over `SystemClock`, `OsRandom` and the database. Startup errors are one `error`, "the server can't start", with the whole chain; the last line, "the server stopped", carries the exit code.
-  > - **A free port without weakening the config:** `serve::run` takes an already-bound tokio `TcpListener`. main.rs binds `[http] bind`; tests bind `127.0.0.1:0`. The port-0 rule is unchanged.
-  > - **`migrate`** logs like `serve`: "the database is migrated" (`info`, with `path`) or "the database can't be migrated" (`error`). It opens the database through `open()` and closes it with the new `Database::close_within(DATABASE_CLOSE)` (5 s). Exit codes 0, 1, 2.
-  > - **`healthcheck`:** our own HTTP/1.1 GET over tokio's `TcpStream` on a current-thread runtime, `Connection: close`, one 3 s timeout for the whole exchange, at most 16 KiB read, no TLS. Healthy only on `HTTP/1.1 200` with an empty body; an unspecified bind is asked on loopback on its port. One line on stdout, exit 0 or 1; no logging. It loads the whole config, like the agent's, so it needs the server's environment variables too. The tests reuse `healthcheck::get` as their HTTP client.
-  > - **`just dev-server`** runs `deploy/dev/server.toml` (dev mode, pretty logs, default bind, no database path) with `$AFKFLEET_SERVER__DATABASE__PATH`, a `$`-parameter defaulting to `target/dev-server/afkfleet.db` under `justfile_directory()`; Node creates the folder first.
-  > - **Tests,** red against compiling stubs (35 of 185 failed): the command line, the probe and its parser, `close_within`, the dev config, and the real binary: missing and invalid configs, usage errors, each command's help, the version, `migrate` twice and into a missing folder, `healthcheck` with nothing listening, against an in-process server, and through an unspecified bind.
+  > Note (P6.11): `afkfleet-server` follows the agent's shape (ADR-0014), with no anyhow and `--config <PATH>` on every command; `serve` warns in dev mode and takes an already-bound listener; `healthcheck` is our own HTTP/1.1 probe of `/health/ready` with one 3 s timeout, asking loopback for an unspecified bind; `just dev-server` passes the database path as a `$`-parameter under `target/dev-server/` ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 - [x] **P6.12** 🔴 Graceful shutdown: axum's `with_graceful_shutdown` plus a `CancellationToken`.
 
-  > Note (P6.12, from group B) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `Database::close()` closes the read pool, then the write pool, and waits for every checked-out connection, so shutdown bounds it with a timeout.
-
-  > Note (P6.12, as built, group E, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **The signals moved to fleet-startup** (§4) in a pure-move commit: `Signal`, `ShutdownSignals`, `OsSignals` and their tests. fleet-agent re-exports them and keeps its own test sources; fleet-server's tests have their own `ChannelSignals`.
-  > - **One deadline, `request_timeout + 5 s`, from the first signal; no new key.** The drain may take up to `[http] request_timeout_secs`, which the timeout layer already enforces per request; the database closes with the rest, at least `DATABASE_CLOSE` (5 s). A later signal is only logged.
-  > - **Connections:** `axum::serve(…).with_graceful_shutdown(token.cancelled_owned())`. axum spawns each connection itself and never aborts them, so at the drain limit the server stops waiting, logs one `warn` and closes the database; by then the timeout layer has cut every handler, so a leftover connection holds no database connection, and the runtime's 1 s shutdown ends it.
-  > - **Exit codes, as the agent's:** 0 stopped by a signal (even with connections cut at the drain limit), 1 startup error, 2 usage error, 4 the server ended unasked or the database didn't close by the deadline; 3 is unused.
-  > - **`serve::drive`** holds the sequence, generic over the server's and the close's futures, with biased `select!`s whose cancel-safety is commented.
-  > - **Tests,** red against a `drive` that returned at once (13 of 29 failed): its timing on paused time with stand-in futures; `serve` in real time over sockets and SQLite (an in-flight request finishing while new connections are refused, an idle keep-alive connection, a held database connection failing at the deadline); and on Unix the real binary stopping on SIGTERM with exit 0, "the server stopped" last. That test finds a free port, then binds it, and retries only when the server exits 1 with the bind error for that port before listening, at most 3 times (the user's addition).
+  > Note (P6.12): the stop signals moved to fleet-startup; one deadline, `request_timeout + 5 s` from the first signal, bounds the drain and `Database::close()`; exit codes as the agent's: 0 stopped by a signal, 1 startup error, 2 usage error, 4 the server ended unasked or the database didn't close by the deadline, and 3 unused ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
 **Security:**
 - No CORS layer.
@@ -1965,11 +1285,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - Snapshots reviewed.
 - `just ci` green.
 
-> Note (DoD, group E): checked point by point.
-> - **The integration test** (`tests/serve/boot.rs`) runs `serve::run` with the binary's wiring on a fresh temporary database and a `127.0.0.1:0` listener: `GET /health/live` and `/health/ready` answer 200 with an empty body over a real connection, the healthcheck reports healthy, and a signal stops it with exit 0, the database closed and every migration applied. A temporary break in the wiring, never committed, made it fail.
-> - **Snapshots:** every snapshot of the phase was read before accepting: the migrations' checksums (group B), 13 error responses (group C), 16 middleware and 4 health responses (group D), and the OpenAPI document (group E).
-> - **`just ci`:** CI runs every recipe of `just ci`, one per job, on the group E PR.
-> - **Security:** no CORS layer; `Cache-Control: no-store` on every response; no secret in any committed TOML (Phase 6's config has none, and the secret-name test guards every key); the database file is owner-only on Unix, and the server refuses one others can read.
+> Note (DoD, group E): checked point by point: `tests/serve/boot.rs` boots `serve::run` on a fresh temporary database, both health checks answer 200 and the healthcheck reports healthy; every snapshot of the phase was read before accepting; CI runs every recipe of `just ci` on the group E PR; the security list holds: no CORS layer, `Cache-Control: no-store` on every response, no secret in any committed TOML, and an owner-only database file on Unix ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
 ---
 
