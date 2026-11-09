@@ -28,11 +28,16 @@ Every service runs as the nonroot user (65532) with a read-only root, no capabil
 
 ## Before you start
 
-- **Docker Engine 28.0 or newer with Compose v2.24 or newer,** rootful: `setup.sh` refuses rootless Docker and user-namespace remapping, since the backups' folder must belong to the server's user (65532). It checks all of this and names what it found.
-- **Your own account may run Docker:** this guide runs `docker` and `setup.sh` as your user, which must be in the `docker` group. That group is root-equivalent (whoever is in it controls the host), so add only your own account, then log in again; or run each of those commands with `sudo` instead. Success: `groups` lists `docker`.
+- **Docker Engine 28.0 or newer with Compose v2.24 or newer,** rootful: `setup.sh` refuses rootless Docker and user-namespace remapping, since the backups' folder must belong to the server's user (65532). It checks all of this and names what it found. Install Docker from Docker's own package repository for your distribution, as Docker's documentation ("Install Docker Engine") describes: a distribution's own Docker package is often older. Updating Docker later restarts every container on the host; afkfleet's start again by themselves.
+- **Your own account may run Docker:** this guide runs `docker` and `setup.sh` as your user, which must be in the `docker` group. That group is root-equivalent (whoever is in it controls the host), so add only your own account; or run each of those commands with `sudo` instead.
   > **Not run by afkfleet's tests:** it changes the host's users and groups.
   ```sh
   sudo usermod -aG docker <you>
+  ```
+  The group counts only from your next login: log out of the host and in again (a new shell in the same session isn't enough). Success: Docker's version shows both its **Client** and its **Server** part, without `sudo`; "permission denied" on Docker's socket means the old login is still in use.
+  > **Not run by afkfleet's tests:** it checks your own login's groups on the host.
+  ```sh
+  docker version
   ```
 - **`curl`, `sha256sum` and `tar`** on the host, for the install and updates.
 - **A domain name** pointing at the host's IPv4 address (an A record) if afkfleet's own Caddy gets the HTTPS certificate: Let's Encrypt checks it over port 80. afkfleet listens on IPv4 alone. A free dynamic-DNS subdomain works ([The host](#the-host)).
@@ -63,6 +68,13 @@ sudo iptables -I DOCKER-USER -p tcp -m conntrack --ctorigdstport 7443 --ctdir OR
 ```
 
 `setup.sh`'s `check` says whether 80 and 443 are free on the host, but free on the host isn't reachable from outside: only your provider's firewall decides that.
+
+**Never reload or save the host's saved packet-filter rules while Docker runs** (your distribution's "persistent" rules service, or a restore from a rule file): a reload drops the rules Docker wrote for its published ports, which then stop answering, and a save copies Docker's own rules into the file, to come back stale at the next boot. If published ports stop answering after a firewall change, restart Docker, which writes its rules again (and restarts every container). Success: afkfleet's services are healthy again (`ps` in [When a service won't start or keeps restarting](#when-a-service-wont-start-or-keeps-restarting)), and its ports answer.
+
+> **Not run by afkfleet's tests:** it restarts the host's Docker.
+```sh
+sudo systemctl restart docker
+```
 
 ### A domain that follows the host's address
 
@@ -117,7 +129,7 @@ sudo systemctl start afkfleet-dns.service
 sudo journalctl -u afkfleet-dns.service -n 5
 ```
 
-Success: the journal shows the service ending with `Deactivated successfully` after your service's own answer (often `good` or `nochg`). A failure shows curl's error, such as `The requested URL returned error: 401`: the token or the URL is wrong; fix the file with `sudoedit` again. Without systemd, root's crontab can run the same every 5 minutes, one line added in its editor:
+Success: the journal shows the service ending with `Deactivated successfully` after your service's own answer, which differs by service: `good` or `nochg` for many, `OK` for others. A failure shows curl's error, such as `The requested URL returned error: 401`: the token or the URL is wrong; fix the file with `sudoedit` again. Without systemd, root's crontab can run the same every 5 minutes, one line added in its editor:
 
 > **Not run by afkfleet's tests:** they change the host's crontab and your DNS record.
 ```sh
@@ -202,6 +214,7 @@ About eleven commands from a host with Docker, each with what success looks like
    ```sh
    sudo sh host/sftp-backups.sh install --key /path/to/your_key.pub
    ```
+9. **From outside,** before you invite anyone: open `https://<your domain>/health/live` in a browser. Success: an empty page with no certificate warning, so the domain, the certificate and the proxy path all work. A warning, an error page or no answer: see [The host](#the-host) and [Choosing a proxy path](#choosing-a-proxy-path).
 
 ## First login and inviting friends
 
@@ -272,7 +285,25 @@ docker compose exec -T server /usr/local/bin/afkfleet-server backup --config /et
 
 Your PC pulls the backups over SFTP, through an account on the host that can list and read them and do nothing else. Nothing on the host holds a credential for anywhere else, and no third party is involved. The pull deliberately doesn't carry the keys: [The keys' copy](#the-keys-copy) does that apart.
 
-**On the host,** once, from the folder that holds `compose.yaml`, with your PC's public key copied over (one line, such as `id_ed25519.pub`):
+**Your PC's own key for it,** made once, apart from the key you log in to the host with: the backups' account can only read backups, so whoever gets this key reads backups and nothing else, and your own login's key never has to open a second door. In PowerShell (any other OpenSSH client works the same way); a passphrase keeps a copied key file useless. Success: it prints the key's fingerprint, and your `.ssh` folder holds `afkfleet-backup` and `afkfleet-backup.pub`.
+
+> **Not run by afkfleet's tests:** it makes a key on your PC.
+```powershell
+ssh-keygen -t ed25519 -f "$HOME\.ssh\afkfleet-backup"
+```
+
+**Its public half to the host:** the `.pub` file is one line and isn't secret. Any of three ways, over your own login:
+- copy it from your PC;
+  > **Not run by afkfleet's tests:** it copies a file from your PC to the host.
+  ```powershell
+  scp "$HOME\.ssh\afkfleet-backup.pub" <you>@<your host>:afkfleet-backup.pub
+  ```
+- or, in your SSH session, open a new file in an editor, paste that one line and save it;
+- or upload it with a graphical SFTP client.
+
+Success, whichever way: the file on the host holds one line, starting with `ssh-ed25519`. Its path goes in for `/path/to/your_key.pub` below.
+
+**On the host,** once, from the folder that holds `compose.yaml`:
 
 ```sh
 sudo sh host/sftp-backups.sh install --key /path/to/your_key.pub
@@ -290,7 +321,7 @@ sudo sh host/sftp-backups.sh install --key /path/to/your_key.pub
 sudo sshd -T -C user=afkfleet-backup,host=<your PC's name>,addr=<your PC's address> | grep -E '^(chrootdirectory|forcecommand|permittty|allowtcpforwarding|disableforwarding) '
 ```
 
-**On your PC** (Windows' built-in OpenSSH client, or any other), compare the host key's fingerprint with the one `install` printed at the first connection, then list and copy. Never copy a `.….db.partial` file: it's still being written. Writing, deleting, a shell or a tunnel is refused. Keep the copies as private as the backups.
+**On your PC** (Windows' built-in OpenSSH client, or any other), with the key made above (`~/.ssh/afkfleet-backup` for `~/.ssh/your_key`), compare the host key's fingerprint with the one `install` printed at the first connection, then list and copy. Never copy a `.….db.partial` file: it's still being written. Writing, deleting, a shell or a tunnel is refused. Keep the copies as private as the backups.
 
 ```sh
 sftp -i ~/.ssh/your_key afkfleet-backup@<your host>
@@ -300,6 +331,8 @@ sftp -i ~/.ssh/your_key afkfleet-backup@<your host>
 sftp> ls
 sftp> get afkfleet-backup-20261101T000000Z.db
 ```
+
+**Or a graphical SFTP client:** connect as `afkfleet-backup` to your host with that key (some clients convert it to their own format first), compare the host key's fingerprint at the first connection exactly as above, and download the finished `afkfleet-backup-….db` files, never a `.partial` one. Success: the files arrive with the sizes the listing shows.
 
 **Removing the account:** it removes the account first, then the drop-in and the key file, reloads sshd, and keeps the folders and the backups. When the account can't be removed (it's logged in), it says so and removes nothing: end its sessions and run it again. Success: `ok: the account, its key and the drop-in are gone; the backups' folders stay`.
 
@@ -319,15 +352,20 @@ sudo sh setup.sh keys-backup
 
 Make a new copy after every [vault key rotation](#rotating-the-vault-key).
 
-**Getting it off the host,** through your own SSH login (never the backups' account), as one file that exists only for the transfer. On the host, a folder and a file that are yours alone before anything is written (mode 0700 and 0600), then the copy into it and its SHA-256. `sudo` asks for your password on the session's terminal; the copy goes only into the file, never to the terminal or a command line. Success: the first three print nothing, and `sha256sum` prints one hash and the file's name.
+**Getting it off the host,** through your own SSH login (never the backups' account), as one file that exists only for the transfer. On the host, a folder and a file that are yours alone before anything is written (mode 0700 and 0600), then the copy into it and its SHA-256. `sudo` asks for your password on the session's terminal; the copy goes only into the file, never to the terminal or a command line. Paste one line at a time. If a pasted line arrives with stray characters in front, such as `200~` (the terminal's paste markers), clear it with Ctrl+C and type it instead: never run a line as it arrived.
 
 > **Not run by afkfleet's tests:** they move the keys between your own SSH login on the host and your PC.
 ```sh
 install -d -m 700 ~/afkfleet-keys-out
-install -m 600 /dev/null ~/afkfleet-keys-out/afkfleet-keys.tar
-sudo tar -C /root -cf - afkfleet-keys-YYYYMMDDTHHMMSSZ > ~/afkfleet-keys-out/afkfleet-keys.tar
-sha256sum ~/afkfleet-keys-out/afkfleet-keys.tar
+cd ~/afkfleet-keys-out
+install -m 600 /dev/null afkfleet-keys.tar
+sudo tar -C /root -cf - afkfleet-keys-YYYYMMDDTHHMMSSZ > afkfleet-keys.tar
+tar -tvf afkfleet-keys.tar
+sha256sum afkfleet-keys.tar
+cd ~
 ```
+
+Success: the first four print nothing (but `sudo`'s password prompt); `tar -tvf` lists `afkfleet-keys-YYYYMMDDTHHMMSSZ/keys/ca.key`, `…/keys/vault-key-1` (and any later vault key) and `…/ca/ca.crt`, with their folders; `sha256sum` prints one hash and the file's name: note the hash. A list without those files is an empty or partial copy (an empty tar is 10240 bytes too, so its size proves nothing): run the fourth line again, then the two after it.
 
 On your PC, in PowerShell, fetch it over the same login and take its SHA-256. Success: `scp` shows the file at 100%, and `Get-FileHash` prints the same hash as the host's `sha256sum` (capital or small letters don't matter). If they differ, fetch it again; never go on with a copy whose hash differs.
 
