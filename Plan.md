@@ -717,7 +717,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `cargo tree -i ring` must be empty or justified.
   - If it can't be done, move everything to `ring` instead and record that in an ADR. Never mix providers.
 
-  > Note (P0.10): Verified with `spikes/tls-provider/`, not a workspace member (the user's choice), on Windows (MSVC + NASM) and in `rust:1-bookworm`. `cargo tree -i ring --target all` is empty, `openssl-sys`, `native-tls` and `webpki-roots` aren't in the graph, and `.cargo/config.toml` enforces NASM. `tauri-plugin-updater` and `testcontainers` default to ring, so they need `default-features = false` (§5), which the ring ban enforces.
+  > Note (P0.10): Verified with `spikes/tls-provider/` (deleted in P12.8, U47; it stays in git history), not a workspace member (the user's choice), on Windows (MSVC + NASM) and in `rust:1-bookworm`. `cargo tree -i ring --target all` is empty, `openssl-sys`, `native-tls` and `webpki-roots` aren't in the graph, and `.cargo/config.toml` enforces NASM. `tauri-plugin-updater` and `testcontainers` default to ring, so they need `default-features = false` (§5), which the ring ban enforces.
 - [x] **P0.11** Set up CI (GitHub Actions) with these jobs:
   - `fmt`
   - `clippy` (`--all-targets -D warnings`)
