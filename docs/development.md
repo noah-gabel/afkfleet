@@ -16,6 +16,7 @@ Further reading:
 - [`docs/adr/`](adr/): architecture decision records
 - [`docs/threat-model.md`](threat-model.md): assets, attackers and mitigations
 - [`docs/runbook.md`](runbook.md): the operators' guide, for a Linux host with Docker
+- [`docs/README.md`](README.md): every document under `docs/`
 
 ## Prerequisites (Windows 11)
 - Git, [PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows) (`pwsh`) and [`just`](https://github.com/casey/just)

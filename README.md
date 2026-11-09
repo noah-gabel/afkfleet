@@ -31,7 +31,7 @@ Every command, with what success looks like: [the runbook](docs/runbook.md#insta
 - [Using the app](docs/using-the-app.md), for friends.
 - [The runbook](docs/runbook.md), for whoever hosts afkfleet.
 - [Releasing](docs/releasing.md), for the maintainer.
-- [Developing afkfleet](docs/development.md), for contributors. [docs/](docs/) lists every other document.
+- [Developing afkfleet](docs/development.md), for contributors. [docs/](docs/README.md) lists every other document.
 
 ## Disclosure
 
