@@ -14,10 +14,12 @@ import { describe, it } from "node:test";
 import { ROOT } from "./threat-model-citations.mjs";
 
 /**
- * The guides checked, from the repository's root: the operators', the friends', the
- * maintainer's and the DoD's kit. README is the developers', naming their tools' sites.
+ * The guides checked, from the repository's root: README, the operators', the friends', the
+ * maintainer's and the DoD's kit. `docs/development.md` is the developers', naming their
+ * tools' sites and the private networks an agent may dial.
  */
 const GUIDES = [
+  "README.md",
   "docs/runbook.md",
   "docs/using-the-app.md",
   "docs/releasing.md",

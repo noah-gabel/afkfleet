@@ -6,7 +6,7 @@ An operator's guide to running afkfleet on a Linux host with Docker, beside what
 
 - **Read it at your release's tag.** Each release's page links this guide as it was for that release (`…/blob/vX.Y.Z/docs/runbook.md`), so its commands match the files you unpacked.
 - **What your friends do** in the app (installing it, connecting, registering with an invite, 2FA) is in [Using the afkfleet app](using-the-app.md): hand them that link.
-- **Every setting and its default** is in `env.example` (in the release's files) and, for the server's and the agents' own keys, in the repository's README ([Running the server](../README.md#running-the-server), [Running the agent](../README.md#running-the-agent)).
+- **Every setting and its default** is in `env.example` (in the release's files) and, for the server's and the agents' own keys, in the developers' guide ([Running the server](development.md#running-the-server), [Running the agent](development.md#running-the-agent)).
 - **Every step says what success looks like.** A command whose block isn't marked otherwise is run as written by afkfleet's own tests; a few steps touch what no test can reach (your firewall, your DNS, your PC), and their blocks say so.
 
 The design behind it is [ADR-0022](adr/0022-deployment-and-phase-12-refinements.md).

@@ -436,8 +436,8 @@ icons:
 # debug). Their own ports, so they run beside the
 # dev stack: HTTP 127.0.0.1:8090, gRPC 127.0.0.1:7453, Minecraft 127.0.0.1:25566. Nothing
 # secret is ever an argument: dod-owner asks for the password hidden, and dod-enroll reads
-# the bundle from stdin. The steps are README's "The DoD's first check" and "The DoD's
-# 24-hour run".
+# the bundle from stdin. The steps are docs/development.md's "The DoD's first check" and
+# "The DoD's 24-hour run".
 
 # The user only: start the DoD checks' online-mode Minecraft server and wait until it's healthy (needs Docker).
 dod-mc-up:

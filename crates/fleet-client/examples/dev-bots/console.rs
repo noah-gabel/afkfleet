@@ -869,7 +869,7 @@ async fn new_mode<S: SessionStore>(
 ) -> Result<(), ClientError> {
     let Ok(request) = serde_json::from_str::<CreateModeRequest>(json) else {
         terminal.say(
-            "not a mode's JSON: {\"name\", \"visibility\", \"steps\"}, as the README shows; nothing was sent",
+            "not a mode's JSON: {\"name\", \"visibility\", \"steps\"}, as docs/development.md shows; nothing was sent",
         );
         return Ok(());
     };
@@ -895,7 +895,7 @@ async fn edit_mode<S: SessionStore>(
 ) -> Result<(), ClientError> {
     let Ok(request) = serde_json::from_str::<UpdateModeRequest>(json) else {
         terminal.say(
-            "not a mode's JSON: {\"version\", \"name\", \"visibility\", \"steps\"}, as the README shows; nothing was sent",
+            "not a mode's JSON: {\"version\", \"name\", \"visibility\", \"steps\"}, as docs/development.md shows; nothing was sent",
         );
         return Ok(());
     };
@@ -966,7 +966,7 @@ async fn new_server<S: SessionStore>(
 ) -> Result<(), ClientError> {
     let Ok(request) = serde_json::from_str::<CreateServerSettingsRequest>(json) else {
         terminal.say(
-            "not server settings' JSON: {\"server\", \"conflict_texts\", \"chat_formats\"}, as the README shows; nothing was sent",
+            "not server settings' JSON: {\"server\", \"conflict_texts\", \"chat_formats\"}, as docs/development.md shows; nothing was sent",
         );
         return Ok(());
     };
@@ -992,7 +992,7 @@ async fn edit_server<S: SessionStore>(
 ) -> Result<(), ClientError> {
     let Ok(request) = serde_json::from_str::<UpdateServerSettingsRequest>(json) else {
         terminal.say(
-            "not server settings' JSON: {\"version\", \"server\", \"conflict_texts\", \"chat_formats\"}, as the README shows; nothing was sent",
+            "not server settings' JSON: {\"version\", \"server\", \"conflict_texts\", \"chat_formats\"}, as docs/development.md shows; nothing was sent",
         );
         return Ok(());
     };
@@ -1039,7 +1039,7 @@ async fn preview_formats<S: SessionStore>(
 ) -> Result<(), ClientError> {
     let Ok(request) = serde_json::from_str::<PreviewChatFormatsRequest>(json) else {
         terminal.say(
-            "not a preview's JSON: {\"chat_formats\", \"line\"}, as the README shows; nothing was sent",
+            "not a preview's JSON: {\"chat_formats\", \"line\"}, as docs/development.md shows; nothing was sent",
         );
         return Ok(());
     };

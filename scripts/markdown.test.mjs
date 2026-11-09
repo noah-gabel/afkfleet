@@ -11,6 +11,7 @@ import { ROOT } from "./threat-model-citations.mjs";
 /** The guides whose links must resolve, from the repository's root. */
 const GUIDES = [
   "README.md",
+  "docs/development.md",
   "docs/runbook.md",
   "docs/using-the-app.md",
   "docs/releasing.md",
