@@ -1293,292 +1293,72 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** Invite-only login with 2FA, rotating tokens, central authorization and layered rate limits, all backed by adversarial tests.
 **Introduces:** `argon2`, `getrandom`, `sha2`, `subtle`, `base64`, `zeroize`, `chacha20poly1305`, `totp-rs`, `zxcvbn`, `governor`, `hmac`, `rpassword`; no `tower_governor` (group C, the user's decision).
 
-> Note (P7):
-> - **Five group branches.** At the user's request, Phase 7 is built in group PRs like Phases 2–6. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
->
->   | Group | Branch | Tasks |
->   |---|---|---|
->   | A | `p7/p7.2-p7.5-passwords-vault-owner` | P7.2, P7.4 (with the `*_file` loader), P7.5; `fleet_core::auth` with the password length rule |
->   | B | `p7/p7.3-p7.8-sessions-and-auth-user` | P7.1's `sessions` (with `stepped_up_at`), P7.3, P7.8 |
->   | C | `p7/p7.10-p7.11-routes-and-rate-limits` | P7.1's `login_attempts`, P7.11, P7.10 |
->   | D | `p7/p7.6-p7.7-login-and-2fa` | P7.1's `user_mfa` (and wherever the login challenges live), P7.7; P7.6's `login`, `login/mfa`, `refresh`, `logout`; `/me/mfa/*`; `POST /auth/step-up` |
->   | E | `p7/p7.6-p7.9-accounts-admin-wrap-up` | P7.1's `invites`; P7.6's `register`, `/me`, `/me/password`, `/me/sessions`; P7.9; the DoD, the threat model and the wrap-up |
->
->   - **The guards come before any endpoint.** Every new endpoint needs its rate-limit class and route-coverage entry from day one (security rule 3), so the guards (B, C) come before the first endpoint (D).
->   - **Tasks spread over groups:** P7.1 and P7.6 are ticked in E.
->   - Each later group asks its own implementation questions in its session.
-> - **Decisions.** The user answered the Phase 7 plan's open questions on 2026-10-11, one at a time. [ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md) records them; the notes below summarize what changes a task.
-> - **Security tests and audit events ship with the feature** (the user's decision).
->   - **Audit actions:** every new write adds its action to Phase 7's one `audit_actions!` block in the group that adds the write:
->     - A: create-owner
->     - B: token reuse
->     - C: the lockout
->     - D: login, logout, 2FA
->     - E: password, roles, invites
->   - **Service-level P7.12 tests** go in the service's group:
->     - B: refresh reuse, a disabled user through `AuthUser`
->     - C: lockout counting
->     - D: TOTP replay
->   - **End-to-end HTTP tests** go in the endpoint's group:
->     - D: enumeration, lockout through login, expired sessions and refresh reuse through `/auth/refresh`
->     - E: escalation, disabling, invite reuse and expiry
->   - **E only checks:** the DoD, each P7.12 item named with its test, the threat model's auth section, and the P7.12 and P7.13 ticks.
-> - **Pure rules live in `fleet_core::auth`** (the user's decision): the lockout schedule, session expiry, the refresh outcome, TOTP acceptance and replay, invite validity, the step-up window and the password length rule, with `DateTime<Utc>` passed in. Each group adds the rules its feature needs. The crypto stays in fleet-server.
-> - **Tests drive the real router with `oneshot`** (the user's decision):
->   - the full stack and the limiter
->   - `#[sqlx::test]` SQLite, `ManualClock` and `SeededRandom`
->   - the peer address as axum's `ConnectInfo`
->   - one real-socket test for `into_make_service_with_connect_info`
->
->   fleet-client's full-stack tests stay P8.1's.
-> - **Coverage gates as lists of path prefixes** (the user's decision).
->   - **Auth:** fleet-core's `auth`, `app/auth`, `app/users`, `app/invites`, `infra/crypto/` except the vault, `http/extractors/`, the rate-limit middleware and the route registry.
->   - **Vault:** the vault and the `*_file` loader.
->   - **Dead prefixes fail:** a listed prefix that matches no file in the report fails the gate.
->   - **Adding prefixes:** each group adds a prefix only when it creates that module.
->   - **Required from A on:** both gates are `required` from group A on.
-> - **Dependencies (group A, the user's approval).**
->   - **New in `[workspace.dependencies]`:**
->     - argon2 0.6.0, no default features; `alloc`, `password-hash`, `zeroize`
->     - chacha20poly1305 0.11.0, no default features; `alloc`, `zeroize`
->     - zxcvbn 3.1.1, no default features
->     - rpassword 7.5.4
->     - base64 0.23.1, no default features, so no `simd-unsafe`
->     - subtle 2.6.1
->     - zeroize 1.9.0
->   - **fleet-server:** all of them, plus tokio's `sync`.
->   - **fleet-startup:** secrecy and zeroize, and tempfile in dev.
->   - **The profile:** `[profile.dev.package]` compiles argon2, blake2 and zxcvbn at `opt-level = 3`.
-> - **Dependencies (group C, the user's approval).**
->   - **No tower_governor:** 0.8.0 hard-codes governor's quanta clock, forces governor's and axum's default features on the workspace, and rounds its wait down. fleet-server uses the workspace's governor with `std` only, behind its own middleware.
->   - **New in `[workspace.dependencies]`:** hmac 0.13.0 (fleet-server enables `zeroize`), and ipnet 2.12.2, a fleet-server dev-dependency only. Both were already in Cargo.lock, which gains only the direct edges.
+> Note (P7): built in groups A–E, one PR each, with P7.1 and P7.6 spread over several groups and ticked in E; their decisions (the Phase 7 plan's questions, answered by the user on 2026-10-11, then each group's) are in [ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md).
+> Security tests and audit actions ship with their feature, pure rules live in `fleet_core::auth`, tests drive the real router with `oneshot`, and the auth and vault coverage gates are lists of path prefixes, required from group A on.
 
 - [x] **P7.1** 🔴 Migrations and repositories: `sessions` (with token families), `invites`, `login_attempts`, `user_mfa`.
 
-  > Note (P7.1, from the Phase 7 plan, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **each table arrives with its first user,** in its own migration, so its columns are designed together with the feature:
-  > - `sessions` with `stepped_up_at` (B)
-  > - `login_attempts` (C)
-  > - `user_mfa`, and wherever the `mfa_token` and setup token live (D)
-  > - `invites` (E)
-  >
-  > The task is ticked in E.
+  > Note (P7.1): each table arrived with its first user, in its own migration, under the schema conventions of P6.4's note: `sessions` (B), `login_attempts` (C), `user_mfa` (D), `invites` (E); ticked in E.
+  > `WriteTx::commit` always records an audit entry; `commit_unaudited(reason)` takes only an enum of named exemptions (`SessionTouch` first, later `EventBatch`), each with its own ADR note, never free text ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md), [ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
-  > Note (P7.1, from Phase 6, group B, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **Follow the schema conventions** of P6.4's note: STRICT, canonical TEXT IDs and millisecond TEXT times with their CHECKs, CHECKs only on closed sets.
-  > - **Unaudited writes.** `WriteTx::commit` always records an audit entry. The first write that needs none (a session's `last_used_at`) adds `commit_unaudited(reason)`, whose reason is an enum of named exemptions (`SessionTouch`, later `EventBatch`), each with its own ADR note, never free text.
+  > Note (P7.1): **IDs aren't secrets** (the group A review): v7 IDs reveal their creation time, so invite codes and session tokens come from `getrandom`, never from an ID, and access is decided by `authorize()`, not by how hard an ID is to guess.
 
-  > Note (P7.1, from the group A review): **IDs aren't secrets.** v7 IDs reveal their creation time. Invite codes and session tokens come from `getrandom`, never from an ID, and access is decided by `authorize()`, not by how hard an ID is to guess.
+  > Note (P7.1): **`0003_sessions.sql`** (B): one `sessions` row per login's token family, its `SessionId` the same across every refresh: `user_id` (no cascade), `access_hash` and `refresh_hash` (32-byte BLOBs, UNIQUE), `created_at`, `refreshed_at`, `last_used_at`, `stepped_up_at`, `revoked_at`; no expiry columns, no IP address or user agent.
+  > `rotated_refresh_tokens (hash, session_id, rotated_at)` keeps every refresh token a session replaced, ON DELETE CASCADE ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P7.1, as built, group B) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`0003_sessions.sql`.**
-  > - **`sessions`**, one row per login's token family, its ID (`SessionId`) the same across every refresh: `user_id` (references `users`, no cascade), `access_hash` and `refresh_hash` (32-byte BLOBs, UNIQUE), `created_at`, `refreshed_at`, `last_used_at`, `stepped_up_at` and `revoked_at` (NULL until set). No expiry columns: `fleet_core::auth` computes them from `created_at` and `refreshed_at` with the running config. No IP address or user agent.
-  > - **`rotated_refresh_tokens`** `(hash, session_id, rotated_at)`: every refresh token a session replaced, ON DELETE CASCADE, so reuse of any of them is recognized while the session exists.
-  > - **Indexes:** `sessions(user_id)`, `sessions(created_at)` (P11.6's cleanup), `rotated_refresh_tokens(session_id)`.
-  > - **The repository** has what B uses: insert, the joined lookup by access hash, and inside the write transaction the lookup by refresh hash (current or rotated), rotate, revoke and the conditional touch. `WriteTx::commit_unaudited(UnauditedWrite)` arrives with its first exemption, `SessionTouch`.
-  > - **Tests,** red against compiling stubs: 21 of 26 repository tests and 3 of 8 `TokenHash` tests failed on assertions, then all passed.
+  > Note (P7.1): **`0004_login_attempts.sql`** (C): one row per username with a running failure streak (`failures`, `last_failure_at`, `locked_until`), keyed by HMAC-SHA256 of the normalized `Username` under the lockout key (P7.10's note), never the name, since people type their password into that field; no `user_id`, so an unknown name's row looks exactly like a real user's. Purges commit with `UnauditedWrite::LoginAttemptsPurge` ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P7.1, group C, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`0004_login_attempts.sql`.**
-  > - **One row per username with a running failure streak,** keyed by `username_key`: HMAC-SHA256 of the normalized `Username` under a lockout key derived from the vault's active key (P7.10's note), a 32-byte BLOB. Never the name, since people type their password into that field.
-  > - **Columns:** `failures` (`>= 1`), `last_failure_at`, `locked_until` (NULL until a lock). No `user_id`, so an unknown name's row looks exactly like a real user's.
-  > - **Index** on `last_failure_at`, for the purge of expired streaks.
-  > - **The repository:** `find` (read pool and transaction), `upsert`, `delete`, and `purge_stale(failed_by, now, limit)` (a `rowid IN (SELECT … LIMIT ?)` subquery). Purge batches commit with the new exemption `UnauditedWrite::LoginAttemptsPurge`.
-  > - **Tests,** red against compiling stubs: 14 of 18 failed, then all passed.
+  > Note (P7.1): **One Owner** (group D): the `users` migration adds a partial unique index on `role` for `'owner'`, and `authorize()` also refuses to act on any other user with the Owner role (ADR-0010).
 
-  > Note (P7.1, from group D): **One Owner.** The `users` migration adds a partial unique index on `role` for `'owner'`. `authorize()` also refuses to act on any other user with the Owner role (ADR-0010).
+  > Note (P7.1): **`0005_user_mfa.sql`** (D): `user_mfa` holds confirmed enrollments only (`user_id`; `secret_envelope`, a vault envelope v1 of the 20-byte TOTP secret bound by its AAD to the user's ID and `totp_secret`; `last_used_step`; `confirmed_at`). `recovery_codes (hash, user_id, used_at)` stores plain SHA-256, safe only because each code has at least 80 bits, and isn't keyed, so P9's key rotation can't make the codes unusable.
+  > The login challenges live in memory, not in a table, held as SHA-256 hashes, so a restart drops them ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P7.1, group D, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`0005_user_mfa.sql`.**
-  > - **The login challenges live in memory,** not in a table: the mfa token and the setup token are held as SHA-256 hashes, at most one login challenge and one replace token per user, and a restart drops them (P7.7's note).
-  > - **`user_mfa`** holds confirmed enrollments only, so a user has 2FA exactly when their row exists: `user_id` (the key, references `users`, no cascade), `secret_envelope` (a vault envelope v1 of the 20-byte TOTP secret, 65 bytes, bound by its AAD to the user's ID and `totp_secret`), `last_used_step` (`>= 0`) and `confirmed_at`. No `key_id` column: the envelope's header carries it.
-  > - **`recovery_codes`** `(hash, user_id, used_at)`: plain SHA-256 of the normalized code, safe only because each code has at least 80 bits from `SecureRandom` (100 in fact). Not keyed, since a key derived from the vault's active key would make every code unusable after P9's key rotation. A used code keeps its row; indexed on `user_id`.
-  > - **The repository:** `find` (read pool and transaction), `find_unused_code`, `insert` (a second first enrollment is refused), `replace`, the conditional `advance_step` (only a later step, and only while `confirmed_at` is unchanged), `replace_codes` and the conditional `use_code`. The sessions gain `refresh_hash_exists`, `revoke_all_for_user(user, except)`, `find` and `stamp_step_up`; the users `get` in a transaction and `set_password_hash`, which never touches `password_changed_at`.
-  > - **Tests,** red against compiling stubs: 27 of 39 failed, then all passed. The migrations' snapshot gained line 5.
-
-  > Note (P7.1, group E, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`0006_invites.sql`**, the last of the four tables.
-  > - **Columns:** `id`; `code_hash` (SHA-256 of the `afk_iv_…` code, a 32-byte BLOB, UNIQUE); `role` (`member` or `admin` only: an Owner invite can't exist); `created_by` and `used_by` referencing `users` without cascade, `used_by` UNIQUE (one invite per user); `created_at` and `expires_at` (stored at creation from `[auth] invite_ttl_hours`, so a config change doesn't move it); `used_by`, `used_at` and `revoked_at` NULL until set. A used or revoked invite keeps its row.
-  > - **Belt CHECKs behind the services:** a user and the time of the use come together; an invite is never both used and revoked; it expires after its creation (the fixed time form compares as text). Each has a refusal test.
-  > - **Indexes** on `created_by` (the cap and revoking a creator's pending invites) and `expires_at` (P11.6's cleanup).
-  > - **The repository** (`ports::invites`, `infra::sqlite::invites`): `find` and `find_by_code_hash` on the read pool and in the transaction, `list` (newest first, every state, joined with the people's names, one row more than the page), `insert`, `count_pending_by`, and the conditional `use_invite`, `revoke` and `revoke_pending_by` (each only while unused, unrevoked and unexpired; the last with `RETURNING`). `ports::page` holds the shared `PageLimit` (1–100, 50 by default), `Page` and `Paged::split`.
-  > - **fleet-core:** `InviteId`, `AuditTarget::Invite` (`invite`) and `auth::invite` (`InviteTtl` 1–720 h, 72 by default; `invite_state`: used, then revoked, then expired at `now >= expires_at`; `MAX_PENDING_INVITES` = 20 and `pending_cap_reached`).
-  > - **Tests,** red against compiling stubs (a rule that kept every invite pending and accepted every lifetime, a target named like a session, a page that never split, a repository that found and wrote nothing): fleet-core 18 of 25 rule tests and the two target tests, fleet-server 6 of 11 page tests and 13 of 20 repository tests failed on assertions. The repository tests that passed check the table's CHECKs and foreign keys, which the real migration already enforces, and an unknown lookup. Then all passed. Snapshots, read before accepting: the serialized IDs gained `invite`, the migrations' line 6.
+  > Note (P7.1): **`0006_invites.sql`** (E), the last table: `code_hash` (SHA-256 of the `afk_iv_…` code), `role` (`member` or `admin` only), `created_by` and `used_by` (UNIQUE) without cascade, `expires_at` stored at creation, `used_at`, `revoked_at`, and belt CHECKs behind the services.
+  > `ports::page` holds the shared `PageLimit` (1–100, 50 by default); `invite_state` is used, then revoked, then expired at `now >= expires_at` ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 - [x] **P7.2** 🔴 `PasswordService`:
   - Argon2id with the configured parameters
   - runs in `spawn_blocking` behind a semaphore
   - dummy hash for unknown users
   - password policy (length, zxcvbn)
 
-  > Note (P7.2, from Phase 6, group C, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a full argon2 queue answers `busy` (503, `Retry-After`), like a busy database (Plan.md §6's overload row).
+  > Note (P7.2): a full argon2 queue answers `busy` (503, `Retry-After`), like a busy database (Plan.md §6's overload row) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
-  > Note (P7.2, group A, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Ports and adapters.** `ports::passwords::Passwords` with `hash(&NewPassword, &Username)`, `verify` and `verify_unknown_user`, implemented by `infra::crypto::passwords::Argon2Passwords`.
-  > - **The queue.**
-  >   - **Admission:** at most 4 × `argon2_max_concurrent` callers wait (`try_acquire`); past that, `busy` at once.
-  >   - **The hashing permit** is taken with `acquire_owned()` and moved into the `spawn_blocking` closure. A cancelled caller never frees a slot while argon2 still runs.
-  >   - **Tests use a blocking stand-in** for both rules.
-  > - **The dummy hash** is made at startup with the configured parameters, through a private path without the strength check. `verify_unknown_user` takes the real check's queue, permit and verify call, and always answers "wrong password".
-  > - **`fleet_core::auth::NewPassword(SecretString)`.**
-  >   - **Length:** 12–128 `chars()`, no trimming and no normalization.
-  >   - **Control characters** are refused.
-  >   - **Errors:** `NewPasswordError::{TooShort, TooLong, ControlCharacter}`, carrying only the limits.
-  > - **zxcvbn** runs inside `hash`, in the same blocking task, before argon2, with score ≥ 3.
-  >   - **User inputs:** the username, "afkfleet" and "minecraft".
-  >   - **Weak passwords:** `HashError::Weak` carries `fleet_core::auth::{WeakWarning, WeakSuggestion}`, our own enums, mapped from zxcvbn's by exhaustive `match`es.
-  > - **`[auth]`'s argon2 keys.**
-  >   - **Ranges:** memory 19456–1048576 KiB, iterations 2–10, parallelism 1–16, max_concurrent 1–64.
-  >   - **No constructor below the floor exists,** not even for tests: every test hashes at the baseline, and the dev profile compiles argon2, blake2 and zxcvbn at `opt-level = 3`. That's 10 ms per hash instead of 228 ms, measured.
-  > - **The hash format:** argon2id v19 with the configured m/t/p, a 16-byte salt from `SecureRandom` and a 32-byte output.
-  >   - **What `verify` accepts:** argon2id v19 with in-range parameters.
-  >   - **`VerifyError::Corrupt`** covers anything else: another algorithm or version, a string that doesn't parse, or m/t/p above the config's upper bounds.
-
-  > Note (P7.2, as built, group A) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **`[auth]`'s ranges are checked in validation, not by garde.** `RawAuth`'s fields drop the `argon2_` prefix (clippy's `struct_field_names`) and serde names the keys. garde would report the field's name instead of the key: 0.23 parses `rename` but never applies it. So validation checks each value against `Argon2Params`' bounds, reports every problem under its key in garde's words ("lower than …", "greater than …"), and then builds `Argon2Params::try_new`, the type's only checked constructor besides `Default`.
-  > - **Tests,** red against compiling stubs (a `NewPassword` that accepted anything, empty texts and `ALL` lists, a `try_new` without checks, config that ignored the keys, a service that hashed nothing, a queue that was always busy, mappings to one variant):
-  >   - fleet-core: 19 of 29 failed on assertions
-  >   - fleet-server: 68 of 77 failed on assertions
-  >
-  >   Then all passed. The queue's tests use a blocking stand-in and bound every wait at 10 s.
+  > Note (P7.2): `Passwords` (`Argon2Passwords`) admits at most 4 × `argon2_max_concurrent` waiting callers, moves the hashing permit into the `spawn_blocking` closure, and checks unknown users against a dummy hash made at startup with the configured parameters. `NewPassword` is 12–128 `chars()` without control characters; zxcvbn (score ≥ 3) runs inside `hash`, before argon2.
+  > `[auth]`'s argon2 ranges are checked in validation, not by garde, and no constructor below the floor exists, not even for tests; a stored hash of another algorithm or version, one that doesn't parse, or one above the config's bounds is `VerifyError::Corrupt` ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 - [x] **P7.3** 🔴 `TokenService`:
   - tokens from `getrandom`, with prefixes
   - SHA-256 hashing and constant-time comparison (`subtle`)
   - TTLs
   - refresh rotation, and **family revocation when an old token is reused**
 
-  > Note (P7.3, group B, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **One `sessions` row per family,** with the current access and refresh hashes; every replaced refresh hash stays in `rotated_refresh_tokens`, so reuse of any of them is caught. A refresh replaces the access token too.
-  > - **The tokens:** 32 bytes from `SecureRandom`, base64url without padding, behind `afk_at_` or `afk_rt_`. Stored as SHA-256 of the whole text (a 32-byte BLOB). A presented token must be its prefix plus 43 base64url characters before it's hashed; after the indexed lookup, `TokenHash::ct_eq` confirms the match.
-  > - **Expiry from anchors:** access = `refreshed_at` + `access_token_ttl_secs`, idle = `refreshed_at` + `refresh_token_idle_days`, both capped at `created_at` + `refresh_token_absolute_days`, from the running config. Expired at `now >= expiry`.
-  > - **The refresh rule** (`fleet_core::auth::refresh_decision`), inside the write transaction: unknown, revoked or expired → 401; a replaced token of a live session → reuse (revoke + `security.refresh_token_reuse` in the same commit, one `warn`); the current token of a disabled user → 401; otherwise rotate (`commit_unaudited(SessionRotate)`). No grace window; reuse in a dead session records nothing.
-  > - **The reuse entry:** Failure, no actor, the client's IP, target the session's user, metadata `session_id` and `rotated_at` (fleet-core's new typed `AuditMetadata::id` and `time`).
-  > - **`TokenService::prepare`** makes a session before any transaction; D's login inserts it and commits with `auth.login`.
-
-  > Note (P7.3, as built, group B) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **The pieces:** `fleet_core::auth::{SessionPolicy, SessionTimes, refresh_decision}`; `ports::tokens::{Tokens, TokenKind, MintedToken}` and `infra::crypto::tokens::Sha256Tokens` (sha2 with `zeroize`); `app::auth::TokenService` with `prepare` and `refresh`; `[auth]`'s three token keys.
-  > - **Tests,** red against compiling stubs (rules that allowed everything, typed metadata that added nothing, an adapter that minted nothing, config that ignored the keys, a service that refused every refresh): fleet-core 20 of 25 rule tests and 5 metadata tests plus the names snapshot; fleet-server 11 adapter, 8 config and 13 of 21 service tests failed on assertions. The tests that passed against the stubs check refusals and `Debug`. Then all passed.
+  > Note (P7.3): one `sessions` row per family, every replaced refresh hash kept in `rotated_refresh_tokens`, and a refresh replaces the access token too. Tokens are 32 bytes from `SecureRandom`, base64url behind `afk_at_` or `afk_rt_`, stored as SHA-256 and confirmed with `TokenHash::ct_eq`; expiry is computed from `created_at` and `refreshed_at` with the running config.
+  > `refresh_decision` rotates (`commit_unaudited(SessionRotate)`), or for a replaced token of a live session revokes it and records `security.refresh_token_reuse` in the same commit; there's no grace window ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 - [x] **P7.4** 🔴 Vault cipher: the envelope from §7.5 with `key_id` and AAD. TOTP secrets need it now; Phase 9 extends it. Tests cover tampering, the wrong key and the wrong AAD.
 
-  > Note (P7.4, from Phase 6, group A, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **The `*_file` loader comes here,** with its first user, the vault key: how a secret file is read into a `SecretBox` (a size cap, its permissions, a trailing newline) is decided and tested in this task.
-  > - **The secret-name test** (P6.2) already checks every config key: a name with a part `key`, `token`, `password`, `secret`, `passphrase`, `pepper` or `credential` must end in `_file` or `_files`. Keys that match but hold no secret, such as `[auth] access_token_ttl_secs`, go on the test's allowlist (`NOT_SECRETS` in fleet-server's `config/raw.rs`), each with its reason.
+  > Note (P7.4): the `*_file` loader arrived here with its first user, the vault key. P6.2's secret-name test (a key with a part `key`, `token`, `password`, `secret`, `passphrase`, `pepper` or `credential` must end in `_file` or `_files`) lists keys that hold no secret, such as `[auth] access_token_ttl_secs`, on `NOT_SECRETS` in fleet-server's `config/raw.rs`, each with its reason ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
-  > Note (P7.4, group A, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **The envelope, version 1:** `0x01 | key_id (u32 BE) | nonce (24) | ciphertext + tag`.
-  >   - **AAD:** `0x01 ‖ key_id ‖ record UUID (16) ‖ purpose name` (`VaultPurpose::TotpSecret` = `totp_secret`).
-  >   - **A committed golden envelope** pins the format. It's never regenerated: a real change means version 2.
-  > - **Key files:** standard padded base64 of exactly 32 bytes; a 33-byte key is a wrong length, not "not base64".
-  > - **`[vault]`:** `master_key_files` holds 1–16 entries, with u32 IDs and absolute paths. `active_key_id` must be one of them.
-  >   - **Duplicate keys** are refused (`subtle`).
-  >   - **Who reads the files:** `serve` reads them before the runtime starts and stops with exit 1 on a bad one; `migrate` and `healthcheck` never read them.
-  >   - **Not held yet:** the vault is built and dropped until D's MFA service holds it.
-  > - **The loader is `fleet_startup::secret_file`,** shared with the agent and P10.
-  >   - **Checks:**
-  >     - stat first, so anything but a regular file is refused without opening it
-  >     - then every check again on the opened handle: a regular file, `mode & 0o077 == 0` on Unix, not empty, at most 64 KiB
-  >   - **Reading** is from that handle, capped.
-  >   - **Trailing newline:** one trailing `\n` or `\r\n` is removed.
-  >   - **Errors** name the file, its mode and the fix, never the content.
-  > - **The dev key:** `just dev-server` creates `target/dev-server/vault-key-1` when it's missing and passes it through `AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1`. CLAUDE.md's rule 12 lists it among the files never to read.
-
-  > Note (P7.4, as built, group A) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Characters before length** (the user's decision during the build). base64 0.23.1's `decode_slice` checks that the whole input fits before it looks at any character, so a 45-character text with a stray space would have been "the wrong length". So the key decoding checks the characters first:
-  >   - **A byte-order mark** (UTF-8 `EF BB BF`, UTF-16 `FF FE` or `FE FF`) gets its own error, "starts with a byte-order mark; save it as plain text without BOM". Windows editors and Windows PowerShell 5.1's `>` add one.
-  >   - **Any byte outside the standard alphabet and `=`** is "not base64".
-  >   - **Then `decode_slice`** decides the padding, the trailing bits and the length; a 33-byte key is still `WrongLength`.
-  > - **No copy of a key.** The key decodes straight into its `SecretBox<[u8; 32]>`, and `XChaChaVault::new` consumes the loaded keys: each goes into its cipher (wiped on drop through chacha20poly1305's `zeroize` feature) by reference, and the loaded copy is dropped (wiped) right after. The loader allocates its buffer once at full size, so reading never leaves a copy behind.
-  > - **`VaultError::TooLarge`** joins the port's errors: XChaCha20-Poly1305 refuses plaintexts beyond about 256 GiB, and `seal` returns a `Result`, so nothing may panic there. No stored secret comes near it.
-  > - **base64 stays without `alloc`.** The tests encode with `encode_slice` into a fixed buffer, and the serve tests' key is a constant (checked with Node).
-  > - **Tests,** red against compiling stubs (a loader that returned nothing, keys that loaded nothing, a vault that sealed nothing and opened nothing, validation that accepted anything):
-  >   - fleet-startup: 15 of 16 failed on Windows; the Unix-only cases (modes, a symlink, a FIFO read on its own thread with a 5 s bound) run in Linux CI
-  >   - fleet-server: 49 failed, including the real binary refusing a bad key file
-  >   - the dev script's tests: 7 of 8 (the mode case is Unix-only)
-  >
-  >   Then all passed. The byte-flip test asserts the envelope's length first, so it can't pass on an empty one. The golden envelope was made once by a temporary test, never committed.
+  > Note (P7.4): the envelope v1 is `0x01 | key_id (u32 BE) | nonce (24) | ciphertext + tag`, its AAD `0x01 ‖ key_id ‖ record UUID (16) ‖ purpose name`, pinned by a committed golden envelope that's never regenerated (a real change means version 2). Key files hold padded base64 of exactly 32 bytes, their characters checked first (a byte-order mark gets its own error).
+  > `[vault]` holds 1–16 `master_key_files` and an `active_key_id`; only `serve` reads them, through `fleet_startup::secret_file` (a regular file, `mode & 0o077 == 0` on Unix, not empty, at most 64 KiB, checked again on the opened handle). `just dev-server` creates `target/dev-server/vault-key-1` ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 - [x] **P7.5** 🔴 CLI `user create-owner`: hidden prompt with `rpassword`; refuses when an Owner already exists.
 
-  > Note (P7.5, group A, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **The command:** `user create-owner --config <PATH> --username <NAME> [--password-stdin]`.
-  >   - **The Owner check** runs before any prompt or stdin read.
-  >   - **The prompt:** the password twice, at most 3 rounds, with zxcvbn's hints.
-  >   - **`--password-stdin`:** one password, capped at 1 KiB, with no retry; refused when stdin is a terminal.
-  >   - **Neither available:** without a terminal and without `--password-stdin`, it exits 1. There's no password flag or variable.
-  >   - **Exit codes:** 0 created; 1 refused or failed; 2 usage.
-  > - **`just dev-owner username`** runs it against the dev database.
-  > - **The audit entry:** `user.create` (Success, target the new user, metadata `role` and `via`, no actor or IP). E's register shares the action.
-  > - **The naming rule for audit actions:**
-  >   - Actions someone performs are `area.verb`.
-  >   - Things the server detects are `security.<noun>`.
-  >   - The outcome never goes into the name.
-  >   - An insta snapshot of every name keeps merged names from being renamed.
-
-  > Note (P7.5, as built, group A) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **The pieces:**
-  >   - `UserReads::owner_exists`, an `EXISTS` query
-  >   - `app::users::UserService::create_owner`: the hash first, outside the transaction, then the insert and its `user.create` entry in one commit
-  >   - `CreatedVia::Cli` for `via`
-  >   - `cli::user` with a `PasswordPrompt` trait (rpassword's terminal, a stand-in in tests) and a `PasswordInput` of the prompt or stdin
-  > - **No unwiped copies of a password:** a typed password is copied into a `SecretString` of exactly its length (so boxing it never reallocates) and the original is zeroized; stdin is read into a `Zeroizing` buffer allocated once at full size.
-  > - **The output:** "the Owner "alice" is created" on stdout. Every refusal is one `afkfleet-server: …` line on stderr. A round's refusal (a mismatch, the length rule, a weak password with its hints) is a plain line before the next prompt.
-  > - **The log:** `info` "the Owner is created" with the user's ID; a failure of the database or the password service is one `error` with its chain.
-  > - **Tests,** red against compiling stubs (no Owner check, a service that refused everything, a command that did nothing): 26 failed on assertions, then all passed.
-  >   - In-crate: the rounds through a stand-in prompt, `--password-stdin` through a stand-in stdin, and prompts and stdin that fail the test when they're used.
-  >   - The real binary: `--password-stdin` creates the Owner with one audit entry, and a second run exits 1 with its stdin still open and unwritten.
-
-  > Note (P7.5, from the group A review, fixed in group B) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **the reads never block the runtime.** The prompt and the `--password-stdin` read run in `spawn_blocking`, each moving its owned source onto the blocking thread and back; the Owner check still comes first. Two current-thread tests failed (the reads blocked the runtime for their 5 s bound), then passed.
+  > Note (P7.5): `user create-owner --config <PATH> --username <NAME> [--password-stdin]` checks for an Owner before any prompt or stdin read. The prompt asks for the password twice, at most 3 rounds; `--password-stdin` takes one password of at most 1 KiB and is refused when stdin is a terminal; there's no password flag or variable, and both reads run in `spawn_blocking` (the group A review, fixed in group B).
+  > Exit codes: 0 created, 1 refused or failed, 2 usage. The entry is `user.create` (`role`, `via`), and `just dev-owner username` runs the command against the dev database ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 - [x] **P7.6** 🔴 Endpoints:
   - `POST /auth/login`, `/auth/login/mfa`, `/auth/refresh`, `/auth/logout`, `/auth/register` (invite)
   - `GET /me`, `POST /me/password` (step-up)
   - `GET /me/sessions`, `DELETE /me/sessions/{id}`
 
-  > Note (P7.6, from Phase 6, group C, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **The first request DTOs.** garde joins fleet-api-types here. Each request DTO derives `Deserialize`, `Validate` and `#[serde(deny_unknown_fields)]`, with tests for an unknown field and every rule; a handler turns garde's report into `validation_failed` with `?` (`From<garde::Report> for ApiError` exists).
-  > - **axum's JSON rejections** get their mapping here: which of `bad_request`, `unsupported_media_type` and `validation_failed` a malformed body, a wrong content type and an unknown or mistyped field answer with. axum's `json` feature arrives with them.
-  > - **A DTO that uses garde's `pattern` rule** (its `regex` feature) gets the test that a value breaking it appears nowhere in the 422 body.
+  > Note (P7.6): the first request DTOs bring garde to fleet-api-types: each derives `Deserialize`, `Validate` and `#[serde(deny_unknown_fields)]`, tested for an unknown field and every rule. axum's JSON rejections (a malformed body, a wrong content type, an unknown or mistyped field) get their mapping to `bad_request`, `unsupported_media_type` or `validation_failed` here, with axum's `json` feature.
+  > A DTO using garde's `pattern` rule gets the test that a value breaking it appears nowhere in the 422 body ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
-  > Note (P7.6, from the Phase 7 plan, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Split between D and E.** D builds `login`, `login/mfa`, `refresh` and `logout`, plus `POST /auth/step-up`. E builds `register`, `/me`, `/me/password` and `/me/sessions`. The task is ticked in E.
-  > - **Step-up.** `POST /auth/step-up {password}` stamps the session's `stepped_up_at`.
-  >   - A step-up action needs a stamp at most 5 min old; otherwise it answers 403 `step_up_required`.
-  >   - A wrong password counts toward the lockout.
-  > - **Open for D: re-hashing.** A stored hash made with older `argon2_*` parameters verifies with different timing than the dummy hash. Whether a successful login re-hashes it with the current parameters, and which audit action that write records, is group D's question.
-  > - **Open for D: an oversized login.** Login's request DTO gets a generous upper bound on the password field, so an oversized login is refused before any hashing. The bound itself is D's question.
-  > - **Open for D and E: the 422 for weak passwords.** `HashError::Weak` carries `WeakWarning` and `WeakSuggestion`; how a 422 exposes them is D's and E's question.
+  > Note (P7.6): split between D (`login`, `login/mfa`, `refresh`, `logout`, plus `POST /auth/step-up`) and E (`register`, `/me`, `/me/password`, `/me/sessions`), ticked in E. `POST /auth/step-up {password}` stamps the session's `stepped_up_at`; a step-up action needs a stamp at most 5 min old (otherwise 403 `step_up_required`), and a wrong password counts toward the lockout ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P7.6, group D, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **The password step** never hands out real tokens: `{status: "mfa_required" | "mfa_setup_required", token, expires_in}`, an mfa token (`afk_mt_`, 5 min, 3 wrong codes) or a setup token (`afk_st_`, 10 min). An unknown name, a wrong password and a disabled user are one 401 `invalid_credentials`, counted toward the lockout and audited (`auth.login` Failure; no target for an unknown name, which is never stored). A name that isn't a valid `Username` is 422 before the lockout or any hashing; the password field is capped at 1024 characters.
-  > - **The code step** takes one `code` field: 6 digits are a TOTP code, 20 base32 characters a recovery code. Wrong codes count toward the lockout; the streak is cleared only when tokens are issued. Its commit re-reads the user (disabled: counted; password changed: not counted) and accepts the step or uses the code conditionally (an authenticator replaced meanwhile: `mfa_changed`, not counted). Answer: `{access_token, refresh_token, access_expires_in, refresh_expires_in}`.
-  > - **Re-hashing** a stored hash whose variant, version, m, t or p differ from today's: best-effort at the password step, written in the `auth.login` success commit (`rehashed`), never touching `password_changed_at`.
-  > - **Refresh** checks the read pool first, so an unknown token never takes the write connection; a refusal is 401 `unauthorized`.
-  > - **Logout** revokes the request's session (`auth.logout`, target the session), 204.
-  > - **Step-up** is a plain authed route on the Login bucket: a wrong password is 403 `forbidden`, counted; its commit re-reads the session and the user (401 when gone or disabled, 403 uncounted when the password changed), stamps exactly that session and clears the streak (`auth.step_up`), 204.
-  > - **`invalid_credentials`** (401) joins the error codes; every 401 carries `WWW-Authenticate: Bearer`, whatever its code.
+  > Note (P7.6): D: the password step never hands out real tokens, only an mfa token (`afk_mt_`, 5 min, 3 wrong codes) or a setup token (`afk_st_`, 10 min). An unknown name, a wrong password and a disabled user are one counted 401 `invalid_credentials`; a name that isn't a valid `Username` is 422 before the lockout or any hashing, and the password field is capped at 1024 characters.
+  > Login calls `LockoutService::begin` before any verify; the code step takes one `code` field; a hash made with other parameters is re-hashed best-effort, written in the `auth.login` success commit; refresh checks the read pool first; logout revokes its session; step-up is a plain authed route on the `Login` bucket; every 401 carries `WWW-Authenticate: Bearer`.
+  > Deviation (the user's decision): "two concurrent stale logins of the same user both succeed" can't happen under the lockout's in-flight guard, so a cross-flow test pins the property instead ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P7.6, as built, group D) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **The pieces:** `app::login::LoginService` (`password_step`, `code_step`, `step_up`); `TokenService::logout` and the refresh's read-pool check; `IssuedTokens` with the seconds left; `Passwords::{needs_rehash, rehash_verified}`; the handlers in `http::handlers::auth`; fleet-api-types' `auth` DTOs (`LoginRequest`, `LoginResponse` with the open `LoginStatus`, `LoginMfaRequest`, `TokenResponse`, `RefreshRequest`, `StepUpRequest`); the actions `auth.login`, `auth.logout`, `auth.step_up`. `serve` builds the password service before the app (its dummy hash is async work); a failure is a new start error.
-  > - **Deviation, one test (the user's decision during the build):** "two concurrent stale logins of the same user both succeed" can't happen: the lockout's in-flight guard holds the name from a step's `begin` to its commit (a second login gets 429), and a password step between another's two steps replaces its challenge. The test that pins the property instead runs across flows: a 2FA replacement's confirm still succeeds after a login re-hashed the password meanwhile; and a second attempt while one is in flight is 429.
-  > - **Tests,** the login tests in `tests/auth/` (one binary: login, refresh, logout, step-up), red against compiling stubs (a login service that refused everything, a logout that revoked nothing, a refresh without the read-pool check, a re-hash that never ran, a 401 header for `unauthorized` only, DTO rules that accepted anything, tokens without their lifetimes): 51 of the 73 new tests failed on assertions. The ones that passed check 422s, shapes, `Debug`, registrations, limits and refusals a do-nothing stub satisfies too. Then all passed. Changes landing between a step's checks and its commit come from a store wrapper that applies a queued change right before the next write transaction opens.
-
-  > Note (P7.6, from group D, for E; to ask the user): **failed code attempts on `/me`.** A wrong code means someone has the password, so `/me` could show the failed code attempts (`auth.login` Failure, `step` = `code`) since the user's last login, and P8 show them as a warning.
-
-  > Note (P7.6, from group D, for E; the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **a credential change revokes every other session.** A 2FA replacement does (D), and E's `/me/password` must too, through `SessionWrites::revoke_all_for_user(user, except)`, which `PATCH /users/{id}` reuses for all of a user's sessions.
-
-  > Note (P7.6, group E, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **`POST /auth/register {invite, username, password}`** (public, `Register`): the cheapest checks first, the invite then the username on the read pool, then the strength check and the hash, then one transaction that re-checks the invite and its creator (enabled, still allowed to `CreateInvite` its role), inserts the user and uses the invite conditionally. 201 `{id, username, role}`, never tokens: the first login answers `mfa_setup_required`.
-  > - **Its refusals:** every invite it can't use is one 422 on `invite` ("isn't valid: it's unknown, used, revoked or expired; ask for a new invite"); a real one is recorded as `user.create` Failure (no actor, the IP, target the invite, `reason` `used` | `revoked` | `expired` | `creator_unauthorized`), every attempt, while an unknown or malformed code never is. A taken name is 422 on `username` ("is taken") and leaves the invite pending, a race at the insert included. A success records `invite.use` and `user.create` (`via` = `invite`, `invite_id`) in one commit, actor the new user.
-  > - **A refused new password** (register and `/me/password`) is 422 on its field: "is too weak", then one entry per zxcvbn warning and suggestion in its own words; the length and control-character rule's own message comes first, from garde.
-  > - **`GET /me`:** `{id, username, role, created_at, password_changed_at, mfa_confirmed_at?, recovery_codes_left, failed_code_attempts: {count, last_at?}}`, the wrong codes after the previous successful login (or since the account's creation), over the new index `0007_audit_log_target.sql`.
-  > - **`POST /me/password {new_password}`** (`step_up_route`, `Login`): the same password is 422 ("is the current password"); the commit re-checks the session (live, the user's: else 401), the user (enabled: else 401) and the stamp (within 5 minutes, and `password_changed_at` not after it: else 403 `step_up_required`, nothing written), then writes the hash and `password_changed_at`, revokes every other session and clears this session's stamp (`user.change_password` with `sessions_revoked`). 204.
-  > - **`GET /me/sessions`** lists the live sessions (not revoked, refresh not expired) newest first in keyset pages, `{id, created_at, last_used_at, expires_at, current}`; **`DELETE /me/sessions/{id}`** ends another one (`session.revoke`), the current one is 409 (logout ends it), and someone else's, an ended or an unknown one is 404.
-
-  > Note (P7.6, as built, group E) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **The pieces:** `InviteService::{code_hash, check, check_in}` with `InviteCheck` and `Unusable`; `UserService::{register, me, change_password}`; `TokenService::{list_sessions, revoke_own}`; the queries `AuditReads::failed_code_attempts`, `MfaReads::count_unused_codes`, `UserWrites::change_password`, `SessionReads::list_live` and `SessionWrites::clear_step_up`; `http::handlers::me` and register in `auth`; fleet-api-types' `RegisterRequest`, `RegisterResponse`, `MeResponse`, `FailedCodeAttempts`, `PasswordChangeRequest`, `SessionResponse`, `SessionPage`; `AuditAction::{INVITE_USE, USER_CHANGE_PASSWORD, SESSION_REVOKE}`.
-  > - **`mfa_confirmed_at` is optional** on the wire: a user who logged in always has an authenticator, but a profile without one reads as left out rather than failing.
-  > - **An over-long invite code** fails its garde rule with the same message as every other bad invite, so a client can't tell it from an unknown one.
-  > - **Tests,** red against compiling stubs (rules that accepted anything, queries that found and wrote nothing, services that refused everything): fleet-api-types 3 rule tests, the queries 7 of 8, the HTTP tests 25 of 35 failed on assertions. The ones that passed check refusals a do-nothing stub gives too (the step-up 403, rule 422s, a 401, the unknown-invite 422, a 404, the limits). Then all passed. Snapshots, read before accepting: the audit-action names (three added), the migrations' line 7, `registered`, `register_weak`, `me`, `sessions_page` and the OpenAPI document.
-
-  > Note (P7.6, from group C, for group D) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Login and the lockout:**
-  >   - Login parses the typed name as a `Username` at the boundary; how an invalid name answers is D's question.
-  >   - It calls `LockoutService::begin` before the dummy or the real verify, holds the `Attempt` through its transaction, puts `record_failure` into the `auth.login` failure commit and `clear` into the success commit, and maps `LockoutError` to `ApiError` with `?`.
-  >   - Step-up's wrong password counts the same way.
-  > - **Routes and the client:** handlers take `ClientIp` for their audit entries; the login routes register with `RateClass::Login`, refresh with `Refresh` (E's register with `Register`).
-  > - **Open: refresh without the write connection.** `/auth/refresh` could check on the read pool whether the presented refresh hash exists at all (current or rotated) before opening the write transaction, so an unknown token is a 401 without taking the one write connection. That's safe because a token reaches a client only after its commit, so the check never misses one; only known tokens take the race-safe path inside the transaction. D's question (the user's note).
+  > Note (P7.6): E: `POST /auth/register {invite, username, password}` re-checks the invite and its creator in one transaction and answers 201 `{id, username, role}`, never tokens; every invite it can't use is one 422 on `invite`, a real one recorded as `user.create` Failure, and a refused new password is 422 "is too weak" with zxcvbn's hints. `GET /me` includes `failed_code_attempts` (group D's suggestion) and an optional `mfa_confirmed_at`.
+  > A credential change revokes every other session through `revoke_all_for_user(user, except)`: a 2FA replacement (D) and `POST /me/password` (`step_up_route`). `GET /me/sessions` lists the live sessions in keyset pages; `DELETE /me/sessions/{id}` is 409 for the current one and 404 for someone else's ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 - [x] **P7.7** 🔴 2FA:
   - enroll returns the otpauth URI and a QR code as PNG data
   - confirm, then reset (with step-up), which forces a fresh enrollment at the next login
@@ -1587,141 +1367,62 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - mandatory for **every** user, not configurable: until they enroll, login returns `mfa_setup_required` plus a single-use setup token that only works for enroll and confirm (§7.2). That includes users who just registered with an invite.
   - tests: the setup token is rejected on every other endpoint, expires after 10 min and can't be reused
 
-  > Note (P7.7, from group C, open for D; the user's note) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **2FA codes and the lockout.** Whether wrong 2FA codes (and recovery codes) count toward the per-username lockout, and how many code attempts one `mfa_token` allows, are D's questions. Per-IP limits alone don't stop code guessing from many addresses; `Attempt::record_failure` can count a wrong code like a wrong password.
+  > Note (P7.7): **Deviation: the QR code is SVG, not PNG.** totp-rs's `qr` feature brings image codecs (some with SIMD and unsafe code), so the server draws qrcodegen's module grid as an SVG, sent as `data:image/svg+xml;base64,…`; the app shows it only through an `<img>` ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P7.7, group D, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Deviation: the QR code is SVG, not PNG.** totp-rs's `qr` feature brings image codecs (image, moxcms, png and more, some with SIMD and unsafe code). qrcodegen builds the module grid, and the server writes it as an SVG with nothing but a white background path and one black path of unit squares (ECC Medium, a 4-module quiet zone), sent as `data:image/svg+xml;base64,…`. The app shows it only through an `<img>`.
-  > - **Setup tokens only** for enroll and confirm (`Authorization: Bearer afk_st_…`), under a new registry kind `Access::Setup`. Enroll may be repeated (each call replaces the pending secret, which waits in memory); confirm before enroll is 409; a wrong or malformed code is 422 on `code` and keeps the token; confirm takes the token once the code matched, so a second concurrent confirm gets 401. The response of enroll: `{otpauth_uri, qr_svg, secret}`.
-  > - **TOTP:** SHA-1, 6 digits, 30 s steps, ±1 step, a 20-byte secret from `SecureRandom`, issuer "afkfleet", label `afkfleet:<username>`. A code is accepted only for a step strictly after `last_used_step`; confirm stores its own step, so the confirming code can't log in afterwards.
-  > - **Recovery codes:** 10, each 20 base32 characters (100 bits), shown once as `abcd-efgh-ijkl-mnop-qrst`, typed back in any case with or without `-` and spaces, stored as plain SHA-256.
-  > - **Replace, never reset:** `POST /me/mfa/reset` (step-up) answers 200 `{setup_token, expires_in}`, bound to the session that asked; nothing changes until its confirm, which swaps the authenticator and the codes, revokes the user's other sessions (`mfa.reset` with `sessions_revoked`) and re-checks that this session is live, the user enabled and the password unchanged. `DELETE /me/mfa` doesn't exist.
-  > - **The vault** joins `AppState` through the 2FA service; the secret's AAD names the user's ID and `totp_secret`.
-
-  > Note (P7.7, as built, group D) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **The pieces:** `fleet_core::auth::{totp, recovery, challenge}` (the window and the replay rule, `RecoveryCode`, `SecondFactor`, the lifetimes); `ports::{totp, qr, recovery_codes}` with `infra::crypto::{totp::TotpRs, recovery_codes::Sha256RecoveryCodes}` and `infra::qr::SvgQr`; `app::challenges::Challenges` and `app::mfa::MfaService`; the extractors `SetupToken`, `SteppedUpUser` and `ValidJson`; `Routes::{setup_route, step_up_route}` with the security schemes and `x-step-up`; `ErrorCode::StepUpRequired`; fleet-api-types' `SecretText` and the 2FA DTOs; `VaultKeys::from_keys`, the in-memory half of `load`.
-  > - **The registry test** calls every authed, step-up and setup route without credentials (401), every authed and step-up route with a live setup token (401), every setup route with an access token (401), and every step-up route with a live session that never stepped up (403 `step_up_required`); a step-up route whose handler forgets the check is caught. Each operation's security and `x-step-up` match its access.
-  > - **Tests,** red against compiling stubs (a store that found no challenge, a service that refused everything, adapters that matched, drew and hashed nothing, an extractor that skipped the stamp, a body extractor that answered 400 to everything, a registry that documented nothing): 68 of the 88 new server tests, 37 of the 74 new rule tests in fleet-core, and 8 of the 13 new tests in fleet-api-types failed on assertions. The ones that passed check refusals, pinned values and registration, which the stubs satisfy too. Then all passed. New snapshots, read before accepting: the audit-action names (`mfa.enroll`, `mfa.reset`), the 403 `step_up_required` envelope, the OpenAPI document and the SVG of the test URI.
+  > Note (P7.7): enroll and confirm take only a setup token (`Access::Setup`), and the registry test refuses a live setup token on every authed and step-up route; enroll may be repeated, its pending secret waiting in memory, and confirm stores its own step, so the confirming code can't log in afterwards. TOTP is SHA-1, 6 digits, 30 s steps, ±1 step, accepted only for a step after `last_used_step`; 10 recovery codes of 20 base32 characters; wrong codes count toward the lockout (group C's open question).
+  > Deviation: replace, never reset. `POST /me/mfa/reset` (step-up) answers a setup token bound to the session, nothing changes until its confirm, and `DELETE /me/mfa` doesn't exist ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 - [x] **P7.8** 🔴 The `AuthUser` extractor (Bearer token via `axum-extra`) loads session and user and rejects disabled users. A `require(permission, resource)` helper calls `fleet_core::authz::authorize`.
 
-  > Note (P7.8, group B, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Every refusal is the same 401** (`ApiError::Unauthorized`, a bare `WWW-Authenticate: Bearer`): no header, more than one `Authorization` header, another scheme, a malformed, unknown or expired token, a revoked session, a disabled user. A database failure isn't a refusal: 503 or 500.
-  > - **One lookup per request:** the session joined with its user on the read pool, decided by `fleet_core::auth::access_decision` (revoked, then expired, then disabled).
-  > - **The touch:** `last_used_at` at most once a minute (`touch_due`), a conditional write committed with `commit_unaudited(SessionTouch)`. Only the wait for the write connection is bounded (250 ms); the touch never fails a request, and a skipped one is logged at `debug`.
-  > - **Logging:** each refusal is one `debug` line with its reason (and the session's and user's IDs once found); no token, hash or header value is ever logged.
-  > - **Step-up:** `AuthUser::stepped_up_at` and `fleet_core::auth::is_stepped_up` (5 minutes); D adds `step_up_required` with its first step-up route.
-  > - **Wiring:** `AppState` carries the `TokenService`, built by `serve` from `[auth]`.
+  > Note (P7.8): every refusal is the same 401 (`ApiError::Unauthorized`, a bare `WWW-Authenticate: Bearer`): no header, more than one `Authorization` header, another scheme, a malformed, unknown or expired token, a revoked session, a disabled user; a database failure is 503 or 500.
+  > One joined lookup per request, decided by `access_decision`; `last_used_at` is touched at most once a minute (`commit_unaudited(SessionTouch)`, only the wait for the write connection bounded, at 250 ms); `Bearer` matches in any case, the spaces after it trimmed (RFC 6750) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P7.8, as built, group B) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **The scheme:** headers 0.4's `Authorization<Bearer>` matches `Bearer` in any case and trims the spaces after it, as RFC 6750's `"Bearer" 1*SP b64token` allows (the user's decision during the build); the token's own shape check does the rest.
-  > - **Tests,** through a test-only router behind the real middleware stack, red against compiling stubs (an extractor that didn't count the headers, a service that skipped the decision and the touch): 7 of 15 failed on assertions, then all passed. The test that the held write connection doesn't hold up a request passed against the stub too, which never touched.
-
-  > Note (P7.8, from group D) (ADR-0010):
-  > - **Errors.** `AuthzError::NotFound` becomes 404 and `Forbidden` 403. `WrongResource` is a bug in the handler: 500, logged at `error`.
-  > - **Self-service routes** (`/me/*`, `/me/sessions/{id}`, `/auth/logout`, `/events/ticket`) check `Permission::UsePersonal` on `ResourceContext::Personal{owner}`, so every authed handler calls `authorize()`. Someone else's session gives 404.
-  > - **Step-up** (§7.2) is checked here or in the handler, not by `authorize()`.
-
-  > Note (P7.8, from Phase 6, group C) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `From<AuthzError> for ApiError` already exists, as the note above maps it, so `require(…)` returns `authorize()`'s error with `?`. The 401 answer, `ApiError::Unauthorized`, always sends `WWW-Authenticate: Bearer` with no error detail, so it never tells whether a token existed.
+  > Note (P7.8): `AuthzError::NotFound` becomes 404 and `Forbidden` 403; `WrongResource` is a bug in the handler: 500, logged at `error`. `From<AuthzError> for ApiError` already exists, so `require(…)` returns `authorize()`'s error with `?`.
+  > Self-service routes check `Permission::UsePersonal` on `ResourceContext::Personal{owner}`, so every authed handler calls `authorize()`, and someone else's session gives 404; step-up is checked here or in the handler, not by `authorize()` (ADR-0010, [ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 - [x] **P7.9** 🔴 Admin endpoints:
   - `GET /users`
   - `PATCH /users/{id}` (role, disabled). Changing either revokes all of that user's sessions.
   - `POST`, `GET` and `DELETE` on `/invites`
 
-  > Note (P7.9, from group D) (ADR-0010):
-  > - **Roles** change only through the Owner (`SetRole`, Member ↔ Admin), never on the Owner themselves or another Owner. Admins only disable and enable Members (`SetDisabled`), so Appendix B's "Admin+" for `PATCH /users/{id}` means the `disabled` field for Admins.
-  > - **Ownership transfer** has no permission yet. It gets one together with a route.
-  > - **Invites.** Admins create and revoke Member invites; Admin invites are the Owner's (`CreateInvite{role}` on `Global`, `RevokeInvite` on `ResourceContext::Invite{role}`). Admins list all invites.
+  > Note (P7.9): roles change only through the Owner (`SetRole`, Member ↔ Admin), never on the Owner themselves or another Owner; Admins only disable and enable Members (`SetDisabled`), so Appendix B's "Admin+" for `PATCH /users/{id}` means the `disabled` field for Admins.
+  > Admins create and revoke Member invites and list all invites; Admin invites are the Owner's; ownership transfer gets a permission together with a route (ADR-0010).
 
-  > Note (P7.9, group E, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **`GET /users`** (Admin+): keyset pages (`?before=<id>&limit=1..100`, 50 by default, newest first by v7 ID; `{items, next}`, `next` left out on the last page), each user `{id, username, role, disabled, created_at, mfa_enrolled, last_seen_at?}`; `last_seen_at` is the newest `last_used_at` of any of their sessions.
-  > - **`PATCH /users/{id}`** takes exactly one of `role` and `disabled` (422 otherwise) and answers the user as the list shows them. A value equal to the current one, decided on the row the transaction re-reads, writes nothing. A change revokes every session of the user (`user.set_role` with `role`, `previous_role`, `sessions_revoked`; `user.set_disabled` with `disabled`, `sessions_revoked`); a demotion to Member or disabling also revokes their pending invites, one `invite.revoke` each with `reason` `creator_demoted` or `creator_disabled`.
-  > - **Invites:** `POST /invites {role}` answers 201 `{code, invite}`, the code `afk_iv_…` (32 bytes, `TokenKind::Invite`) shown only there; `[auth] invite_ttl_hours` (default 72, 1 to 720) sets `expires_at` at creation; a creator holds at most 20 pending invites (409 beyond, counted inside the transaction). `GET /invites` lists every invite in its state (`pending`, `used`, `revoked`, `expired`) with `created_by` and `used_by` as `{id, username}`. `DELETE /invites/{id}` revokes a pending one (`invite.revoke`); a used one is 409; a revoked or expired one 204 again without a second entry.
-  > - **Every admin write re-checks in its transaction** (`app::users::recheck`): the acting session live and theirs, the actor enabled, then `authorize()` again on the fresh role and target. A dead session or disabled actor is 401; a refusal is what `authorize()` answers on the fresh facts (an Admin demoted meanwhile gets 404 on a Member, since a Member can't see other users).
-  > - **The API's new building blocks:** fleet-api-types' `Timestamp` (`YYYY-MM-DDTHH:MM:SS.mmmZ`, written and read by hand; chrono joins the crate with no features), IDs as fleet-core's typed IDs on the wire as strings, `PageQuery<I>` with its own `IntoParams`, and `bool` fields (the renderer test gained `boolean`). Absent values are left out, never `null`. A path ID that isn't a v7 UUID is 404 (`ValidPath`); a query that doesn't parse is 400 and a rule broken 422 (`ValidQuery`, over axum's `query` feature, the user's approval).
-
-  > Note (P7.9, as built, group E) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **The pieces:** `UserReads::{list, listed}` and `UserWrites::{set_role, set_disabled}`; `app::users::{ActingUser, recheck, UserChange, UserService::{list, user_ref, set}}`; `app::invites::InviteService`; `http::handlers::{users, invites}` with explicit operation IDs; `http::extractors::{ValidPath, ValidQuery}`; `AppState` gains both services; `AuditAction::{USER_SET_ROLE, USER_SET_DISABLED, INVITE_CREATE, INVITE_REVOKE}`.
-  > - **garde has no rule across fields,** so `UserPatchRequest` implements `Validate` by hand, reporting on the request as a whole (an empty path).
-  > - **`PageQuery` uses no serde `default`:** it would bound the ID type by `Default`; a missing `Option` reads as `None` anyway.
-  > - **Unique operation IDs:** utoipa names an operation after its function, so `users::list` and `invites::list` were both `list`; each new operation names its own, and a test keeps every operation ID unique (red on the duplicate first).
-  > - **Tests,** red against compiling stubs (services that listed and found nothing and refused every change, repositories that read and wrote nothing, a `Timestamp` that wrote nothing and read anything, rules that accepted everything, extractors that refused everything or skipped garde, a prefix and a config key that were ignored): fleet-api-types 26 tests, the users' repository 6 of 6, config 3, the token prefix 2, the extractors 3 of 6, the HTTP tests 33 of 46 failed on assertions. The ones that passed check refusals the handler makes before the service is called. Then all passed. Snapshots, read before accepting: the audit-action names (four added), `users_page`, `user_patched`, `invite_created`, `invites_page` and the OpenAPI document.
+  > Note (P7.9): `GET /users` (Admin+) lists keyset pages (`?before=<id>&limit=1..100`, 50 by default) with `mfa_enrolled` and `last_seen_at`. `PATCH /users/{id}` takes exactly one of `role` and `disabled` (garde has no rule across fields, so `Validate` by hand); a change revokes every session of the user, and a demotion to Member or disabling also their pending invites.
+  > `POST /invites {role}` shows the `afk_iv_…` code only once, with at most 20 pending invites per creator; every admin write re-checks the acting session, the actor and the target in its transaction (`app::users::recheck`). Absent values are left out, never `null`, and every operation ID is unique ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 - [x] **P7.10** 🔴 Rate limiting:
   - tower_governor per IP, globally and on auth routes, via `into_make_service_with_connect_info`
   - `trusted_proxies` CIDRs decide when `X-Forwarded-For` is honored
-
-  > Note (P7.10, from Phase 6, group A) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `[http] trusted_proxies` doesn't exist yet: the server's config has only Phase 6's keys, so this task adds it, with its validation.
   - a periodic `retain_recent()` clean-up
   - governor limits per user
   - a per-username lockout stored in the DB
   - `429` with `Retry-After`
 
-  > Note (P7.10, from Phase 6, group C) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a limit answers with `ApiError::RateLimited { retry_after }`, the limiter's delay, which is sent in whole seconds, rounded up.
+  > Note (P7.10): from Phase 6: this task adds `[http] trusted_proxies` with its validation and switches `serve` to `into_make_service_with_connect_info`; a limit answers `ApiError::RateLimited { retry_after }`, sent in whole seconds, rounded up.
+  > A 429 that bypasses `ApiError` keeps its envelope and headers but is logged at `error` as a wiring bug, and the dev-only `GET /api/openapi.json` needs a rate-limit class too ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
-  > Note (P7.10, from Phase 6, group D) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a 429 that tower_governor answers itself, without `ApiError`, still gets the envelope from `render_errors`' safety net and keeps its `Retry-After` and rate-limit headers, but it's logged at `error` as a wiring bug, so the limiter's error handler should return `ApiError::RateLimited`. Whether the health routes count against the global limit is this task's question.
+  > Note (P7.10): **Deviation: governor without tower_governor.** tower_governor 0.8.0 hard-codes governor's quanta clock, forces governor's and axum's default features, and rounds its wait down, so the server's own middleware runs governor's keyed limiters on its `Clock` port (`MonotonicClock` in production).
+  > Limits per IP (every request, health checks and unmatched paths included; IPv6 by its /64), per route class (`Login` shared by `/auth/login` and `/auth/login/mfa`, `Refresh`, `Register`) and per user; `X-Forwarded-For` is read only from a trusted proxy, walked from the right; one real-socket test proves the peer address reaches the limiter ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P7.10, from Phase 6, group E) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): the dev-only `GET /api/openapi.json` needs a rate-limit class too, like every route. The limiter needs the client's address: `serve` passes the router to `axum::serve` directly, so this task switches to `into_make_service_with_connect_info` there.
+  > Note (P7.10): the lockout: 5 failures (`[auth] lockout_threshold`, 3–20) lock for 1 min, each further one doubles the lock up to 1 h, and a streak expires 24 h after its last failure; while locked, 429 before any password check, not counted, and one attempt per name in flight. Rows are keyed by HMAC-SHA256 of the normalized `Username` under a key derived from the vault's active key, unknown names taking exactly the same path.
+  > `security.lockout` is recorded at each lock. The housekeeping task runs every 60 s: `retain_recent()`, the purge of expired streaks, and one `info` summary of the refusals ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P7.10, from the Phase 7 plan, the user's decision; open for group C) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): the one real-socket test sends a request over a real connection to a route with the per-IP limit, and fails if the peer address doesn't reach the limiter. `oneshot` sets `ConnectInfo` itself, so it can't catch a missing `into_make_service_with_connect_info`.
-
-  > Note (P7.10, group C, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Deviation: governor without tower_governor.** tower_governor 0.8.0 hard-codes governor's quanta clock, forces governor's and axum's default features, and rounds its wait down. The server's own middleware runs governor's keyed limiters, and every refusal is `ApiError::RateLimited` with the limiter's wait, rounded up to whole seconds.
-  > - **The limits:**
-  >   - **Per IP:** every request, health checks and unmatched paths included, in the middleware stack right inside `render_errors`.
-  >   - **Per route class,** given at registration (P7.11): `Login` (one bucket shared by `/auth/login` and `/auth/login/mfa`), `Refresh`, `Register`; `Standard` spends nothing more. A route layer, so a 404 or 405 spends none.
-  >   - **Per user:** every authed request, in `AuthUser`, right after authentication.
-  >   - **Keys:** an IPv4 client by its address, an IPv6 client by its /64; only the key is masked, the audit log keeps the full address.
-  > - **The client** (`ClientIp`, a request extension and an extractor for D's handlers): the canonical peer address. Only when it's in `[http] trusted_proxies` is `X-Forwarded-For` read: all its headers as one list, walked from the right past trusted proxies to the first untrusted address. A bad entry stops at the last trusted hop; all trusted means the left-most. No `Forwarded`, no `X-Real-IP`. A request without `ConnectInfo` is a 500, logged as a wiring bug.
-  > - **The limiters' clock** is the server's `Clock` port: a new `MonotonicClock` in production, only for the limiters, and the same `ManualClock` as everything else in tests. Stored and audited times keep `SystemClock`.
-  > - **The lockout** (`app::lockout::LockoutService`):
-  >   - **The rule** (`fleet_core::auth::lockout`): 5 failures (`[auth] lockout_threshold`, 3–20) lock for 1 min, each further one doubles the lock up to 1 h, and a streak expires 24 h after its last failure.
-  >   - **While locked:** 429 with the rest of the lock, before any password check, not counted. One attempt per name in flight; a concurrent one gets 429 with `Retry-After: 1`.
-  >   - **Keys:** rows keyed by HMAC-SHA256 of the normalized `Username` under a key derived from the vault's active key; unknown names take exactly the same path.
-  >   - **`security.lockout`:** recorded in the failing attempt's transaction at each lock, with an `info` line.
-  > - **The housekeeping** (`cli::housekeeping`), the server's first long-lived background task: every 60 s it runs `retain_recent()`, purges expired streaks in batches of 1000 (each committed with `UnauditedWrite::LoginAttemptsPurge`), and logs one `info` summary of the refusals since its last run. A refused request's own line is at `debug`. It belongs to `serve`'s `JoinSet` and stops at the first signal.
-  > - **Config:** `[http] trusted_proxies` (at most 32 strict CIDRs: host bits zero, no bare addresses, no duplicates, no IPv4-mapped networks, no /0 since group D) and every `[rate_limits]` key but chat's and `ws_connections_per_user`:
+  > Note (P7.10): config: `[http] trusted_proxies` (at most 32 strict CIDRs: host bits zero, no bare addresses, no duplicates, no IPv4-mapped networks, no /0 since group D, since trusting every address lets any client choose its own through `X-Forwarded-For`, past every per-IP limit and into the audit log's IPs) and every `[rate_limits]` key but chat's and `ws_connections_per_user` ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
   >
-  >   | Key | Default | Range |
-  >   |---|---|---|
-  >   | `per_ip_per_sec` / `per_ip_burst` | 20 / 40 | 1–1000 / 1–10000 |
-  >   | `login_per_ip_per_min` | 5 | 1–60 |
-  >   | `refresh_per_ip_per_min` | 30 | 1–600 |
-  >   | `register_per_ip_per_hour` | 5 | 1–100 |
-  >   | `per_user_per_sec` / `per_user_burst` | 10 / 30 | 1–1000 / 1–10000 |
-  > - **Tests,** each written first and red against compiling stubs:
-  >   - the lockout rule: 25 of 40
-  >   - `IpNet`: 33 of 46
-  >   - config: 19 of 21
-  >   - the limiter and the client's address: 19 of 33
-  >   - the router-level limits: 13 of 16
-  >   - the HMAC, the derivation and `MonotonicClock`: 9 of 13
-  >   - the lockout service, P7.12's lockout counting: 16 of 19
-  >   - the housekeeping: 5 of 8
-  >   - the real-socket test, with `serve` stripped of `into_make_service_with_connect_info`: it saw a 500
-  >   - the housekeeping's stop, with a token the shutdown never cancels: it hit its 30 s bound
-  >
-  >   Then all passed. The ones that passed against the stubs check allowances, refusals or `Debug` that a do-nothing stub satisfies too. A proptest cross-checks `IpNet` and the /64 key with `ipnet`. The 429 response and the audit-action names have snapshots, read before accepting.
-
-  > Note (P7.10, from the group C review, fixed in group D's first commit) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **no /0 proxy.** `[http] trusted_proxies` accepted `0.0.0.0/0` and `::/0`. Trusting every address lets any client choose its own address through `X-Forwarded-For`, which bypasses every per-IP limit (login's included) and forges the audit log's IPs. `IpNet` now refuses a prefix length of 0 for both families with `IpNetError::Everything` ("a prefix length of 0 would trust every address; list only your proxies' own networks"). The unit tests that had used /0 as a valid network moved to the refusal table or to /1 networks, and the proptests draw lengths from 1. Tests, red first: 6 failed (two parse cases, the message test, the no-echo test and one config case per family), then all passed.
+  > | Key | Default | Range |
+  > |---|---|---|
+  > | `per_ip_per_sec` / `per_ip_burst` | 20 / 40 | 1–1000 / 1–10000 |
+  > | `login_per_ip_per_min` | 5 | 1–60 |
+  > | `refresh_per_ip_per_min` | 30 | 1–600 |
+  > | `register_per_ip_per_hour` | 5 | 1–100 |
+  > | `per_user_per_sec` / `per_user_burst` | 10 / 30 | 1–1000 / 1–10000 |
 - [x] **P7.11** 🔴 **Route-coverage test.**
   - Routes are registered only through `public_route(…)` or `authed_route(…)` helpers, which also record them in a registry.
   - The test calls every authed route without credentials and expects `401`.
   - It also checks that the public list is exactly the expected allowlist.
 
-  > Note (P7.11, from Phase 6, group D) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `GET /health/live` and `GET /health/ready` exist since P6.7, registered with plain `Router::route`. They move to `public_route` and belong on the public allowlist.
+  > Note (P7.11): routes are registered through utoipa-axum's `OpenApiRouter`, so `public_route` and `authed_route` wrap it and every route keeps its `OpenAPI` entry; `GET /health/live` and `GET /health/ready` (plain `Router::route` since P6.7) move to `public_route` and the allowlist, and the dev-only `GET /api/openapi.json` is public, the allowlist test checking both modes ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
-  > Note (P7.11, from Phase 6, group E) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): routes are registered through utoipa-axum's `OpenApiRouter` (`routes!` with `#[utoipa::path]`), so `public_route` and `authed_route` wrap it and every route keeps its `OpenAPI` entry. `GET /api/openapi.json` exists only in dev mode: it's public, and the allowlist test checks both modes.
-
-  > Note (P7.11, from the Phase 7 plan, the user's decision; open for group C) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): the route-coverage test must not pass while the authed list is empty. One way: a test-only authed route proves the 401 check, and D's and E's routes join the test automatically.
-
-  > Note (P7.11, as built, group C) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **`http::routes`:** `Routes` wraps utoipa-axum's `OpenApiRouter`. Its only ways in are `public_route(class, routes!(…))` and `authed_route(class, routes!(…))`, each taking the route's `RateClass` (`Standard`, `Login`, `Refresh`, `Register`) and recording every method and path as a `RouteEntry { method, path, access, class }`.
-  > - **The router:** `http::router::api_routes` registers the production routes (health live and ready, public, `Standard`), and `Routes::finish` adds the dev-only `GET /api/openapi.json` (public, `Standard`, recorded, not in the document) and the middleware stack. `router()` is `api_routes(Routes::new()).finish(…)`.
-  > - **`tests/routes.rs`:**
-  >   - The public routes are exactly the allowlist outside dev mode and in it.
-  >   - A test-only authed route whose handler takes `AuthUser` keeps the authed list from being empty, and every authed route answers 401 with `WWW-Authenticate: Bearer` without credentials.
-  >   - An authed route whose handler forgets `AuthUser` is caught.
-  >   - The registry equals the document's operations.
-  > - **Tests,** red against a registry that recorded nothing: 8 of 9 failed, then all passed.
-  > - **For D and E:** a handler takes `AuthUser` before any body extractor, or its request without credentials isn't a 401 and the route-coverage test fails.
+  > Note (P7.11): `http::routes::Routes` takes routes only through `public_route(class, routes!(…))` and `authed_route(class, routes!(…))`, recording each method and path with its access and `RateClass`.
+  > `tests/routes.rs` checks the public allowlist, calls every authed route without credentials (401), keeps the authed list from being empty with a test-only authed route, and checks that the registry equals the document's operations; a handler takes `AuthUser` before any body extractor ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 - [x] **P7.12** 🔴 Security tests:
   - **User enumeration:** an unknown user and a wrong password give the same status and body.
   - **Lockout.**
@@ -1731,34 +1432,15 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - **Invites:** reuse and expiry.
   - **TOTP replay.**
 
-  > Note (P7.12, from the Phase 7 plan, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **each test ships with what it attacks,** written first, so it's red before its defense exists.
-  > - **Service-level tests:**
-  >   - B: refresh reuse revokes the family; a disabled user's session is rejected by `AuthUser`
-  >   - C: lockout counting
-  >   - D: TOTP replay
-  > - **End-to-end tests over HTTP:**
-  >   - D: enumeration (same status and body); lockout through login; expired sessions and refresh reuse through `/auth/refresh`
-  >   - E: escalation; disabling through `PATCH /users/{id}`; invite reuse and expiry
-  >
-  > E names each item with its test and ticks the task.
+  > Note (P7.12): each test shipped with the defense it attacks, red first: service-level tests in B (refresh reuse, a disabled user through `AuthUser`), C (lockout counting) and D (TOTP replay); end-to-end tests over HTTP in D (enumeration, lockout through login, expired sessions and refresh reuse) and E (escalation, disabling, invite reuse and expiry).
+  > Every item is named with its tests in the threat model's B1 section ("P7.12's security tests"), whose citations `scripts/threat-model-citations.mjs` checks ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P7.12, from group C, for E and the threat model; the user's note) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Lockout counting** is `tests/lockout_service.rs` (group C): the fifth failure locks for a minute, each further one doubles the lock up to an hour, a locked name is refused without being counted, and an unknown name locks exactly like a real one.
-  > - **An accepted residual risk the threat model names:** the lockout lets an attacker keep one account locked by failing once per lock (one failure an hour, once the lock reached its cap), while existing sessions keep working.
-
-  > Note (P7.12, group D, for E's naming of each item) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Enumeration:** `tests/auth/login.rs`'s `an_unknown_name_a_wrong_password_and_a_disabled_user_answer_alike` (same status, headers and body but the request ID) and `the_typed_name_is_stored_nowhere`.
-  > - **Lockout through login:** `the_fifth_wrong_password_locks_the_name_and_the_right_one_waits` and `wrong_codes_count_toward_the_lockout` there, and `step_up.rs`'s `wrong_step_up_passwords_lock_the_name_for_login_too`.
-  > - **Expired sessions and refresh reuse through `/auth/refresh`:** `tests/auth/refresh.rs`'s `reusing_a_replaced_refresh_token_revokes_the_whole_session`, `a_session_idle_for_seven_days_cant_refresh` and `a_session_past_thirty_days_cant_refresh_however_often_it_did`.
-  > - **TOTP replay:** `tests/mfa_service.rs`'s `a_totp_code_is_accepted_once_and_no_older_code_after_it` and `the_confirming_code_cant_log_in_afterwards`, and `tests/mfa_repository.rs`'s conditional-write tests.
-
-  > Note (P7.12, from group D, for E's threat model; the user's notes) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **accepted residual risks** to list next to the lockout DoS:
+  > Note (P7.12): the accepted residual risks, under the threat model's "Accepted risks and known limits" ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **Keeping an account locked:** an attacker can fail once per lock (one failure an hour, once the lock reached its cap), while existing sessions keep working.
   > - **Stale hashes:** after an `argon2_*` change, users who don't log in keep their old hashes, so their names stay distinguishable by timing until they do.
   > - **TOTP guessing by a password holder:** at the default threshold of 5, about 33 wrong codes a day get through (5 free, then locks of 1, 2, 4, 8, 16 and 32 minutes, then one an hour). Each guess hits one of about 3 in 10^6 codes (the window's three steps), so about 1e-4 a day and 3.5 % a year for an attacker who has the password and never stops, while the real user stays locked out nearly all the time.
   > - **An account without 2FA** (an invitee who abandons setup) belongs to whoever first enrolls with its password.
   > - **Displacing a login:** a password holder can replace the user's live login challenge with a password step of their own (the same class as the lockout DoS).
-
-  > Note (P7.12, group E) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **every item is named with its tests** in the threat model's B1 section (`docs/threat-model.md`, "P7.12's security tests"), whose citations `scripts/threat-model-citations.mjs` checks against the crates. E's own: escalation (`a_member_cant_make_themselves_an_admin`, `an_admin_cant_change_the_owner`, `an_admin_cant_disable_another_admin`, `an_admin_cant_change_any_role`, `nobody_makes_another_owner`, `an_admin_cant_invite_an_admin`, `nobody_invites_an_owner`), disabling through `PATCH /users/{id}` (`an_admin_disables_a_member_who_is_refused_from_then_on`), invite reuse (`an_invite_registers_once_and_its_reuse_is_refused_and_recorded`, `two_registrations_with_one_invite_create_one_user`) and expiry (`an_invite_is_refused_from_its_expiry_on`), each red against its stub first. The accepted residual risks of groups C, D and E are under the threat model's "Accepted risks and known limits".
 - [x] **P7.13** Audit events for:
   - login success and failure, logout
   - password and 2FA changes
@@ -1766,29 +1448,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - invites created and used
   - token reuse
 
-  > Note (P7.13, from Phase 6, group B, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a failed login for an unknown username never stores the typed name raw in the audit log: people sometimes type their password into the username field. Each phase lists its actions in one `audit_actions!` block in fleet-core.
+  > Note (P7.13): a failed login for an unknown username never stores the typed name raw in the audit log: people sometimes type their password into the username field. Each phase lists its actions in one `audit_actions!` block in fleet-core ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
-  > Note (P7.13, from the Phase 7 plan, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Each action arrives with its write:**
-  >   - A: `user.create`
-  >   - B: token reuse
-  >   - C: the lockout
-  >   - D: login, logout, 2FA
-  >   - E: password, roles, invites
-  >
-  >   E ticks the task.
-  > - **The naming rule:**
-  >   - Actions someone performs are `area.verb` in the imperative (`auth.login`, `user.set_role`, `invite.create`, `invite.use`).
-  >   - Things the server detects are `security.<noun>` (`security.refresh_token_reuse`).
-  >   - The outcome is never part of the name.
-  >   - Metadata values come from closed enums.
-  >   - A snapshot of every name keeps merged names from being renamed or dropped.
-
-  > Note (P7.13, as built, group D) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`auth.login`, `auth.logout`, `auth.step_up`, `mfa.enroll` and `mfa.reset`.** `auth.login` Success when tokens are issued (actor and target the user, `session_id`, `method`, `rehashed` only when true); Failure on every counted refusal and on a code step refused because the password or the authenticator changed (no actor, target the user or none, `step` and `reason`). `auth.logout` and `auth.step_up` target the new `AuditTarget::Session`; a step-up's Failure carries `reason`. `mfa.enroll` records a first confirm, `mfa.reset` a replacement's with `sessions_revoked`. Starting a replacement, 422s and 429s record nothing. The names snapshot gained all five, read before accepting.
-
-  > Note (P7.13, as built, group C) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`security.lockout`**, recorded in the failing attempt's own transaction each time a failure starts a lock. Outcome Failure; no actor; the client's IP; target the user when the name is a user's, none otherwise (the typed name is never stored); metadata `failures` and `locked_until`. The names snapshot gained it, read before accepting.
-
-  > Note (P7.13, as built, group E) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`user.set_role`, `user.set_disabled`, `user.change_password`, `invite.create`, `invite.use`, `invite.revoke` and `session.revoke`,** plus `user.create` through an invite (Success, `via` = `invite`) and its Failure for a real invite that can't be used. Every entry whose commit revokes sessions carries `sessions_revoked`; the pending invites a demotion or disabling revokes get one `invite.revoke` each with `reason`. The names snapshot gained all seven, read before accepting.
+  > Note (P7.13): each action arrived with its write: A `user.create`; B `security.refresh_token_reuse`; C `security.lockout`; D `auth.login`, `auth.logout`, `auth.step_up`, `mfa.enroll`, `mfa.reset`; E `user.set_role`, `user.set_disabled`, `user.change_password`, `invite.create`, `invite.use`, `invite.revoke`, `session.revoke`, and `user.create` through an invite.
+  > Actions someone performs are `area.verb`, things the server detects `security.<noun>`, the outcome is never part of the name, and a snapshot of every name keeps merged names from being renamed or dropped ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
 **DoD:**
 - auth + vault coverage ≥ 90 %.
@@ -1803,21 +1466,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - **Rust:** `tauri` (≥ 2.11.1), `tauri-plugin-single-instance`, `keyring-core` + `windows-native-keyring-store`, `reqwest`, `rustls`.
 - **npm:** react, vite, typescript, TanStack Query & Router, zustand, zod, react-hook-form, tailwindcss, shadcn/ui, lucide-react, sonner, vitest, Testing Library, msw, `@tauri-apps/api`, biome.
 
-> Note (P8):
-> - **Five group branches.** At the user's request, Phase 8 is built in group PRs like Phases 2–7. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
->
->   | Group | Branch | Tasks |
->   |---|---|---|
->   | A | `p8/p8.1-fleet-client` | P8.1 |
->   | B | `p8/p8.2-p8.3-scaffold-and-hardening` | P8.2, P8.3 |
->   | C | `p8/p8.4-p8.5-bridge` | P8.4, P8.5 |
->   | D | `p8/p8.6-p8.7-shell-and-auth-screens` | P8.6; P8.7's server setup, login with 2FA, register and enrollment |
->   | E | `p8/p8.7-p8.9-profile-admin-wrap-up` | P8.7's profile; P8.8; P8.9; the DoD, threat model B2/B7 and README |
->
->   - **P8.7 is spread over D and E** and ticked in E.
->   - **Hands-on checks:** where only the user can check something on Windows (the window, the keychain, the phone's authenticator, an installed dev build), the group's plan names the exact steps.
->   - Each later group asks its own implementation questions in its session.
-> - **Decisions.** The user answered group A's questions on 2026-10-12, one at a time, and amended its plan in review. [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md) records them; the notes below summarize what changes a task.
+> Note (P8): built in groups A–E, one PR each, with P8.7 spread over D and E and ticked in E; their decisions (group A's questions, answered by the user on 2026-10-12, then each group's) are in [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md).
 
 - [x] **P8.1** 🔴 `fleet-client`:
   - typed async methods for every endpoint (reqwest + rustls, timeouts)
@@ -1825,76 +1474,20 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - typed errors
   - integration tests against the in-process server
 
-  > Note (P8.1, from Phase 7, group B, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **A refresh replaces the access token at once.** A request sent with an access token that a refresh has since replaced gets a 401. fleet-client's single-flight refresh checks whether the token it used is still the current one: if a refresh already replaced it, it retries once with the current token instead of refreshing again (no needless second rotation). Only a 401 for the current token triggers a refresh.
-  > - **No grace window.** A refresh whose response got lost leaves the client with a replaced refresh token; sending it again is reuse, which revokes the session, so the user logs in again.
+  > Note (P8.1): a refresh replaces the access token at once, so a request with a replaced one gets 401; the single-flight refresh then retries once with the current token, and only a 401 `unauthorized` for the current token from an authenticated route refreshes (never a 401 `invalid_credentials` from login or login/mfa, nor step-up's 403 `forbidden`, a wrong password).
+  > No grace window: a lost refresh response, or a refused refresh, means logging in again. `expires_in` lets the app restart a timed-out mfa or setup step; refreshing never runs on a timer ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P8.1, from Phase 7, group D, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Which 401 refreshes:** the client refreshes only on a 401 with the code `unauthorized` from an authenticated route. A 401 `invalid_credentials` from login or login/mfa never triggers a refresh or a logout, and a 403 `forbidden` from step-up means a wrong password, not a lost session. A refused refresh (401 `unauthorized` from `/auth/refresh`) means logging in again.
-  > - **`expires_in`:** the app uses it on the mfa and setup tokens to restart a timed-out step itself (an expired token answers like a wrong code). Refreshing stays on a 401 only, never on a timer.
+  > Note (P8.1): fleet-client sets a maximum response body size, since fleet-api-types caps each text a client reads but not how many entries a response holds ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
-  > Note (P8.1, from Phase 6, group C, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **A maximum response body size.** fleet-api-types caps each text a client reads (`BoundedText`, `Open`), but not how many entries a response holds (a `fields` array with a million entries), so fleet-client sets a maximum body size on its HTTP client, which bounds every response, not only errors.
-
-  > Note (P8.1, group A, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **The API types:** request DTOs derive `Serialize` too, leaving an empty `Option` out (an amendment of ADR-0015's request rule), and fleet-api-types re-exports the IDs its DTOs carry, so §4's table holds.
-  > - **The tokens:**
-  >   - The refresh token lives only in a `SessionStore` port (`MemoryStore` here, the keychain in P8.4); a failed save clears it.
-  >   - The access token lives only in memory; a request without one refreshes first.
-  >   - The password step's and a 2FA replacement's tokens stay inside the client, whose methods take only codes.
-  >   - `login` with a session held is `AlreadyLoggedIn`.
-  > - **The session ends** on a refused refresh, a 401 after the retry, an empty store, and every logout, even an unreachable server's; never on a transient failure. **An end never races a save:** an epoch under a store gate drops, and revokes on the server, any save that started before an end. Logout ends locally first, then revokes with the tokens it took.
-  > - **The server and its certificates:**
-  >   - `ServerUrl` is an origin; plain http works only for a literal loopback address.
-  >   - No redirects, no proxies.
-  >   - `Trust::System`, or `Trust::CustomCa` alone (`tls_certs_only`), read strictly by `CustomCa::from_pem`.
-  > - **Bounds:**
-  >   - 5 s to connect, 20 s per request and 5 s per store call.
-  >   - A 1 MiB body cap.
-  >   - No automatic retries: the error carries `retry_after`.
-  >   - **The server's `[http] request_timeout_secs` is capped at 19 s** (Appendix A's note).
-  > - **Tests:**
-  >   - `serve::app_with` runs the production wiring over a `ManualClock` and `SeededRandom`.
-  >   - The interleavings run through a crate-private transport seam.
-  >   - A required `fleet-client` coverage gate at 90 %.
-
-  > Note (P8.1, as built, group A) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **The pieces:**
-  >   - The client: `fleet_client::{Client, ClientConfig, LoginStep, ServerUrl, Trust, CustomCa, SessionStore, MemoryStore, ClientError, ApiFailure}`, every `/api/v1` route plus `health_live` and `health_ready`.
-  >   - fleet-server: `serve::{ServerPorts, app_with}`.
-  >   - fleet-api-types: the request DTOs' `Serialize` and the ID re-exports.
-  > - **Tests,** red against compiling stubs first: fleet-api-types 2 of 3, the config's range case, fleet-client 101 of 132, the gates script's new check. Then all passed.
-  >   - The integration tests run the real server on 127.0.0.1:0: every route; the refresh rules (a transparent refresh, eight requests and one rotation, no grace window, the idle expiry); logout after a restart.
-  >   - The TLS tests use rcgen certificates and a rustls server on a thread.
-  > - **A dropped caller never stops a save** (the user's review of PR #34): once a refresh's or a code step's request may reach the server, the request, the save and the adoption run in a task of their own, which holds the refresh lock and the refresh-out mark until it ends. So a cancelled caller can't lose a rotated refresh token (whose next use would be reuse) or orphan a session. A task that ends without an answer is `ClientError::Interrupted`.
-  > - **Lockfile:** the build gains rcgen, pem and yasna. Cargo.lock also lists x509-parser and its parsing crates, the optional dependency behind rcgen's weak feature `x509-parser?/verify-aws`, which nothing enables or builds; `cargo deny check` passes.
+  > Note (P8.1): request DTOs derive `Serialize` too (amending ADR-0015's request rule); the refresh token lives only in a `SessionStore`, the access and step tokens only in the client's memory, and `login` with a session held is `AlreadyLoggedIn`. An end never races a save (an epoch under a store gate), and once a request may reach the server, its save runs in a task of its own (the user's review of PR #34).
+  > `ServerUrl` is an origin, plain http only for a literal loopback address; no redirects or proxies; `Trust::System`, or `Trust::CustomCa` alone. 5 s to connect, 20 s per request, a 1 MiB body cap, no automatic retries, the server's `[http] request_timeout_secs` capped at 19 s, and a required `fleet-client` coverage gate at 90 % ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 - [x] **P8.2** Scaffold:
   - `apps/desktop` (Tauri v2; `src-tauri` is a workspace member)
   - `packages/ui` (Vite + React + strict TypeScript + Tailwind + shadcn/ui)
   - pnpm scripts for both
 
-  > Note (P8.2, group B, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **Windows only.** `apps/desktop/src-tauri` (crate `afkfleet-desktop`) is a workspace member, but on Linux it would need WebKitGTK, so every workspace-wide Rust recipe adds `--exclude afkfleet-desktop` there. Windows covers it: clippy and test on windows-latest, and a new `tauri-build` job (docs, stable-check, `just app-build`). Coverage never measures it.
-  > - **Doctests leave the desktop crate out on every platform.** tauri-build's static VC++ runtime puts a stub `msvcrt.lib` on its link path, and cargo passes every build script's link paths to every doctest, so fleet-core's doctests failed to link. The desktop crate has no doctests.
-  > - **cargo deny in two passes**, same `deny.toml`, no ignores:
-  >   - the workspace without the desktop crate, on every target
-  >   - the desktop crate alone, on Windows
-  >
-  >   The real all-targets run failed only on the Linux GTK3 stack (glib 0.18's RUSTSEC-2024-0429, proc-macro-error's RUSTSEC-2024-0370, target-lexicon's `Apache-2.0 WITH LLVM-exception`). A new desktop target joins the second pass.
-  > - **Docker:** the agent's image copies `apps/desktop/src-tauri` too, because cargo can't load the workspace without it. Nothing there builds it.
-  > - **Identity:** identifier `io.github.noah-gabel.afkfleet`, productName `afkfleet`.
-  > - **The frontend:**
-  >   - TypeScript 7.0.2.
-  >   - shadcn/ui is only `components.json` (radix-nova, `#` subpath imports) plus its theme tokens; its packages arrive with the first component.
-  >   - Vitest with a smoke test.
-  >   - The Tauri CLI from npm.
-  >   - `apps/desktop` renders `<App />` from `@afkfleet/ui` on Vite's port 1420.
-  > - **The icon** is an original placeholder SVG; `just icons` renders `icon.ico` from it.
-  > - **Recipes:** `just dev-app`, `just app-build [--debug]`, `just icons` and `just ui-test` work; `just e2e` arrives in P8.9.
-  > - **Tests,** red first against stubs:
-  >   - `scripts/icons.test.mjs`: 4 of 4
-  >   - the UI's smoke test, which found no heading in an empty `App`
-  >
-  >   Then all passed.
+  > Note (P8.2): Windows only: `apps/desktop/src-tauri` (crate `afkfleet-desktop`) is a workspace member that the Linux recipes exclude, covered by clippy and tests on windows-latest and a `tauri-build` job; doctests leave it out everywhere (tauri-build's stub `msvcrt.lib`); cargo deny runs two passes over the same `deny.toml` with no ignores (the Linux GTK3 stack failed it); the agent's image copies it but never builds it.
+  > Identifier `io.github.noah-gabel.afkfleet`; TypeScript 7.0.2, shadcn/ui as only `components.json` and its theme tokens, Vitest, the Tauri CLI from npm; a placeholder icon that `just icons` renders ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 - [x] **P8.3** Tauri hardening:
   - CSP: `default-src 'self'; img-src 'self' data:; style-src 'self'; connect-src ipc: http://ipc.localhost`. Relax it only with an ADR.
   - Capabilities allow only our commands.
@@ -1902,134 +1495,41 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - Devtools only in debug builds.
   - The single-instance plugin.
 
-  > Note (P8.3, group B, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **The CSP, exactly,** with `dangerousDisableAssetCspModification: true`: Tauri appends no hashes or nonces, which makes the served header stricter, not looser. Tauri writes the header from a hash map, so its four directives come in an order that varies between runs.
-  > - **No `devCsp`:** `tauri dev` on desktop loads Vite's server directly, and Tauri sends no CSP there. The real CSP is checked in a `tauri build --debug` exe.
-  > - **`withGlobalTauri: false`** is written out.
-  > - **`freezePrototype: true`** (the user's addition); removing it needs an ADR.
-  > - **Capabilities:** one, `main`, granting nothing; no `core:default`.
-  >   - build.rs passes `const COMMANDS` (empty) to `AppManifest::commands`.
-  >   - An empty `[default]` permission in `permissions/default.toml` turns the ACL on for app commands. Without an app manifest Tauri lets every app command through, which the ACL test showed.
-  > - **Devtools:** no `devtools` feature or window setting. tauri has only `wry` and `compression`: `dynamic-acl` is out, and `common-controls-v6` is out too (the user's choice), since its TaskDialogIndirect import kept the ACL test's exe from starting.
-  > - **Single instance:** the plugin is registered first, and a second launch restores, shows and focuses the window.
-  > - **A navigation guard** (the user's addition): an internal plugin's `on_navigation` hook allows only `http://tauri.localhost`, and `devUrl`'s origin in dev builds.
-  > - **Pinned:**
-  >   - `just tauri-check` (`scripts/tauri-hardening.mjs`; in `check`, `ci` and CI's deny job) fails on any change to the security settings, the windows, the dev URL, the capability, the command list, the default permission or tauri's resolved features.
-  >   - `tests/acl.rs` shows on the mock runtime that ungranted app and core commands are refused.
-  > - **Tests,** red first against stubs: `navigation` 14 of 19, `focus` 2 of 2, the ACL's app-command case, and the hardening script 18 of 25. Then all passed.
-  > - **Checked live** in a debug build over WebView2's DevTools protocol: the page loads, no CSP violations, the guard keeps the window on the app, `window.open` opens nothing, and a second launch exits at once.
+  > Note (P8.3): the CSP exactly, with `dangerousDisableAssetCspModification: true`, which makes the served header stricter, and no `devCsp`, since `tauri dev` sends no CSP; `withGlobalTauri: false` written out; `freezePrototype: true` (the user's addition; removing it needs an ADR). One capability, `main`, granting nothing (no `core:default`), and an empty `[default]` permission that turns the ACL on for app commands.
+  > tauri has only `wry` and `compression` (no `devtools`, `dynamic-acl` or `common-controls-v6`); the single-instance plugin is registered first; a navigation guard allows only the app's own origin. `just tauri-check` and `tests/acl.rs` pin it, and a debug build checked it live ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 - [x] **P8.4** 🔴 Rust side:
   - `AppState` holds the server profile, the `fleet-client` and the session.
   - The **refresh token lives in the OS keychain**; the access token only in memory.
   - Typed commands are grouped per feature (`commands/auth.rs` …) and return `Result<T, CommandError { code, message }>`.
   - Server profile: a URL plus an optional custom CA PEM, validated. **Never accept invalid certificates.**
-  > Note (P8.4, from group A) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **The keychain implements fleet-client's `SessionStore`**, doing its blocking calls off the runtime.
-  > - **The server profile reuses `ServerUrl` and `CustomCa::from_pem`.**
-  > - **`main` installs the aws-lc-rs provider** before building the client.
-  > - **`CommandError` maps `ClientError`** with a default branch (`ApiFailure::code` is `Open`).
-  > - **No token reaches `AppState`:** fleet-client holds the access token and the step tokens itself.
 
-  > Note (P8.4, group C, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **Every endpoint now:** 20 commands in `commands/{server,auth,mfa,me,users,invites}.rs`, each a thin wrapper over an `AppState` method. The IPC types (`CommandError`, the login step, the logout outcome, the server profile's request, view and states) live in fleet-api-types' `app` module and are exported by `just gen`; the `OpenAPI` comparison leaves them out.
-  > - **`CommandError { code, message, api?, fields? }`:**
-  >   - a closed code
-  >   - its fixed message
-  >   - only for `api`: the server's status, open code, message, request ID, fields and `retry_after_secs`
-  >   - the rules a local check broke
-  >
-  >   Logout always answers Ok: `ended`, or `unconfirmed` with the error.
-  > - **The server profile:**
-  >   - It's validated by `ServerUrl` and `CustomCa::from_pem`, and stored as `server-profile.json` (version 1) in the local app-data folder. A CA is stored as canonical PEM re-encoded from DER (`CustomCa::to_pem`), and the file is written atomically and read with a 128 KiB cap.
-  >   - A file that can't be used starts the app without a profile, `unreadable` with its reason.
-  >   - The view is the origin plus each CA certificate's SHA-256 fingerprint.
-  >   - `set_server_profile` checks `health_live` before changing anything; `check_server` calls `health_ready`.
-  > - **Switching:**
-  >   - The keychain entry is keyed by origin, and a stored session resumes only under the identical profile.
-  >   - An identical profile is a no-op (`change: "none"`). Any other change logs out of the old server, then clears the new origin's entry unsent (`Client::discard_session`), saves and swaps (`change: "switched"`).
-  >   - One `RwLock`: every command holds it shared, and the switch exclusively, after its health check.
-  > - **The keychain:**
-  >   - keyring-core 1.0.0 over windows-native-keyring-store 1.1.0, `Local` persistence.
-  >   - Calls on one entry run in order: a tokio mutex per origin (shared by every store of that entry, after the user's review of PR #36) taken before `spawn_blocking`, its guard moved in, so a call that timed out waiting never runs. A call that outlives the 5 s timeout runs on in its thread: a new task exception in CLAUDE.md.
-  >   - keyring-core's errors become content-free `KeychainError`s.
-  > - **fleet-client:** `CustomCa::to_pem` and `fingerprints`; `from_pem` also refuses a CA whose canonical PEM would pass 64 KiB; `Client::discard_session`.
-  > - **Pinned:**
-  >   - Each command is in build.rs, `main.json` and `tauri-hardening.mjs`.
-  >   - `permissions/autogenerated/` is committed and pinned byte for byte.
-  >   - `tests/ipc-contract.json` lists every command's exact args and expected answer, checked by the ACL test on the mock runtime.
-  > - **Coverage:** `just cov-desktop` on Windows (CI's `tauri-build` job), with a required 90 % gate. It runs with `--no-rustc-wrapper`, since cargo-llvm-cov 0.9.1's wrapper leaves the lib's unit-test binary uninstrumented on Windows (found in the spike).
-  > - **Tests:**
-  >   - The commands run against the in-process server (`serve::app_with`).
-  >   - The keychain's ordering tests run on real time (a deviation like sqlx's).
-  >   - One test uses the real Credential Manager under a test-only service.
+  > Note (P8.4): the keychain implements fleet-client's `SessionStore`, its blocking calls off the runtime; the profile reuses `ServerUrl` and `CustomCa::from_pem`; `main` installs the aws-lc-rs provider; `CommandError` maps `ClientError` with a default branch; no token reaches `AppState` ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 
-  > Note (P8.4, as built, group C) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **Tests,** red first against compiling stubs:
-  >   - fleet-api-types' `app`: 1 of 14, on the stub's empty messages (a second failure was the test's own field-order mistake, fixed)
-  >   - fleet-client: 7 of 7 `CustomCa` and 4 of 4 `discard`
-  >   - the desktop crate: 94 of 129, the 35 that passed being the existing tests and checks a do-nothing stub also satisfies
-  >   - `tauri-hardening`: 10 of 34
-  >   - `coverage-gates`: 7 of 23
-  >
-  >   The keychain's ordering test also failed against a std mutex taken inside the blocking call, as the user predicted. Then all passed.
-  > - **Coverage:** 94.95 % of the desktop gate's lines on the dev machine, 95.17 % in CI. After the user's review of PR #36, a prefix gate also fails on a listed file with executable lines and none covered ("uninstrumented test binary?"), and the keychain's turn is per entry (one per origin, shared by every store of it).
-  > - **Lockfile:** it gains only keyring-core and windows-native-keyring-store.
+  > Note (P8.4): 20 commands in `commands/{server,auth,mfa,me,users,invites}.rs`, thin wrappers over `AppState`, their IPC types in fleet-api-types' `app` module; `CommandError { code, message, api?, fields? }` with a closed code; logout always answers Ok (`ended`, or `unconfirmed` with the error).
+  > The profile is `server-profile.json` (version 1, a CA stored as canonical PEM, read with a 128 KiB cap; an unusable file starts the app `unreadable`). The keychain entry is keyed by origin: an identical profile is a no-op, and any other change logs out, clears the new origin's entry (`Client::discard_session`) and swaps under one `RwLock`.
+  > keyring-core 1.0.0 over windows-native-keyring-store 1.1.0 (`Local`), calls on one entry in order through a tokio mutex per origin, a call outliving its 5 s timeout a new task exception; each command pinned in build.rs, `main.json`, `tauri-hardening.mjs` and `tests/ipc-contract.json`; `just cov-desktop` gates 90 % with `--no-rustc-wrapper` ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 - [x] **P8.5** 🔴 TypeScript side:
   - The `ApiClient` interface lives in `packages/ui/src/api/`.
   - `TauriApiClient` lives in `apps/desktop/src/` and is injected into `<App apiClient={…} />`.
   - `FakeApiClient` is for tests.
   - DTO types come only from `src/generated`.
 
-  > Note (P8.5, from Phase 6, group C, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **Error codes.** UI code that branches on an error code always has a default branch that shows the message and the request ID, never an exhaustive switch that assumes the union is complete: an older app can receive a code added later. The same applies to every `Open<…>` field.
-  > - **The generated folder** holds only ts-rs's files: `just gen` refuses to touch it if it holds anything else. Import each type from its own file (`../generated/ErrorResponse`); there's no index file.
+  > Note (P8.5): UI code that branches on an error code always has a default branch that shows the message and the request ID, never an exhaustive switch, since an older app can receive a code added later; the same applies to every `Open<…>` field. The generated folder holds only ts-rs's files (`just gen` refuses otherwise), each type imported from its own file ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
-  > Note (P8.5, group C, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **`ApiClient`:** 20 methods typed by the generated types. Failures are `ApiError { error: CommandError }`; a rejection that isn't a `CommandError` (Tauri's own refusals) becomes `ipc`. `describeError` switches exhaustively on `code` and keeps a default branch on `api.code`.
-  > - **zod in a `validated(client)` wrapper,** which `App` applies: every input is checked before `invoke`, and a failure is `invalid_input` with garde-style fields. `limits.ts` mirrors the Rust constants, and a fleet-api-types test keeps them equal.
-  > - **`FakeApiClient`** is scripted per method and records calls; `UnavailableApiClient` serves the web entry until P8.9.
-  > - **`TauriApiClient(invoke)`** has `invoke` injected and is tested with Vitest in apps/desktop against `ipc-contract.json`, the same fixture the Rust ACL test uses.
-  > - **Biome's `noRestrictedImports`:** no `@tauri-apps/*` in packages/ui, and only `@tauri-apps/api/core` in apps/desktop.
-  > - **Dependencies:** `@tauri-apps/api` 2.12.1, zod 4.6.5, vitest 5.0.3 (apps/desktop dev), all exact.
-
-  > Note (P8.5, as built, group C) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **Tests,** red first:
-  >   - the UI: 25 of 31 against stubs
-  >   - `TauriApiClient`: 4 of 24, against a renamed command, a dropped argument and no rejection mapping
-  >   - `tests/limits.rs`: on a missing constant
-  >
-  >   Then all passed. One test runs the validating wrapper with `Object.prototype` frozen, as the webview does.
-  > - **packages/ui** exports `./generated/*`, so apps/desktop imports each type from its own file.
+  > Note (P8.5): `ApiClient` has 20 methods typed by the generated types, failing with `ApiError { error: CommandError }` (`ipc` for Tauri's own refusals); `describeError` keeps a default branch on `api.code`. `validated(client)` checks every input with zod before `invoke`, and a fleet-api-types test keeps `limits.ts` equal to the Rust constants.
+  > `FakeApiClient` is scripted per method; `TauriApiClient(invoke)` is tested against `ipc-contract.json`, the Rust ACL test's fixture. Biome refuses `@tauri-apps/*` in packages/ui and all but `@tauri-apps/api/core` in apps/desktop; packages/ui exports `./generated/*` ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 - [x] **P8.6** 🔴 App shell:
   - TanStack Router with an auth guard
   - role-aware navigation
   - an error boundary
   - toasts
   - a banner when the server is unreachable
-  > Note (P8.6, P8.7, from group A) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - The banner shows on `Unreachable` and `TimedOut`.
-  > - Server setup explains `Certificate`.
-  > - A 429 or 503 shows its `retry_after`.
-  > - `expires_in` restarts a timed-out login or setup step.
-  > - Registering holds no session, so the login right after it never meets `AlreadyLoggedIn`.
 
-  > Note (P8.6, group D, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **Dependencies,** exact and at least 3 days old: TanStack Router 1.170.42 and Query 5.104.1, sonner 2.0.8, zustand 5.0.15, lucide-react 1.53.0, `cn` 0.4.0, class-variance-authority 0.7.1, `@radix-ui/react-slot` 1.4.0 and `@radix-ui/react-label` 2.1.16 (never the `radix-ui` umbrella), user-event 14.6.7 (dev). `pnpm-workspace.yaml` sets `minimumReleaseAge: 4320` for every install from now on.
-  > - **No runtime styles:** sonner is patched not to inject its `<style>` (the release CSP blocks it), and every Vitest test ends with a check that the document holds no `<style>` and no stylesheet at all.
-  > - **shadcn's six components** (Button, Input, Label, Textarea, Card, Alert) are copied from the registry's JSON, never through the CLI, each with its edits in its header.
-  > - **The router:** routes in code over a memory history. `/` is the launch: no profile or an unreadable one leads to server setup; `me()` then leads Home, to login on `no_session`, or to a start screen (waiting while unreachable; otherwise the error with Try again, Server settings and Log out).
-  > - **Every call is watched:** `unreachable`/`timed_out` raise the banner, `certificate` its own banner state, and `no_session` ends a signed-in session once (only for a call of the current sign-in, never at launch, inside the sign-in flow or during a logout): to login first, then the cache is emptied, then one toast. A success of a call that started after the banner went up takes it down and refetches.
-  > - **The banner** checks every 10 s, never two at once, and waits a busy server's `retry_after` (at least 10 s); "Retry now" checks at once.
-  > - **QueryClient:** no retries, no refetch on focus or reconnect; `me` is fresh for 60 s.
-  > - **Role-aware navigation:** Home and Server for everyone; Users and Invites (placeholders until group E) for Admins and the Owner, behind a role guard that answers "not found". An unknown role gets a Member's rights.
-  > - **The error boundary** shows a fixed text with Try again and Restart; an API error its text, any other error only its name.
-  > - **Logout** from the header: login first, then the cache; a warning when the server couldn't be told; a failed call stays signed in.
+  > Note (P8.6, P8.7): the banner shows on `Unreachable` and `TimedOut`; server setup explains `Certificate`; a 429 or 503 shows its `retry_after`; `expires_in` restarts a timed-out login or setup step; registering holds no session, so the login right after it never meets `AlreadyLoggedIn` ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 
-  > Note (P8.6, as built, group D) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **Tests,** red first against compiling stubs: the style guard 3 of 4, sonner's guard against the unpatched package, the stores and the watched client 23 of 32, the QueryClient's defaults 1 of 2, the shell (launch, session end, header, router, nav, banner, error screen) 64 of 67. Then all passed. The 3 that passed are what a stub also does (two privileges, the error component's wiring).
-  > - **A keychain entry the app can't read** (`tests/bridge/auth.rs`, the real `KeychainStore` on keyring-core's mock): `me()` answers `store`, `logout()` removes it, and the next login works. It pins existing behaviour, so it was shown red through a temporary change to fleet-client's logout (skipping the clear after a failed load), then reverted.
-  > - **Found while building:** a check that settled before React rendered flipped `checking` twice in one batch, so the banner's next wait never started; the wait now chains from the check itself.
-  > - **Found in the live check** (a `just app-build --debug` exe over WebView2's DevTools protocol): zod's JIT probe (`new Function`) caused a CSP violation at every start. zod is now jitless (`src/api/zod.ts`, the only module that may import zod), with a red-first guard test; after it, no violation and no `<style>` on any screen walked.
+  > Note (P8.6): routes in code over a memory history, `/` the launch (server setup, login, Home or a start screen). Every call is watched: `unreachable`/`timed_out` raise the banner, and `no_session` ends a signed-in session once (login first, then the cache, then one toast); the banner checks every 10 s and waits a busy server's `retry_after`; no retries, no refetch on focus or reconnect.
+  > Home and Server for everyone, Users and Invites for Admins and the Owner (an unknown role gets a Member's rights); an error boundary with a fixed text, Try again and Restart. No runtime styles: sonner is patched, and every Vitest test checks the document holds no `<style>` and no stylesheet; zod is jitless (`src/api/zod.ts`), since its JIT probe caused a CSP violation in the live check.
+  > Dependencies are exact and at least 3 days old (`minimumReleaseAge: 4320` in `pnpm-workspace.yaml`) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 - [x] **P8.7** 🔴 Screens:
   - server setup
   - login, including the 2FA step
@@ -2037,114 +1537,24 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - 2FA enrollment (QR code from the server), shown right after the first login, since 2FA is mandatory
   - profile: change password, list and revoke sessions
 
-  > Note (P8.7, from Phase 7, group D, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **The QR code is an SVG `data:` URI.** The app shows it only through `<img src="data:…">`, never by inserting the SVG as HTML, so nothing in it could ever run. P8.3's CSP already allows `img-src data:`.
-  > - **After setup, the app asks for the next code:** the code that confirmed the authenticator can't log in.
-  > - **Replacing the authenticator** goes from the profile through step-up and `POST /me/mfa/reset` straight into enroll and confirm with the setup token it answers, in the same session; until confirm, the old authenticator keeps working.
+  > Note (P8.7): from Phase 7: the QR code is an SVG `data:` URI, shown only through `<img src="data:…">`; after setup the app asks for the next code; replacing the authenticator goes from the profile through step-up and `POST /me/mfa/reset` into enroll and confirm. Registering trims a pasted invite code and logs in straight into the 2FA setup.
+  > The profile warns when `failed_code_attempts.count` is above 0 and when 3 or fewer recovery codes are left; the `current` session's row logs out through `POST /auth/logout` ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P8.7, from Phase 7, group E, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Registering:** the screen trims spaces and line breaks around a pasted invite code before sending it, since chat apps often add them; the server's shape check stays strict. After a successful registration the app logs in right away with the credentials just entered and goes straight into the 2FA setup, so a new account never sits without 2FA (the threat model's "an account without 2FA").
-  > - **The profile:** when `failed_code_attempts.count` is above 0, the app shows a warning that names `last_at` and suggests changing the password. When `recovery_codes_left` is 3 or fewer, it warns and points to the 2FA replacement, which issues 10 new codes.
-  > - **The session list:** the row marked `current` shows "Log out", which calls `POST /auth/logout`; `DELETE /me/sessions/{id}` answers 409 for it.
+  > Note (P8.7): D's part: one sign-in flow per `/login` and `/register`, a reducer whose state alone holds the password, the TOTP secret and the recovery codes; every call carrying a secret is a direct call, never a TanStack query or mutation. The code step allows 3 tries, then goes back to the password step, as its deadline does; recovery codes are shown once, behind a required "I've saved these codes"; server setup asks for a current custom CA again to keep it; a failed discard is `session_discard`.
+  > After the user's review of PR #37: a server switch while signed in runs as a deliberate logout, late answers count only for their step, a running call holds its step's other actions, and `styles.css` hides Edge's own reveal button ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 
-  > Note (P8.7, group D's part: server setup, login with 2FA, register, enrollment; the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **One sign-in flow** per `/login` and `/register`, a reducer inside one component, so the password, the TOTP secret and the recovery codes live only in its state. Every call that carries a secret in its request or its answer (here `login`, `register`, `loginMfa`, `mfaEnroll`, `mfaConfirm`; in E `stepUp`, `changePassword`, `createInvite`) is a direct call, never a TanStack query or mutation (CLAUDE.md).
-  > - **The code step:** whitespace removed; 3 tries ("Wrong code. 2 tries left.", "… 1 try left."), the third and the step's deadline back to the password step (username kept, password dropped); a code after the deadline is never sent; a last-minute warning. A 422 shows at the field and doesn't count.
-  > - **The setup step:** the QR code only through `<img>` and only as `data:image/svg+xml;base64,`; the key in groups of 4; "New QR code"; only the newest one works.
-  > - **Recovery codes:** shown once, "Copy all" (the clipboard may keep them), a required "I've saved these codes"; then the flow logs in again with the kept password and asks for the next code. A failed login there goes back to the password step.
-  > - **Registering:** the invite trimmed, the password typed twice with "show" toggles; then a login with the same credentials straight into the setup, or the login form with "Your account was created. Log in to set up 2FA."
-  > - **A session still held at login:** the same user (case-insensitive) opens Home; another offers "Continue as …" or "Log out"; one that can't be checked offers "Log out". Every way into the app starts a new signed-in generation.
-  > - **Server setup:** the address and an optional CA (pasted, or read from a file of at most 64 KiB); a current custom CA starts checked with its fingerprints and must be given again to keep it; signed in, a warning before a save logs out. `none` keeps the session; `switched`, `profile_save` and the new `session_discard` go to the login.
-  > - **`session_discard`:** after the old server's logout, a failed discard of the new origin's stored session no longer answers `store`, so `store` from `set_server_profile` always means nothing changed.
-
-  > Note (P8.7, as built, group D) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **Tests,** red first: the flow's reducer 9 of 11; the field components 3 of 4; the login, register and server screens 57 of 57 against the placeholders; the desktop crate 2 of 134 against a `session_discard()` stub; the UI failed to compile until it knew the new code, by design. A test that a store refused before the guard leaves a live session untouched pins existing behaviour and was shown red through a temporary change that logged out first; the frozen-prototype flow test, through a temporary shadowing `toString` assignment.
-  > - **E's part:** the profile (password change, sessions) and the admin screens replace group D's placeholders; P8.7 is ticked there.
-
-  > Note (P8.7, the user's review of PR #37) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **A server switch while signed in runs as a deliberate logout:** `logging_out` from before the call until its answer, so a call answering `no_session` meanwhile shows no "session ended"; `none` and an error that changed nothing go back to signed in.
-  > - **Late answers count only for their step:** every step has an id, each action names the step it was issued in, and the reducer drops the rest. A late answer never signs in or navigates once the flow left its step or route.
-  > - **While a call runs,** its step's Cancel, links, "Log out" and "Continue as" wait, and a second submit does nothing. "New QR code" waits too, and hides the old secret and QR code while the new one loads.
-  > - **Edge's own reveal button:** WebView2 adds Edge's password-reveal (and clear) button to inputs, so a password field showed two eye icons; `styles.css` hides `input::-ms-reveal` and `input::-ms-clear`, checked in the debug exe (two icons before, one after).
-  > - **Smaller:** the setup secret is requested once per step, also under StrictMode; a step's deadline counts from when its request was sent; a failed login after registering lands on a real `/login` (with its notice and username), whose Register link works.
-  > - **Tests,** red first: 13 flow tests and 2 switch tests against the old code, and the reducer's 11 of 13 against the old reducer. 8 more pin behaviour the old code had (double submits, "Continue as"'s guard, the generation rule, `me`'s invalidation at every way in, the setup step's deadline check), shown red through temporary mutations of those guards.
-
-  > Note (P8.7, group E's part: the profile; the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **The layout:** `/profile` holds the account, the warnings, "Change password", "Replace authenticator" with the recovery codes left, and the sessions. `/profile/password` and `/profile/2fa` are routes of their own beside it, so leaving a flow drops its password, secret and codes.
-  > - **Step-up first.** Both flows start with "Confirm it's you" (`stepUp`, a direct call; the password lives only in `StepUpForm` until it answers).
-  >   - **The password:** then the new password, typed twice, before the step-up's 5 minutes end, counted from when it was sent (`STEP_UP_WINDOW_SECS`, mirrored in `limits.ts` and checked by `tests/limits.rs`).
-  >   - **The authenticator:** `mfaReset` straight into the 2FA setup, then the new recovery codes and "Finish", without a new login.
-  >   - `step_up_required` or a deadline goes back to the password with "That step ended. Enter your password again."
-  > - **The warnings:** wrong 2FA codes since the previous login (naming the last), and 3 or fewer recovery codes left. They show on the profile and on Home, where every sign-in lands; on Home "Dismiss" hides one until the next sign-in.
-  > - **The wrong-code count leaves out the typos of the login that succeeded** (a server change). The password step mints a `LoginStepId`, which the code step's `auth.login` entries record as `login_step_id`, and `GET /me` leaves out the newest success's own step ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)'s amendment).
-  > - **Sessions:**
-  >   - "Show more".
-  >   - Another session's "Log out" runs at once; this session's is the header's logout.
-  >   - "Log out all other sessions" asks first, then fetches every page the server lists. It runs to the end even when the screen is left, and reports on the screen or in a toast.
-
-  > Note (P8.7, as built, group E) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **Shared with the sign-in flow:** `hooks/useStepGuard` (the step-id and pending guards), `useEnrollment`, `nextSetup`, `isStepGone`, and `SetupStep`'s and `RecoveryCodesStep`'s texts as props.
-  > - **Found while building:** `showFieldErrors` kept only a field's last message, so a weak password showed only zxcvbn's last hint. Every message now shows, one per line (red first).
-  > - **Tests,** red first:
-  >   - the UI against compiling stubs: 52 of the new and changed tests (the reducer 4 of 7, the notices store 2 of 3, navigation 2 of 10, the router 4 of 12, the overview 9 of 11, the sessions 9 of 9, the password flow 14 of 14, the 2FA flow 8 of 8); the rest are what a stub also does
-  >   - the server's wrong-code tests 3 of 3 against the old query
-  >   - `tests/limits.rs` on the missing constant
-  >   - `formErrors` 1 of 3
-  >
-  >   Tests that pin existing behaviour were shown red through temporary mutations: the login step's metadata and its error path, two `formErrors` cases, and the sessions' "every page" and "runs to the end" cases.
-
-  > Note (P8.7, the user's review of PR #38) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **A refusal's wait counts down.** A 429 (or a 503 busy) showed "Try again in N s." as static text, with the submit still enabled, so every click during the wait was refused again.
-  > - **The countdown:** every form that sends a request shows the wait counting down (`useRetryWait`, `RetryWaitMessage`). Those are login, the code step, the 2FA setup, registering, the step-up (the profile's and the admin prompt's), the new password and the server form. The form keeps its submit disabled until the wait reaches zero, then says once "You can try again now."
-  > - **Screen readers** hear the start (the refusal, with the whole wait in words) and the end (a status), never each second: the ticking number is hidden from them.
-  > - **A login that ran by itself** (after registering, or after the recovery codes) hands its wait to the login form's notice, which counts it down.
-  > - **After a reload** the countdown is gone, and the next try shows the server's remaining wait again; the server enforces it.
-  > - **Tests,** red first with fake timers against a stub hook: the hook 4 of 6, the message 2 of 3, and each form 10 of 10.
+  > Note (P8.7): E's part: `/profile`, with `/profile/password` and `/profile/2fa` beside it, both starting with "Confirm it's you" (`stepUp`); the warnings show on the profile and on Home; "Log out all other sessions" fetches every page and runs to the end. The wrong-code count leaves out the typos of the login that succeeded (a `LoginStepId`, [ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)'s amendment); every field message shows, one per line.
+  > After the user's review of PR #38, a refusal's wait counts down on every form that sends a request, its submit disabled until the end (`useRetryWait`, `RetryWaitMessage`), and screen readers hear only its start and end ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 - [x] **P8.8** 🔴 Admin screens:
   - users: change role, disable
   - invites: the code is shown **once**, with a copy button
 
-  > Note (P8.8, group E, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **Only what the server would allow.** `permissions.ts` mirrors `authorize()` (`userActions`, `inviteRoles`, `canRevoke`). Its test reads fleet-core's authorization-matrix snapshot itself and checks every cell of its Users, CreateInvite and RevokeInvite tables, so a rule change fails the UI's test.
-  > - **Step-up for the admin writes** (a server change). `PATCH /users/{id}`, `POST /invites` and `DELETE /invites/{id}` are `step_up_route`s, checked by the extractor only ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)'s amendment). The screens send the write; on 403 `step_up_required` they show "Confirm it's you" at the row or the form, step up and send it once more (`useStepUpAction`).
-  > - **Inline confirmations** (no dialog) for a role change, disabling and revoking an invite, each naming what it ends; enabling runs at once.
-  > - **The invite's code** is shown once, in the screen's state only, with the clipboard note on both copy buttons:
-  >   - "Copy invitation": the server, the code, its end with its time zone, and a custom CA's fingerprints with "Ask me for the CA file"
-  >   - "Copy code"
-  > - **Paging:** "Show more" on every list.
-
-  > Note (P8.8, as built, group E) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **tests,** red first:
-  > - the server's step-up tests 5 of 5 against the old registration
-  > - fleet-client's and the desktop's admin flows (4 and 3) until they stepped up
-  > - the 38 admin tests that fail without their stamps
-  > - the UI 33 of 38 against all-refusing mirrors and the placeholder screens; the other 5 read the snapshot's tables and check refusals
+  > Note (P8.8): `permissions.ts` mirrors `authorize()`, its test checking every cell of fleet-core's authorization-matrix snapshot. The admin writes became `step_up_route`s (a server change, [ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)'s amendment): on 403 `step_up_required` the screen shows "Confirm it's you", steps up and sends the write once more (`useStepUpAction`).
+  > Inline confirmations, no dialog; the invite's code shown once, with "Copy invitation" and "Copy code"; "Show more" on every list ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 - [x] **P8.9** Playwright against the Vite web build with MSW, for login, 2FA and invite registration.
 
-  > Note (P8.9, group E, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **The e2e build** (`apps/desktop/e2e`): the desktop app's UI with its real `TauriApiClient`, over `fetchInvoke`, which sends each command's args as JSON to `/e2e/ipc/<command>`. MSW's handlers answer in the Playwright process through `@msw/playwright`, from a fake of the Rust side and the server that answers exactly `ipc-contract.json`'s commands. There is no service worker, and no MSW code or token in any bundle.
-  > - **The browser and the CSP:**
-  >   - The installed Edge (`channel: "msedge"`): nothing is downloaded.
-  >   - `vite preview` serves the release CSP with only `connect-src 'self'`.
-  >   - Every browser spec freezes `Object.prototype`, and fails on a CSP violation, a console error or an injected style.
-  > - **Never shipped:** Biome refuses any `e2e` import in `apps/desktop/src`. `just e2e` builds both shipped bundles and runs `scripts/e2e-bundle-guard.mjs` before Playwright.
-  > - **The specs:**
-  >   - login with the code step
-  >   - the first login's 2FA setup
-  >   - registering with an invite
-  >   - the DoD's story: an Admin invites; the invitee registers, sets up 2FA and logs in; the Admin finds them in the user list
-  >
-  >   `just e2e` is in `check` and `ci`, and a new `e2e` CI job runs on windows-latest.
-  > - **Dependencies,** exact devDependencies of apps/desktop: `@playwright/test` 1.64.0, `msw` 3.0.3, `@msw/playwright` 0.7.0 and `@types/node` 24.19.2. None runs an install script. vitest's `@vitest/mocker` names msw ^2 as an optional peer, which pnpm reports as unmet; vitest runs only in Node here and never loads it.
-
-  > Note (P8.9, as built, group E) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **17 specs:** 5 in Edge (two login specs, the first login, registering, the story) and 12 in Node (`fetchInvoke` through `TauriApiClient`, the CSP and its served header, the fake against the contract).
-  > - **Red first:** the bundle guard's script 3 of 4 against a stub. The specs were written with the code, so each was shown red through a temporary mutation:
-  >   - a `<style>`, a `console.error` and an `eval` in the e2e entry, each caught (the style count with a `style-src-elem` violation, the console, a `script-src` violation)
-  >   - the story, with the fake skipping the step-up
-  >   - `e2eCsp` returning its input: 1 of 2
-  >   - `fetchInvoke` resolving everything: 6 of 7
-  >   - the fake missing a command: 1 of 3
-  >   - the real guard, with the marker added to the shipped desktop bundle
-  > - **Every answer is a 200 with an envelope:** the browser logs a failed request as a console error, which the guards would count.
+  > Note (P8.9): the e2e build (`apps/desktop/e2e`) runs the real `TauriApiClient` over `fetchInvoke`, which posts each command to `/e2e/ipc/<command>`, answered by MSW in the Playwright process (`@msw/playwright`) from a fake that answers exactly `ipc-contract.json`'s commands; no service worker, and no MSW code or token in any bundle (`scripts/e2e-bundle-guard.mjs`). The installed Edge, under the release CSP with only `connect-src 'self'`.
+  > Every browser spec freezes `Object.prototype` and fails on a CSP violation, a console error or an injected style, so every answer is a 200 with an envelope. Specs: login with the code step, the first login's 2FA setup, registering with an invite and the DoD's story; `just e2e` is in `check` and `ci`, with an `e2e` CI job on windows-latest ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 
 **Security:**
 - Tokens never reach JavaScript.
@@ -2155,7 +1565,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - A friend can install a dev build, register with an invite and log in with 2FA, and an Admin can manage users.
 - Vitest and Playwright are green.
 
-> Note (Phase 8's DoD, group E, the user's decision) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **"A friend can install a dev build" moves to Phase 12's DoD.** A friend's PC can reach a server only over HTTPS, which Phase 12 brings (Caddy), and the app allows plain http only to a loopback address. Phase 8 proves the rest on the user's PC, by the PR's hands-on steps: the release exe against `just dev-server` over loopback, an invite created in the app, registering, setting up 2FA, logging in, and an Admin managing users. Playwright runs the same story on every push.
+> Note (Phase 8's DoD): "A friend can install a dev build" moved to Phase 12's DoD (the user's decision): a friend's PC can reach a server only over HTTPS, which Phase 12 brings (Caddy), and the app allows plain http only to a loopback address. Phase 8 proved the rest on the user's PC by the PR's hands-on steps (the release exe against `just dev-server` over loopback), and Playwright runs the same story on every push ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 
 ---
 
