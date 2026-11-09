@@ -2,12 +2,12 @@
 
 ## About this guide
 
-An operator's guide to running afkfleet on a Linux host with Docker, beside whatever else the host runs: installing it, keeping it running, updating it, backing it up, restoring it and removing it. It names no hosting provider: where a step depends on yours, it says so in general terms.
+How to run afkfleet on a Linux host with Docker, beside whatever else the host runs, from the install to the uninstall. It names no hosting provider: where a step depends on yours, it says so in general terms.
 
 - **Read it at your release's tag.** Each release's page links this guide as it was for that release (`…/blob/vX.Y.Z/docs/runbook.md`), so its commands match the files you unpacked.
-- **What your friends do** in the app (installing it, connecting, registering with an invite, 2FA) is in [Using the afkfleet app](using-the-app.md): hand them that link.
-- **Every setting and its default** is in `env.example` (in the release's files) and, for the server's and the agents' own keys, in the developers' guide ([Running the server](development.md#running-the-server), [Running the agent](development.md#running-the-agent)).
-- **Every step says what success looks like.** A command whose block isn't marked otherwise is run as written by afkfleet's own tests; a few steps touch what no test can reach (your firewall, your DNS, your PC), and their blocks say so.
+- **Your friends** install and use the app with [Using the afkfleet app](using-the-app.md): hand them that link.
+- **Every setting and its default** is in `env.example` (in the release's files); the server's and the agents' own keys are in the developers' guide ([Running the server](development.md#running-the-server), [Running the agent](development.md#running-the-agent)).
+- **Every step says what success looks like.** afkfleet's own tests run each command as written, except in the blocks marked otherwise: those touch what no test can reach (your firewall, your DNS, your PC).
 
 The design behind it is [ADR-0022](adr/0022-deployment-and-phase-12-refinements.md).
 
@@ -16,7 +16,7 @@ The design behind it is [ADR-0022](adr/0022-deployment-and-phase-12-refinements.
 Everything below is afkfleet's own, and [Uninstalling](#uninstalling) removes it again; nothing else on the host changes.
 
 - **A folder** with the release's files and your `.env`: `~/afkfleet` in this guide.
-- **A compose project,** `afkfleet`: its containers (the server, the agent, Caddy if you use it), its networks `afkfleet_fleet` (and `afkfleet_edge`), and its volumes `afkfleet_data` (the database), `afkfleet_keys` (the vault key and the CA's key), `afkfleet_ca`, `afkfleet_tls` and `afkfleet_agent-data`. No host networking: nothing joins the host's other networks or services.
+- **A compose project,** `afkfleet`: its containers (the server, the agent, Caddy if you use it), its networks `afkfleet_fleet` (and `afkfleet_edge`), and its volumes `afkfleet_data` (the database), `afkfleet_keys` (the vault key and the CA's key), `afkfleet_ca`, `afkfleet_tls` and `afkfleet_agent-data`. No host networking.
 - **The backups' folder,** `/srv/afkfleet-backups/backups` by default, owned by the server's user (65532), inside a folder only root changes.
 - **The SFTP account** `afkfleet-backup`, if you let your PC pull the backups: the account, its key file and one sshd drop-in.
 - **The keys' copies** under `/root`, until you move them off the host.
@@ -24,12 +24,12 @@ Everything below is afkfleet's own, and [Uninstalling](#uninstalling) removes it
 
 Success, once afkfleet runs: the host's other services run as they did before, and nothing on the host is new but what this list names.
 
-Every service runs as the nonroot user (65532) with a read-only root, no capabilities (Caddy keeps the one that lets its binary start), `no-new-privileges`, memory and pids limits without swap, rotated logs and `restart: unless-stopped`. Nothing is published but the proxy path's own ports (and 7443 if you publish it), and the keys' volumes are mounted read-only wherever the server runs.
+Every service runs unprivileged (the nonroot user 65532, a read-only root, no capabilities but the one Caddy's binary needs, memory and pids limits, `restart: unless-stopped`), and nothing is published but the proxy path's own ports (and 7443 if you publish it).
 
 ## Before you start
 
-- **Docker Engine 28.0 or newer with Compose v2.24 or newer,** rootful: `setup.sh` refuses rootless Docker and user-namespace remapping, since the backups' folder must belong to the server's user (65532). It checks all of this and names what it found. Install Docker from Docker's own package repository for your distribution, as Docker's documentation ("Install Docker Engine") describes: a distribution's own Docker package is often older. Updating Docker later restarts every container on the host; afkfleet's start again by themselves.
-- **Your own account may run Docker:** this guide runs `docker` and `setup.sh` as your user, which must be in the `docker` group. That group is root-equivalent (whoever is in it controls the host), so add only your own account; or run each of those commands with `sudo` instead.
+- **Docker Engine 28.0 or newer with Compose v2.24 or newer,** rootful: `setup.sh` refuses rootless Docker and user-namespace remapping, since the backups' folder must belong to the server's user (65532). Install Docker from Docker's own package repository for your distribution, as Docker's documentation ("Install Docker Engine") describes: a distribution's own Docker package is often older. Updating Docker later restarts every container on the host; afkfleet's start again by themselves.
+- **Your own account may run Docker:** this guide runs `docker` and `setup.sh` as your user, in the `docker` group. That group is root-equivalent, so add only your own account (or run those commands with `sudo` instead).
   > **Not run by afkfleet's tests:** it changes the host's users and groups.
   ```sh
   sudo usermod -aG docker <you>
@@ -39,15 +39,11 @@ Every service runs as the nonroot user (65532) with a read-only root, no capabil
   ```sh
   docker version
   ```
-- **`curl`, `sha256sum` and `tar`** on the host, for the install and updates.
+- **`curl`, `sha256sum` and `tar`** on the host.
 - **A domain name** pointing at the host's IPv4 address (an A record) if afkfleet's own Caddy gets the HTTPS certificate: Let's Encrypt checks it over port 80. afkfleet listens on IPv4 alone. A free dynamic-DNS subdomain works ([The host](#the-host)).
 - **The host's clock in sync** (NTP; [Time](#time)).
-- **An SSH key on your PC** if it's to pull the backups ([Keeping backups off the host](#keeping-backups-off-the-host)).
-- **Disk:**
-  - the database: chat takes about bots × `max_lines_per_bot` lines, plus up to 120,000 lines that can come in between two retention runs; a line takes about 0.3 KB, at worst about 4.7 KB, so 20 bots at the default need about 300 MB, at worst about 5.3 GB, plus SQLite's write-ahead log. The file never shrinks by itself: SQLite reuses freed pages;
-  - the backups: (`backup_keep` + 1) copies of the database, plus the write-ahead log's peak while a backup runs;
-  - a lowered `max_lines_per_bot` or chat `retention_days` applies at the first retention run after the restart, but the file only shrinks with a `VACUUM`;
-  - a full disk makes every retention run and every backup fail, since a delete needs room in the write-ahead log: watch the free space ([Metrics](#metrics)).
+- **OpenSSH on your PC** (Windows has it built in) if it's to pull the backups ([Keeping backups off the host](#keeping-backups-off-the-host)).
+- **Disk:** the database is mostly chat, bots × `max_lines_per_bot` lines at about 0.3 KB each (4.7 KB at worst): about 300 MB for 20 bots at the default, 5.3 GB at worst. The backups take (`backup_keep` + 1) copies of it. The file never shrinks by itself (SQLite reuses freed pages; only a `VACUUM` shrinks it), and a full disk makes every retention run and every backup fail: watch the free space ([Metrics](#metrics)).
 
 Success: [Installing](#installing)'s `check` says `ok: Docker <version> and Compose <version>`, an Engine of 28.0 or newer; on an older one, or rootless Docker, it refuses and names what it found.
 
@@ -55,11 +51,11 @@ Success: [Installing](#installing)'s `check` says `ok: Docker <version> and Comp
 
 ### The firewall
 
-Open TCP 80 and 443 in your provider's firewall and the host's, for afkfleet's Caddy (Let's Encrypt needs 80): they're meant to be open to everyone. With an existing proxy, it's your proxy's ports instead. 8080, 9480 and 9481 are the API behind the proxy and the metrics: afkfleet never publishes them, so no firewall needs to open them.
+Open TCP 80 and 443 to everyone in your provider's firewall and the host's, for afkfleet's Caddy (Let's Encrypt needs 80); with an existing proxy, your proxy's ports instead. afkfleet never publishes 8080 (the API behind the proxy), 9480 or 9481 (the metrics), so no firewall needs to open them.
 
-**Docker's published ports go around the host's own firewall.** Docker writes its own packet-filter rules for each port it publishes, ahead of ufw's and firewalld's, so a ufw or firewalld rule doesn't limit them. That matters for 7443, which agents on other hosts dial ([Agents on other hosts](#agents-on-other-hosts)) and nobody else should reach. Limit it to the agents' addresses:
-- in your provider's firewall, in front of the host: 7443 allowed from the agents' addresses alone;
-- or in Docker's `DOCKER-USER` chain, which Docker checks first and leaves to you: for example a rule that drops 7443 from every address but one agent's (the same with `ip6tables` if the host has IPv6; keep it across reboots your distribution's way). Success: the chain lists it (`iptables -L DOCKER-USER -n`, as root), and 7443 doesn't answer from another address;
+**Docker's published ports go around the host's own firewall:** Docker's packet-filter rules come ahead of ufw's and firewalld's. That matters for 7443, which agents on other hosts dial ([Agents on other hosts](#agents-on-other-hosts)) and nobody else should reach. Limit it to the agents' addresses:
+- in your provider's firewall, in front of the host;
+- or in Docker's `DOCKER-USER` chain, which Docker checks first and leaves to you: the rule below drops 7443 from every address but one agent's (the same with `ip6tables` if the host has IPv6; keep it across reboots your distribution's way). Success: the chain lists it (`iptables -L DOCKER-USER -n`, as root), and 7443 doesn't answer from another address;
 - and, on a host with several addresses, publish 7443 on one alone: `AFKFLEET_GRPC_PUBLISH=192.0.2.10:7443` in `.env`.
 
 > **Not run by afkfleet's tests:** it changes the host's packet filter.
@@ -67,7 +63,7 @@ Open TCP 80 and 443 in your provider's firewall and the host's, for afkfleet's C
 sudo iptables -I DOCKER-USER -p tcp -m conntrack --ctorigdstport 7443 --ctdir ORIGINAL ! --ctorigsrc 192.0.2.20 -j DROP
 ```
 
-`setup.sh`'s `check` says whether 80 and 443 are free on the host, but free on the host isn't reachable from outside: only your provider's firewall decides that.
+`setup.sh`'s `check` says whether 80 and 443 are free on the host; only your provider's firewall decides whether they're reachable from outside.
 
 **Never reload or save the host's saved packet-filter rules while Docker runs** (your distribution's "persistent" rules service, or a restore from a rule file): a reload drops the rules Docker wrote for its published ports, which then stop answering, and a save copies Docker's own rules into the file, to come back stale at the next boot. If published ports stop answering after a firewall change, restart Docker, which writes its rules again (and restarts every container). Success: afkfleet's services are healthy again (`ps` in [When a service won't start or keeps restarting](#when-a-service-wont-start-or-keeps-restarting)), and its ports answer.
 
@@ -78,7 +74,7 @@ sudo systemctl restart docker
 
 ### A domain that follows the host's address
 
-If the host's public address changes and your domain comes from a dynamic-DNS service, keep its record in step from the host. The service's update URL holds a token: whoever has it can point your domain elsewhere and get a certificate for it, and read every login, passwords and 2FA codes included. So the token lives in one root-only file and never on a command line, in a shell's history or in this folder.
+If the host's public address changes and your domain comes from a dynamic-DNS service, keep its record in step from the host. The service's update URL holds a token that lets whoever has it point your domain elsewhere, get a certificate for it and read every login, so the token lives in one root-only file, never on a command line, in a shell's history or in this folder.
 
 > **Not run by afkfleet's tests:** they change the host's systemd units and your DNS record.
 ```sh
@@ -86,13 +82,13 @@ sudo install -d -o root -g root -m 700 /etc/afkfleet-dns
 sudoedit /etc/afkfleet-dns/update.curl
 ```
 
-In the editor, write curl's settings, your service's update URL as its documentation gives it:
+In the editor, write your service's update URL, as its documentation gives it, as curl's settings, and save (`sudoedit` keeps the file root's):
 
 ```ini
 url = "https://dyndns.example.com/update?hostname=fleet.example.com&token=<your token>"
 ```
 
-Save it; `sudoedit` leaves it root's. Then the unit, `/etc/systemd/system/afkfleet-dns.service`, which reads the file as a credential of its own, as a user that exists only while it runs:
+Then the unit, `/etc/systemd/system/afkfleet-dns.service`, which reads the file as its own credential, as a user that exists only while it runs:
 
 ```ini
 [Unit]
@@ -129,7 +125,7 @@ sudo systemctl start afkfleet-dns.service
 sudo journalctl -u afkfleet-dns.service -n 5
 ```
 
-Success: the journal shows the service ending with `Deactivated successfully` after your service's own answer, which differs by service: `good` or `nochg` for many, `OK` for others. A failure shows curl's error, such as `The requested URL returned error: 401`: the token or the URL is wrong; fix the file with `sudoedit` again. Without systemd, root's crontab can run the same every 5 minutes, one line added in its editor:
+Success: the journal shows the service ending with `Deactivated successfully` after your service's own answer, which differs by service: `good` or `nochg` for many, `OK` for others. A failure shows curl's error, such as `The requested URL returned error: 401`: the token or the URL is wrong; fix the file with `sudoedit`. Without systemd, root's crontab can run the same every 5 minutes, one line added in its editor:
 
 > **Not run by afkfleet's tests:** they change the host's crontab and your DNS record.
 ```sh
@@ -142,11 +138,11 @@ sudo crontab -e
 
 ### Time
 
-The server's clock decides when an agent's certificate has expired, TLS checks certificates against the real time on both ends, Minecraft sessions are granted for minutes, and 2FA codes are 30-second steps: keep NTP on, on this host and on every agent's host. "a granted session expires within the connect timeout" in an agent's log means its clock or the server's is off by minutes.
+Agents' certificates, TLS, Minecraft sessions (granted for minutes) and 2FA codes (30-second steps) all depend on the clock: keep NTP on, on this host and on every agent's host. "a granted session expires within the connect timeout" in an agent's log means its clock or the server's is off by minutes.
 
 ### The disk
 
-The database holds chat in plain text; `secure_delete` overwrites only what SQLite itself deletes. Encrypt the disk under Docker's volumes on the host if you can.
+The database holds chat in plain text; `secure_delete` overwrites only what SQLite itself deletes. Encrypt the disk under Docker's volumes if you can.
 
 ## Choosing a proxy path
 
@@ -161,7 +157,7 @@ COMPOSE_FILE=compose.yaml:compose.edge.yaml
 COMPOSE_FILE=compose.yaml:compose.loopback.yaml
 ```
 
-The server believes `X-Forwarded-For` from that path's proxy alone. `setup.sh`'s `check` says whether 80 and 443 are free here. Success: [Installing](#installing)'s `check` names the path you kept, such as `ok: .env: the caddy proxy path`.
+The server believes `X-Forwarded-For` from that path's proxy alone. Success: [Installing](#installing)'s `check` names the path you kept, such as `ok: .env: the caddy proxy path`.
 
 ### An existing proxy's duties
 
@@ -196,7 +192,7 @@ About eleven commands from a host with Docker, each with what success looks like
    cp env.example .env
    ```
 4. **Fill in `.env`** with an editor: the proxy path ([Choosing a proxy path](#choosing-a-proxy-path)), `AFKFLEET_DOMAIN`, `AFKFLEET_ACME_EMAIL` for Let's Encrypt, and anything else you change ([Settings](#settings)). The images need no line: `RELEASE` names this release's, pinned by digest. Success: no line of `env.example`'s placeholders (`example.com`) is left.
-5. **Check, then install.** `check` changes nothing and says which proxy path fits; `init` (root only to make the backups' folder for the server's user) checks Docker, `.env` and the files, makes the vault key and the PKI inside the server's image, starts the server, enrolls the local agent and starts the rest. It prints the CA's fingerprint, never a key, and never overwrites anything. Success: `check` ends with `the project afkfleet isn't installed yet`, and `init` with `ok: afkfleet is running` and the next steps. On a failure, it names what it created.
+5. **Check, then install.** `check` changes nothing and says which proxy path fits. `init` (as root, to make the backups' folder for the server's user) checks Docker, `.env` and the files, makes the vault key and the PKI inside the server's image, starts the server, enrolls the local agent and starts the rest; it prints the CA's fingerprint, never a key, and never overwrites anything. Success: `check` ends with `the project afkfleet isn't installed yet`, and `init` with `ok: afkfleet is running` and the next steps. On a failure, it names what it created.
    ```sh
    sh setup.sh check
    sudo sh setup.sh init
@@ -220,7 +216,7 @@ About eleven commands from a host with Docker, each with what success looks like
 
 1. In the app (installed by [Using the afkfleet app](using-the-app.md)), connect to `https://<your domain>`, log in as the Owner, and set up 2FA. Success: Home opens.
 2. **Invites:** under **Admin › Invites**, make one per friend and send it with the address. An invite works once and expires. Success: its code shows this once, and the list shows it pending until the friend registers.
-3. **A server without a public domain:** if your HTTPS certificate isn't from a public certificate authority (your own proxy's own CA, say), hand your friends that CA's certificate as a file, and its SHA-256 fingerprint another way (in person, or in another chat). Never hand out `ca.crt` from afkfleet's `ca` volume: that's the agents' CA, not HTTPS's. The friends' guide tells them to compare the fingerprint before they log in. Success: openssl prints one line, `sha256 Fingerprint=` and the fingerprint you hand over.
+3. **A server without a public domain:** if your HTTPS certificate isn't from a public certificate authority (your own proxy's own CA, say), hand your friends that CA's certificate as a file, and its SHA-256 fingerprint another way (in person, or in another chat); the friends' guide has them compare it before they log in. Never hand out `ca.crt` from afkfleet's `ca` volume: that's the agents' CA, not HTTPS's. Success: openssl prints one line, `sha256 Fingerprint=` and the fingerprint you hand over.
    > **Not run by afkfleet's tests:** the CA is your own proxy's, not afkfleet's.
    ```sh
    openssl x509 -in your-https-ca.crt -noout -fingerprint -sha256
@@ -228,7 +224,7 @@ About eleven commands from a host with Docker, each with what success looks like
 
 ## Settings
 
-Every setting is a line in `.env`, which an update never replaces. Never edit a file of the release: `fetch` refuses a release file changed here. `env.example` lists every line with its default:
+Every setting is a line in `.env`, which an update never replaces; never edit a file of the release (`fetch` refuses one changed here). `env.example` lists every line with its default:
 
 - the proxy path, the domain and the Let's Encrypt email;
 - the backups' folder (`AFKFLEET_BACKUPS_DIR`) and how many backups to keep, how often (`AFKFLEET_SERVER__DATABASE__BACKUP_KEEP`, `AFKFLEET_SERVER__DATABASE__BACKUP_INTERVAL_HOURS`);
@@ -244,16 +240,16 @@ docker compose up --detach --wait
 
 ## Updating
 
-Two commands. `fetch` downloads a newer release's files and checks them (the sums, every name, that no file of the release was changed here), then puts them in place; it never touches `.env`, `compose.override.yaml` or `ca.crt`, and refuses an older release or one that needs a newer install first. `update` takes a backup with the running server, pulls the new images and starts the server before the rest; it refuses while the running server is newer than the folder's release. Success: `fetch` ends with `ok: this folder holds release X.Y.Z's files` and `update` with `ok: afkfleet is updated`.
+Two commands. `fetch` downloads a newer release's files, checks them (the sums, every name, that no file of the release was changed here) and puts them in place; it never touches `.env`, `compose.override.yaml` or `ca.crt`, and refuses an older release or one that needs a newer install first. `update` takes a backup with the running server, pulls the new images and starts the server before the rest; it refuses while the running server is newer than the folder's release. Success: `fetch` ends with `ok: this folder holds release X.Y.Z's files` and `update` with `ok: afkfleet is updated`.
 
 ```sh
 sh setup.sh fetch X.Y.Z
 sh setup.sh update
 ```
 
-- **The server goes first,** then its agents: [Agents on other hosts](#agents-on-other-hosts) update after the server's host, with the same two commands.
+- **The server goes first:** [agents on other hosts](#agents-on-other-hosts) update after it, with the same two commands.
 - **An agent older than its server's modes** can't read a schedule it doesn't know (`on_respawn`, say): its stream ends as `unreadable` and reconnects in a loop, logging "a message from the server couldn't be read" with the field, while its bots keep their old modes. Update the agent.
-- **Going back** is a restore, never an older `fetch`: before an update that adds a mode feature, a backup comes first anyway (update takes it). A server rolled back past a feature reads such modes as corrupt: switch the bots off them, or delete them, before you restore an older backup.
+- **Going back** is a restore, never an older `fetch`. A server rolled back past a mode feature reads such modes as corrupt: switch the bots off them, or delete them, before you restore an older backup.
 - **When `fetch` stops halfway** it leaves `.afkfleet-fetch` for a look and says why; `RELEASE` still names the old release. Fix what it named, then remove the folder and fetch again. Success: as above.
   ```sh
   rm -r .afkfleet-fetch
@@ -264,13 +260,8 @@ sh setup.sh update
 
 The server backs up its database by itself, `backup_keep` copies (14 by default), one every `backup_interval_hours` (24 by default), at most 720 hours between them.
 
-**What a backup is:**
-- One SQLite file, `afkfleet-backup-YYYYMMDDTHHMMSSZ.db`, named for the second it was taken (UTC), in the backups' folder. While it's being written it's the dot file `.afkfleet-backup-YYYYMMDDTHHMMSSZ.db.partial`: never copy that one.
-- A consistent copy (`VACUUM INTO`), checked before it counts (this server's migrations, and SQLite's `quick_check`), readable only by the server's user, and never written over another file.
-
-**What a backup holds:**
-- Every secret only sealed: TOTP secrets and Microsoft refresh tokens under the vault's keys, passwords as Argon2id hashes, session tokens as SHA-256 hashes.
-- In plain text: usernames, the audit log (with the addresses users came from) and the bots' chat. Chat the retention deleted lives on in older backups for up to `backup_keep` × `backup_interval_hours`. Treat a backup as private data.
+- **A backup** is one SQLite file, `afkfleet-backup-YYYYMMDDTHHMMSSZ.db`, named for the second it was taken (UTC), in the backups' folder: a consistent copy (`VACUUM INTO`), checked before it counts (this server's migrations, and SQLite's `quick_check`), readable only by the server's user, and never written over another file. While it's being written it's the dot file `.afkfleet-backup-YYYYMMDDTHHMMSSZ.db.partial`: never copy that one.
+- **It holds every secret only sealed:** TOTP secrets and Microsoft refresh tokens under the vault's keys, passwords as Argon2id hashes, session tokens as SHA-256 hashes. In plain text, it holds usernames, the audit log (with the addresses users came from) and the bots' chat, including chat the retention deleted since, for up to `backup_keep` × `backup_interval_hours`. Treat a backup as private data.
 - **Never the keys.** The vault key and the CA's key live on their own volume: no backup and no copy of the database's volume holds the key that opens it. [The keys' copy](#the-keys-copy) keeps them apart.
 
 **Taking one now,** beside the running server. Success: it prints the new backup's path, `/backups/afkfleet-backup-….db` (the file of that name in the backups' folder). Exit 3 means it was written but older ones couldn't be removed.
@@ -309,11 +300,7 @@ Success, whichever way: the file on the host holds one line, starting with `ssh-
 sudo sh host/sftp-backups.sh install --key /path/to/your_key.pub
 ```
 
-- It adds the account `afkfleet-backup` with the server's user's uid and gid (65532), the only ones that can read the owner-only backups; no shell, no home, no password. Your key goes into `/etc/ssh/afkfleet-backup.authorized_keys`, marked `restrict`.
-- It adds the drop-in `/etc/ssh/sshd_config.d/10-afkfleet-backup.conf`: for that account alone, keys only, confined to the backups' folder's parent, read-only SFTP, no TTY and no forwarding. It never edits `sshd_config`.
-- It refuses (exit 1, saying why, changing nothing) when a tool or a way to reload sshd is missing, when `sshd_config` doesn't include the drop-in folder above every `Match` block, when the backups' folder or a folder above it isn't root's alone, when the name, uid or gid is taken, when its files exist already, or when the key file holds anything but one key line.
-- If a step fails after it wrote something, it removes exactly what it added, so the host is as it was. A backups' folder other than the default is given with `--backups /path/to/backups`.
-- Success: `ok: the account afkfleet-backup reads … over SFTP, read-only`, then this host's key fingerprint. Keep your own SSH session open until a new login works.
+It adds the account `afkfleet-backup` (the server's uid and gid, 65532, the only ones that can read the backups; no shell, no home, no password), your key marked `restrict` (`/etc/ssh/afkfleet-backup.authorized_keys`), and one sshd drop-in (`/etc/ssh/sshd_config.d/10-afkfleet-backup.conf`) that gives that account alone keys only, a root confined to the backups' folder's parent, read-only SFTP, no TTY and no forwarding; it never edits `sshd_config`. It refuses, saying why and changing nothing, when it can't do that safely, and removes exactly what it added if a later step fails. Another backups' folder is given with `--backups /path/to/backups`. Success: `ok: the account afkfleet-backup reads … over SFTP, read-only`, then this host's key fingerprint. Keep your own SSH session open until a new login works.
 
 `install` checks the account's settings for one test address. If an earlier sshd setting is tied to addresses (a `Match Address` block), check your PC's own address too. Success: `chrootdirectory` names the backups' folder's parent, then `forcecommand internal-sftp -R -d /backups`, `permittty no`, `allowtcpforwarding no` and `disableforwarding yes`; anything else means the earlier block wins for your address: change it, or uninstall.
 
@@ -334,7 +321,7 @@ sftp> get afkfleet-backup-20261101T000000Z.db
 
 **Or a graphical SFTP client:** connect as `afkfleet-backup` to your host with that key (some clients convert it to their own format first), compare the host key's fingerprint at the first connection exactly as above, and download the finished `afkfleet-backup-….db` files, never a `.partial` one. Success: the files arrive with the sizes the listing shows.
 
-**Removing the account:** it removes the account first, then the drop-in and the key file, reloads sshd, and keeps the folders and the backups. When the account can't be removed (it's logged in), it says so and removes nothing: end its sessions and run it again. Success: `ok: the account, its key and the drop-in are gone; the backups' folders stay`.
+**Removing the account:** it removes the account, then the drop-in and the key file, reloads sshd, and keeps the folders and the backups. While the account is logged in it removes nothing and says so: end its sessions and run it again. Success: `ok: the account, its key and the drop-in are gone; the backups' folders stay`.
 
 ```sh
 sudo sh host/sftp-backups.sh uninstall
@@ -352,7 +339,7 @@ sudo sh setup.sh keys-backup
 
 Make a new copy after every [vault key rotation](#rotating-the-vault-key).
 
-**Getting it off the host,** through your own SSH login (never the backups' account), as one file that exists only for the transfer. On the host, a folder and a file that are yours alone before anything is written (mode 0700 and 0600), then the copy into it and its SHA-256. `sudo` asks for your password on the session's terminal; the copy goes only into the file, never to the terminal or a command line. Paste one line at a time. If a pasted line arrives with stray characters in front, such as `200~` (the terminal's paste markers), clear it with Ctrl+C and type it instead: never run a line as it arrived.
+**Getting it off the host,** through your own SSH login (never the backups' account), as one file that exists only for the transfer. On the host, a folder and a file that are yours alone before anything is written (mode 0700 and 0600), then the copy into it, its list and its SHA-256. `sudo` asks for your password on the session's terminal; the copy goes only into the file, never to the terminal or a command line. Paste one line at a time. If a pasted line arrives with stray characters in front, such as `200~` (the terminal's paste markers), clear it with Ctrl+C and type it instead: never run a line as it arrived.
 
 > **Not run by afkfleet's tests:** they move the keys between your own SSH login on the host and your PC.
 ```sh
@@ -383,7 +370,7 @@ rm ~/afkfleet-keys-out/afkfleet-keys.tar
 rmdir ~/afkfleet-keys-out
 ```
 
-**Keep it offline,** apart from the backups, as the updater's key is kept: two copies on two offline media (two USB drives in different places, say), never in a cloud folder, an email or a chat. On your PC, copy it to each medium and take each copy's SHA-256 (put each medium's drive for `<first medium>` and `<second medium>`, such as `E:`). Success: both print the host's hash.
+**Keep it offline,** apart from the backups, as the updater's key is kept: two copies on two offline media (two USB drives in different places, say), never in a cloud folder, an email or a chat. On your PC, copy it to each medium and take each copy's SHA-256 (put each medium's drive, such as `E:`, for `<first medium>` and `<second medium>`). Success: both print the host's hash.
 
 > **Not run by afkfleet's tests:** they handle the keys on your PC and its offline media.
 ```powershell
@@ -402,7 +389,7 @@ Remove-Item afkfleet-keys.tar
 
 The root-only folder on the host can stay; once the offline copies are made, you may remove it as root ([Uninstalling](#uninstalling) gives the command).
 
-**Bringing it back** to a new host, for [Restoring a backup on a new host](#on-a-new-host): the same staging, then the same comparison, before anything else. On the new host, the folder and the file, yours alone (0700 and 0600) before anything is written. Success: no output.
+**Bringing it back** to a new host, for [Restoring a backup on a new host](#on-a-new-host), the same way in reverse, before anything else. On the new host, the folder and the file, yours alone (0700 and 0600) before anything is written. Success: no output.
 
 > **Not run by afkfleet's tests:** they move the keys between your own SSH login on the host and your PC.
 ```sh
@@ -426,7 +413,7 @@ On the new host, its SHA-256, before anything else. Success: the same hash as `G
 sha256sum ~/afkfleet-keys-in/afkfleet-keys.tar
 ```
 
-Once they match, the transfer is done: delete the PC's copy (the media keep theirs). Success: no output, and the file is gone.
+Once they match, delete the PC's copy (the media keep theirs). Success: no output, and the file is gone.
 
 > **Not run by afkfleet's tests:** they handle the keys on your PC and its offline media.
 ```powershell
@@ -450,7 +437,7 @@ rmdir ~/afkfleet-keys-in
 
 ## Restoring a backup
 
-`restore` puts a backup in place of the database, with the server stopped: the database, its `-wal` and its `-shm` move aside under a time stamp, never deleted, so a leftover `-wal` is never replayed onto the backup; then it migrates the backup, checks every secret opens with this host's vault keys, and lists the agents. With a healthy server when it starts, it also disables again every agent you disabled since the backup was taken, and starts afkfleet. Success: `ok: afkfleet runs on afkfleet-backup-….db`, the reminders below, and the `forget-aside` command.
+`restore` puts a backup in place of the database, with the server stopped. The database, its `-wal` and its `-shm` move aside under a time stamp, never deleted (so a leftover `-wal` is never replayed onto the backup); it migrates the backup, checks every secret opens with this host's vault keys, and lists the agents. With a healthy server when it starts, it also disables again every agent you disabled since the backup was taken, and starts afkfleet. Success: `ok: afkfleet runs on afkfleet-backup-….db`, the reminders below, and the `forget-aside` command.
 
 ```sh
 sh setup.sh restore afkfleet-backup-YYYYMMDDTHHMMSSZ.db
@@ -460,12 +447,12 @@ sh setup.sh restore afkfleet-backup-YYYYMMDDTHHMMSSZ.db
   ```sh
   docker compose up --detach --wait
   ```
-- **When a step after the stop fails** (a backup from a newer server is refused at the migration, and one whose secrets need a vault key this host doesn't configure, from before a key rotation, at the vault check), the server stays stopped, and it says how to put the old database back. Success: `put back: afkfleet.db`, and the server starts again on the old database.
+- **When a step after the stop fails** (a backup from a newer server, refused at the migration, or one whose secrets need a vault key this host doesn't configure, at the vault check), the server stays stopped, and it says how to put the old database back. Success: `put back: afkfleet.db`, and the server starts again on the old database.
   ```sh
   docker compose run --rm files put-back YYYYMMDDTHHMMSSZ
   docker compose up --detach --wait
   ```
-- **What's aside is never deleted halfway:** a restore marks its stamp finished only once the backup is in place and migrated, and `forget-aside` refuses a stamp that isn't, whatever the server's health: after a failed restore, the old database aside may be the only copy. `put-back` marks its stamp finished too, since what's left then is the undone copy.
+- **What's aside is never deleted halfway:** `forget-aside` refuses a stamp whose restore didn't finish (the backup in place and migrated), whatever the server's health, since the old database aside may then be the only copy. `put-back` marks its stamp finished too.
 - **Then, in the app,** redo what was done after the backup was taken: disable users again, end sessions and revoke grants again; whoever changed their password or 2FA since must change it once more (the old ones work again).
 - **Agents:** an agent may still run bots the restored database doesn't give it: they're fenced (`bot.stray`) until it removes them. Right after the start nothing new is placed until every enabled agent is back or 90 s have passed. An agent enrolled after the backup isn't in it: it's refused at its next connect (exit 5) and enrolls again.
 - **Once all is well,** delete what's aside: without a stamp it lists what's aside; with one, it deletes exactly that stamp's files, only once the stamp is marked finished and while the server is healthy. Success: `ok: what was aside under … is gone`.
@@ -482,7 +469,7 @@ The old host is gone, and you have a backup (pulled by your PC) and [the keys' c
    ```sh
    sudo sh setup.sh keys-restore /root/afkfleet-keys-YYYYMMDDTHHMMSSZ
    ```
-2. **The backup,** staged as the keys' copy is: a folder and a file yours alone (0700 and 0600) before anything is written, the copy from your PC into it, then into the backups' folder as the server's user, owner-only, and the staged copy deleted. On the new host, the folder and the file. Success: no output.
+2. **The backup,** staged as the keys' copy is, then into the backups' folder as the server's user, owner-only, and the staged copy deleted. On the new host, the folder and the file, yours alone (0700 and 0600). Success: no output.
    > **Not run by afkfleet's tests:** they move a backup between your own SSH login on the host and your PC.
    ```sh
    install -d -m 700 ~/afkfleet-backup-in
@@ -526,10 +513,9 @@ docker compose run --rm probe
 docker compose run --rm probe http://agent:9481/metrics
 ```
 
-A scraper of your own joins the `fleet` network the same way; never give it `edge`, and never publish either port: neither asks for a login. Every series is there from the start, at 0, and starts again from 0 when the process restarts. No label holds a username, an account or player name, an address, an ID, a token or chat, and none is per user, per bot or per agent; every label's values are fixed.
+A scraper of your own joins the `fleet` network the same way; never give it `edge`, and never publish either port: neither asks for a login. Every series starts at 0 with its process. Every label's values are fixed: none holds a name, an address, an ID, a token or chat, and none is per user, per bot or per agent.
 
-- **The server's port** serves only `/metrics`: another path is 404 and another method 405, with the API's per-IP limit and request timeout. The API's own port answers 404 at `/metrics`.
-- **The agent's port** has a small responder of its own: at most 4 connections at once, 5 s each, and a request head of at most 2 KiB. Another path is 404, another method 405, a malformed or oversized request 400. Nothing from a request is logged.
+Each port serves only `/metrics` (another path is 404, another method 405), and the API's own port answers 404 there. The server's has the API's per-IP limit and request timeout; the agent's is a small responder of its own (at most 4 connections, 5 s each, a 2 KiB request head; a malformed or oversized request is 400) that logs nothing from a request.
 
 **What to watch,** as examples for alerts:
 - **Any refresh-token reuse** (`afkfleet_refresh_token_reuses_total` above 0): a refresh token came back after its rotation, and its session was revoked. It may have been stolen: the audit log's `security.refresh_token_reuse` entry shows whose ([Incident response](#incident-response)).
@@ -577,7 +563,7 @@ AFKFLEET_GRPC_NAMES=fleet.example.com
 AFKFLEET_GRPC_PUBLISH=7443
 ```
 
-`init` gives these names to the certificate; on an installed host, renew it for them ([Renewing the server certificate](#renewing-the-server-certificate)). Limit 7443 to the agents' addresses as [The firewall](#the-firewall) says: the host's own firewall doesn't limit a port Docker publishes. Then publish the port, and copy the CA's certificate out (it's public: agents pin it). Success: every service healthy, compose saying `Successfully copied` for `ca.crt`, which now lies beside `.env`.
+`init` gives these names to the certificate; on an installed host, renew it for them ([Renewing the server certificate](#renewing-the-server-certificate)). Limit 7443 to the agents' addresses ([The firewall](#the-firewall)), then publish the port and copy the CA's certificate out (it's public: agents pin it). Success: every service healthy, compose saying `Successfully copied` for `ca.crt`, which now lies beside `.env`.
 
 ```sh
 docker compose up --detach --wait
@@ -622,7 +608,7 @@ sh setup.sh update
 
 ## An agent next to a local Minecraft server
 
-The agent's bots dial public Minecraft servers and never the host's own networks or its other services. A Minecraft server in a container on this host is on a private network, so its network must be listed for the agent, and the agent must join it:
+The agent's bots dial public addresses, never a private network the agent doesn't list. For a Minecraft server in a container on this host, list its network and let the agent join it:
 
 1. Find that network's subnet, and list exactly it, the narrowest, in `.env`: every network listed opens to every Manage holder of a bot on this agent (the threat model's accepted risk). At most 32 networks, each inside a private range. Success: one subnet in CIDR form, the address and its prefix length, which goes into the list.
    > **Not run by afkfleet's tests:** they need a Minecraft server's network on this host.
@@ -688,7 +674,7 @@ A rotation seals every secret again under a new vault key, with the server stopp
    sudo sh setup.sh keys-backup
    ```
 
-Key 1 stays configured and on the volume afterwards: `prod/server.toml` names it, and `.env` can't remove a key. That's harmless, since nothing is sealed with it any more. Keep the old keys' copy offline as long as a backup from before the rotation exists: those backups are sealed with key 1.
+Key 1 stays configured and on the volume (`prod/server.toml` names it, and `.env` can't remove a key), which is harmless: nothing is sealed with it any more. Keep the old keys' copy offline as long as a backup from before the rotation exists: those backups are sealed with key 1.
 
 - **A backup from before the rotation** restores as any other (key 1 is still here), but its secrets come back sealed with key 1: with the server stopped, run step 4's three commands again, then start.
 - **On a new host** whose keys' copy predates the rotation, `restore` refuses a newer backup at its vault check (it needs key 2): bring the newer keys' copy instead.
