@@ -18,7 +18,7 @@ CI builds the installer and the images and makes a draft release, all without an
    - **Rules:** Restrict creations, Restrict updates, Restrict deletions, Block force pushes.
 2. **Immutable releases**, so a published release's files and tag can't change afterwards. In **Settings › General › Releases**, tick **Enable release immutability**. You add the updater's files to the draft before you publish, so this never gets in the way.
 3. **Workflow permissions** stay at **Read repository contents and packages permissions** (**Settings › Actions › General**). The release workflow asks for more per job: `packages: write` for the images, and `contents: write` for its last job alone, which runs no repository code. No repository secret is used.
-4. **The images' packages** exist only after the first release run. Then, on your GitHub profile's **Packages** tab, open `afkfleet-server` and `afkfleet-agent` in turn, and in each one's **Package settings**:
+4. **The images' packages** appear only once the first release run's `push` jobs have finished, and on your GitHub profile, not the repository: on your profile's **Packages** tab, open `afkfleet-server` and `afkfleet-agent` in turn, and in each one's **Package settings** (in the right-hand column of the package's page):
    - check that **Manage Actions access** lists this repository with the **Admin** role (or **Write**), so later releases can push;
    - under **Danger Zone**, choose **Change visibility › Public**, so operators can pull without a login. This can't be undone.
 
@@ -41,8 +41,8 @@ The app installs only updates signed by the key whose public half it carries (`p
 **If it leaks** (someone may have the file and the password): make a new key pair at once and release a version with its public key, which friends install by hand. An old app trusts the leaked key for as long as it runs an old version, but it only installs what this repository's latest release offers, so tags and releases stay yours alone (the tag ruleset above).
 
 ## Each release
-1. **The version.** Releases are numbered X.Y.Z. In a pull request of its own, set `[workspace.package] version` in `Cargo.toml` (the app, the server and the agent all take it from there), let `Cargo.lock` follow, and merge it. In the same file, `[workspace.metadata.afkfleet] updates_from` is the oldest release a host may update from to this one with `setup.sh`'s `fetch`: raise it only when this release can't take over an older host's files or volumes, and say so in the release's notes.
-2. **Wait for CI on main.** The workflow refuses a tag unless CI succeeded on a push of exactly that commit to main. CI cancels a run when a newer commit lands, so tag the newest commit of main once its CI run is green.
+1. **The version.** Releases are numbered X.Y.Z. In a pull request of its own, set `[workspace.package] version` in `Cargo.toml` (the app, the server and the agent all take it from there), let `Cargo.lock` follow, and merge it. In the same file, `[workspace.metadata.afkfleet] updates_from` is the oldest release a host may update from to this one with `setup.sh`'s `fetch`: raise it only when this release can't take over an older host's files or volumes, and say so in the release's notes. **For the first release,** the version `Cargo.toml` already holds (`0.1.0`) is the one to tag: nothing to change.
+2. **Wait for CI on main.** The workflow refuses a tag unless CI succeeded on a push of exactly that commit to main. CI cancels a run when a newer commit lands, so tag the newest commit of main once its CI run is green. **A tag pushed too early** (CI on main still running) fails the `guard` job: wait until CI on main finishes green, then use **Re-run failed jobs** on the Release run. Never delete or move the tag to try again, even though your admin role could: a release's tag stays where it was pushed, and the re-run checks CI afresh.
 3. **Tag it** from an up-to-date main:
    ```
    git switch main
@@ -57,12 +57,12 @@ The app installs only updates signed by the key whose public half it carries (`p
    - `push (arm64)` and `push (amd64)`: on fresh runners, the saved images loaded and checked, then pushed as `X.Y.Z-arm64` and `X.Y.Z-amd64`, never over a tag that exists;
    - `merge`: the `X.Y.Z` index of each image, made from the pushed digests and checked;
    - `bundle`: the host's files, `afkfleet-deploy-X.Y.Z.tar.gz`, from the tag's `deploy/` with read access alone; its `RELEASE` names both images by their index digests, so a host pulls exactly these;
-   - `installer`: the installer, built with no key; its SHA-256 is in the job's log and summary;
+   - `installer`: the installer, built with no key; its SHA-256 is on the Release run's **Summary** page under "The installer", and in the `installer` job's log;
    - `release`: a **draft** release with the installer, the bundle, `SHA256SUMS` and the body naming both images by digest and linking the runbook at this tag.
 
    If a job fails, use **Re-run failed jobs**, never **Re-run all jobs**: a tag that was pushed is never pushed again, so a re-run of a finished push job is refused. If a push failed halfway, its tag stays: fix the cause and release the next patch version instead. If the `release` job failed after its draft was made, delete that leftover draft (**Releases**, the draft, **Delete**) before you re-run it: it never makes a second draft for the same tag.
 5. **First release only:** make both packages public (the setup's step 4), before you publish.
-6. **Download and check the installer.** Open the draft (**Releases**), download `afkfleet_X.Y.Z_x64-setup.exe`, and run `Get-FileHash "$HOME\Downloads\afkfleet_X.Y.Z_x64-setup.exe"` in PowerShell. The hash must equal both the `installer` job's printed SHA-256 and the installer's line in the draft's `SHA256SUMS` (capital or small letters don't matter). If they differ, stop.
+6. **Download and check the installer.** Open the draft (**Releases**), download `afkfleet_X.Y.Z_x64-setup.exe`, and run `Get-FileHash "$HOME\Downloads\afkfleet_X.Y.Z_x64-setup.exe"` in PowerShell. The hash must equal both the SHA-256 under "The installer" on the Release run's **Summary** page and the installer's line in the draft's `SHA256SUMS` (capital or small letters don't matter). If they differ, stop.
 7. **Sign it for the updater**, with your offline key attached:
    ```
    just updater-sign <absolute path of afkfleet-updater.key> "$HOME\Downloads\afkfleet_X.Y.Z_x64-setup.exe" <the SHA-256> X.Y.Z
@@ -70,7 +70,7 @@ The app installs only updates signed by the key whose public half it carries (`p
    It refuses a key inside the repository, a file name that doesn't match the version, a hash that doesn't match, and an output folder that exists. Type the key's password at its hidden prompt. Success: it prints the path of `afkfleet_X.Y.Z_x64-setup.exe.sig` in `target/updater-sign/vX.Y.Z/`, where `latest.json` lies beside it; it has checked that the signature is by the committed public key and names the file and the version. Detach the key's drive.
 8. **Upload** `afkfleet_X.Y.Z_x64-setup.exe.sig` and `latest.json` from that folder to the draft's assets (edit the draft, then drop the files on it).
 9. **Publish** the release, as the latest release and not a pre-release: installed apps read `releases/latest/download/latest.json`. With immutable releases on, nothing on it can change afterwards.
-10. **Check.** On a PC with an older version installed, **Profile › Updates › Check for updates** shows "afkfleet X.Y.Z is available." Operators update their hosts by the runbook's [Updating](runbook.md#updating).
+10. **Check.** On a PC with an older version installed, **Profile › Updates › Check for updates** shows "afkfleet X.Y.Z is available." Operators update their hosts by the runbook's [Updating](runbook.md#updating). **For the first release,** no older app exists: install this one by the friends' guide ([Installing the app](using-the-app.md#installing-the-app)); then **Profile › Updates** shows "Installed: afkfleet X.Y.Z." and **Check for updates** says "afkfleet is up to date."
 
 To rehearse the whole update flow on your PC without the real key, run `just update-rehearsal`: it installs nothing itself, and prints its steps.
 
