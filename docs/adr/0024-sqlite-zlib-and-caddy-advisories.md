@@ -1,4 +1,4 @@
-# 0025. SQLite's advisory via sqlx, and zlib in the runtime image
+# 0024. SQLite's advisory via sqlx, zlib in the runtime image, and Caddy 2.11.9
 
 - **Status:** Accepted
 - **Date:** 2026-11-09
@@ -31,7 +31,16 @@ The user's, 2026-11-09: a `deps/` pull request of its own, before group E's.
 - **Why the exception:** the user's rule takes the newest release at least 7 days old (ADR-0022, U12, U13), but this is a High finding with a fix, in the base of both shipped images. A distroless image's creation date is fixed at 1970 for reproducible builds, so its digest's age can't be read anyway.
 - **How it was checked:** `docker buildx imagetools inspect gcr.io/distroless/cc-debian13:nonroot` showed exactly that index digest, with `linux/amd64` and `linux/arm64/v8` images.
 
-**3. No release now.** Both fixes reach hosts with the next release, v0.1.1.
+**3. Caddy: 2.11.9 now, a second security exception to the 7-day rule, since a Critical finding is remotely reachable.** This branch's Audit run (2026-11-09) passed the server's and the agent's images on the new base, then failed on Caddy's pinned `caddy:2.11.7-alpine@sha256:e70b164d…`, which the scheduled run hadn't reached. The 2.11.7 tag still pointed at that digest: no rebuild fixes it, only a newer Caddy. The user's rule, at the review: move Caddy in a `deps/` pull request of its own on 2026-11-12, when 2.11.9 is 7 days old, unless a finding is remotely reachable in our setup, and if one is, take 2.11.9 now with the checks below.
+- **What our Caddy uses** (`deploy/Caddyfile`): HTTP/1.1 and HTTP/2 (`protocols h1 h2`, no HTTP/3), TLS from Let's Encrypt over ACME, `reverse_proxy` to the server's port 8080 over HTTP/1.1, header changes, `respond 404`, a filtered log; no `encode`, `file_server`, `php_fastcgi`, templates or admin API. No service runs `curl`: Caddy's binary is static Go, `probe` runs busybox's `wget`, `files` busybox's `sh`, and nothing has a healthcheck that calls `curl`.
+- **Reachable, remotely, through the HTTP/2 server and the reverse proxy** (Go's `net/http`, its internal `http2` and `golang.org/x/net/http2` v0.59.0 in Caddy 2.11.7's go1.26.8 build):
+  - **GO-2026-6612, Critical** (CVE-2026-78663): a client that resets streams after sending data gets connection-level flow-control credit back twice, so it can buffer past `MaxReceiveBufferPerConnection`, bounded by the concurrent-stream and stream-level limits. Fixed in go1.26.9, go1.27.2 and x/net v0.60.0.
+  - **High:** GO-2026-6603 (memory from a Trailer declaring many fields), GO-2026-6610 (an HTTP/2 reverse proxy forwarding malformed framing headers to HTTP/1 clients), GO-2026-6611 (CPU from many small SETTINGS frames), GO-2026-6617 (an HTTP/2 server crash from concurrent HPACK table-size changes).
+- **Not reachable here:** GO-2026-6604 (Critical, Windows `os.Root`), GO-2026-6609 (Range in `FileServer`), GO-2026-6608 (multipart parsing), GO-2026-6860 (x/net's HTML parser), GO-2026-6607 (ECH, which we don't configure), the CONNECT cases GO-2026-6605 and GO-2026-6613 (the server answers no CONNECT with 2xx), klauspost/compress's GO-2026-6865 (`encode` isn't used), and the Alpine packages: brotli-libs (CVE-2026-111497, Critical, known exploited), curl and libcurl (nineteen CVEs, seven Critical) and zlib (CVE-2026-4738, Critical), none of which any process of ours loads.
+- **The pin:** `caddy:2.11.9-alpine@sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee` (2026-11-05; `linux/amd64` and `linux/arm64/v8`), the same everywhere Caddy's image is named: `compose.caddy.yaml`, `compose.yaml`'s `probe` and `files`, the smoke test's stand-in and the `image-scan` recipe, which `compose.rs` holds equal (red first on the tag). 2.11.8 brought Go 1.27 release builds; 2.11.9 adds Caddy's own fixes (GHSA-q34h-28rj-5hjm, GHSA-9cr8-wmhh-39pm, go-jose v4.1.6 for GHSA-mgcc-cww5-fp2q).
+- **S21's `cap_add: [NET_BIND_SERVICE]` stays,** as the user chose. 2.11.8's binary carries the file capability as `+p` rather than 2.11.7's `+ep`, so Caddy now holds it permitted but not effective: the smoke test, red first on 2.11.9 (`CapPrm` and `CapBnd` 0x400, `CapEff` 0), now expects exactly that, and Caddy binds 80 and 443 as Docker lets any user in a container. The threat model's "Caddy holds one capability" says so; the line can go at a later Caddy move.
+
+**4. No separate release now.** The fixes reach hosts with the next release, v0.1.1, which the user can now release promptly.
 
 ## Consequences
 - **Easier:** `cargo deny` and the image scan pass again, and the ignore can't outlive its reason: sqlx's fixed release turns it into a failure.

@@ -785,10 +785,12 @@ fn check_the_stop(stack: &mut Stack) {
     assert!(last.contains("the server stopped"), "{last}");
 }
 
-/// The Caddy in `service` holds `NET_BIND_SERVICE` alone (ADR-0022, S21):
-/// 2.11.7's binary needs it in the bounding set to start, and its file
-/// capability makes it permitted and effective; nothing else, and nothing
-/// inherited or ambient.
+/// The Caddy in `service` holds `NET_BIND_SERVICE` alone (ADR-0022, S21;
+/// ADR-0024): the compose file keeps it in the bounding set, and 2.11.9's
+/// binary carries it as a file capability without the effective bit (`+p`),
+/// so it's permitted and never effective; nothing else, and nothing
+/// inherited or ambient. Caddy binds 80 and 443 as any process in a container
+/// may.
 fn check_caddy_holds_net_bind_service_alone(stack: &mut Stack, service: &str) {
     let compose = if service == "proxy" {
         stack.edge.clone().unwrap()
@@ -803,7 +805,7 @@ fn check_caddy_holds_net_bind_service_alone(stack: &mut Stack, service: &str) {
     for (name, held) in [
         ("CapInh", "0000000000000000"),
         ("CapPrm", "0000000000000400"),
-        ("CapEff", "0000000000000400"),
+        ("CapEff", "0000000000000000"),
         ("CapBnd", "0000000000000400"),
         ("CapAmb", "0000000000000000"),
     ] {
