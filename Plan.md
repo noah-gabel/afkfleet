@@ -2215,11 +2215,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P12.7, Phase 12's group C) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S19, U5, U20, U21): **as built.** fleet-integration's `slow_smoke_with_caddy`, `slow_smoke_behind_a_container_proxy` and `slow_smoke_behind_a_host_proxy` bring the production project up from a copy of `deploy/`, with a `.env` and an override of their own (offline accounts allowed there alone, U20), under project names of their own. Beyond the five steps (the Owner created with `--password-stdin`, the login through fleet-client with the full 2FA flow), they check the client's real address and a forged `X-Forwarded-For`; no `ticket`, `q`, password, TOTP secret or recovery code in any log after forced 502s; both metrics ports from inside and neither through any path; `.env`'s settings in the server's environment; the database and a backup across a recreate; memory and pids under 75 % of the limits (U21); Caddy's one capability; the image alone refusing to start; and every exit clean. The Stack workflow runs them nightly on arm64 and amd64, with `deploy/setup.sh init` doing the setup there; `just test-stack` and `just test-slow` run them elsewhere, the test doing the same steps itself.
 
-- [ ] **P12.8** Tidy-up (group E, `p12/tidy-up`, after D2's merge; [ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U35): the repository tidied for readability, with no behaviour change. Its plan first lists what it would move, merge, shorten or delete, each with why, for the user's approval. Candidates:
+- [x] **P12.8** Tidy-up (group E, `p12/tidy-up`, after D2's merge; [ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U35): the repository tidied for readability, with no behaviour change. Its plan first lists what it would move, merge, shorten or delete, each with why, for the user's approval. Candidates:
   - README's length and order;
   - an index for `docs/`;
   - stale notes, dead scripts or recipes, and outdated comments;
   - Plan.md's finished phases condensed, as long as every note an ADR or a comment points to stays findable.
+
+  > Note (P12.8, as built) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), "Group E (P12.8)", U42–U52, S52–S58): one pull request (U42). README is a short intro with a quickstart and a status line (U44, U45, S52); its developer material is `docs/development.md` (U46), and `docs/README.md` indexes `docs/` (S53). The runbook gained what the DoD's run found and lost its repeats (S56); `docs/releasing.md` gained what the first release found (U52). Phases 0–11 above are summarised in place (U43, S55), every citation of Plan.md pinned by `scripts/plan-citations.test.mjs` (S54). `spikes/tls-provider/` is deleted (U47), and tasks keep `docs/development.md` current, README only its intro, quickstart and status (U48).
+  > Deviation: the runbook lost about 5 % of its words, not the planned ~35 %: what S56 keeps word for word makes up most of its lines. U49 added the subagent write guard ([ADR-0024](docs/adr/0024-subagents-read-only-enforced.md)).
 
 **DoD:**
 - A clean afkfleet install (no earlier afkfleet state) on an existing Linux host that keeps its other services, following only the runbook.
@@ -2229,11 +2232,15 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
 > Note (Phase 12's DoD, group D2) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S49): **the user's kit is `docs/dod/phase-12.md`:** part (a), the clean install by the runbook alone, and part (b), the friend's login by the friends' guide alone, each step with what success looks like and a place for its outcome. It's opened at the first release's tag; the AI never runs any of it.
 
+> Note (Phase 12's DoD, passed) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), "The DoD's run"): **both parts passed on 2026-11-07 with v0.1.0,** run by the user. The gaps the run found in the guides went into P12.8.
+
 ---
 
 ### Phase 13: Hardening
 **Goal:** Prove the security and resilience claims.
 **Introduces:** cargo-fuzz (`libfuzzer-sys`, `arbitrary`), cargo-mutants.
+
+> Note (P13, from Phase 12's DoD, the user's finding) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), "The DoD's run"): **the update download's URL scheme.** The app's own update download accepts any URL scheme `latest.json` names; release builds should require https, as defence in depth (the installer is still verified against the committed key).
 
 - [ ] **P13.1** 🔴 **Authorization matrix test:** every endpoint × {anonymous, Member without grant, View, Control, Manage, Admin, Owner} → the expected status. The table is generated and snapshotted.
 
