@@ -1,0 +1,47 @@
+# 0025. SQLite's advisory via sqlx, and zlib in the runtime image
+
+- **Status:** Accepted
+- **Date:** 2026-11-09
+- **Related:** ADR-0015 (sqlx); ADR-0014 and ADR-0022 (the images, their pins, and the user's 7-day rule, U12, U13); ADR-0021 (the last advisory ignore); `deny.toml`, the justfile's `deny`, `deploy/docker/server.Dockerfile`, `deploy/docker/agent.Dockerfile`; Plan.md §5
+
+## Context
+The weekly Audit of 2026-11-09 failed on two advisories published since the week before:
+- **`cargo deny`: RUSTSEC-2026-0459 (CVE-2026-119375).** SQLite before 3.54.0 can return uninitialized page-cache memory when a process opens a database file together with a sibling write-ahead log (`-wal`) whose page size differs from the database's: a crafted pair of files makes ordinary queries return stale bytes from the process's memory. The attack vector is local. `libsqlite3-sys` 0.6.0 to 0.38.2 bundle affected SQLite versions; 0.39.0 (2026-10-24) fixes it. fleet-server builds `libsqlite3-sys` 0.37.0 from source through sqlx's `sqlite-bundled`. **No update reaches the fix:** sqlx-sqlite 0.9.0, the newest sqlx release (2026-05-21), requires `libsqlite3-sys` `>=0.30.1, <0.38.0`.
+- **The image scan: zlib in the runtime base.** Grype found `zlib1g 1:1.3.dfsg+really1.3.1-1+b1` in the server's image, from `gcr.io/distroless/cc-debian13:nonroot` at `sha256:e792ab3d…`. Two High CVEs (CVE-2026-76844, a heap overflow in `gz_write` after a failed write; CVE-2026-85091) and one Medium (CVE-2026-27171) are fixed in `1:1.3.dfsg+really1.3.1-1+deb13u1` (DSA-6613-1). The agent's image has the same base. The scan fails on any High finding a newer package fixes.
+
+Every pull request's CI runs `just deny` too, so the first one blocks every merge, group E's included.
+
+## Decision
+The user's, 2026-11-09: a `deps/` pull request of its own, before group E's.
+
+**1. SQLite: RUSTSEC-2026-0459 ignored, alone, until a sqlx release accepts the fix.**
+- **The removal trigger,** in the ignore's own reason too: a sqlx release whose sqlx-sqlite accepts `libsqlite3-sys >= 0.39.0`. That release's bump of sqlx removes the ignore in the same pull request.
+- **Why the exposure is negligible:** the attack needs a crafted database and its `-wal` opened together, and nothing hands the server either.
+  - The server opens only its own database, in an owner-only volume: a new file is created `0600`, and on Unix the server refuses a database, `-wal` or `-shm` that other users can read (P6.3).
+  - Backups are single files made by `VACUUM INTO`, never with a `-wal`.
+  - `restore` moves the database's `-wal` and `-shm` aside before it puts a backup in place, so no leftover `-wal` is ever opened with it.
+  - Whoever could write files into the data volume could replace the database itself, which is more than this advisory gives.
+  - The dev and DoD databases are the developer's own, in their own folders.
+- **Upstream:** launchbadge/sqlx#4502, "Bump the upper bound on libsqlite3-sys to allow 0.39.x", merged on 2026-11-08, makes sqlx-sqlite's requirement `>=0.30.1, <0.40.0` on sqlx's `main`; on 2026-11-09 no release carries it yet, so the trigger will most likely come with sqlx's next release.
+- **A stale ignore fails:** `[advisories] unused-ignored-advisory = "deny"`, so the workspace's `cargo deny` pass fails with `advisory-not-detected` as soon as an ignored advisory matches nothing, this one once sqlx's fix is in the lockfile. The desktop crate's pass gets `-A advisory-not-detected`: its graph holds none of the ignored crates (azalea's, testcontainers' or sqlx's), so every ignore would read as stale there.
+- **Red first:** with `main`'s `deny.toml`, the workspace pass fails on RUSTSEC-2026-0459; with a stale ignore added (RUSTSEC-2026-0346, a rustls advisory no longer in the graph), it fails with `advisory-not-detected`, while the desktop pass with `-A advisory-not-detected` passes; `deny.toml` was restored by checksum after each run.
+
+**2. zlib: both Dockerfiles pin distroless's current index digest, a security exception to the 7-day rule.**
+- **The pin:** `gcr.io/distroless/cc-debian13:nonroot@sha256:cc66d222f0a7ec996b78a99fe76a969bc80b539a5016ad866c14d1949bc6d0ab`, in both Dockerfiles (a test holds them equal).
+- **Why the exception:** the user's rule takes the newest release at least 7 days old (ADR-0022, U12, U13), but this is a High finding with a fix, in the base of both shipped images. A distroless image's creation date is fixed at 1970 for reproducible builds, so its digest's age can't be read anyway.
+- **How it was checked:** `docker buildx imagetools inspect gcr.io/distroless/cc-debian13:nonroot` showed exactly that index digest, with `linux/amd64` and `linux/arm64/v8` images.
+
+**3. No release now.** Both fixes reach hosts with the next release, v0.1.1.
+
+## Consequences
+- **Easier:** `cargo deny` and the image scan pass again, and the ignore can't outlive its reason: sqlx's fixed release turns it into a failure.
+- **Harder:** every future ignore must match the workspace's graph, or the check fails; an ignore that matters only for the desktop crate would need its own handling.
+- **Accepted:** until sqlx's release, fleet-server bundles an SQLite with RUSTSEC-2026-0459, behind the exposure argued above. The runtime base moves to a digest that may be younger than 7 days.
+- **Unchanged:** the builder image (`rust:1.99.0-slim-trixie`) isn't shipped or scanned, so it keeps its pin.
+
+## Alternatives considered
+- **sqlx-sqlite from sqlx's `main` (a git source):** `deny.toml`'s sources allow crates.io alone.
+- **sqlx's `sqlite-unbundled`, linking the image's own SQLite:** Debian 13's SQLite predates 3.54.0 too, and it changes what the image ships.
+- **Waiting for sqlx's release:** the weekly Audit and every pull request's CI stay red until then.
+- **Leaving `unused-ignored-advisory` at its default, `warn`:** a warning in a passing run is easy to miss.
+- **Waiting 7 days for the base image's digest:** a High finding with a fix would ship meanwhile.

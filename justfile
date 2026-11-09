@@ -117,7 +117,7 @@ cov-desktop:
 # cargo-deny: advisories, licenses, bans and sources.
 deny:
     cargo deny --exclude {{ desktop }} check
-    cargo deny --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc check
+    cargo deny --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc check -A advisory-not-detected
 
 # Format Rust and frontend code.
 fmt:

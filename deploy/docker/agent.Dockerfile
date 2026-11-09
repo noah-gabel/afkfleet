@@ -46,7 +46,7 @@ RUN cargo build --release --locked --package fleet-agent --bin afkfleet-agent
 RUN mkdir -m 0700 /folders /folders/data
 
 # --- runtime: glibc and libgcc only, no shell, the nonroot user (65532) ---
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cc66d222f0a7ec996b78a99fe76a969bc80b539a5016ad866c14d1949bc6d0ab
 # The release's labels, from build args the release workflow sets (`just images`
 # reads them from the environment; empty outside a release). Declared here alone,
 # so the shared stages stay word for word (ADR-0022, S22, R24).

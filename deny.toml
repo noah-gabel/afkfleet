@@ -21,6 +21,10 @@ all-features = true
 unmaintained = "all"
 unsound = "all"
 yanked = "deny"
+# An ignored advisory that no longer matches the graph fails the check, so a stale ignore is
+# removed when its trigger comes (ADR-0025). The desktop crate's pass allows it: its graph
+# holds none of the crates below (justfile, `deny`).
+unused-ignored-advisory = "deny"
 # azalea's advisories, accepted by the user (ADR-0011, ADR-0012). Every azalea bump
 # re-checks them.
 ignore = [
@@ -30,6 +34,8 @@ ignore = [
     # testcontainers' advisory, accepted by the user (ADR-0021): it reaches only the
     # container tests, never a shipped binary.
     { id = "RUSTSEC-2026-0440", reason = "astral-tokio-tar via testcontainers 0.28.0, a dev-dependency of fleet-mc's and fleet-integration's container tests, never built into a shipped binary: unmaintained, not vulnerable, no fix. Remove once a testcontainers release drops it (ADR-0021)" },
+    # SQLite's advisory, accepted by the user (ADR-0025): no sqlx release accepts the fix yet.
+    { id = "RUSTSEC-2026-0459", reason = "SQLite before 3.54.0, bundled in libsqlite3-sys 0.37.0 via sqlx-sqlite 0.9.0, which accepts only <0.38.0: needs a crafted database and -wal opened together, and the server opens only its own database in an owner-only volume. Remove, and bump sqlx in the same PR, once a sqlx release's sqlx-sqlite accepts libsqlite3-sys >= 0.39.0 (ADR-0025)" },
 ]
 
 [licenses]
