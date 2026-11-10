@@ -657,9 +657,14 @@ mod tests {
     /// The scene after azalea's physics dropped a mounted bot onto the floor
     /// under its minecart: its own eyes are inside the minecart's box. A
     /// seated player looking steeply down south sees, through the
-    /// minecart's top and front, a pig in front of it. Returns what the bot
-    /// looks at after azalea's pick and the plugin's, with the minecart's
-    /// and the pig's entities.
+    /// minecart's top and front, a pig on a ledge in front of it. Returns
+    /// what the bot looks at after azalea's pick and the plugin's, with the
+    /// minecart's and the pig's entities.
+    ///
+    /// The pig stands where only the line from the seat's eyes meets it,
+    /// 0.65 above the one from the fallen bot's: with an entity around the
+    /// eyes and another on the line, azalea's rule (vanilla's) takes
+    /// whichever it visits last, and it visits a hash set.
     fn looks_at_the_pig_behind_its_minecart(mounted: bool) -> (HitResult, Entity, Entity) {
         let mut scene = Scene::new(EntityKind::Minecart);
         scene.app.add_systems(Update, update_hit_result_component);
@@ -672,7 +677,7 @@ mod tests {
             .world_mut()
             .spawn((
                 AbstractLiving,
-                LastBoundingBox(standing(Vec3::new(0.5, 63.5, 1.65), 0.9, 0.9)),
+                LastBoundingBox(standing(Vec3::new(0.5, 64.0, 1.65), 0.9, 0.9)),
             ))
             .id();
         scene.app.world_mut().entity_mut(scene.vehicle).insert((
