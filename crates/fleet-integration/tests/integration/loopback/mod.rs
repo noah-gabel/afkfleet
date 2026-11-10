@@ -8,6 +8,7 @@ use fleet_server::ports::audit::AuditRecord;
 
 mod agent_disable;
 mod agent_restart;
+mod certificate_renewal;
 mod chat;
 mod conflict_texts;
 mod killed_mid_stream;
