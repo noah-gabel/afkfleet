@@ -56,7 +56,9 @@ use fleet_server::infra::crypto::vault::{VaultKeys, XChaChaVault};
 use fleet_server::infra::qr::SvgQr;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::accounts::{AccountReads, AccountWrites};
-use fleet_server::ports::agents::{Agent, AgentCert, AgentReads, AgentWrites, ListedAgent};
+use fleet_server::ports::agents::{
+    Agent, AgentCert, AgentReads, AgentWrites, LatestCert, ListedAgent,
+};
 use fleet_server::ports::audit::{
     AuditEntryId, AuditLimit, AuditPage, AuditReads, AuditRecord, AuditWrites, NewAuditEntry,
 };
@@ -2171,6 +2173,10 @@ impl AgentReads for HookedAgents {
 
     async fn admissible(&self, now: DateTime<Utc>) -> Result<Vec<CertFingerprint>, StoreError> {
         self.inner.agents().admissible(now).await
+    }
+
+    async fn latest_certs(&self) -> Result<Vec<LatestCert>, StoreError> {
+        self.inner.agents().latest_certs().await
     }
 
     async fn list(&self, page: Page<AgentId>) -> Result<Vec<ListedAgent>, StoreError> {

@@ -1,9 +1,14 @@
-//! The agents' use cases (Plan.md P10.4, P10.5, P10.6, P10.10; ADR-0019).
+//! The agents' use cases (Plan.md P10.4, P10.5, P10.6, P10.10, P13.6;
+//! ADR-0019, ADR-0027).
 //!
 //! - [`connections`]: admitting the certificate a connecting agent presents,
 //!   recording its accepted hello, how its stream ended and a conflict over
 //!   its identity, and checking the live streams again (P10.4, P10.5),
 //!   behind the [`AgentConnections`](crate::ports::agent_connections::AgentConnections)
+//!   port the gRPC port calls.
+//! - [`renewal`]: an agent's next certificate, signed for the key of the one
+//!   it presents and stored beside it (P13.6; ADR-0027), behind the
+//!   [`CertificateRenewals`](crate::ports::renewals::CertificateRenewals)
 //!   port the gRPC port calls.
 //! - [`assignments`]: the bots' assignments as the reconciler changes them,
 //!   each change in its own audited transaction (P10.5, S36).
@@ -42,6 +47,7 @@
 pub mod assignments;
 pub mod connections;
 pub mod ingest;
+pub mod renewal;
 pub mod session_grants;
 
 use std::sync::Arc;
@@ -57,6 +63,7 @@ use tracing::{debug, info};
 
 pub use assignments::AssignmentService;
 pub use connections::AgentConnectionService;
+pub use renewal::CertificateRenewalService;
 pub use session_grants::SessionGrantService;
 
 use super::audit::AuditService;

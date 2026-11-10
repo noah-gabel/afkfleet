@@ -7,7 +7,8 @@
 //! the name is only the label its own config gives it. Two enabled agents
 //! never share a name, whatever its case ([`InsertAgentError::NameTaken`]).
 //! A certificate's row is keyed by its fingerprint, and an agent may hold
-//! more than one (P13.6's renewal; S1).
+//! more than one (S1): a renewal adds the new one beside the one that asked
+//! for it, which the agent's next hello revokes (P13.6; ADR-0027).
 
 use core::fmt;
 
@@ -117,6 +118,20 @@ pub struct ListedAgent {
     pub bots: u32,
 }
 
+/// An enabled agent's latest unrevoked certificate, as the certificates'
+/// watch judges it (P13.6; ADR-0027).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LatestCert {
+    /// The agent.
+    pub agent: AgentId,
+    /// Its name.
+    pub name: AgentName,
+    /// When the certificate was stored: its issue.
+    pub issued_at: DateTime<Utc>,
+    /// The certificate's notAfter.
+    pub not_after: DateTime<Utc>,
+}
+
 /// Reading agents through the read connections.
 #[async_trait]
 pub trait AgentReads: Send + Sync + fmt::Debug {
@@ -153,6 +168,14 @@ pub trait AgentReads: Send + Sync + fmt::Debug {
     /// # Errors
     /// [`StoreError`], including [`StoreError::Corrupt`].
     async fn admissible(&self, now: DateTime<Utc>) -> Result<Vec<CertFingerprint>, StoreError>;
+
+    /// Each enabled agent's latest unrevoked certificate, the one whose
+    /// `not_after` is the furthest, ordered by the agent's ID. An agent
+    /// without an unrevoked certificate is left out.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn latest_certs(&self) -> Result<Vec<LatestCert>, StoreError>;
 
     /// The agents of `page`, newest first: one more than its limit when
     /// another page follows.
@@ -225,4 +248,31 @@ pub trait AgentWrites: Send {
     /// # Errors
     /// [`StoreError`].
     async fn revoke_certs(&mut self, id: AgentId, at: DateTime<Utc>) -> Result<u64, StoreError>;
+
+    /// Revokes every unrevoked certificate of agent `id` but `keep` at
+    /// `at`; how many. A renewal leaves an agent the certificate it asked
+    /// with and the new one (P13.6; ADR-0027).
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn revoke_other_certs(
+        &mut self,
+        id: AgentId,
+        keep: CertFingerprint,
+        at: DateTime<Utc>,
+    ) -> Result<u64, StoreError>;
+
+    /// Revokes every unrevoked certificate of agent `id` that was stored
+    /// before `keep` at `at`; how many. A hello ends the certificates its
+    /// own replaced, never a newer one, which the agent may hold already
+    /// (P13.6; ADR-0027). None when the agent doesn't hold `keep`.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn revoke_older_certs(
+        &mut self,
+        id: AgentId,
+        keep: CertFingerprint,
+        at: DateTime<Utc>,
+    ) -> Result<u64, StoreError>;
 }

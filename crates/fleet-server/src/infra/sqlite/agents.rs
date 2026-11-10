@@ -14,7 +14,7 @@ use sqlx::SqliteConnection;
 use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::{store_error, unique_violation};
 use crate::ports::agents::{
-    Agent, AgentCert, AgentHello, InsertAgentError, ListedAgent, NewAgent, NewAgentCert,
+    Agent, AgentCert, AgentHello, InsertAgentError, LatestCert, ListedAgent, NewAgent, NewAgentCert,
 };
 use crate::ports::page::Page;
 use crate::ports::store::StoreError;
@@ -330,6 +330,97 @@ pub(super) async fn revoke_certs(
     .await
     .map(|done| done.rows_affected())
     .map_err(store_error)
+}
+
+/// Revokes every unrevoked certificate of agent `id` but `keep` at `at`; how
+/// many.
+pub(super) async fn revoke_other_certs(
+    conn: &mut SqliteConnection,
+    id: AgentId,
+    keep: CertFingerprint,
+    at: DateTime<Utc>,
+) -> Result<u64, StoreError> {
+    let id = id_text(id);
+    let keep = keep.as_bytes().as_slice();
+    let at = stored_time(at, AGENT_CERTS, "revoked_at")?;
+    sqlx::query!(
+        "UPDATE agent_certs SET revoked_at = ?
+         WHERE agent_id = ? AND revoked_at IS NULL AND fingerprint_sha256 <> ?",
+        at,
+        id,
+        keep
+    )
+    .execute(conn)
+    .await
+    .map(|done| done.rows_affected())
+    .map_err(store_error)
+}
+
+/// Revokes every unrevoked certificate of agent `id` stored before `keep`
+/// at `at`; how many. Rows are never deleted, so the row ID is the order
+/// they were stored in.
+pub(super) async fn revoke_older_certs(
+    conn: &mut SqliteConnection,
+    id: AgentId,
+    keep: CertFingerprint,
+    at: DateTime<Utc>,
+) -> Result<u64, StoreError> {
+    let id = id_text(id);
+    let keep = keep.as_bytes().as_slice();
+    let at = stored_time(at, AGENT_CERTS, "revoked_at")?;
+    sqlx::query!(
+        "UPDATE agent_certs SET revoked_at = ?
+         WHERE agent_id = ? AND revoked_at IS NULL
+           AND rowid < (SELECT kept.rowid FROM agent_certs kept
+                        WHERE kept.fingerprint_sha256 = ? AND kept.agent_id = ?)",
+        at,
+        id,
+        keep,
+        id
+    )
+    .execute(conn)
+    .await
+    .map(|done| done.rows_affected())
+    .map_err(store_error)
+}
+
+/// Each enabled agent's latest unrevoked certificate, by the agent's ID.
+pub(super) async fn latest_certs(pool: &sqlx::SqlitePool) -> Result<Vec<LatestCert>, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT a.rowid AS "rowid!: i64", a.id AS "id!", a.name AS "name!",
+                  c.rowid AS "cert_rowid!: i64", c.created_at AS "issued_at!",
+                  c.not_after AS "not_after!"
+           FROM agents a JOIN agent_certs c ON c.agent_id = a.id
+           WHERE a.enabled = 1
+             AND c.rowid = (SELECT latest.rowid FROM agent_certs latest
+                            WHERE latest.agent_id = a.id AND latest.revoked_at IS NULL
+                            ORDER BY latest.not_after DESC, latest.rowid DESC
+                            LIMIT 1)
+           ORDER BY a.id"#
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(store_error)?;
+    rows.into_iter()
+        .map(|row| {
+            let agent = |column| StoreError::Corrupt {
+                table: AGENTS,
+                column,
+                rowid: row.rowid,
+            };
+            let cert = |column| StoreError::Corrupt {
+                table: AGENT_CERTS,
+                column,
+                rowid: row.cert_rowid,
+            };
+            Ok(LatestCert {
+                agent: parse_id(&row.id).ok_or_else(|| agent("id"))?,
+                name: AgentName::try_from(row.name).map_err(|_| agent("name"))?,
+                issued_at: parse_time(&row.issued_at).ok_or_else(|| cert("created_at"))?,
+                not_after: parse_time(&row.not_after).ok_or_else(|| cert("not_after"))?,
+            })
+        })
+        .collect()
 }
 
 /// Records `hello` on its agent while it's enabled; `last_seen_at` only

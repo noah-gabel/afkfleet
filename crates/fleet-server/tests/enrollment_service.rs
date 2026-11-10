@@ -91,6 +91,15 @@ impl AgentCertificates for Signer {
         self.issuer.issue(csr_der, agent, now)
     }
 
+    fn renew(
+        &self,
+        presented_der: &[u8],
+        agent: AgentId,
+        now: DateTime<Utc>,
+    ) -> Result<IssuedCertificate, IssueError> {
+        self.issuer.renew(presented_der, agent, now)
+    }
+
     fn ca_fingerprint(&self) -> CertFingerprint {
         self.issuer.ca_fingerprint()
     }

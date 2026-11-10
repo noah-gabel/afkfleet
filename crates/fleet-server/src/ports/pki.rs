@@ -7,6 +7,10 @@
 //! used. Subject, SAN (the agent ID), key usage and lifetime are the
 //! server's. Only Ed25519 keys are accepted (S10).
 //!
+//! A renewal has no CSR (P13.6; ADR-0027): the certificate a connection
+//! presented, which the TLS handshake proved the caller holds the key of,
+//! gives its public key, and the server signs that key again.
+//!
 //! The calls are synchronous CPU work, so the service runs them in
 //! `spawn_blocking`, and never inside a write transaction (ADR-0015).
 
@@ -72,6 +76,10 @@ pub enum IssueError {
     /// The certificate would be valid outside the years 1970 to 9999.
     #[error("the certificate's validity is out of range")]
     OutOfRange,
+    /// A renewal's presented certificate isn't one certificate with an
+    /// Ed25519 key: nothing the CA signed.
+    #[error("the presented certificate's key can't be read")]
+    Presented,
     /// The certificate couldn't be built or signed. The source is the
     /// adapter's own error, for the log.
     #[error("the certificate couldn't be signed")]
@@ -116,6 +124,23 @@ pub trait AgentCertificates: Send + Sync + fmt::Debug {
     fn issue(
         &self,
         csr_der: &[u8],
+        agent: AgentId,
+        now: DateTime<Utc>,
+    ) -> Result<IssuedCertificate, IssueError>;
+
+    /// Signs a new certificate for the key of `presented_der`, a certificate
+    /// the CA signed for `agent` that the caller's connection presented
+    /// (P13.6; ADR-0027): the same key, `agent` named again, valid from
+    /// about `now` for the configured lifetime. Nothing else is taken from
+    /// the presented certificate, and whether it still admits its agent is
+    /// the caller's check.
+    ///
+    /// # Errors
+    /// [`IssueError::Presented`] when `presented_der` isn't one certificate
+    /// with an Ed25519 key, or another [`IssueError`].
+    fn renew(
+        &self,
+        presented_der: &[u8],
         agent: AgentId,
         now: DateTime<Utc>,
     ) -> Result<IssuedCertificate, IssueError>;

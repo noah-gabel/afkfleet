@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE agent_certs SET revoked_at = ?\n         WHERE agent_id = ? AND revoked_at IS NULL\n           AND rowid < (SELECT kept.rowid FROM agent_certs kept\n                        WHERE kept.fingerprint_sha256 = ? AND kept.agent_id = ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "81f0978489e06f11eabd15c26464ab01886b99e41b35fefef3b582fa7dd93e90"
+}

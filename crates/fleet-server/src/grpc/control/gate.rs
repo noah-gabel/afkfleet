@@ -1,5 +1,6 @@
-//! [`ControlGate`]: what every `Connect` call passes before anything it
-//! sent is read; see the [module docs](super).
+//! [`ControlGate`]: what every call of the control service passes before
+//! anything it sent is read, a `Connect` and a `RenewCertificate` alike;
+//! see the [module docs](super).
 
 use core::fmt;
 
@@ -21,7 +22,7 @@ use crate::http::rate_limit::RateLimits;
 use crate::infra::pki::fingerprint;
 use crate::metrics::{ConnectRefused, ServerMetrics};
 
-/// The gate in front of `Connect`.
+/// The gate in front of the control service.
 #[derive(Debug, Clone)]
 pub struct ControlGate {
     limits: RateLimits,
@@ -83,7 +84,7 @@ impl Interceptor for ControlGate {
             // First of all, before an ID is minted: a call without a
             // certificate costs this line and nothing else (S24). Any
             // number of them may come, so it's at `debug`.
-            debug!("a connect call without a client certificate was refused");
+            debug!("a control call without a client certificate was refused");
             self.metrics.connect_refused(ConnectRefused::NoCertificate);
             return Err(Status::unauthenticated(CERTIFICATE_REQUIRED));
         };
@@ -92,7 +93,7 @@ impl Interceptor for ControlGate {
             Err(failure) => {
                 error!(
                     error = %chain(&failure),
-                    "a connect call was refused: no request ID could be minted"
+                    "a control call was refused: no request ID could be minted"
                 );
                 return Err(Status::internal(FAILED));
             }
@@ -105,7 +106,7 @@ impl Interceptor for ControlGate {
                 request_id = %id,
                 code = code_name(Code::ResourceExhausted),
                 latency_ms = latency_ms(started),
-                "a connect call was rate-limited"
+                "a control call was rate-limited"
             );
             return Err(refusal(
                 Code::ResourceExhausted,

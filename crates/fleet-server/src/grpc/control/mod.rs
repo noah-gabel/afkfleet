@@ -1,8 +1,9 @@
-//! `fleet.v1.AgentControl.Connect` on the gRPC port (Plan.md P10.4;
-//! ADR-0019, S13, S22–S30): an enrolled agent's one stream, admitted only by
-//! the client certificate it presents.
+//! `fleet.v1.AgentControl` on the gRPC port (Plan.md P10.4, P13.6;
+//! ADR-0019, S13, S22–S30; ADR-0027): `Connect`, an enrolled agent's one
+//! stream, and `RenewCertificate`, its next certificate, both admitted only
+//! by the client certificate the call presents.
 //!
-//! Each call passes three steps:
+//! Each `Connect` call passes three steps:
 //! 1. **The gate** ([`ControlGate`], tonic's interceptor), before anything
 //!    the caller sent is read: no client certificate is
 //!    `UNAUTHENTICATED` at once; then the call's request ID is minted, the
@@ -64,15 +65,35 @@
 //! answer goes only to the stream that asked; whatever is waiting or running
 //! when the stream ends is dropped.
 //!
+//! **`RenewCertificate`** (`renew.rs`) passes the same gate, which spends
+//! the same per-certificate limit, and the same admission with its
+//! refusals and their records. Then the
+//! [`CertificateRenewals`] port signs a new certificate for the presented
+//! one's key and its row's agent, within [`RENEW_SERVER_DEADLINE`], and
+//! stores it. It needs no live stream and holds none: the agent's slot is
+//! `Connect`'s alone. Its answers:
+//!
+//! | Case | Answer |
+//! |---|---|
+//! | no client certificate, rate-limited | the gate's, as above |
+//! | unknown, revoked, expired, disabled, SAN mismatch, or revoked or disabled meanwhile | `UNAUTHENTICATED` [`CERTIFICATE_REFUSED`] |
+//! | database busy | `UNAVAILABLE` [`BUSY`], `retry-after: 1` |
+//! | the signing too slow | `DEADLINE_EXCEEDED` [`RENEWAL_TOO_SLOW`] |
+//! | a failure on the server's side | `INTERNAL` [`RENEWAL_FAILED`] |
+//! | renewed | the new certificate as PEM and its end, with the call's request ID |
+//!
 //! **Logs:** never the peer's address, the hello's name or the certificate's
 //! bytes; an agent appears under its stored name and ID only. A call
 //! without a certificate and a rate-limited call are `debug` lines (the
 //! minute's summary counts the latter); the admission's refusals are the
-//! service's lines; a session logs its `Welcome` and its end at `info`.
+//! service's lines; a session logs its `Welcome` and its end at `info`, and
+//! a renewal one "a certificate renewal finished" line with its code and
+//! latency.
 
 mod gate;
 mod grants;
 mod outbound;
+mod renew;
 mod session;
 
 use core::time::Duration;
@@ -80,7 +101,9 @@ use std::sync::Arc;
 
 use fleet_core::id::RequestId;
 use fleet_core::system::Clock;
-use fleet_proto::control::{HELLO_TIMEOUT, MAX_AGENT_MESSAGE_BYTES, MAX_SERVER_MESSAGE_BYTES};
+use fleet_proto::control::{
+    HELLO_TIMEOUT, MAX_AGENT_MESSAGE_BYTES, MAX_SERVER_MESSAGE_BYTES, RENEW_SERVER_DEADLINE,
+};
 use fleet_proto::generated as wire;
 use fleet_proto::generated::agent_control_server::{AgentControl, AgentControlServer};
 use tokio::sync::{mpsc, oneshot};
@@ -109,6 +132,7 @@ use crate::http::rate_limit::RateLimits;
 use crate::metrics::ServerMetrics;
 use crate::ports::agent_connections::{AdmitError, AgentConnections, Presented};
 use crate::ports::ingest::Ingest;
+use crate::ports::renewals::CertificateRenewals;
 use crate::ports::session_grants::SessionGrants;
 
 /// No client certificate.
@@ -141,6 +165,10 @@ pub const MESSAGE_UNREADABLE: &str = "A message couldn't be read; connect again.
 pub const TOO_SLOW: &str = "The agent read too slowly; connect again.";
 /// The server shuts down.
 pub const SHUTTING_DOWN: &str = "The server is shutting down; connect again later.";
+/// A renewal's signing outlasted its deadline.
+pub const RENEWAL_TOO_SLOW: &str = "The renewal took too long; try again.";
+/// A renewal failed on the server's side.
+pub const RENEWAL_FAILED: &str = "The renewal failed on the server.";
 
 /// How many messages a stream's queue to its agent holds: a session answer
 /// and a spec change for each of 1000 bots, a `Welcome` and a full
@@ -158,28 +186,33 @@ pub struct ControlTimings {
     pub hello_timeout: Duration,
     /// The stream's grant queue (S57).
     pub grants: GrantBounds,
+    /// How long a renewal's signing may take (P13.6).
+    pub renew_deadline: Duration,
 }
 
 impl ControlTimings {
-    /// `heartbeats` with the protocol's [`HELLO_TIMEOUT`] and the default
-    /// grant queue.
+    /// `heartbeats` with the protocol's [`HELLO_TIMEOUT`] and
+    /// [`RENEW_SERVER_DEADLINE`], and the default grant queue.
     #[must_use]
     pub fn new(heartbeats: Heartbeats) -> Self {
         Self {
             heartbeats,
             hello_timeout: HELLO_TIMEOUT,
             grants: GrantBounds::default(),
+            renew_deadline: RENEW_SERVER_DEADLINE,
         }
     }
 }
 
-/// What the control service asks the app: the agents' connections, the
-/// session grants, the ingest of what the agents report, and the server's
-/// clock.
+/// What the control service asks the app: the agents' connections, their
+/// certificates' renewals, the session grants, the ingest of what the
+/// agents report, and the server's clock.
 #[derive(Debug, Clone)]
 pub struct ControlPorts {
     /// Admitting a certificate, recording a hello and a stream's end.
     pub connections: Arc<dyn AgentConnections>,
+    /// An agent's next certificate (P13.6).
+    pub renewals: Arc<dyn CertificateRenewals>,
     /// The answers to session requests (P10.6).
     pub grants: Arc<dyn SessionGrants>,
     /// Where the reports about the bots a stream holds go (P10.8).
@@ -218,10 +251,12 @@ impl Sessions {
     }
 }
 
-/// `Connect`'s handler; see the [module docs](self).
+/// `Connect`'s and `RenewCertificate`'s handler; see the
+/// [module docs](self).
 #[derive(Debug, Clone)]
 pub struct ControlGrpc {
     connections: Arc<dyn AgentConnections>,
+    renewals: Arc<dyn CertificateRenewals>,
     grants: Arc<dyn SessionGrants>,
     ingest: Arc<dyn Ingest>,
     clock: Arc<dyn Clock>,
@@ -293,6 +328,13 @@ impl AgentControl for ControlGrpc {
         super::status::request_id(response.metadata_mut(), call.id);
         Ok(response)
     }
+
+    async fn renew_certificate(
+        &self,
+        request: Request<wire::RenewRequest>,
+    ) -> Result<Response<wire::RenewResponse>, Status> {
+        self.renew(request).await
+    }
 }
 
 /// The answer to an admission or a hello the app didn't accept, for call
@@ -329,6 +371,7 @@ pub fn control_service(
 ) -> ControlRoute {
     let ControlPorts {
         connections,
+        renewals,
         grants,
         ingest,
         clock,
@@ -337,6 +380,7 @@ pub fn control_service(
     InterceptedService::new(
         AgentControlServer::new(ControlGrpc {
             connections,
+            renewals,
             grants,
             ingest,
             clock,
@@ -415,6 +459,8 @@ mod tests {
             MESSAGE_UNREADABLE,
             TOO_SLOW,
             SHUTTING_DOWN,
+            RENEWAL_TOO_SLOW,
+            RENEWAL_FAILED,
         ];
 
         let distinct: std::collections::BTreeSet<_> = messages.iter().collect();

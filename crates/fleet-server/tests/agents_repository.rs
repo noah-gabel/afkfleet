@@ -754,3 +754,246 @@ async fn disabling_turns_the_agent_off_once_and_revokes_each_unrevoked_certifica
         ]
     );
 }
+
+// --- Renewal (P13.6; ADR-0027) ---
+
+/// A certificate with fingerprint `byte`… for `agent`, stored `issued` days
+/// after `T0` and valid 60 days from then.
+fn cert_issued(byte: u8, agent: AgentId, issued: i64) -> NewAgentCert {
+    NewAgentCert {
+        fingerprint: CertFingerprint::from_digest([byte; 32]),
+        agent,
+        not_after: at(T0 + (issued + 60) * DAY),
+        created_at: at(T0 + issued * DAY),
+    }
+}
+
+#[sqlx::test(migrations = false)]
+async fn revoking_the_others_keeps_the_named_certificate_and_another_agents(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let agent = new_agent(1, "agent-1");
+    let other = new_agent(2, "agent-2");
+    insert(&db, &agent).await.unwrap();
+    insert(&db, &other).await.unwrap();
+    insert_cert(&db, &new_cert(1, agent.id)).await.unwrap();
+    revoke_all(&db, agent.id).await;
+    for byte in [2, 3, 4] {
+        insert_cert(&db, &new_cert(byte, agent.id)).await.unwrap();
+    }
+    insert_cert(&db, &new_cert(9, other.id)).await.unwrap();
+    let keep = CertFingerprint::from_digest([3; 32]);
+
+    let mut tx = db.write().await.unwrap();
+    let revoked = tx
+        .agents()
+        .revoke_other_certs(agent.id, keep, at(T0 + DAY))
+        .await
+        .unwrap();
+    let again = tx
+        .agents()
+        .revoke_other_certs(agent.id, keep, at(T0 + 2 * DAY))
+        .await
+        .unwrap();
+    tx.commit(setup_entry()).await.unwrap();
+
+    assert_eq!(revoked, 2);
+    assert_eq!(again, 0);
+    let revoked_at: Vec<_> = db
+        .agents()
+        .certs(agent.id)
+        .await
+        .unwrap()
+        .iter()
+        .map(|cert| cert.revoked_at)
+        .collect();
+    assert_eq!(
+        revoked_at,
+        [
+            // Revoked before: its time stays.
+            Some("2027-01-15T08:00:00Z".parse().unwrap()),
+            Some(at(T0 + DAY)),
+            None,
+            Some(at(T0 + DAY)),
+        ]
+    );
+    let others = db.agents().certs(other.id).await.unwrap();
+    assert_eq!(others.len(), 1);
+    assert_eq!(others[0].revoked_at, None);
+}
+
+#[sqlx::test(migrations = false)]
+async fn revoking_the_others_of_a_certificate_the_agent_doesnt_hold_revokes_them_all(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let agent = new_agent(1, "agent-1");
+    insert(&db, &agent).await.unwrap();
+    insert_cert(&db, &new_cert(1, agent.id)).await.unwrap();
+
+    let mut tx = db.write().await.unwrap();
+    let revoked = tx
+        .agents()
+        .revoke_other_certs(
+            agent.id,
+            CertFingerprint::from_digest([7; 32]),
+            at(T0 + DAY),
+        )
+        .await
+        .unwrap();
+    tx.commit(setup_entry()).await.unwrap();
+
+    assert_eq!(revoked, 1);
+}
+
+#[sqlx::test(migrations = false)]
+async fn revoking_the_older_ones_leaves_the_named_certificate_and_every_newer_one(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let agent = new_agent(1, "agent-1");
+    let other = new_agent(2, "agent-2");
+    insert(&db, &agent).await.unwrap();
+    insert(&db, &other).await.unwrap();
+    insert_cert(&db, &new_cert(1, agent.id)).await.unwrap();
+    revoke_all(&db, agent.id).await;
+    // Another agent's certificate, stored between this agent's.
+    insert_cert(&db, &new_cert(2, agent.id)).await.unwrap();
+    insert_cert(&db, &new_cert(9, other.id)).await.unwrap();
+    for byte in [3, 4, 5] {
+        insert_cert(&db, &new_cert(byte, agent.id)).await.unwrap();
+    }
+    let keep = CertFingerprint::from_digest([4; 32]);
+
+    let mut tx = db.write().await.unwrap();
+    let revoked = tx
+        .agents()
+        .revoke_older_certs(agent.id, keep, at(T0 + DAY))
+        .await
+        .unwrap();
+    let again = tx
+        .agents()
+        .revoke_older_certs(agent.id, keep, at(T0 + 2 * DAY))
+        .await
+        .unwrap();
+    // A certificate the agent doesn't hold ends nothing: not another
+    // agent's, and not one nobody stored.
+    let anothers = tx
+        .agents()
+        .revoke_older_certs(
+            agent.id,
+            CertFingerprint::from_digest([9; 32]),
+            at(T0 + DAY),
+        )
+        .await
+        .unwrap();
+    let unknown = tx
+        .agents()
+        .revoke_older_certs(
+            agent.id,
+            CertFingerprint::from_digest([7; 32]),
+            at(T0 + DAY),
+        )
+        .await
+        .unwrap();
+    tx.commit(setup_entry()).await.unwrap();
+
+    assert_eq!((revoked, again, anothers, unknown), (2, 0, 0, 0));
+    let revoked_at: Vec<_> = db
+        .agents()
+        .certs(agent.id)
+        .await
+        .unwrap()
+        .iter()
+        .map(|cert| cert.revoked_at)
+        .collect();
+    assert_eq!(
+        revoked_at,
+        [
+            // Revoked before: its time stays.
+            Some("2027-01-15T08:00:00Z".parse().unwrap()),
+            Some(at(T0 + DAY)),
+            Some(at(T0 + DAY)),
+            None,
+            None,
+        ]
+    );
+    assert_eq!(
+        db.agents().certs(other.id).await.unwrap()[0].revoked_at,
+        None
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_latest_certificates_are_each_enabled_agents_furthest_unrevoked_one(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    // Renewed: the newer certificate counts, whichever was stored first.
+    let renewed = new_agent(1, "renewed");
+    // Its newer certificate was revoked: the older one counts.
+    let fell_back = new_agent(2, "fell-back");
+    // Every certificate revoked, and a disabled agent: left out.
+    let bare = new_agent(3, "bare");
+    let off = new_agent(4, "off");
+    // One certificate.
+    let plain = new_agent(5, "plain");
+    for agent in [&renewed, &fell_back, &bare, &off, &plain] {
+        insert(&db, agent).await.unwrap();
+    }
+    insert_cert(&db, &cert_issued(0x12, renewed.id, 40))
+        .await
+        .unwrap();
+    insert_cert(&db, &cert_issued(0x11, renewed.id, 0))
+        .await
+        .unwrap();
+    insert_cert(&db, &cert_issued(0x31, bare.id, 0))
+        .await
+        .unwrap();
+    insert_cert(&db, &cert_issued(0x22, fell_back.id, 40))
+        .await
+        .unwrap();
+    revoke_all(&db, fell_back.id).await;
+    revoke_all(&db, bare.id).await;
+    insert_cert(&db, &cert_issued(0x21, fell_back.id, 0))
+        .await
+        .unwrap();
+    insert_cert(&db, &cert_issued(0x41, off.id, 0))
+        .await
+        .unwrap();
+    disable(&db, off.id).await;
+    insert_cert(&db, &cert_issued(0x51, plain.id, 7))
+        .await
+        .unwrap();
+
+    let latest = db.agents().latest_certs().await.unwrap();
+
+    let shown: Vec<_> = latest
+        .iter()
+        .map(|cert| (cert.name.as_str(), cert.issued_at, cert.not_after))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("renewed", at(T0 + 40 * DAY), at(T0 + 100 * DAY)),
+            ("fell-back", at(T0), at(T0 + 60 * DAY)),
+            ("plain", at(T0 + 7 * DAY), at(T0 + 67 * DAY)),
+        ]
+    );
+    assert_eq!(latest[0].agent, renewed.id);
+}
+
+#[sqlx::test(migrations = false)]
+async fn no_agents_have_no_latest_certificates(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+
+    assert_eq!(db.agents().latest_certs().await.unwrap(), []);
+}

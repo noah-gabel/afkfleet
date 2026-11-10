@@ -47,7 +47,7 @@ async fn the_eleventh_connect_in_a_minute_is_refused_before_any_lookup(
     assert_eq!(
         fleet_testkit::log_capture::count(
             "fleet_server::grpc::control::gate",
-            "a connect call was rate-limited"
+            "a control call was rate-limited"
         ),
         1
     );

@@ -109,6 +109,7 @@ async fn a_client_certificate_from_another_ca_fails_the_handshake(
                 id: named,
                 name: String::new(),
                 identity: identity(&cert.pem, &key),
+                key_pem: key.to_pem().as_str().to_owned(),
                 fingerprint: cert.fingerprint,
                 der: cert.der.to_vec(),
                 pem: cert.pem.clone(),

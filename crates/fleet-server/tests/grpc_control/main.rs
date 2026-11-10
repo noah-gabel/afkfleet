@@ -12,6 +12,9 @@
 //! - `admission`: `[rate_limits] connect_per_cert_per_min`.
 //! - `registry`: one stream per agent, the ends of a permission, and what an
 //!   agent may report.
+//! - `renewal`: `RenewCertificate`: who gets a new certificate, what the
+//!   old one is worth afterwards, and the limit it shares with `Connect`
+//!   (P13.6; ADR-0027).
 //! - `logs`: what never reaches a log line.
 //! - `reconcile`: the reconciler over the port: which agent runs which bot,
 //!   and what an agent hears of it (P10.5).
@@ -43,6 +46,7 @@ mod logs;
 mod proxy;
 mod reconcile;
 mod registry;
+mod renewal;
 mod session;
 mod sizes;
 mod support;
