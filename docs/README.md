@@ -40,3 +40,4 @@ Each architecture decision record (ADR) holds one decision with its context, its
 - [0023. Local autonomous pipeline](adr/0023-local-autonomous-pipeline.md) (superseded by 0025)
 - [0024. SQLite's advisory via sqlx, zlib in the runtime image, and Caddy 2.11.9](adr/0024-sqlite-zlib-and-caddy-advisories.md)
 - [0025. A simpler workflow](adr/0025-a-simpler-workflow.md)
+- [0026. A bot in a minecart: fleet-mc tracks the vehicle, keeps the seat and picks from it](adr/0026-a-bot-in-a-minecart.md)
