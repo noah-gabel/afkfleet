@@ -41,3 +41,4 @@ Each architecture decision record (ADR) holds one decision with its context, its
 - [0024. SQLite's advisory via sqlx, zlib in the runtime image, and Caddy 2.11.9](adr/0024-sqlite-zlib-and-caddy-advisories.md)
 - [0025. A simpler workflow](adr/0025-a-simpler-workflow.md)
 - [0026. A bot in a minecart: fleet-mc tracks the vehicle, keeps the seat and picks from it](adr/0026-a-bot-in-a-minecart.md)
+- [0027. Agents renew their certificates; Phase 13's groups and refinements](adr/0027-certificate-renewal-and-phase-13-refinements.md)
