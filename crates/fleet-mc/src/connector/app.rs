@@ -1,8 +1,8 @@
 //! A session's Bevy App, as ADR-0008 §1 and §3 decided: azalea's plugins
 //! without auto-reconnect and auto-respawn, the packet-liveness and
 //! chat-signing plugins, the death and respawn watch (ADR-0020, S22, S27),
-//! the bot's event channel, and the single-threaded executor on every
-//! schedule.
+//! the riding plugin (ADR-0026), the bot's event channel, and the
+//! single-threaded executor on every schedule.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -21,6 +21,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::events::{LivenessStamps, PacketLivenessPlugin, RespawnWatchPlugin};
+use crate::riding::RidingPlugin;
 use crate::signing::SigningPlugin;
 
 /// The channel azalea's `LocalPlayerEvents` sends a session's events on. The
@@ -57,6 +58,8 @@ pub(super) fn build_app(
         PacketLivenessPlugin(stamps),
         signing,
         respawns,
+        // What azalea lacks for a bot in a minecart (ADR-0026).
+        RidingPlugin,
     ));
     give_events_to_the_bot(&mut app, events);
     extra(&mut app);

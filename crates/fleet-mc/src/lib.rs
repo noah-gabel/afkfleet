@@ -44,6 +44,7 @@ mod config;
 mod connector;
 mod events;
 mod host;
+mod riding;
 mod signing;
 
 pub use config::McConfig;
