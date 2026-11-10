@@ -31,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "afkfleet-desktop"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "fleet-api-types",
@@ -2537,7 +2537,7 @@ dependencies = [
 
 [[package]]
 name = "fleet-agent"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "clap",
@@ -2572,7 +2572,7 @@ dependencies = [
 
 [[package]]
 name = "fleet-api-types"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "fleet-core",
@@ -2590,7 +2590,7 @@ dependencies = [
 
 [[package]]
 name = "fleet-client"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -2618,7 +2618,7 @@ dependencies = [
 
 [[package]]
 name = "fleet-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "backon",
  "chrono",
@@ -2635,7 +2635,7 @@ dependencies = [
 
 [[package]]
 name = "fleet-integration"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2662,7 +2662,7 @@ dependencies = [
 
 [[package]]
 name = "fleet-mc"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "azalea",
  "azalea-chat",
@@ -2682,7 +2682,7 @@ dependencies = [
 
 [[package]]
 name = "fleet-proto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "fleet-core",
@@ -2702,7 +2702,7 @@ dependencies = [
 
 [[package]]
 name = "fleet-runtime"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "fleet-core",
@@ -2720,7 +2720,7 @@ dependencies = [
 
 [[package]]
 name = "fleet-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "argon2",
  "async-trait",
@@ -2782,7 +2782,7 @@ dependencies = [
 
 [[package]]
 name = "fleet-startup"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "figment",
  "fleet-core",
@@ -2800,7 +2800,7 @@ dependencies = [
 
 [[package]]
 name = "fleet-testkit"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "figment",
