@@ -34,7 +34,7 @@ use tracing::Instrument as _;
 use tracing::subscriber::DefaultGuard;
 use tracing_subscriber::layer::SubscriberExt as _;
 
-use crate::pki::{ALWAYS, TestCa, agent_id, agent_key, identity_files};
+use crate::pki::{ALWAYS, TestCa, Validity, agent_id, agent_key, identity_files};
 use crate::server::PATIENCE;
 
 /// The agent's ID in every test.
@@ -50,6 +50,7 @@ pub(crate) const SHORT: LinkTimings = LinkTimings {
     welcome: Duration::from_secs(2),
     keepalive_interval: Duration::from_secs(1),
     keepalive_timeout: Duration::from_secs(2),
+    renew_retry: Duration::from_hours(1),
 };
 
 /// How a test runs the agent.
@@ -61,15 +62,19 @@ pub(crate) struct Options {
     pub(crate) timings: LinkTimings,
     /// The run's start, which its clock counts from: R52's check reads it.
     pub(crate) anchor: DateTime<Utc>,
+    /// When the agent's certificate is valid.
+    pub(crate) validity: Validity,
 }
 
-/// Four bots, the protocol's timings, the run starting now.
+/// Four bots, the protocol's timings, the run starting now, a certificate
+/// far from its renewal.
 impl Default for Options {
     fn default() -> Self {
         Self {
             max_bots: 4,
             timings: LinkTimings::default(),
             anchor: Utc::now(),
+            validity: ALWAYS,
         }
     }
 }
@@ -119,10 +124,11 @@ pub(crate) struct Agent {
     task: JoinHandle<Outcome>,
 }
 
-/// The agent's config for `url`, its files in `dir`, at most `max_bots`.
-fn config(dir: &Path, url: &str, ca: &TestCa, max_bots: usize) -> AgentConfig {
+/// The agent's config for `url`, its files in `dir`, at most `max_bots`,
+/// its certificate valid as `validity` says.
+fn config(dir: &Path, url: &str, ca: &TestCa, max_bots: usize, validity: Validity) -> AgentConfig {
     let key = agent_key(1);
-    let certificate = ca.agent_certificate(&key, agent(), ALWAYS);
+    let certificate = ca.agent_certificate(&key, agent(), validity);
     let plane = identity_files(dir, url, ca, &key, &certificate);
     AgentConfig {
         name: "agent-1".try_into().unwrap(),
@@ -182,7 +188,7 @@ impl Agent {
         };
         let subscriber = tracing_subscriber::registry().with(layer(&log, false, logs.clone()));
         let guard = tracing::subscriber::set_default(subscriber);
-        let config = config(dir, url, ca, options.max_bots);
+        let config = config(dir, url, ca, options.max_bots, options.validity);
         let AgentMode::ControlPlane(plane) = &config.mode else {
             unreachable!("managed");
         };

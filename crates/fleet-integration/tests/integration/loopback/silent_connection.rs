@@ -27,6 +27,7 @@ const SHORT: LinkTimings = LinkTimings {
     welcome: Duration::from_secs(2),
     keepalive_interval: Duration::from_secs(1),
     keepalive_timeout: Duration::from_secs(2),
+    renew_retry: Duration::from_hours(1),
 };
 
 /// Slack for a slow machine on every bound.

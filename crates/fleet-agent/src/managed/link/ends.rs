@@ -10,7 +10,8 @@
 //! - **Backoff:** everything else: other statuses, transport and TLS
 //!   failures, the welcome timeout, a stream that ends without a `Reject`,
 //!   a first message that isn't `Welcome` or `Reject`, and the agent's own
-//!   ends (a full queue, an overflowing outbox, a failed snapshot).
+//!   ends (a full queue, an overflowing outbox, a failed snapshot, a
+//!   renewed certificate to connect with).
 //!   `AlreadyConnected` and a server shutting down are routine.
 
 use core::time::Duration;
@@ -92,6 +93,9 @@ pub enum Cause {
     NotYetValid,
     /// The agent's certificate expired by its clock (R52).
     Expired,
+    /// The agent renewed its certificate and connects again with the new
+    /// one (P13.6).
+    Renewed,
 }
 
 impl Cause {
@@ -112,6 +116,7 @@ impl Cause {
             Self::Snapshot => "snapshot",
             Self::NotYetValid => "not_yet_valid",
             Self::Expired => "expired",
+            Self::Renewed => "renewed",
         };
         fixed.to_owned()
     }
@@ -280,6 +285,8 @@ mod tests {
             Level::INFO
         );
         assert_eq!(End::own(Cause::WelcomeTimeout).level(), Level::INFO);
+        assert_eq!(End::own(Cause::Renewed).level(), Level::INFO);
+        assert_eq!(End::own(Cause::Renewed).next, Next::Backoff);
         assert_eq!(
             End::of_status(&Status::unavailable("x")).level(),
             Level::INFO
@@ -302,6 +309,7 @@ mod tests {
             Cause::Snapshot,
             Cause::NotYetValid,
             Cause::Expired,
+            Cause::Renewed,
         ]
         .map(Cause::as_str);
 

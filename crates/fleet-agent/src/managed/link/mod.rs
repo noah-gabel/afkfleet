@@ -15,6 +15,11 @@
 //! - **The reader** hands session answers to the credentials and the six
 //!   instructions to the conductor's FIFO; a full FIFO, a second `Welcome`
 //!   or a message it can't read ends the stream.
+//! - **The certificate's renewal** (P13.6; ADR-0027): a welcomed stream
+//!   waits for the [`Renewer`]'s time too, runs its attempt on the stream's
+//!   own connection, and on a renewal swaps the endpoint and the kept
+//!   certificate and ends the stream, so the next attempt presents the new
+//!   one.
 //! - **The ends** ([`ends`]): a stop forgets every kept grant before the
 //!   stream's end is noted, so nothing hands one out after the server's
 //!   refusal (S63), and the run stops every bot and exits 5; the rest wait
@@ -54,6 +59,7 @@ use crate::managed::conductor::{Inbox, InboxError, Instruction};
 use crate::managed::credentials::{LinkGeneration, ManagedCredentials, SessionAnswer};
 use crate::managed::identity::KeptCertificate;
 use crate::managed::outbound::{Outbound, Outbox};
+use crate::managed::renewal::{RENEW_RETRY, Renewer};
 
 /// How long the hello's barrier may take, inside `WELCOME_TIMEOUT` (R48).
 pub const BARRIER_BOUND: Duration = Duration::from_secs(5);
@@ -68,15 +74,20 @@ pub struct LinkTimings {
     pub keepalive_interval: Duration,
     /// How long a ping may go unanswered.
     pub keepalive_timeout: Duration,
+    /// How long the agent waits after a failed renewal of its certificate
+    /// before it tries again (P13.6).
+    pub renew_retry: Duration,
 }
 
-/// `WELCOME_TIMEOUT`, `KEEPALIVE_INTERVAL` and `KEEPALIVE_TIMEOUT`.
+/// `WELCOME_TIMEOUT`, `KEEPALIVE_INTERVAL`, `KEEPALIVE_TIMEOUT` and
+/// [`RENEW_RETRY`].
 impl Default for LinkTimings {
     fn default() -> Self {
         Self {
             welcome: WELCOME_TIMEOUT,
             keepalive_interval: KEEPALIVE_INTERVAL,
             keepalive_timeout: KEEPALIVE_TIMEOUT,
+            renew_retry: RENEW_RETRY,
         }
     }
 }
@@ -135,6 +146,9 @@ pub struct LinkParts {
     pub endpoint: Endpoint,
     /// The certificate, checked before each attempt (R52).
     pub kept: KeptCertificate,
+    /// The certificate's renewal (P13.6), which swaps the endpoint and the
+    /// kept certificate.
+    pub renewer: Renewer,
     /// The hello's fields but its snapshot.
     pub hello: HelloParts,
     /// The outbox, opened with each hello.
@@ -216,6 +230,7 @@ impl Link {
     /// One attempt, or none when `stop` came first.
     async fn attempt(&mut self, stop: &CancellationToken) -> Option<Attempted> {
         self.attempts = self.attempts.saturating_add(1);
+        self.parts.renewer.remind();
         if let Some(end) = self.certificate() {
             if matches!(end.next, Next::Stop(_)) {
                 self.parts.credentials.forget_all();
@@ -336,7 +351,7 @@ impl Link {
         deadline: Instant,
         stop: &CancellationToken,
     ) -> Option<(End, Option<Duration>)> {
-        let mut client = AgentControlClient::new(channel)
+        let mut client = AgentControlClient::new(channel.clone())
             .max_decoding_message_size(MAX_SERVER_MESSAGE_BYTES)
             .max_encoding_message_size(MAX_AGENT_MESSAGE_BYTES);
         let welcome = async {
@@ -387,6 +402,21 @@ impl Link {
                 // keepalive ends a silent connection (S23 rejected a server
                 // heartbeat, S67).
                 () = stop.cancelled() => return None,
+                // Only a sleep is raced here, which is cancel-safe. The
+                // attempt runs to its end below, never dropped halfway: once
+                // the server may have signed, the certificate is stored and
+                // the identity swapped before anything else happens (P13.6).
+                () = self.parts.renewer.due() => {
+                    let Some(renewed) = self.parts.renewer.attempt(channel.clone()).await else {
+                        self.parts.renewer.remind();
+                        continue;
+                    };
+                    self.parts.endpoint = renewed.endpoint;
+                    self.parts.kept = renewed.kept;
+                    // The stream ends here, so the next attempt connects
+                    // with the new certificate; its hello revokes the old.
+                    break End::own(Cause::Renewed);
+                }
                 message = messages.next() => message,
             };
             let message = match message {

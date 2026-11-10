@@ -43,6 +43,10 @@ serde = { workspace = true, features = ["derive"] }
 # ADR-0019, U4).
 sha2.workspace = true
 thiserror.workspace = true
+# A renewal's timing and the warning before the certificate's end read its two dates
+# (notBefore, notAfter) with it, after rustls checked the certificate (P13.6, ADR-0027).
+# Already in the lockfile through fleet-server; its errors are never passed on.
+x509-parser.workspace = true
 # `net` and `io-util` for the metrics endpoint's listener and its responder (P12.4);
 # azalea-protocol builds both already, so no crate is added (ADR-0022, S9).
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }

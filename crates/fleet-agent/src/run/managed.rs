@@ -40,6 +40,7 @@ use crate::managed::credentials::ManagedCredentials;
 use crate::managed::link::backoff::{self, Backoff};
 use crate::managed::link::{self, HelloParts, Link, LinkParts};
 use crate::managed::outbound::Outbox;
+use crate::managed::renewal::Renewer;
 use crate::metrics_endpoint;
 use crate::signals::ShutdownSignals;
 
@@ -223,9 +224,10 @@ fn build<C: MinecraftConnector>(
         .as_ref()
         .and_then(server_name)
         .ok_or(StartupError::ServerUrl)?;
-    let (tls, kept) = managed.identity.into_tls(domain);
+    let (tls, kept, renewal) = managed.identity.into_link(domain.clone());
     let endpoint =
         link::endpoint(&plane.url, tls, managed.timings).map_err(|_| StartupError::ServerUrl)?;
+    let renewer = Renewer::new(renewal, plane.url.clone(), domain, managed.timings, clock);
     let policy = backoff::policy().map_err(StartupError::Reconnect)?;
     let capacity = u32::try_from(runtime.max_bots.get())
         .ok()
@@ -236,6 +238,7 @@ fn build<C: MinecraftConnector>(
     let link = Link::new(LinkParts {
         endpoint,
         kept,
+        renewer,
         hello: HelloParts {
             name: config.name.clone(),
             agent_version,

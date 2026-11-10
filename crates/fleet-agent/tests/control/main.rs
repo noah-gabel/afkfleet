@@ -9,6 +9,8 @@
 //! - `proxy` stalls the connections already open, as a dead server does.
 //! - `agent` runs the real managed run on fleet-testkit's fake connector.
 //! - `link` holds the cases; `pki` is the seeded test PKI.
+//! - `renewal` holds the certificate's renewal: when the agent asks, what
+//!   it does with the answer, and a server that doesn't renew (P13.6).
 //! - `endpoint` covers the managed run's metrics endpoint, which `scrape`
 //!   asks.
 // Integration tests are test code, but clippy only applies the test allowances
@@ -22,6 +24,7 @@ mod link;
 #[path = "../common/pki.rs"]
 mod pki;
 mod proxy;
+mod renewal;
 #[path = "../common/scrape.rs"]
 mod scrape;
 mod server;
