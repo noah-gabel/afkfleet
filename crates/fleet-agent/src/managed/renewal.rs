@@ -4,7 +4,8 @@
 //! - **When.** Once two thirds of the certificate's lifetime have passed,
 //!   by the run's clock (fleet-core's `renewal_due`): at once for an agent
 //!   that starts past that point. After a failure it tries again every
-//!   [`RENEW_RETRY`]. An expired certificate is never renewed: the link
+//!   [`RENEW_RETRY`], and after a renewal no sooner than that, whatever the
+//!   new certificate's dates say. An expired certificate is never renewed: the link
 //!   stops the agent before (R52), and it enrolls again.
 //! - **How.** `RenewCertificate` on the connection that carries the
 //!   welcomed stream, within `RENEW_CLIENT_DEADLINE`: no CSR, since the
@@ -156,7 +157,11 @@ impl Renewer {
         match self.renew(channel).await {
             Ok((renewed, lifetime, fingerprint)) => {
                 self.lifetime = lifetime;
-                self.next = renewal_due(lifetime.not_before, lifetime.not_after);
+                // Never at once again: a certificate that's due already (a
+                // server whose clock is far behind) would otherwise end
+                // every stream it opens with another renewal.
+                let again = fleet_core::time::add(self.clock.now(), self.timings.renew_retry);
+                self.next = renewal_due(lifetime.not_before, lifetime.not_after).max(again);
                 self.failed = None;
                 diagnostics::identity_renewed(lifetime.not_after);
                 info!(

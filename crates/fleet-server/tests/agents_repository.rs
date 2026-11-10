@@ -997,3 +997,33 @@ async fn no_agents_have_no_latest_certificates(
 
     assert_eq!(db.agents().latest_certs().await.unwrap(), []);
 }
+
+#[sqlx::test(migrations = false)]
+async fn a_latest_certificate_whose_agents_name_doesnt_read_back_is_corrupt(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let agent = new_agent(1, "agent-1");
+    insert(&db, &agent).await.unwrap();
+    insert_cert(&db, &new_cert(1, agent.id)).await.unwrap();
+    let id = agent.id.as_uuid().hyphenated().to_string();
+    sqlx::query!("UPDATE agents SET name = '.hidden' WHERE id = ?", id)
+        .execute(db.write_pool())
+        .await
+        .unwrap();
+
+    let read = db.agents().latest_certs().await;
+
+    assert!(
+        matches!(
+            read,
+            Err(StoreError::Corrupt {
+                table: "agents",
+                column: "name",
+                ..
+            })
+        ),
+        "{read:?}"
+    );
+}

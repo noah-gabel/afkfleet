@@ -333,3 +333,100 @@ async fn an_answer_that_fails_enrolls_check_is_never_stored_and_a_good_one_after
     assert_eq!(outcome.exit, Exit::Stopped);
     drop(second);
 }
+
+#[tokio::test]
+async fn a_certificate_file_that_cant_be_replaced_keeps_the_agent_on_the_one_it_has() {
+    let dir = test_dir("control", "renew_store_fails");
+    let ca = TestCa::new(1);
+    let mut server = FakeServer::start(&ca).await;
+    server
+        .renewals
+        .answer(Ok(ca.agent_certificate(&agent_key(1), agent(), ALWAYS)));
+    let running = Agent::launch(
+        &dir,
+        &server.url(),
+        &ca,
+        Options {
+            validity: past_two_thirds(),
+            // The default retry is an hour: this test sees one attempt.
+            ..Options::default()
+        },
+    );
+    // The agent read its identity at its start. Now a folder with something
+    // in it sits at the certificate's name: nothing can be renamed over it.
+    let cert = dir.join("agent.crt");
+    fs::remove_file(&cert).unwrap();
+    fs::create_dir(&cert).unwrap();
+    fs::write(cert.join("kept"), "kept").unwrap();
+
+    let mut call = server.pending().await.accept();
+    call.welcome(agent(), secs(1)).await;
+    server.renewals.called(1).await;
+    // The stream lives on, on the certificate the agent started with.
+    a_heartbeat(&mut call).await;
+    a_heartbeat(&mut call).await;
+    let logs = running.logs.clone();
+    let outcome = running.stop().await;
+
+    let failed = logs.lines_with(FAILED).unwrap();
+    assert_eq!(failed.len(), 1, "{}", logs.text());
+    assert_eq!(failed[0]["cause"], "store");
+    assert_eq!(failed[0]["level"], "WARN");
+    let stored = logs
+        .lines_with("the renewed certificate couldn't be stored")
+        .unwrap();
+    assert_eq!(stored.len(), 1, "{}", logs.text());
+    assert_eq!(stored[0]["level"], "ERROR");
+    assert_eq!(logs.lines_with(RENEWED).unwrap().len(), 0);
+    assert_eq!(fs::read_to_string(cert.join("kept")).unwrap(), "kept");
+    assert!(
+        !dir.join("agent.crt.renew.tmp").exists(),
+        "the temp is removed"
+    );
+    assert_eq!(outcome.exit, Exit::Stopped);
+}
+
+#[tokio::test]
+async fn a_renewed_certificate_that_is_already_due_isnt_renewed_again_at_once() {
+    let dir = test_dir("control", "renew_due_again");
+    let ca = TestCa::new(1);
+    let mut server = FakeServer::start(&ca).await;
+    // A server whose clock is far behind answers a certificate that's past
+    // its own two thirds already; so is the one after it.
+    for _ in 0..2 {
+        server.renewals.answer(Ok(ca.agent_certificate(
+            &agent_key(1),
+            agent(),
+            past_two_thirds(),
+        )));
+    }
+    let running = Agent::launch(
+        &dir,
+        &server.url(),
+        &ca,
+        Options {
+            validity: past_two_thirds(),
+            ..Options::default()
+        },
+    );
+
+    let call = server.pending().await.accept();
+    call.welcome(agent(), secs(1)).await;
+    server.renewals.called(1).await;
+    let mut second = server.pending().await.accept();
+    second.welcome(agent(), secs(1)).await;
+    // The new stream lives on: no renewal ends it again.
+    a_heartbeat(&mut second).await;
+    a_heartbeat(&mut second).await;
+    let logs = running.logs.clone();
+    let outcome = running.stop().await;
+
+    assert_eq!(
+        server.renewals.calls(),
+        1,
+        "one renewal, then an hour's wait"
+    );
+    assert_eq!(logs.lines_with(RENEWED).unwrap().len(), 1);
+    assert_eq!(outcome.exit, Exit::Stopped);
+    drop(call);
+}

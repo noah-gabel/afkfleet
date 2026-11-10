@@ -27,7 +27,7 @@ const SLACK: Duration = Duration::from_mins(10);
 /// an hour before its issue, is due for renewal 40 days less 20 minutes
 /// after it; so one issued this far back is due [`DUE_AFTER`] from now.
 fn clock_behind() -> Duration {
-    Duration::from_hours(40 * 24) - Duration::from_mins(20) - DUE_AFTER
+    Duration::from_hours(40 * 24).saturating_sub(Duration::from_mins(20) + DUE_AFTER)
 }
 
 fn text(record: &AuditRecord, key: &str) -> Option<String> {
