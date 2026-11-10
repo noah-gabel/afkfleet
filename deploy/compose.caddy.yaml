@@ -3,15 +3,14 @@
 # HTTPS from Let's Encrypt for AFKFLEET_DOMAIN, which must point at this
 # host, and proxies only the app's routes to the server (Caddyfile). It runs
 # as the nonroot user with every capability dropped but NET_BIND_SERVICE in
-# its bounding set (ADR-0022, S21): 2.11.7's binary carries that capability
-# as a file capability (+ep), and without it in the bounding set the binary
-# can't even be executed. It's the one capability Caddy holds (the smoke test
-# checks), and all it allows is binding ports below 1024, which Docker lets
-# any user in a container do anyway. From Caddy 2.11.8 on, the cap_add can
-# go.
+# its bounding set (ADR-0022, S21), kept at the move to 2.11.9 (ADR-0024).
+# 2.11.9's binary carries that capability as a file capability without the
+# effective bit (+p), so Caddy holds it permitted, never effective (the smoke
+# test checks), and binds 80 and 443 as Docker lets any user in a container
+# do. The cap_add can go at a later Caddy move.
 services:
   caddy:
-    image: caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5
+    image: caddy:2.11.9-alpine@sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee
     user: "65532:65532"
     read_only: true
     cap_drop: [ALL]

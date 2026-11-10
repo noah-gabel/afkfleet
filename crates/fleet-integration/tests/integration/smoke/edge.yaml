@@ -6,11 +6,11 @@
 # holds the two equal), so no other image is needed.
 services:
   proxy:
-    image: caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5
+    image: caddy:2.11.9-alpine@sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee
     user: "65532:65532"
     read_only: true
     cap_drop: [ALL]
-    # Caddy 2.11.7's binary needs it in the bounding set to start (ADR-0022, S21).
+    # As deploy/compose.caddy.yaml keeps it (ADR-0022, S21; ADR-0024).
     cap_add: [NET_BIND_SERVICE]
     security_opt:
       - no-new-privileges:true

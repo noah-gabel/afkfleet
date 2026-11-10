@@ -245,7 +245,7 @@ fn every_long_running_service_is_hardened() {
 
 /// No service adds a capability back but Caddy and the smoke test's
 /// stand-in, and those only `NET_BIND_SERVICE`, under no-new-privileges, so
-/// 2.11.7's binary starts and gains nothing (ADR-0022, S21).
+/// Caddy's binary gains nothing (ADR-0022, S21; ADR-0024).
 #[test]
 fn only_caddy_adds_a_capability_and_only_net_bind_service() {
     for (file, name) in [
@@ -664,7 +664,7 @@ fn caddy_is_pinned_the_same_everywhere() {
     assert_eq!(files, probe);
     assert_eq!(scanned, [probe, probe], "image-scan pulls and saves it");
     let (tag, digest) = probe.split_once("@sha256:").unwrap();
-    assert_eq!(tag, "caddy:2.11.7-alpine");
+    assert_eq!(tag, "caddy:2.11.9-alpine");
     assert!(digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()));
 }
 
