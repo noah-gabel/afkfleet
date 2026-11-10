@@ -6,6 +6,12 @@
 ## Deviations from Plan.md
 <!-- Every deviation also has a `> Note (Pn.m): …` under its task in Plan.md. Write "None" if there are none. -->
 
+## Decided myself
+<!-- Every decision the AI made that it once would have asked about (design, dependencies, texts friends read, UX, an exception a rule names), each with one line of why (ADR-0025). Write "None" if there are none. -->
+
+## Weakened
+<!-- Every change that weakens a security control: lints and `#[expect]`, the CSP, Tauri capabilities, rate limits, `deny.toml`, coverage gates. Write "None" if there are none. -->
+
 ## Snapshots
 <!-- Every new or changed insta snapshot, each one read before it was accepted. Write "None" if there are none. -->
 
@@ -19,4 +25,5 @@
 - [ ] New or changed snapshots were read before accepting, and are listed in the PR description.
 - [ ] `README.md` reflects the change (setup, commands, config, behavior, phase status).
 - [ ] The `Plan.md` checkbox is ticked, with a note for any deviation, and an ADR exists for any decision.
+- [ ] The PR description lists **Decided myself** and **Weakened** (or "none").
 - [ ] The work is on its task branch, pushed, with a PR open, and nothing was pushed to `main`.

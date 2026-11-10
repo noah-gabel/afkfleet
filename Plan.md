@@ -4,7 +4,7 @@
 > - Mark a task done by ticking its box (`- [x]`).
 > - Note deviations inline as `> Note (P4.3): …`.
 > - Record design decisions as ADRs in `docs/adr/`.
-> - Every task is built on its own branch (`p<phase>/<task-id>-<slug>`) and merged through a pull request: by the AI's guarded merge, or by the user when the merge guard sends it to them ([ADR-0023](docs/adr/0023-local-autonomous-pipeline.md)). Nobody commits to `main`!
+> - Every task is built on its own branch (`p<phase>/<task-id>-<slug>`) and merged through a pull request, which the user reviews and merges ([ADR-0025](docs/adr/0025-a-simpler-workflow.md)). Nobody commits to `main`!
 >
 > Created 2026-10-04. Crate versions are a **baseline** from that date. Phase 0 pins exact versions after re-checking each one on docs.rs.
 >
@@ -4319,7 +4319,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Introduces:** `tauri-plugin-updater`. Tools: cargo-chef, Docker Compose, Caddy (optional, [ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U5).
 
 > Note (P12, Phase 12's planning, 2026-11-05) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md)):
-> - **Group branches** (four at the planning; at D's plan review D was split into D1 and D2, and E was added, [ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), R27, U35). Phase 12 is built in group PRs like Phases 2–11, each after the previous PR is merged: features first, then what packages them, then the release. Each group aims at about 5,300 lines; one that grows past it is split at its plan review. *From [ADR-0023](docs/adr/0023-local-autonomous-pipeline.md) (2026-11-08) on, group E included, a group aims at about 1,500 changed lines (lockfiles, generated code and snapshots aside), is split at its plan review past that, and goes through the local review pipeline.*
+> - **Group branches** (four at the planning; at D's plan review D was split into D1 and D2, and E was added, [ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), R27, U35). Phase 12 is built in group PRs like Phases 2–11, each after the previous PR is merged: features first, then what packages them, then the release. Each group aims at about 5,300 lines; one that grows past it is split at its plan review. *From [ADR-0023](docs/adr/0023-local-autonomous-pipeline.md) (2026-11-08), a group aimed at about 1,500 changed lines and went through the local review pipeline; [ADR-0025](docs/adr/0025-a-simpler-workflow.md) (2026-11-09) replaced it: one PR per group, reviewed and merged by the user.*
 >
 >   | Group | Branch | Tasks |
 >   |---|---|---|

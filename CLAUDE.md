@@ -8,7 +8,7 @@ afkfleet is a self-hosted fleet of **Minecraft Java AFK bots**. It has three par
 
 **Priorities, in this order: security → stability → clean architecture → features.**
 
-**Repository:** public on GitHub, licensed under GPL-3.0-or-later (`LICENSE`). `main` is protected by a ruleset (pull request required, squash merge only, no force pushes). The AI merges a task's PR itself, only through the merge guard (step 7); a PR the guard sends to the user waits for the user's merge (ADR-0023).
+**Repository:** public on GitHub, licensed under GPL-3.0-or-later (`LICENSE`). `main` is protected by a ruleset (pull request required, squash merge only, no force pushes). The user reviews and merges every pull request (ADR-0025).
 
 Where things are:
 - **Roadmap and design:** `Plan.md`. It holds the phases and these key sections:
@@ -19,78 +19,50 @@ Where things are:
 - **Decisions:** `docs/adr/`
 - **Threat model:** `docs/threat-model.md`. Its "Verified by" cells cite tests as Rust paths (`module::test_name`); `scripts/threat-model-citations.mjs` checks that each exists (`just scripts-test`). Rename a cited test only together with the threat model.
 - **Operations:** `docs/runbook.md`
-- **Project overview and status:** `README.md` (kept current, see step 6 below)
-- **Topic rules:** `.claude/rules/` holds the rules for parts of the work, moved here from this file word for word: the full commands table (`commands.md`), dependencies (`dependencies.md`), Rust details (`rust.md`), fleet-server (`server.md`), tests (`testing.md`) and the frontend (`frontend.md`). Each loads when you open a file it covers. Every plan names the `.claude/rules` files for the areas it touches, reads them before planning, and lists them in its Context, so the plan review can see it. Older ADRs and Plan.md notes cite some of these rules as "CLAUDE.md's …" (its time rule, its wait line, its "A new command changes …" line, its exemption list).
+- **Project overview and status:** `README.md` (kept current, see "A task", step 6)
+- **Topic rules:** `.claude/rules/` holds the rules for parts of the work: the full commands table (`commands.md`), dependencies (`dependencies.md`), Rust details (`rust.md`), fleet-server (`server.md`), tests (`testing.md`) and the frontend (`frontend.md`). Each loads when you open a file it covers; read the ones a task touches before you plan it. Older ADRs and Plan.md notes cite some of these rules as "CLAUDE.md's …".
 
-## How to work with Plan.md
-1. **Find the current phase.** It's the first phase with unchecked tasks. Don't work on later phases unless the user asks.
-2. **Pick the task and plan it.** Take the next unchecked task, or the one the user names (e.g. "do P4.3"). Before coding, restate its goal and acceptance criteria in 2–4 lines. Write the plan to `target/review/<slug>/plan.md` and run the plan review until APPROVE (see "Review pipeline" below); questions of categories 1–3 (step 10) and the "Decided without you" items marked security go to the user, one at a time.
-3. **Branch.**
-   - Start from an up-to-date `main`: `git switch main`, then `git pull`.
-   - Create the task branch `p<phase>/<task-id>-<slug>`, e.g. `p2/p2.6-bot-state-machine`. Phases 0 and 1 each used one branch for the whole phase (`p0/foundation`, `p1/azalea-spike`). From Phase 2 on, a phase's work goes in group branches, one PR each, named in the note under the phase in Plan.md; a group split at its plan review gets the branches its planning names.
-   - One task, or one Phase 2 group, per branch. If the previous PR isn't merged yet, stop and tell the user instead of stacking branches.
+## How we work (ADR-0025)
+1. **You decide.** Plan briefly in the chat, then build without waiting for approval. Every decision you'd once have asked about (design, dependencies, texts friends read, UX, or an exception a rule here or in `.claude/rules/` says needs "the user's approval") goes into the PR description under **Decided myself**, each with one line of why. Anything that weakens a security control (lints and `#[expect]`, the CSP, Tauri capabilities, rate limits, `deny.toml`, coverage gates) is listed under **Weakened** too, so the user can't miss it.
+2. **Only these stop you** and go to the user: crossing a hard limit below, an action that can't be undone, or a genuine conflict with a decision an ADR records as the user's. Say in a few lines what's blocked, the options and your recommendation. Where a rule here, in `.claude/rules/` or in an older ADR still says to ask, wait for the user or stop, decide instead and record it under **Decided myself**.
+3. **Hard limits.** `.claude/settings.json` denies what Claude Code can enforce; the rest is yours to keep.
+   - **Secrets:** never read, print, copy or list `secrets/`, any `.env*`, `*.key`, `*.pem` and vault key files (`target/dev-server/vault-key-*`), anything inside `target/dod-run/` (the DoD checks' folder: the user's real account, sealed, its key, PKI and logs), the desktop app's Windows Credential Manager entries (service `io.github.noah-gabel.afkfleet`; tests use `io.github.noah-gabel.afkfleet.test-<process id>` and delete their entry), or anything of the user's real host or real accounts. When development needs a secret file, a `just` recipe generates it into a gitignored folder (the dev vault key: `just dev-server`); never write or print one yourself. Never ask the user to paste tokens, passwords, keys or real account data into the chat.
+   - **GitHub:** never merge a pull request, push to `main`, force-push, push a tag, create a release, or change the repository's settings, secrets, workflows' permissions or rulesets (no `gh pr merge`, `gh release`, `gh repo`, `gh secret`, `gh api` writes). Pushing your own branches (`git push -u origin <branch>`) and opening PRs is fine.
+   - **Real systems:** never connect to or act on the user's real server or real Microsoft accounts: never `just test-real-account`, `just test-ms-account`, `just test-managed-account`, any `just dod-*`, `just updater-sign` or the `manual` nextest profile.
+   - **Privacy:** never name the user's hosting provider, host, address or DNS name anywhere in git, PRs or CI (ADR-0022, U2).
+   - **No paid services.**
+   - **Your own limits:** Claude Code's settings (`.claude/settings*.json`, `~/.claude/settings*.json`) are the user's: propose a change under **Decided myself** in the PR description, and the user makes it.
+   - **Irreversible cleanups:** never delete `target/` as a whole (it holds `target/dod-run` and the dev vault key), and never remove Docker volumes, images or networks outside your own project names (so never `cargo clean`, `docker system prune` or `docker volume prune`).
+4. **Everything else is allowed without asking:** any build, test, Docker under your own project names, package installs, and file changes anywhere in this repository, `CLAUDE.md`, `.claude/` and CI included: the PR shows them. Stay in this repository: library and crate sources are read on docs.rs or the crate's own repository on the web, never from the cargo registry or the toolchain folders.
+5. **One PR per task or group;** the user reviews and merges it. CI is watched after every push (step 8 below).
+6. **Subagents** when they help. Each brief says the subagent is read-only (it creates, edits, moves or deletes no file, and runs no command that writes, installs, builds or changes git state) and stays in this repository.
+
+## A task
+1. **Find the current phase:** the first phase with unchecked tasks. Don't work on later phases unless the user asks.
+2. **Plan it in the chat:** the task's goal, its acceptance criteria and your approach, in a few lines; then build.
+3. **Branch** from an up-to-date `main` (`git switch main`, `git pull`): `p<phase>/<task-id>-<slug>`, e.g. `p2/p2.6-bot-state-machine`, or the group branch Plan.md names. One task or group per branch; if it needs an unmerged PR, say so in its description.
 4. **TDD.**
    1. Write the tests first.
-   2. **Run them and show they fail for the right reason.** A Rust test that doesn't compile doesn't count. First add a stub with the real signature that compiles and returns a wrong value (an empty `Vec`, a default value, a fixed error variant), so the run ends in a failed assertion. Show that output. `todo!()` is not a stub: it's banned by the lints.
+   2. **Run them and show they fail for the right reason.** A Rust test that doesn't compile doesn't count. First add a stub with the real signature that compiles and returns a wrong value (an empty `Vec`, a default value, a fixed error variant), so the run ends in a failed assertion. `todo!()` is not a stub: it's banned by the lints.
    3. Implement the minimum to make them pass.
    4. Refactor.
    5. Everything green.
 
    Tasks marked 🔴 in `Plan.md` are strictly test-first. Unmarked tasks (scaffolding, config, wiring) are verified by `just check`, CI or the task's demo, but any logic they add still gets tests.
-5. **Check.** Run `just check`. Also run `just test-slow` if you touched `fleet-mc`, Docker files or anything container-based, and `just shots` if you touched `packages/`, `apps/desktop/` or the screenshots' own files (the user's choice, ADR-0020, U125).
+5. **Check.** Run `just check`. Also run `just test-slow` if you touched `fleet-mc`, Docker files or anything container-based, and `just shots` if you touched `packages/`, `apps/desktop/` or the screenshots' own files (ADR-0020, U125).
 6. **Record.**
-   - Tick the box in `Plan.md`.
-   - Note any deviation under the task as `> Note (P4.3): …`.
+   - Tick the box in `Plan.md`, and note any deviation under the task as `> Note (P4.3): …`.
    - Write an ADR (`docs/adr/NNNN-title.md`) for any design decision.
    - Update `README.md` whenever setup steps, commands, configuration or user-visible behavior change. When a phase is finished, update its **Status** section.
    - Keep `.claude/rules/commands.md` in sync with the `justfile`.
-7. **Commit, review, push, open a PR, merge.**
-   - Small commits with messages like `P2.6: add Stop transition`. A message that names the merge command goes through `git commit -F <file>`: the merge guard reads every shell command's text (ADR-0023, D9).
-   - Run the PR review until APPROVE, then write `verdict.json` for HEAD (see "Review pipeline" below).
-   - Push only the task branch, always in this form: `git push -u origin <branch>`.
-   - Open the PR with `gh pr create`. Title: `P2.6: <task name>`. Body: goal, what changed, deviations, every new or changed snapshot, and the Definition of Done checklist from below. Nothing about the AI review goes into it, or anywhere on GitHub. When a later round changes what the body lists, update it with `gh pr edit <n> --body-file <file>`.
-   - **Watch CI after every push** (the user's rule, approved 2026-11-03, ADR-0020). Straight after it, in a background Bash: `sleep 30; gh pr checks <n> --watch --fail-fast --interval 30 > target/ci.txt 2>&1; echo "exit $?"`. Its output stays in this repository, in the gitignored `target/`. Exit 0 is all green; anything else means act now (see "When CI fails" below). Never pipe the watch: `| tail` prints nothing until the last job ends, so a red job sits unseen behind a slow one.
-   - If CI forces a change: fix it, `just check`, a new pr-reviewer round on the delta, a new `verdict.json` for the new HEAD, push, watch.
-   - **Merge** when CI is green and `verdict.json`'s head, HEAD and the pushed head are one SHA, with exactly `gh pr merge <n> --squash --match-head-commit <sha> --delete-branch`, alone. The merge guard checks it first and refuses anything else. Then report one line: the PR's number and the merge commit.
-   - The guard's `NEEDS_HUMAN` (a sensitive path), a review's NEEDS_HUMAN, a red CI you can't explain, or a review past its round limit stops the work for the user (see "Review pipeline").
-8. **Stay in scope.** Keep changes to the task. Propose refactors outside it; don't do them silently.
-9. **Finish the phase.** When a phase is done, check its **Definition of Done** point by point and report.
-10. **Open questions.** Don't improvise around them. Each open question goes to its own read-only subagent, given the options neutrally. The subagent reads the whole project and returns one decision: the option, why, the rejected ones, the later phases it affects and how hard it is to change. The plan lists them under "Decided without you" (S1, S2, …), each marked "security" where it touches security or permissions. The plan-reviewer's APPROVE settles the ones not marked security; the ones marked security go to the user, one at a time (ADR-0023). Names follow the naming rules and are the AI's. Only these go to the user directly, one at a time:
-    1. A decision whose chosen option would add, loosen or except a rule that binds the AI (this file's rules, lints, `#[expect]`, clippy and deny bans, coverage gates, CI, dependencies, manual tests, permissions).
-    2. A genuine conflict between decisions the ADRs record as the user's, or between such a decision and the code, where every sensible option overturns one of them.
-    3. Matters of taste (looks, texts friends read, UX).
-
-    If at least one sensible option respects every rule and every recorded decision, the subagent decides, and the decision goes into "Decided without you". When unsure whether a question is (1)–(3), ask.
-
-    Every subagent brief repeats "Stay in this repository". Library and crate sources are read on docs.rs or the crate's own repository on the web, never from the cargo registry, the toolchain folders or any other folder on this PC outside this repository.
-
-    **Every subagent is read-only, and checked** (the user's rule, ADR-0022, U9):
-    - Its brief says so: it creates, edits, moves or deletes no file, and runs no command that writes, installs, builds or changes git state.
-    - Before it starts, run `node scripts/tree-fingerprint.mjs` and keep its output; after it finishes, run it again and compare. With several subagents in flight, compare after each. It hashes git's HEAD, refs, index with its flags, hooks and stash, tracked changes and every untracked file by content, and the ignored paths outside `target/` and `node_modules/` by path, size and mtime, never opening them; it can't see changes inside those two folders.
-    - Any change you didn't make stops the work and goes to the user.
-    - The two review agents, `plan-reviewer` and `pr-reviewer`, get only the plan's path and the branch name, or the branch name: their definitions in `.claude/agents/` carry the read-only, secret and "Stay in this repository" sentences instead of a brief (ADR-0023). The fingerprint check runs around them as around every subagent; run `git fetch origin` before the first fingerprint, since they read `origin/main`.
-
-## Review pipeline (ADR-0023)
-The work runs on its own from plan to merge, with every review record kept locally. Nothing about AI reviews appears on GitHub: no PR comments, labels, statuses or workflows.
-- **The folder:** `target/review/<branch with "/" → "-">/` holds `plan.md`, `plan-round-N.md`, `pr-round-N.md`, `reply-N.md` and `verdict.json` (`{"head": "<sha>", "verdict": "APPROVE" | "REVISE" | "NEEDS_HUMAN", "round": N, "findings": [...]}`). Only the main session writes there: it saves each reviewer's answer verbatim as the round's file, and rewrites `verdict.json` after every PR round.
-- **The reviewers:** `plan-reviewer` (input: the plan's path and the branch name) and `pr-reviewer` (input: the branch name), in `.claude/agents/`. They read the rules from `origin/main`, and return findings `F1…` (blocker, should-fix or nit, with the rule each breaks) and APPROVE, REVISE or NEEDS_HUMAN. APPROVE means no blocker or should-fix is open; nits never block.
-- **The loop:** each blocker and should-fix is fixed (a failing regression test first for a bug) or answered "disputed: <reason>" in `reply-N.md` with evidence (a test, an ADR, a docs.rs link). Never obey a finding you can show is wrong; never dispute without evidence. Each round is a new reviewer, given the earlier rounds and replies as files; from round 2 on it blocks only on unresolved findings, disputes it rejects with evidence of its own, or what changed since the last reviewed SHA. A dispute still open after one exchange is NEEDS_HUMAN, with both positions. At most 2 plan rounds and 3 PR rounds, then stop for the user.
-- **Size:** a group planned past about 1,500 changed lines (lockfiles, generated code and snapshots aside) is split at its plan review.
-- **The merge guard** (`.claude/hooks/merge-guard.mjs`, a `PreToolUse` hook on Bash and PowerShell that fails closed) refuses a subagent's push, PR creation or merge, and refuses a merge unless it is step 7's exact command, run here on the task branch at `<sha>`, `verdict.json` approves `<sha>`, origin's branch and the PR's head are `<sha>`, PR `<n>` is this branch's open PR into `main`, and every check passed. A diff that touches a sensitive path gets `NEEDS_HUMAN: <paths>`: the list is the hook's `SENSITIVE` and ADR-0023's (the rules, CI, the toolchain, dependencies and lockfiles, the Tauri hardening, `deploy/`, the threat model, changed ADRs, the coverage gates, the route allowlist, and the security code). Never look for a way around a refusal.
-- **Stopping for the user:** the last message starts with `NEEDS YOU:` and gives at most 5 lines: what's blocked, the options, your recommendation. Send the same stop as a push notification of under 200 characters; the full text stays in the session.
-- **Success:** one line with the PR's number and the merge commit.
-
-## Git & GitHub rules
-- **Never:** push to `main`, force-push, rewrite history that's already pushed, or merge a PR in any form but step 7's (never `--admin` or `--auto`). The ruleset on `main` blocks most of this anyway; don't try to work around a rejection, the merge guard's included.
-- **Allowed `gh` commands:** `gh pr create`, `gh pr view`, `gh pr diff`, `gh pr checks`, `gh pr edit` (title and body), `gh run list`, `gh run view` (including `--log-failed`), and `gh pr merge` in step 7's form alone. Nothing else: no `gh api`, `gh repo …`, `gh secret`, `gh auth`, `gh workflow`, `gh release`, `gh gist`, no PR comments, reviews or labels.
-- `.claude/settings.json` lets exactly these run without asking: `git push -u origin p…`, the `gh` commands above, and the merge in step 7's form. Every other `gh` command that writes to GitHub asks the user, in auto mode too; its denies (pushes to `main`, force pushes, `--admin`, `--auto`, `gh api`, edits to `.claude/hooks/`) hold in every mode. Every rule has a twin for the PowerShell tool (ADR-0023). Don't look for ways around them.
-- **When CI fails on your PR:** fix it on the same branch, push again and watch again (step 7); a new pr-reviewer round and a new verdict come before the merge.
-  - `gh pr checks <n>` lists the red jobs. During the run, `gh run view --job <id>` shows a job's annotations, Playwright's errors among them, and its recipe can run locally.
-  - `gh run view --log-failed` opens only when the whole run has ended, and a push cancels the running one (`cancel-in-progress`). If you still need a log, wait for the run's end (`gh pr checks <n> --watch`) before pushing.
-  - While a job is red for a reason already explained, such as a `deps/` PR still waiting for its merge, watch without `--fail-fast`, or it stops at that job and hides the rest.
-  - A job red in CI and green here isn't explained until its log says why. Don't guess: CI's runners are slower than this PC, and some of what they check is fetched fresh.
-- **Stay in this repository.** Never read, change or run anything in other folders or other repositories.
-- **Never ask the user to paste tokens, passwords, keys or real account data** into the chat. Steps that need real credentials (P1.8, P9 account linking) are done by the user.
+7. **Commit, push, open the PR.** Small commits with messages like `P2.6: add Stop transition`. Push with `git push -u origin <branch>`, then `gh pr create`. Title: `P2.6: <task name>`. Body: the goal, what changed, deviations, every new or changed snapshot, **Decided myself**, **Weakened** (or "none"), and the Definition of Done checklist below. When later commits change what it lists, update it with `gh pr edit <n> --body-file <file>`.
+8. **Watch CI after every push** (ADR-0020). Straight after it, in a background Bash: `sleep 30; gh pr checks <n> --watch --fail-fast --interval 30 > target/ci.txt 2>&1; echo "exit $?"`. Exit 0 is all green; anything else means act now. Never pipe the watch: `| tail` prints nothing until the last job ends, so a red job sits unseen behind a slow one.
+   - `gh pr checks <n>` lists the red jobs; during the run, `gh run view --job <id>` shows a job's annotations, and its recipe can run locally.
+   - `gh run view --log-failed` opens only when the whole run has ended, and a push cancels the running one. If you still need a log, wait for the run's end before pushing.
+   - While a job is red for a reason already explained (a `deps/` PR waiting for its merge), watch without `--fail-fast`, or it stops at that job and hides the rest.
+   - A job red in CI and green here isn't explained until its log says why: CI's runners are slower than this PC, and some of what they check is fetched fresh.
+9. **Stay in scope.** Keep changes to the task; propose refactors outside it in the PR.
+10. **Finish the phase:** when a phase is done, check its **Definition of Done** point by point and report.
 
 ## Commands
 The full table, with every recipe and how to write one, is in `.claude/rules/commands.md`, which loads when you open the `justfile` or `scripts/`. The ones most tasks need:
@@ -119,7 +91,7 @@ The full table, with every recipe and how to write one, is in `.claude/rules/com
 **Server layering:** `http/handlers` → `app` services → `ports` → `infra`.
 - Handlers only parse input, authorize, call a service and map the result. No business logic, no SQL.
 - Services own use cases, transactions and audit entries.
-- Writes go through `Store::write()`, a `WriteTx` on the one write connection, whose `commit(entry)` takes the audit entry. Its few named exemptions, each with the user's approval and an ADR note, and the rule for a new one, are in `.claude/rules/server.md`.
+- Writes go through `Store::write()`, a `WriteTx` on the one write connection, whose `commit(entry)` takes the audit entry. Its few named exemptions, each with an ADR note, and the rule for a new one, are in `.claude/rules/server.md`.
 
 **Shared types:**
 - Every API DTO lives in `fleet-api-types` (serde + garde + ts-rs + utoipa). A test keeps its `OpenAPI` schemas equal to the TypeScript export.
@@ -130,10 +102,9 @@ The full table, with every recipe and how to write one, is in `.claude/rules/com
 - Binaries stay thin: `main.rs` wires things up; logic lives in the library part.
 
 ## Crate registry: one crate per concern
-**Never add a dependency or swap a crate without asking the user first.** If they approve, write an ADR and update Plan.md §5 and the registry in `.claude/rules/dependencies.md`.
+**Adding or swapping a dependency is yours to decide:** list it under **Decided myself**, write an ADR, and update Plan.md §5 and the registry in `.claude/rules/dependencies.md`. A new pin is at least 7 days old; a security fix may be newer, noted in the PR.
 - Before using any crate API, **check it on docs.rs for the pinned version**. These crates changed recently: sqlx 0.9, tonic 0.14 (+ `tonic-prost`), rand 0.10, argon2 0.6, chacha20poly1305 0.11, sha2 0.11, reqwest 0.13, keyring v4, azalea.
 - The registry's tables (every Rust crate and npm package allowed, by concern) and how to declare a dependency are in `.claude/rules/dependencies.md`.
-
 
 ## Rust rules
 **Idioms**
@@ -149,7 +120,7 @@ The full table, with every recipe and how to write one, is in `.claude/rules/com
 - direct indexing or slicing; use `.get()`
 - `as` casts that can truncate; use `TryFrom`
 
-Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[expect(lint, reason = "…")]`, and only with the user's approval.
+Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[expect(lint, reason = "…")]`, listed under **Weakened** in the PR.
 
 **The one pre-approved exception: generated code.** The prost/tonic output in `fleet-proto` is included in a dedicated module, e.g. `pub mod generated`, with a comment saying it's generated. That module may carry `#[allow(missing_docs, unreachable_pub, clippy::pedantic, …)]`. Use `#[allow]` there, not `#[expect]`, because generated code may or may not trigger each lint. Never put hand-written code in that module.
 
@@ -181,8 +152,7 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 - **Every network or IO await has a timeout** (`tokio::time::timeout`), or a comment explaining why it doesn't need one.
 - **Channels are always bounded.** No `unbounded_channel`: clippy's `disallowed-methods` bans it. The only exceptions are the two channels azalea's API forces on `fleet-mc`, each marked with an approved `#[expect]` (ADR-0011).
 - **Never hold a `std::sync::Mutex` guard across `.await`.** Prefer message passing to shared locks.
-- **Every spawned task has an owner** (`JoinSet` / `TaskTracker`) and a child `CancellationToken`. No fire-and-forget `tokio::spawn`. There are four exceptions:
-  - four approved exceptions, each owned and ended in its own way: fleet-mc's host threads, the bot actor's teardown task, fleet-client's refresh and code-step tasks, and the desktop keychain's blocking calls (ADR-0011, ADR-0013, ADR-0017; the details are in `.claude/rules/rust.md`).
+- **Every spawned task has an owner** (`JoinSet` / `TaskTracker`) and a child `CancellationToken`. No fire-and-forget `tokio::spawn`. There are four approved exceptions, each owned and ended in its own way: fleet-mc's host threads, the bot actor's teardown task, fleet-client's refresh and code-step tasks, and the desktop keychain's blocking calls (ADR-0011, ADR-0013, ADR-0017; the details are in `.claude/rules/rust.md`).
 - **`tokio::select!` branches must be cancel-safe**, or have a comment explaining why it's fine.
 - **Overload is an explicit error.** When a queue is full or a rate limit is hit, return `QueueFull`, `RateLimited` or `429`. Never wait forever.
 
@@ -211,14 +181,13 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
    - Never turn off certificate checks; no `danger_*` APIs.
    - Use exactly one rustls provider (aws-lc-rs), installed at startup.
    - The agent gRPC port uses mTLS; Caddy only fronts the HTTP API.
-10. **No silent weakening.** Lints, CSP, Tauri capabilities, rate limits, cargo-deny rules and coverage gates change only with the user's explicit approval and an ADR.
+10. **No silent weakening.** A change that weakens lints, the CSP, Tauri capabilities, rate limits, cargo-deny rules or coverage gates comes with an ADR and is listed under **Weakened** in its PR.
 11. **Nothing secret or personal in git.** The repo is public.
     - Never commit secrets, `.env` files, databases, keys or real account data.
     - Never commit personal data either: real names, email addresses, Windows usernames or home paths (`C:\Users\…`), IP addresses, real server addresses or domains, Minecraft account names or UUIDs.
     - Never name the user's hosting, in git, PRs or CI: their provider, their host, its address or DNS name, or that they use any particular cloud or DNS service. Steps that depend on a provider are written generically ("open 80 and 443 in your provider's firewall and the host's"); the runbook is a guide for any Linux host with Docker (the user's rule, ADR-0022, U2).
     - Examples and tests use placeholders: `example.com`, `192.0.2.10`, `AfkBot1`, `C:\path\to\afkfleet`.
     - The one exception is the repository's own GitHub URL (e.g. `repository` in `Cargo.toml`). It's public anyway.
-12. **Never read secret files:** `secrets/`, `.env*`, `*.pem`, `*.key` or `target/dev-server/vault-key-*`. Never read, list or print anything inside `target/dod-run/` either: the DoD checks' folder holds the user's real account, sealed, its vault key, its PKI, the agent's identity and their logs, and only the user's `dod-*` recipes touch it (the user's choice, ADR-0020, U1, U33). Never read or print the desktop app's Windows Credential Manager entries either (service `io.github.noah-gabel.afkfleet`, one per server origin); tests use a test-only service, `io.github.noah-gabel.afkfleet.test-<process id>`, and delete their entry (ADR-0017). When development needs a secret file, a `just` recipe generates it into a gitignored folder; never write or print one yourself. The dev vault key, for example, is created by `just dev-server` itself as `target/dev-server/vault-key-1`, next to the dev database it encrypts (ADR-0016). Any other one goes into the gitignored `secrets/` folder, through a recipe the user runs, except the DoD checks' own, which their recipes keep in `target/dod-run/` (U1).
 
 ## Testing conventions
 **Where tests go**
@@ -232,7 +201,7 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 - Arrange / Act / Assert, one behavior per test. Use `rstest` `#[case]` for tables.
 - **Time:** `#[tokio::test(start_paused = true)]` plus `tokio::time::advance`. Never a real `sleep`.
   - **Never paused time with sqlx.** It runs each SQLite connection on a worker thread, so the runtime looks idle while it waits, and paused time would jump ahead and fire its timeouts early. A test that waits for a pool timeout lowers it (`DatabaseOptions`) instead (ADR-0015).
-  - `governor` (rate limits) and `moka` (caches with expiry) keep their own clocks, which paused tokio time doesn't control. Inject a clock for them (governor supports custom clocks), or ask the user before testing them another way.
+  - `governor` (rate limits) and `moka` (caches with expiry) keep their own clocks, which paused tokio time doesn't control. Inject a clock for them (governor supports custom clocks), or say under **Decided myself** how else they're tested.
   - The approved real-time exceptions (the `manual_` tests that wait on Microsoft, fleet-integration's one wait helper, tests over real sockets, the desktop keychain's tests) are in `.claude/rules/testing.md`.
 - **Randomness:** seeded `StdRng`.
 - **The server's time and randomness** come through fleet-core's `Clock` and `SecureRandom` ports. Tests use fleet-testkit's `ManualClock` and `SeededRandom` (`fail_next` for a failing source) and never hard-code `SeededRandom`'s bytes or the IDs made from them; snapshots redact them (ADR-0015).
@@ -252,7 +221,7 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 
 **Hard rules**
 - `unwrap` and `expect` are allowed in tests, via `clippy.toml`.
-- **Never delete, `#[ignore]`, or weaken a failing test to get to green.** Fix the code or ask.
+- **Never delete, `#[ignore]`, or weaken a failing test to get to green.** Fix the code; a test that is itself wrong is fixed with its reason under **Decided myself**.
 - Coverage gates: `fleet-core` ≥ 90 %, `fleet-runtime` ≥ 85 %, auth and vault modules ≥ 90 %, the Microsoft accounts' modules ≥ 90 % (`msauth`), the control plane ≥ 90 % (`control-plane`: fleet-server's `infra/pki/`, `app/enrollment.rs`, `app/agents/` and `grpc/`; ADR-0019), the agent's control plane ≥ 90 % (`agent-control-plane`: fleet-agent's `managed/` and `enroll/`; ADR-0019, U20), `fleet-client` ≥ 90 %, the desktop crate ≥ 90 % (Windows, `just cov-desktop`), workspace ≥ 80 %.
 
 ## Frontend rules
@@ -261,7 +230,7 @@ The frontend's rules (structure, data and state, safety, quality, and every plac
 
 ## Environment
 - **Dev machine:** Windows 11, already set up by the user.
-  - **Your shell tool is Git Bash.** Write POSIX shell commands. Claude Code's PowerShell tool may be there too; don't use it for work. The merge guard and every permission rule cover it as well (ADR-0023, U3).
+  - **Your shell tool is Git Bash.** Write POSIX shell commands. Claude Code's PowerShell tool may be there too; don't use it for work. The settings' deny rules cover it as well.
   - The `justfile` runs recipes with **PowerShell 7** (`pwsh`) on Windows and `sh` on Linux.
   - Docker Desktop (WSL 2 backend) runs the Minecraft test server and the compose stack. It must be running for `just mc-up`, `just test-slow` and `just shots`; if Docker isn't reachable, ask the user to start it.
 - **Toolchain:** `rust-toolchain.toml` pins a **dated nightly**, and rustup installs it automatically.
@@ -280,4 +249,5 @@ The frontend's rules (structure, data and state, safety, quality, and every plac
 - [ ] New or changed snapshots were read before accepting, and are listed in the PR description.
 - [ ] `README.md` reflects the change (setup, commands, config, behavior, phase status).
 - [ ] The `Plan.md` checkbox is ticked, with a note for any deviation, and an ADR exists for any decision.
+- [ ] The PR description lists **Decided myself** and **Weakened** (or "none").
 - [ ] The work is on its task branch, pushed, with a PR open, and nothing was pushed to `main`.

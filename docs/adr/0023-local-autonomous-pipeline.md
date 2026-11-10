@@ -1,6 +1,6 @@
 # 0023. Local autonomous pipeline
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0025](0025-a-simpler-workflow.md) (2026-11-09): the merge guard, the review agents and the review folder are gone; the user reviews and merges every pull request.
 - **Date:** 2026-11-08
 - **Related:** CLAUDE.md (steps 2–10, "Review pipeline", "Git & GitHub rules", the Definition of Done); ADR-0020 (U87, U125: CI watch); ADR-0022 (U9, U11: read-only, checked subagents; the 5,300-line groups); `.claude/hooks/merge-guard.mjs`, `.claude/agents/plan-reviewer.md`, `.claude/agents/pr-reviewer.md`, `.claude/settings.json`; `docs/threat-model.md`
 

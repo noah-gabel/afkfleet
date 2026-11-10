@@ -629,7 +629,7 @@ Always safe to share: the app's state badge and its "Reason" and "Last disconnec
 
 Every change goes through a pull request; nobody commits to `main`.
 
-This project is written by AI (Claude Code).
+This project is written by AI (Claude Code); its maintainer reviews and merges every pull request.
 
 ## License
 Copyright (C) 2026 the afkfleet contributors.
