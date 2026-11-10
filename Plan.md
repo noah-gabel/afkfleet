@@ -2222,7 +2222,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - Plan.md's finished phases condensed, as long as every note an ADR or a comment points to stays findable.
 
   > Note (P12.8, as built) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), "Group E (P12.8)", U42–U52, S52–S58): one pull request (U42). README is a short intro with a quickstart and a status line (U44, U45, S52); its developer material is `docs/development.md` (U46), and `docs/README.md` indexes `docs/` (S53). The runbook gained what the DoD's run found and lost its repeats (S56); `docs/releasing.md` gained what the first release found (U52). Phases 0–11 above are summarised in place (U43, S55), every citation of Plan.md pinned by `scripts/plan-citations.test.mjs` (S54). `spikes/tls-provider/` is deleted (U47), and tasks keep `docs/development.md` current, README only its intro, quickstart and status (U48).
-  > Deviation: the runbook lost about 5 % of its words, not the planned ~35 %: what S56 keeps word for word makes up most of its lines. U49 added the subagent write guard ([ADR-0024](docs/adr/0024-subagents-read-only-enforced.md)).
+  > Deviation: the runbook lost about 5 % of its words, not the planned ~35 %: what S56 keeps word for word makes up most of its lines. U49's subagent write guard, built during the planning, was dropped with the merge guard when [ADR-0025](docs/adr/0025-a-simpler-workflow.md) replaced the pipeline, so this group is the tidy-up alone.
 
 **DoD:**
 - A clean afkfleet install (no earlier afkfleet state) on an existing Linux host that keeps its other services, following only the runbook.

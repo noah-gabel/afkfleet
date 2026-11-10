@@ -726,8 +726,8 @@ The repository tidied for readability, with no behaviour change, on `p12/tidy-up
 - **U46:** the developer material in one `docs/development.md`.
 - **U47:** `spikes/tls-provider/` deleted.
 - **U48:** CLAUDE.md step 6, its Definition of Done and the PR template: tasks keep `docs/development.md` current, and README only when its intro, quickstart or status line changes.
-- **U49:** the subagent write guard, a hook and instructions, in this pull request ([ADR-0024](0024-subagents-read-only-enforced.md)).
-- **U50, U51:** a third plan round, then no fourth: the user's approval of the plan covered the inventory, README's draft, S52–S58 and the reviewers' checking `docs/development.md` (row 15).
+- **U49:** a subagent write guard, a hook and instructions, in this pull request. It was built during the planning and dropped with the merge guard when [ADR-0025](0025-a-simpler-workflow.md) replaced the pipeline (2026-11-09), before this pull request opened.
+- **U50, U51:** a third plan round, then no fourth: the user's approval of the plan covered the inventory, README's draft, S52–S58 and the reviewers' checking `docs/development.md` (row 15, gone with the reviewer agents under ADR-0025).
 - **U52** *(the user's corrections at the approval)*: README's status line; the guides' gaps above (rows 16 and 17); the DoD's run and the Phase 13 note recorded.
 - The stray backup file at the repository's root stays, the user's.
 
@@ -740,7 +740,7 @@ The repository tidied for readability, with no behaviour change, on `p12/tidy-up
 - **S57.** `rate-limit-docs` and `tauri-hardening` read `docs/development.md` instead of README.
 - **S58.** The dev-bots console's five texts name `docs/development.md`.
 
-**As built**, in thirteen commits after the guard's four (ADR-0024), each red first where a test changed:
+**As built**, rebuilt on ADR-0025's `main` without the guard's commits, each red first where a test changed:
 - README and `docs/development.md`: the re-pointed tests red against a one-heading stub (19 rate-limit keys unnamed, the check exe's path absent); the lines moved word for word by script, links rebased, the phase tags that only told history dropped, two stale lines fixed (the images are published; Caddy fronts the API in production).
 - The index: its case red against a stub, naming every document.
 - The runbook: the DoD's gaps added, then its prose cut; a script compared the result with the version before (83 blocks, 71 Success sentences, 25 setting names kept).
@@ -754,7 +754,7 @@ The repository tidied for readability, with no behaviour change, on `p12/tidy-up
 - **README links the `docs/` index** in its Guides; the quickstart's steps follow the runbook's Installing and the friends' guide.
 - **The deleted spike's ignored `target/` folder** stays on the PC; git never held it.
 
-**Records:** Plan.md's P12.8 ticked with its note, Phase 12's DoD note (passed), the Phase 13 note; README's status line; CLAUDE.md, the PR template and the two reviewers (U48, row 15); `.claude/rules/commands.md`'s stale tools line; ADR-0024 for U49.
+**Records:** Plan.md's P12.8 ticked with its note, Phase 12's DoD note (passed), the Phase 13 note; README's status line; CLAUDE.md and the PR template (U48); `.claude/rules/commands.md`'s stale tools line; the `docs/` index with ADR-0024 and ADR-0025 as they now are.
 
 ## Consequences
 - **Easier:**
