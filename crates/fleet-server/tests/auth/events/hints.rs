@@ -233,6 +233,7 @@ const LABELS: &[(&str, &str)] = &[
         "nothing: a refused stream",
     ),
     ("agent.disable", "bots"),
+    ("agent.cert_renew", "nothing: a certificate no frame shows"),
     ("bot.assign", "bots"),
     ("bot.unassign", "bots"),
     ("bot.detach", "bots"),

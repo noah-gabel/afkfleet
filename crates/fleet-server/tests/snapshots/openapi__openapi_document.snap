@@ -248,6 +248,7 @@ expression: document
           "agent.disconnect",
           "security.agent_identity_conflict",
           "agent.disable",
+          "agent.cert_renew",
           "bot.assign",
           "bot.unassign",
           "bot.detach",

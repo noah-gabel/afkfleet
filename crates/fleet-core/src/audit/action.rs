@@ -322,7 +322,9 @@ audit_actions! {
     /// address; target the agent. Success, in the transaction that records
     /// its hello's capacity and version before `Welcome`: metadata
     /// `fingerprint` (the certificate it connected with), `version` and
-    /// `capacity`. Failure, nothing changed: a certificate the server knows
+    /// `capacity`, and `certificates_revoked` when the hello revoked the
+    /// agent's older certificates (the one a renewal replaced; P13.6,
+    /// ADR-0027). Failure, nothing changed: a certificate the server knows
     /// was refused; metadata `reason` (`revoked`, `expired`, `disabled`,
     /// `san_mismatch` or `name_mismatch`) and `fingerprint`, at most 10 per
     /// agent in any 24 hours. A certificate no agent holds is never recorded.
@@ -353,6 +355,17 @@ audit_actions! {
     /// `certificates_revoked` and `via`. An agent disabled already is no
     /// change, and no entry.
     AGENT_DISABLE = "agent.disable";
+
+    /// An agent renewed its certificate (P13.6, ADR-0027): the server signed
+    /// a new one for the same key and agent, asked over a connection the old
+    /// one admitted, and stored its fingerprint. Outcome: Success. No actor;
+    /// the agent's address; target the agent. Metadata: `fingerprint` (the
+    /// new certificate), `replaces` (the one it asked with, which stays
+    /// valid until the agent's first hello with the new one), `not_after`
+    /// and `certificates_revoked` (earlier renewals the agent never used).
+    /// A refused call is an `agent.connect` Failure, as a refused connect
+    /// is.
+    AGENT_CERT_RENEW = "agent.cert_renew";
 
     /// The server placed a bot on an agent (P10.5, ADR-0019, S36): its row
     /// gets the agent, from none, in its own transaction before the agent is
