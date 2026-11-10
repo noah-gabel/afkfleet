@@ -106,7 +106,9 @@ function localDay(at: number): number {
 /**
  * The warning on an enabled agent whose certificate ends within 14 calendar days of `now`, here,
  * or none: none once it has ended, which the server shows as Expired. "Certificate until" drops in a
- * small window, so this is where the end shows (the user's words, PR #92's review).
+ * small window, so this is where the end shows (the user's words, PR #92's review). An agent renews
+ * its certificate with a third of its lifetime left, 20 of 60 days (P13.6, ADR-0027), so one that
+ * gets here hasn't: it's offline, or older than 0.1.2, which is what the text says to change.
  */
 export function certificateWarning(notAfter: string, now: number): string | undefined {
   const end = Date.parse(notAfter);
@@ -118,5 +120,5 @@ export function certificateWarning(notAfter: string, now: number): string | unde
     return undefined;
   }
   const when = days === 0 ? "today" : days === 1 ? "tomorrow" : `in ${days} days`;
-  return `Expires ${when}. Enroll a new agent before then.`;
+  return `Expires ${when}. It renews once connected on 0.1.2 or later.`;
 }

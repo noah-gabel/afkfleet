@@ -125,13 +125,17 @@ describe("the agents' screen", () => {
         (await row(name)).getByText(word).closest("[data-slot=status-line]")?.className;
 
       expect(
-        (await row("agent-5")).getByText("Expires in 3 days. Enroll a new agent before then."),
+        (await row("agent-5")).getByText(
+          "Expires in 3 days. It renews once connected on 0.1.2 or later.",
+        ),
       ).toBeDefined();
       expect(await tone("agent-5", "Online")).toContain("text-warning");
       expect((await row("agent-4")).queryByText(/^Expires/)).toBeNull();
       expect(await tone("agent-4", "Offline")).toContain("text-muted-foreground");
       expect(
-        (await row("agent-3")).getByText("Expires today. Enroll a new agent before then."),
+        (await row("agent-3")).getByText(
+          "Expires today. It renews once connected on 0.1.2 or later.",
+        ),
       ).toBeDefined();
       expect(await tone("agent-3", "Offline")).toContain("text-warning");
       expect((await row("agent-2")).queryByText(/^Expires/)).toBeNull();

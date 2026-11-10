@@ -8,7 +8,8 @@
 // - A token to add an agent comes only from the server's host (U76), so nothing here creates one.
 // - An enabled agent whose certificate ends within 14 days says so under its status, which takes the
 //   warning tone, as "Certificate until" drops in a small window (the user's choice, PR #92's
-//   review); the time is read again each minute.
+//   review); the time is read again each minute. A certificate renews by itself long before that
+//   (P13.6, ADR-0027), so the line means the agent couldn't: it says what lets it.
 // - In a small window the table drops Enrolled, then Certificate until, then Version, then Can run
 //   (U91, U122), at widths that never show a column, hide it and show it again (R228). A name
 //   keeps 12 characters of width, or the expired hint's column takes it and a name as short as
