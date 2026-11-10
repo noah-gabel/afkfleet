@@ -45,8 +45,12 @@ use tempfile::TempDir;
 const WAIT: Duration = Duration::from_secs(30);
 /// How long the fixture may take: two key pairs and three signatures.
 const FIXTURE_WAIT: Duration = Duration::from_secs(120);
-/// The release's version: newer than the app's 0.1.0.
+/// The release's version: newer than the app's own, the workspace's.
 const VERSION: &str = "0.9.0";
+/// The app's own version: the test context takes it from the crate, as the
+/// real one does. Never a literal, which a release's version PR would leave
+/// behind as merely an older version (found at v0.1.1).
+const OWN_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The installer's name in the release.
 const INSTALLER: &str = "afkfleet_0.9.0_x64-setup.exe";
 
@@ -323,7 +327,7 @@ async fn a_signature_without_a_version_fails_the_downloads_checks() {
 async fn the_apps_own_version_is_no_update() {
     let release = Release::new();
     release.serve("latest.json", |manifest| {
-        manifest["version"] = json!("0.1.0");
+        manifest["version"] = json!(OWN_VERSION);
     });
 
     assert!(check(&release.updates()).await.unwrap().is_none());
@@ -355,7 +359,7 @@ async fn a_release_that_isnt_newer_is_no_update_without_a_windows_entry_too() {
     let release = Release::new();
     release.serve("latest.json", |manifest| {
         without_windows(manifest);
-        manifest["version"] = json!("0.1.0");
+        manifest["version"] = json!(OWN_VERSION);
     });
 
     assert!(check(&release.updates()).await.unwrap().is_none());
