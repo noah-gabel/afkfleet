@@ -19,7 +19,8 @@ Where things are:
 - **Decisions:** `docs/adr/`
 - **Threat model:** `docs/threat-model.md`. Its "Verified by" cells cite tests as Rust paths (`module::test_name`); `scripts/threat-model-citations.mjs` checks that each exists (`just scripts-test`). Rename a cited test only together with the threat model.
 - **Operations:** `docs/runbook.md`
-- **Project overview and status:** `README.md` (kept current, see "A task", step 6)
+- **Project overview and status:** `README.md`: a short intro, the quickstart and the current state (see "A task", step 6)
+- **Developers' guide:** `docs/development.md`: setup, commands, configuration, the binaries' and the API's reference, and the checks only the user runs (kept current, see "A task", step 6). `docs/README.md` indexes every document under `docs/`.
 - **Topic rules:** `.claude/rules/` holds the rules for parts of the work: the full commands table (`commands.md`), dependencies (`dependencies.md`), Rust details (`rust.md`), fleet-server (`server.md`), tests (`testing.md`) and the frontend (`frontend.md`). Each loads when you open a file it covers; read the ones a task touches before you plan it. Older ADRs and Plan.md notes cite some of these rules as "CLAUDE.md's …".
 
 ## How we work (ADR-0025)
@@ -53,7 +54,7 @@ Where things are:
 6. **Record.**
    - Tick the box in `Plan.md`, and note any deviation under the task as `> Note (P4.3): …`.
    - Write an ADR (`docs/adr/NNNN-title.md`) for any design decision.
-   - Update `README.md` whenever setup steps, commands, configuration or user-visible behavior change. When a phase is finished, update its **Status** section.
+   - Update `docs/development.md` whenever setup steps, commands, configuration or user-visible behavior change. Update `README.md` only when what it says changes: its intro, its quickstart or its status line (when a phase is finished, say).
    - Keep `.claude/rules/commands.md` in sync with the `justfile`.
 7. **Commit, push, open the PR.** Small commits with messages like `P2.6: add Stop transition`. Push with `git push -u origin <branch>`, then `gh pr create`. Title: `P2.6: <task name>`. Body: the goal, what changed, deviations, every new or changed snapshot, **Decided myself**, **Weakened** (or "none"), and the Definition of Done checklist below. When later commits change what it lists, update it with `gh pr edit <n> --body-file <file>`.
 8. **Watch CI after every push** (ADR-0020). Straight after it, in a background Bash: `sleep 30; gh pr checks <n> --watch --fail-fast --interval 30 > target/ci.txt 2>&1; echo "exit $?"`. Exit 0 is all green; anything else means act now. Never pipe the watch: `| tail` prints nothing until the last job ends, so a red job sits unseen behind a slow one.
@@ -247,7 +248,7 @@ The frontend's rules (structure, data and state, safety, quality, and every plac
 - [ ] Public items are documented (`missing_docs` and `cargo doc` are clean).
 - [ ] Generated artifacts are refreshed if their inputs changed (`just gen`, `just db-prepare`).
 - [ ] New or changed snapshots were read before accepting, and are listed in the PR description.
-- [ ] `README.md` reflects the change (setup, commands, config, behavior, phase status).
+- [ ] `docs/development.md` reflects the change (setup, commands, config, behavior), and `README.md` its intro, quickstart or status line if they changed.
 - [ ] The `Plan.md` checkbox is ticked, with a note for any deviation, and an ADR exists for any decision.
 - [ ] The PR description lists **Decided myself** and **Weakened** (or "none").
 - [ ] The work is on its task branch, pushed, with a PR open, and nothing was pushed to `main`.
