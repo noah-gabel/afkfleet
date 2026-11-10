@@ -1,8 +1,8 @@
 //! A session's Bevy App, as ADR-0008 §1 and §3 decided: azalea's plugins
 //! without auto-reconnect and auto-respawn, the packet-liveness and
 //! chat-signing plugins, the death and respawn watch (ADR-0020, S22, S27),
-//! the bot's event channel, and the single-threaded executor on every
-//! schedule.
+//! the riding plugin (ADR-0026), the bot's event channel, and the
+//! single-threaded executor on every schedule.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -21,6 +21,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::events::{LivenessStamps, PacketLivenessPlugin, RespawnWatchPlugin};
+use crate::riding::RidingPlugin;
 use crate::signing::SigningPlugin;
 
 /// The channel azalea's `LocalPlayerEvents` sends a session's events on. The
@@ -57,6 +58,8 @@ pub(super) fn build_app(
         PacketLivenessPlugin(stamps),
         signing,
         respawns,
+        // What azalea lacks for a bot in a minecart (ADR-0026).
+        RidingPlugin,
     ));
     give_events_to_the_bot(&mut app, events);
     extra(&mut app);
@@ -105,6 +108,7 @@ mod tests {
     use std::io;
     use std::time::Instant;
 
+    use azalea::core::tick::GameTick;
     use azalea::join::ConnectionFailedEvent;
     use azalea::protocol::connect::ConnectionError;
     use tokio::sync::mpsc::error::TryRecvError;
@@ -204,6 +208,26 @@ mod tests {
 
         assert!(app.is_plugin_added::<azalea::bot::BotPlugin>());
         assert!(app.is_plugin_added::<PacketLivenessPlugin>());
+    }
+
+    /// Bevy warns, at a schedule's first run, about every pair of systems
+    /// that touch the same data in an order nobody declared. azalea's own
+    /// schedules have none, so each system fleet-mc adds declares its place
+    /// among azalea's: a session start that logs a WARN would be noise in
+    /// every operator's log (found by fleet-agent's `slow_compose_scenario`
+    /// for the riding plugin, ADR-0026).
+    #[test]
+    fn no_schedule_runs_systems_in_an_undeclared_order() {
+        fleet_testkit::log_capture::install().unwrap();
+        let mut app = app();
+
+        app.update();
+        app.world_mut().run_schedule(GameTick);
+
+        assert_eq!(
+            fleet_testkit::log_capture::find(|line| line.contains("indeterminate execution order")),
+            Ok(())
+        );
     }
 
     // --- The bot's event channel (found in CI on Linux, group D) ---
