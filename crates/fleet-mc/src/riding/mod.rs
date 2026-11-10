@@ -53,7 +53,8 @@ use azalea::entity::{
 use azalea::interact::pick::{
     HitResultComponent, MaybePickableEntityQuery, update_hit_result_component,
 };
-use azalea::movement::send_position;
+use azalea::mining::MiningSystems;
+use azalea::movement::{send_position, send_sprinting_if_needed};
 use azalea::packet::game::ReceiveGamePacketEvent;
 use azalea::physics::PhysicsSystems;
 use azalea::physics::collision::entity_collisions::AabbQuery;
@@ -148,18 +149,31 @@ impl Plugin for RidingPlugin {
         // azalea registers the message too; registering it again is a no-op,
         // and it lets the plugin work on its own. azalea reads the packets
         // in `PreUpdate`, so a frame's `Update` sees them all.
+        //
+        // Every system has its place among azalea's that touch the same
+        // data: Bevy warns at each session's start about a pair whose order
+        // nobody declared. The bot's target is azalea's, then the seat's,
+        // then what azalea's mining reads. The seat is kept after azalea's
+        // physics, its attack (which slows a sprinting bot) and its
+        // sprinting packet, in azalea's own order, and before its position
+        // packet.
         app.add_message::<ReceiveGamePacketEvent>()
             .add_systems(
                 Update,
                 (
                     track_the_vehicle,
-                    pick_from_the_seat.after(update_hit_result_component),
+                    pick_from_the_seat
+                        .after(update_hit_result_component)
+                        .before(MiningSystems),
                 )
                     .chain(),
             )
             .add_systems(
                 GameTick,
-                keep_the_seat.after(PhysicsSystems).before(send_position),
+                keep_the_seat
+                    .after(PhysicsSystems)
+                    .after(send_sprinting_if_needed)
+                    .before(send_position),
             );
     }
 }

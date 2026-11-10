@@ -108,6 +108,7 @@ mod tests {
     use std::io;
     use std::time::Instant;
 
+    use azalea::core::tick::GameTick;
     use azalea::join::ConnectionFailedEvent;
     use azalea::protocol::connect::ConnectionError;
     use tokio::sync::mpsc::error::TryRecvError;
@@ -207,6 +208,26 @@ mod tests {
 
         assert!(app.is_plugin_added::<azalea::bot::BotPlugin>());
         assert!(app.is_plugin_added::<PacketLivenessPlugin>());
+    }
+
+    /// Bevy warns, at a schedule's first run, about every pair of systems
+    /// that touch the same data in an order nobody declared. azalea's own
+    /// schedules have none, so each system fleet-mc adds declares its place
+    /// among azalea's: a session start that logs a WARN would be noise in
+    /// every operator's log (found by fleet-agent's `slow_compose_scenario`
+    /// for the riding plugin, ADR-0026).
+    #[test]
+    fn no_schedule_runs_systems_in_an_undeclared_order() {
+        fleet_testkit::log_capture::install().unwrap();
+        let mut app = app();
+
+        app.update();
+        app.world_mut().run_schedule(GameTick);
+
+        assert_eq!(
+            fleet_testkit::log_capture::find(|line| line.contains("indeterminate execution order")),
+            Ok(())
+        );
     }
 
     // --- The bot's event channel (found in CI on Linux, group D) ---

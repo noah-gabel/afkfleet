@@ -58,7 +58,9 @@ Mine, under ADR-0025; the user left the approach open. fleet-mc gets a `riding` 
 
 **Leaving** needs nothing new: the ride's `Riding` goes with the server's `SetPassengers`, and azalea applies the teleport that follows.
 
-**Robustness.** The pick's system takes azalea's `Worlds` resource as optional and does nothing without it: a system whose resource is missing panics, and a panic in a session's App ends the session (found by this module's own tests).
+**Robustness.**
+- The pick's system takes azalea's `Worlds` resource as optional and does nothing without it: a system whose resource is missing panics, and a panic in a session's App ends the session (found by this module's own tests).
+- **Every system declares its place among azalea's that touch the same data.** Bevy warns at a schedule's first run about each pair whose order nobody declared, which would be a WARN at every session's start. fleet-agent's `slow_compose_scenario`, which fails on any log line nobody expects, found three such pairs in the first version. So the pick also runs before azalea's `MiningSystems` (which read the target, and run after azalea's pick), and the seat is kept after `send_sprinting_if_needed` too (azalea runs its queued attack, which writes `Physics`, before that). A fast test in `connector::app` runs the session's real `Update` and `GameTick` once and fails on that warning; it was red on the first version.
 
 ### Tests
 - **Unit** (`riding`, `riding::pick`): what each packet changes; several changes in one frame; the seat's offset; the seat keeping and that a bot on foot, one that left, one in a boat and one whose vehicle is unknown are left alone; the pick's entity rule case by case, vanilla's "picked at the eyes" case included; block against entity and both ranges. Two App tests run azalea's own `update_hit_result_component` together with the plugin on the measured scene: without `Riding` the target is the minecart (azalea's result, kept), with it the pig behind the minecart.
@@ -76,7 +78,7 @@ Mine, under ADR-0025; the user left the approach open. fleet-mc gets a `riding` 
 
 ## Consequences
 - A bot in a minecart uses, holds and attacks as a player sitting there would, and its own position is the server's during the ride.
-- **fleet-mc now depends on more of azalea's inner workings**, re-checked at every bump (`docs/releasing.md`): the two empty handlers and the `is_passenger` stubs (once azalea rides by itself, this module goes); `send_position`'s two inputs and its place after `PhysicsSystems`; `update_hit_result_component`, `pick_block`, `get_entities`, `MaybePickableEntityQuery` and `HitResultComponent`'s `DerefMut`; and the `Component` derive, which names its crate as `bevy_ecs` and gets it as `azalea::ecs`.
+- **fleet-mc now depends on more of azalea's inner workings**, re-checked at every bump (`docs/releasing.md`): the two empty handlers and the `is_passenger` stubs (once azalea rides by itself, this module goes); `send_position`'s two inputs and its place after `PhysicsSystems`, `handle_attack_queued` and `send_sprinting_if_needed`; `MiningSystems` after azalea's pick; `update_hit_result_component`, `pick_block`, `get_entities`, `MaybePickableEntityQuery` and `HitResultComponent`'s `DerefMut`; and the `Component` derive, which names its crate as `bevy_ecs` and gets it as `azalea::ecs`.
 - **Known limits:**
   - Other vehicles (boats, horses, pigs, striders, camels) are as before. Each has its own seat; a boat also carries two passengers and is steered by one, which needs `MoveVehicle` and more than a seat.
   - "The own vehicle" is the entity the bot sits in. Vanilla compares root vehicles, which is the same for a minecart: it carries one passenger and rides nothing.
