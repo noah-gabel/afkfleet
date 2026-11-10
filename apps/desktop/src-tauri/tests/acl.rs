@@ -219,9 +219,27 @@ fn every_contract_command_passes_the_acl_and_answers_as_the_contract_says() {
     assert_eq!(entries.len(), 71);
 }
 
+/// The version the contract's answers name. The TypeScript tests' fakes answer it; the
+/// app answers its own, which every release's version PR changes (found at v0.1.1, the
+/// first one).
+const CONTRACT_VERSION: &str = "0.1.0";
+
+/// `expected`, with the contract's version, wherever an answer names the app's own,
+/// replaced by this app's.
+fn at_this_apps_version(expected: &Value) -> Value {
+    let mut expected = expected.clone();
+    for field in ["current", "version"] {
+        if expected.get(field).and_then(Value::as_str) == Some(CONTRACT_VERSION) {
+            expected[field] = Value::String(env!("CARGO_PKG_VERSION").to_owned());
+        }
+    }
+    expected
+}
+
 /// An Ok answer must parse as `command`'s own response type and equal the expected
-/// value.
+/// value. The two answers that name the app's own version are held to this app's.
 fn assert_ok(command: &str, expected: &Value, value: &Value) {
+    let expected = &at_this_apps_version(expected);
     match command {
         "server_profile" => assert_eq!(
             serde_json::from_value::<ServerProfileState>(value.clone()).unwrap(),

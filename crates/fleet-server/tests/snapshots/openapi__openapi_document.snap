@@ -1,6 +1,6 @@
 ---
 source: crates/fleet-server/tests/openapi.rs
-expression: answer.json()
+expression: document
 ---
 {
   "components": {
@@ -2583,7 +2583,7 @@ expression: answer.json()
       "name": "GPL-3.0-or-later"
     },
     "title": "afkfleet",
-    "version": "0.1.0"
+    "version": "[version]"
   },
   "openapi": "3.1.0",
   "paths": {

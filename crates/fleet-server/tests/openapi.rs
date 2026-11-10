@@ -281,7 +281,13 @@ async fn dev_mode_serves_the_document_as_json_with_the_security_headers(
         Some("default-src 'none'; frame-ancestors 'none'")
     );
     assert!(answer.header("x-request-id").is_some());
-    insta::assert_json_snapshot!("openapi_document", answer.json());
+    // The document names the server's own version, which every release's
+    // version PR changes: it's held to the crate's here and left out of the
+    // snapshot, so a version PR never changes that (found at v0.1.1).
+    let mut document = answer.json();
+    assert_eq!(document["info"]["version"], env!("CARGO_PKG_VERSION"));
+    document["info"]["version"] = "[version]".into();
+    insta::assert_json_snapshot!("openapi_document", document);
     db.close().await;
 }
 

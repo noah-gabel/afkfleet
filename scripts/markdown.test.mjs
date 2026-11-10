@@ -5,6 +5,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, normalize } from "node:path";
 import { describe, it } from "node:test";
 
+import { workspaceVersion } from "./deploy-bundle.mjs";
 import { fences, headings, inlineCode, links, sections, slug } from "./markdown.mjs";
 import { ROOT } from "./threat-model-citations.mjs";
 
@@ -233,6 +234,18 @@ describe("the docs' index", () => {
       documents().filter((file) => !linked.has(file)),
       [],
     );
+  });
+});
+
+describe("README's status line (docs/releasing.md, Each release, step 1)", () => {
+  it("names the workspace's version as the released one", () => {
+    const version = workspaceVersion(readFileSync(join(ROOT, "Cargo.toml"), "utf8"));
+    const status = readFileSync(join(ROOT, "README.md"), "utf8")
+      .split("\n")
+      .filter((line) => line.startsWith("**Status:**"));
+
+    assert.equal(status.length, 1, status.join("\n"));
+    assert.ok(status[0].startsWith(`**Status:** v${version} is released`), status[0]);
   });
 });
 
