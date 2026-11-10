@@ -933,7 +933,8 @@ mod tests {
         BotEvent::ConnectFailed(ConnectFailure::TimedOut),
         to(backoff(2), &[StopMode, Disconnect, RecordFailure, retry(2)])
     )]
-    // A duplicate login behind a proxy: transient until P4.1 adds conflict texts.
+    // A plain-text kick, such as a proxy's duplicate login, is transient here: only a server's
+    // conflict texts (P4.1's `ConflictTexts::classify`) make it a conflict.
     #[case::plain_text_kick(
         online(2),
         BotEvent::Disconnected(plain_text_kick()),

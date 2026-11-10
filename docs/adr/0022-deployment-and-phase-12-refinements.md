@@ -709,6 +709,53 @@ The user's review of PR #99, fixed on `p12/p12.6-runbook` as new commits, each r
 - **Phase 13** (from D2): R23, key 1 staying configured after a rotation (`prod/server.toml` names it, and `.env` can't remove it), for P13.7; the four accepted risks S51 added, reviewed with the rest in P13.7.
 - **Phase 13** (from PR #99's review, the user's note): `serve` creates a missing database file, so a server started on a volume without its database comes up healthy and empty. Consider refusing to start without a database outside `init` (a hardening question, with the operator's first start and a restore's new host in mind).
 
+### The DoD's run *(2026-11-07)*
+Both parts passed, with v0.1.0, run by the user alone: **(a)** a clean install on an existing Linux host by the runbook alone, its other services untouched; **(b)** a friend on another Windows PC installed the release's app by the friends' guide, registered with an invite and logged in with 2FA over HTTPS against that system. The AI touched nothing of the host. What the run and the first release found missing from the guides went into group E (rows 16 and 17 below):
+- **The runbook:** a new login after joining the `docker` group (Docker's version then shows its Server part without `sudo`); Docker from Docker's own repository, and an update of Docker restarting every container; never reloading or saving the host's saved packet-filter rules while Docker runs, and restarting Docker when published ports stop answering; dynamic-DNS answers that differ by service (`good`, `nochg`, `OK`); the backups' pull with the PC's own key, three ways to bring its public half over and a graphical SFTP client; the keys' copy in shorter lines, listed with `tar -tvf` before its hash (an empty tar is 10240 bytes too), and a pasted line with stray characters (`200~`) retyped; `/health/live` opened in a browser before anyone is invited.
+- **The maintainer's guide:** the first release's steps 1 and 10; a tag pushed before CI on main was green (wait, then **Re-run failed jobs**, never retag); where the packages appear and their **Package settings**; where the installer's SHA-256 is shown.
+- **For Phase 13** *(the user's finding)*: the app's own update download (group D2's, above) accepts any URL scheme `latest.json` names. Release builds should require https, as defence in depth: the installer is still verified against the committed key.
+
+### Group E (P12.8) *(planned 2026-11-08, approved by the user 2026-11-09)*
+The repository tidied for readability, with no behaviour change, on `p12/tidy-up`.
+
+**The user's answers:**
+- **U42:** one pull request, however many lines move.
+- **U43:** Plan.md's finished Phases 0–11 summarised in place.
+- **U44:** README a short, ready-to-ship intro with a current-state line; its history deleted.
+- **U45:** a short quickstart for friends and operators, linking a shortened runbook; the friends' guide unchanged.
+- **U46:** the developer material in one `docs/development.md`.
+- **U47:** `spikes/tls-provider/` deleted.
+- **U48:** CLAUDE.md step 6, its Definition of Done and the PR template: tasks keep `docs/development.md` current, and README only when its intro, quickstart or status line changes.
+- **U49:** a subagent write guard, a hook and instructions, in this pull request. It was built during the planning and dropped with the merge guard when [ADR-0025](0025-a-simpler-workflow.md) replaced the pipeline (2026-11-09), before this pull request opened.
+- **U50, U51:** a third plan round, then no fourth: the user's approval of the plan covered the inventory, README's draft, S52–S58 and the reviewers' checking `docs/development.md` (row 15, gone with the reviewer agents under ADR-0025).
+- **U52** *(the user's corrections at the approval)*: README's status line; the guides' gaps above (rows 16 and 17); the DoD's run and the Phase 13 note recorded.
+- The stray backup file at the repository's root stays, the user's.
+
+**Decided by the review agents** *(approved with the plan)*:
+- **S52.** The operators' quickstart gives steps in words and links, no commands: commands stay in the runbook, where `runbook-commands.mjs` ties each to a test.
+- **S53.** `docs/README.md` indexes every document under `docs/`, kept whole by a `markdown.test.mjs` case; it and README join the placeholder check, `docs/development.md` stays out (it names the tools' sites and the agent's private ranges).
+- **S54.** `scripts/plan-citations.test.mjs` pins every "Plan.md P…", "§…" and "Appendix …" citation in a tracked file to a task line, a numbered heading or item, or an appendix of Plan.md.
+- **S55.** How a finished phase is summarised: headings, Goal, Introduces, every task line with its spec bullets and the DoD lists word for word; each note cut to its outcome with its ADR links and decision IDs, keeping the facts no ADR records and the content other files describe; a group table becomes one line where the phase's ADR holds it (Phase 2's stays).
+- **S56.** How the runbook is shortened: every heading, fenced block, marker, Success sentence and `AFKFLEET_` name stays word for word.
+- **S57.** `rate-limit-docs` and `tauri-hardening` read `docs/development.md` instead of README.
+- **S58.** The dev-bots console's five texts name `docs/development.md`.
+
+**As built**, rebuilt on ADR-0025's `main` without the guard's commits, each red first where a test changed:
+- README and `docs/development.md`: the re-pointed tests red against a one-heading stub (19 rate-limit keys unnamed, the check exe's path absent); the lines moved word for word by script, links rebased, the phase tags that only told history dropped, two stale lines fixed (the images are published; Caddy fronts the API in production).
+- The index: its case red against a stub, naming every document.
+- The runbook: the DoD's gaps added, then its prose cut; a script compared the result with the version before (83 blocks, 71 Success sentences, 25 setting names kept).
+- The citation test: 1,184 citations read; red through a recorded mutation (P6.2's task line removed: the three files citing it named), Plan.md restored by checksum.
+- Plan.md: drafted phase by phase by four read-only subagents (the tree's fingerprint unchanged after each), each draft checked by script against the original (every task line and line outside notes kept, every ADR link and decision ID kept), spliced in four commits.
+
+**Decided during the build** *(for the user's review)*:
+- **The runbook lost about 5 % of its words** (8,973 to 8,548), not the plan's ~35 %: the blocks, markers, Success sentences and metrics table S56 keeps make up most of its lines, and the rest is mostly the steps' facts the DoD run relied on.
+- **Plan.md** went from 5,122 lines to 2,764; Phases 0–11 from about 3,690 to 1,331.
+- **ADR-0020's S3 quotes "P4.5's note",** but the phrase ("decide where that setting lives (server settings, sent to agents)") stood in P11.3's note, which keeps it.
+- **README links the `docs/` index** in its Guides; the quickstart's steps follow the runbook's Installing and the friends' guide.
+- **The deleted spike's ignored `target/` folder** stays on the PC; git never held it.
+
+**Records:** Plan.md's P12.8 ticked with its note, Phase 12's DoD note (passed), the Phase 13 note; README's status line; CLAUDE.md and the PR template (U48); `.claude/rules/commands.md`'s stale tools line; the `docs/` index with ADR-0024 and ADR-0025 as they now are.
+
 ## Consequences
 - **Easier:**
   - A server that moved or is gone no longer traps the app at its start.

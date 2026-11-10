@@ -1,6 +1,7 @@
 // Every `[rate_limits]` key the server reads is in Plan.md's sample config (Appendix A) and in the
-// README's config list, and every limit `RateLimits` checks is in its module's list of where each
-// one is spent (ADR-0020, PR #90's review: the suggestions' limit reached none of the three).
+// developers' guide's config list (`docs/development.md`), and every limit `RateLimits` checks is
+// in its module's list of where each one is spent (ADR-0020, PR #90's review: the suggestions'
+// limit reached none of the three).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
@@ -51,10 +52,10 @@ describe("the rate limits' docs", () => {
     );
   });
 
-  it("the README names every key", () => {
-    const readme = read("README.md");
+  it("the developers' guide names every key", () => {
+    const guide = read("docs/development.md");
     assert.deepEqual(
-      keys.filter((key) => !new RegExp(`[\`\\s]${key}\``).test(readme)),
+      keys.filter((key) => !new RegExp(`[\`\\s]${key}\``).test(guide)),
       [],
     );
   });

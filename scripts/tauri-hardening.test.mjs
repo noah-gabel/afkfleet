@@ -571,7 +571,7 @@ describe("the debug exe the AI launches (ADR-0020, U87)", () => {
 
   it("is the path the rules name", () => {
     const root = path.resolve(srcTauri, "..", "..", "..");
-    for (const file of ["CLAUDE.md", ".claude/rules/commands.md", "README.md"]) {
+    for (const file of ["CLAUDE.md", ".claude/rules/commands.md", "docs/development.md"]) {
       assert.ok(readFileSync(path.join(root, file), "utf8").includes(CHECK_EXE), file);
     }
   });

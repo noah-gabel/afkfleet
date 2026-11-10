@@ -77,4 +77,4 @@ Every debug build of the app the AI launches is built with `just app-build-check
 ## Environment details
 - Tauri needs MSVC Build Tools ("Desktop development with C++") and WebView2 (built into Windows 11). Both are installed.
 - aws-lc-rs needs NASM, which is installed and on `PATH`. CMake isn't needed (it's only for FIPS builds).
-- Installed: Git, GitHub CLI, PowerShell 7, `just`, rustup, Node 24 + pnpm, Docker Desktop. Cargo tools (nextest, llvm-cov, deny, insta) may still need installing in Phase 0. sqlx-cli 0.9.0 is installed SQLite-only: `cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features sqlite`.
+- Installed: Git, GitHub CLI, PowerShell 7, `just`, rustup, Node 24 + pnpm, Docker Desktop. Cargo tools (nextest, llvm-cov, deny, insta) are installed at the versions `docs/development.md` lists. sqlx-cli 0.9.0 is installed SQLite-only: `cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features sqlite`.

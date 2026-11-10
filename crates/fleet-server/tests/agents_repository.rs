@@ -88,7 +88,7 @@ async fn insert_cert(db: &Database, cert: &NewAgentCert) -> Result<(), StoreErro
     Ok(())
 }
 
-/// Disables agent `id`, as P10.10 will, through the write pool.
+/// Disables agent `id` through the write pool, setting the flag `agent disable` sets (P10.10).
 async fn disable(db: &Database, id: AgentId) {
     let id = id.as_uuid().hyphenated().to_string();
     sqlx::query!("UPDATE agents SET enabled = 0 WHERE id = ?", id)
