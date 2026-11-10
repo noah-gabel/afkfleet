@@ -1,7 +1,7 @@
 // Tests for scripts/markdown.mjs, the docs' checks' Markdown reader (ADR-0022, S45, S49).
 // Run with `just scripts-test`.
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, normalize } from "node:path";
 import { describe, it } from "node:test";
 
@@ -11,6 +11,8 @@ import { ROOT } from "./threat-model-citations.mjs";
 /** The guides whose links must resolve, from the repository's root. */
 const GUIDES = [
   "README.md",
+  "docs/README.md",
+  "docs/development.md",
   "docs/runbook.md",
   "docs/using-the-app.md",
   "docs/releasing.md",
@@ -39,6 +41,27 @@ function brokenLinks(file) {
     }
   }
   return broken;
+}
+
+/** The index of `docs/`, from the repository's root (P12.8, S53). */
+const INDEX = "docs/README.md";
+
+/** Every Markdown file under `docs/` but the index, from the repository's root. */
+function documents() {
+  return readdirSync(join(ROOT, "docs"), { recursive: true })
+    .map((name) => `docs/${String(name).replaceAll("\\", "/")}`)
+    .filter((file) => file.endsWith(".md") && file !== INDEX)
+    .sort();
+}
+
+/** The files `INDEX` links to, from the repository's root. */
+function indexed() {
+  return new Set(
+    links(readFileSync(join(ROOT, INDEX), "utf8"))
+      .map(({ target }) => target.split("#")[0])
+      .filter((path) => path !== "" && !/^[a-z]+:/i.test(path))
+      .map((path) => normalize(join(dirname(INDEX), path)).replaceAll("\\", "/")),
+  );
 }
 
 describe("slug", () => {
@@ -198,6 +221,18 @@ describe("sections", () => {
     });
     assert.equal(found.get("inner").text, ["b", "```sh", "## not a heading", "```"].join("\n"));
     assert.equal(found.get("two").text, "c");
+  });
+});
+
+describe("the docs' index", () => {
+  it("links every document under docs/", () => {
+    const linked = indexed();
+
+    assert.ok(documents().length > 20, documents().join(", "));
+    assert.deepEqual(
+      documents().filter((file) => !linked.has(file)),
+      [],
+    );
   });
 });
 

@@ -303,7 +303,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
   - rustup with the dated nightly from `rust-toolchain.toml` (ADR-0003), plus stable 1.99.0 for the `stable-check` job
   - `just` 1.58.0
   - cargo-nextest 0.9.146, cargo-llvm-cov 0.9.1, cargo-deny 0.20.2, cargo-insta 1.49.0
-  - sqlx-cli **0.9.0** (P6), SQLite-only: `cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features sqlite`, the same in CI and the README
+  - sqlx-cli **0.9.0** (P6), SQLite-only: `cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features sqlite`, the same in CI and `docs/development.md`
   - Later: cargo-chef 0.1.78 (P5), cargo-mutants 27.1.0 and cargo-fuzz 0.13.2 (P13)
 - **Frontend tooling:** pnpm 12.9.1 (`packageManager`) and Biome 2.5.15 from P0.8; every other package is pinned in the phase that introduces it, exactly (no `^`), with `pnpm-lock.yaml` as the lock. From P8.6 `pnpm-workspace.yaml` sets `minimumReleaseAge: 4320`: pnpm resolves no release younger than 3 days and checks the whole lockfile at every install; exceptions only in `minimumReleaseAgeExclude`, with a comment and the user's approval. The Tauri CLI is `@tauri-apps/cli` 2.12.4, a dev-dependency of `apps/desktop` (approved in P8.2, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md); 2.12.4 for NSIS 3.13 and a clean uninstall, P12.5, [ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U26).
 - **Runtime & hosting:**
@@ -521,7 +521,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **A bad envelope:** one that doesn't open stops it, with a Failure entry each.
   > - **The database:** it never creates or migrates it.
   > - **`vault status`** shows, without any key, what each key ID still seals.
-  > - **The procedure** (stop, copy the database, add and activate the new key, rotate, check the status, drop the old key from the config but keep its file while older backups exist, start) is in the README.
+  > - **The procedure** (stop, copy the database, add and activate the new key, rotate, check the status, drop the old key from the config but keep its file while older backups exist, start) is the runbook's [Rotating the vault key](docs/runbook.md#rotating-the-vault-key).
 - **CA private key.** Its own secret, separate from the vault key.
 - **Agents.** They receive only short-lived Minecraft session tokens, held in memory as `SecretString`, and only for the bots assigned to them.
 - **Never log secrets:**
@@ -648,14 +648,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `SECURITY.md`: report vulnerabilities through GitHub's private vulnerability reporting
   - `.github/pull_request_template.md` with the Definition of Done checklist from `CLAUDE.md`
 
-  > Note (P0.1): `.claude/settings.json` was dropped from this task and from the §4 layout at the user's request; the user doesn't provide one. `CLAUDE.md` security rule 12 now states the secret-file rule as an instruction instead. `.claude/settings.local.json` stays in `.gitignore`.
+  > Note (P0.1): Deviation: `.claude/settings.json` was dropped from this task and from the §4 layout at the user's request; `CLAUDE.md` security rule 12 states the secret-file rule as an instruction instead, and `.claude/settings.local.json` stays in `.gitignore`.
 - [x] **P0.2** Pick the target Minecraft version and the matching azalea release or git rev. Pin a **dated nightly** in `rust-toolchain.toml` with the components `rustfmt`, `clippy` and `llvm-tools-preview`. Record this in ADR-0003, including the bump procedure (nightly + azalea + test-server `VERSION` change together).
 
-  > Note (P0.2):
-  > - **azalea:** `=0.16.0` from crates.io, so Minecraft 26.1 (the user's choice). The current Minecraft release is 26.3, so 26.2/26.3 servers need ViaVersion/ViaBackwards.
-  > - **Nightly:** pinned to `nightly-2026-08-21`, not the first candidate `nightly-2026-10-01`, which fails to compile azalea 0.16.0 (E0284 in `azalea-core`). A bisect found 08-21 as the last good and 08-22 as the first bad nightly.
-  > - **Verification:** `spikes/toolchain-check/` builds on Windows and in `rust:1-bookworm`. It stays in the repo for future bumps.
-  > - **Details:** see ADR-0003.
+  > Note (P0.2): azalea `=0.16.0` from crates.io, so Minecraft 26.1 (the user's choice; 26.2/26.3 servers need ViaVersion/ViaBackwards), on `nightly-2026-08-21`, since the first candidate `nightly-2026-10-01` fails to compile azalea 0.16.0; `spikes/toolchain-check/` stays in the repo for future bumps (ADR-0003).
 - [x] **P0.3** Write the workspace `Cargo.toml`:
   - `[workspace.package]`: edition 2024, `license = "GPL-3.0-or-later"`, `publish = false`, `repository` = the GitHub URL. Every member inherits them (`license.workspace = true`, `publish.workspace = true`, …).
   - `[workspace.dependencies]` with **every crate from §5**, each version checked on docs.rs. Crates are only *used* in their own phase.
@@ -684,16 +680,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
     ```
   - `[profile.release]` with `panic = "unwind"`, `overflow-checks = true` and `lto = "thin"`.
 
-  > Note (P0.3):
-  > - **Declared on first use.** The pinned nightly's cargo has a lint, `cargo::unused_workspace_dependencies` (warn by default), which fires once per declared but unused workspace dependency. All §5 crates up front meant 67 warnings. At the user's choice, `[workspace.dependencies]` holds only crates that are in use (none in Phase 0). The versions checked on docs.rs and crates.io, and the feature constraints, are pinned in §5 instead, and each phase copies its entries from there. No lint was changed.
-  > - **Changes from the baseline:**
-  >   - utoipa 6.0.0 / utoipa-axum 0.3.0
-  >   - tokio-tungstenite 0.29.0 instead of 0.30, matching axum 0.8.9's `ws`
-  >   - base64 0.23.1 and getrandom 0.4.3 are the current releases
-  >   - `tauri-build` 2.7.1 added to the registry (approved)
-  > - **Version policy:** caret requirements plus `Cargo.lock`, with `=` only for azalea (ADR-0009).
-  > - `exclude = ["spikes"]`, so spikes nested under the workspace root can build on their own.
-  > - `[workspace.package]` also sets `version = "0.1.0"`.
+  > Note (P0.3): Deviation: dependencies are declared on first use. The pinned nightly's `cargo::unused_workspace_dependencies` lint fires once per unused workspace dependency, so at the user's choice `[workspace.dependencies]` holds only crates in use. §5 pins the checked versions and feature constraints, each phase copies its entries from there, and no lint was changed.
+  > Caret requirements plus `Cargo.lock`, `=` only for azalea, with utoipa 6 and tokio-tungstenite 0.29 (ADR-0009). Also `exclude = ["spikes"]`, so nested spikes build on their own, and `version = "0.1.0"` in `[workspace.package]`.
 - [x] **P0.4** Write the remaining config files:
   - `clippy.toml`: `allow-unwrap-in-tests`, `allow-expect-in-tests`, `allow-panic-in-tests`, `allow-indexing-slicing-in-tests`, `allow-print-in-tests`.
   - `rustfmt.toml`: stable options only, `max_width = 100`.
@@ -705,31 +693,19 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - every license on the allowlist must be compatible with GPL-3.0 (all of the above are)
   - our own crates are GPL-3.0-or-later and unpublished; `[licenses.private] ignore = true` skips them, so the allowlist applies only to dependencies
 
-  > Note (P0.5):
-  > - **Sources:** crates.io only, because azalea is pinned from crates.io (ADR-0003); no git source is allowed.
-  > - **Stricter than the plan:**
-  >   - `ring` is banned too, so "`cargo tree -i ring` empty or justified" is enforced; a justified exception needs a `wrappers` entry and an ADR.
-  >   - `unsound = "all"` and `yanked = "deny"`.
-  > - `[graph] targets` limits the check to Windows MSVC and Linux GNU, so mobile-only dependencies don't count.
-  > - `unused-allowed-license = "allow"`: the allowlist is meant for future dependencies.
-  > - **Heads-up for P3:** a dry run against azalea 0.16.0's graph found two problems. Before azalea enters the workspace, the user has to decide on exceptions (approval + ADR) or on an azalea bump.
-  >   - **Licenses:** `minecraft_folder_path` (Unlicense) and `socks5-impl` (GPL-3.0-or-later) aren't on the allowlist.
-  >   - **Advisories:** RUSTSEC-2026-0118/0119 in `hickory-proto` 0.25.2 (fixed only in 0.26.1), and RUSTSEC-2023-0071 in `rsa` (no fix).
+  > Note (P0.5): Deviation: crates.io is the only source, since azalea is pinned from crates.io (ADR-0003). Stricter than the plan: `ring` is banned too, plus `unsound = "all"` and `yanked = "deny"`; `[graph] targets` covers only Windows MSVC and Linux GNU, and `unused-allowed-license = "allow"`. The heads-up for P3 (azalea 0.16.0's two licenses and three advisories) is in ADR-0003.
 - [x] **P0.6** Add `.config/nextest.toml` with the profiles `default` (excludes `test(/^slow_/)`), `slow` and `ci`.
 
-  > Note (P0.6): The filter is `test(/(^|::)slow_/)`, not `test(/^slow_/)`. nextest matches the full test path, so a unit test is `tests::slow_join`, which `^slow_` would miss. Checked with a temporary `tests::slow_example`: `default` and `ci` skip it, `slow` selects only it.
+  > Note (P0.6): Deviation: the filter is `test(/(^|::)slow_/)`, not `test(/^slow_/)`, because nextest matches the full test path, so a unit test is `tests::slow_join`.
 - [x] **P0.7** Add a `justfile` with the recipes listed in `CLAUDE.md`. Set `set windows-shell := ["pwsh", "-NoLogo", "-NoProfile", "-Command"]` (PowerShell 7).
   - Every recipe must also run in `sh` on Linux CI: one command per line, no `&&`/`||`.
   - Set environment variables with just's `export`, e.g. `export RUSTDOCFLAGS := "-D warnings"`.
   - Anything more complex goes into a script under `scripts/`.
   - `check` also runs `cargo doc --no-deps --workspace`.
 
-  > Note (P0.7):
-  > - **Stubs.** Recipes whose tools arrive later (`gen`, `db-prepare`, `mc-up`/`mc-down`, `dev-*`, `ui-test`, `e2e`) print their phase and exit 1. That keeps the `CLAUDE.md` table in sync; each phase gives its recipes real bodies.
-  > - **Extra checks.** `check` also runs doctests (nextest skips them) and the tests for `scripts/`.
-  > - **CI building blocks.** `check` and `ci` are composed of building-block recipes (`fmt-check`, `clippy`, `docs`, `doctest`, `test-ci`, `stable-check`, `scripts-test`, `ui-check`, `ui-audit`), and each CI job runs one of them.
-  > - **Coverage gates.** `scripts/coverage-gates.mjs` is plain Node (Node 24 is required everywhere anyway), with `node --test` tests. A gate whose files don't exist yet is skipped; the workspace gate never is. The auth and vault path patterns follow the server layout in `CLAUDE.md` and get confirmed in P7. *Confirmed in Phase 7, group A ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): the auth and vault gates are lists of path prefixes that fail on a prefix without files, required from group A on; each Phase 7 group adds its modules.*
-  > - **NASM.** `.cargo/config.toml` (a file not in the §4 layout) sets `AWS_LC_SYS_PREBUILT_NASM=0` for every cargo invocation, so a missing NASM fails the build instead of silently linking prebuilt objects (ADR-0009, P0.10).
+  > Note (P0.7): Recipes whose tools arrive later started as stubs that print their phase and exit 1. `check` also runs doctests and the `scripts/` tests, and `check` and `ci` are composed of building-block recipes, one per CI job (ADR-0009).
+  > `scripts/coverage-gates.mjs` is plain Node, tested with `node --test`. *Confirmed in Phase 7, group A ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): the auth and vault gates are lists of path prefixes that fail on a prefix without files, required from group A on; each Phase 7 group adds its modules.*
+  > `.cargo/config.toml` (a file not in the §4 layout) sets `AWS_LC_SYS_PREBUILT_NASM=0` for every cargo invocation, so a missing NASM fails the build (ADR-0009, P0.10).
 - [x] **P0.8** Set up the frontend workspace:
   - `package.json`
   - `pnpm-workspace.yaml` (`apps/*`, `packages/*`)
@@ -741,14 +717,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `cargo tree -i ring` must be empty or justified.
   - If it can't be done, move everything to `ring` instead and record that in an ADR. Never mix providers.
 
-  > Note (P0.10):
-  > - **Spike.** Verified with `spikes/tls-provider/`, which isn't a workspace member (the user's choice). reqwest 0.13.5, tonic 0.14.6, rcgen 0.14.10 and tokio-tungstenite 0.29.0, with the §5 features, install the aws-lc-rs provider and build their clients. That works on Windows (MSVC + NASM) and in `rust:1-bookworm`.
-  > - **Dependency graph:**
-  >   - `cargo tree -i ring --target all` prints nothing. `ring` appears in `Cargo.lock` only as an inactive optional dependency and is never compiled.
-  >   - `openssl-sys`, `native-tls` and `webpki-roots` aren't in the graph at all.
-  >   - `cargo deny` with the root `deny.toml` passes, so no license beyond the allowlist is needed. webpki-roots' CDLA-Permissive-2.0 is avoided.
-  > - **Prebuilt NASM objects.** rustls's `aws_lc_rs` feature enables aws-lc's `prebuilt-nasm`, which silently links prebuilt objects when NASM isn't on PATH. `.cargo/config.toml` sets `AWS_LC_SYS_PREBUILT_NASM=0`; a build without NASM was confirmed to fail.
-  > - **Not covered here.** `tauri-plugin-updater` and `testcontainers` default to ring, so they must use `default-features = false` (§5). The ring ban in `deny.toml` enforces it.
+  > Note (P0.10): Verified with `spikes/tls-provider/` (deleted in P12.8, U47; it stays in git history), not a workspace member (the user's choice), on Windows (MSVC + NASM) and in `rust:1-bookworm`. `cargo tree -i ring --target all` is empty, `openssl-sys`, `native-tls` and `webpki-roots` aren't in the graph, and `.cargo/config.toml` enforces NASM. `tauri-plugin-updater` and `testcontainers` default to ring, so they need `default-features = false` (§5), which the ring ban enforces.
 - [x] **P0.11** Set up CI (GitHub Actions) with these jobs:
   - `fmt`
   - `clippy` (`--all-targets -D warnings`)
@@ -770,13 +739,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   After the first CI run on the `p0/foundation` PR, the user adds the job names as required status checks in the `main` ruleset.
 
-  > Note (P0.11):
-  > - **Jobs call `just`.** Every job runs one `just` recipe (just and the cargo tools come from `taiki-e/install-action` at pinned versions), so CI and `just ci` can't drift apart.
-  > - **Toolchains.** The nightly comes from `rust-toolchain.toml` via `rustup install`, so there's no toolchain action. The stable version comes from the justfile.
-  > - **Windows.** `clippy` and `test` also run on `windows-latest`, with NASM from `ilammy/setup-nasm`. All other jobs run on `ubuntu-latest`.
-  > - **frontend** also runs the `scripts/` tests and `pnpm audit`, because the frontend workspace exists since P0.8.
-  > - **audit.yml** runs weekly (Mondays) and on demand: `just deny` and `just ui-audit`.
-  > - **Job names for the required checks:** `fmt`, `clippy (ubuntu-latest)`, `clippy (windows-latest)`, `docs`, `test (ubuntu-latest)`, `test (windows-latest)`, `coverage`, `deny`, `stable-check`, `frontend`.
+  > Note (P0.11): Every job runs one `just` recipe, with just and the cargo tools from `taiki-e/install-action` at pinned versions and the nightly from `rust-toolchain.toml`. `clippy` and `test` also run on `windows-latest` (NASM from `ilammy/setup-nasm`). `frontend` also runs the `scripts/` tests and `pnpm audit`, and `audit.yml` runs `just deny` and `just ui-audit` weekly (Mondays) and on demand.
+  > Job names for the required checks: `fmt`, `clippy (ubuntu-latest)`, `clippy (windows-latest)`, `docs`, `test (ubuntu-latest)`, `test (windows-latest)`, `coverage`, `deny`, `stable-check`, `frontend`.
 - [x] **P0.12** Add `docs/adr/0000-template.md` and these ADRs:
 
   | ADR | Topic |
@@ -789,14 +753,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   | 0006 | Opaque tokens instead of JWT |
   | 0007 | Tauri Rust-side API proxy (keychain, no CORS) |
 
-  > Note (P0.12): ADR-0009 ("Phase 0 dependency and tooling conventions") was added for the decisions taken while setting up Phase 0:
-  > - the version policy and declaring dependencies on first use
-  > - the single TLS provider, with the ring ban and NASM enforcement
-  > - utoipa 6 and tokio-tungstenite 0.29
-  > - the stricter cargo-deny settings
-  > - CI calling `just`, and Node scripts
-  >
-  > ADR-0008 stays reserved for P1.10. ADR-0004 is `Proposed` until the spike confirms it.
+  > Note (P0.12): ADR-0009 ("Phase 0 dependency and tooling conventions") was added for Phase 0's setup decisions: the version policy and declaring on first use, the single TLS provider, utoipa 6 and tokio-tungstenite 0.29, the stricter cargo-deny settings, and CI calling `just` with Node scripts. ADR-0008 stayed reserved for P1.10, and ADR-0004 `Proposed` until the spike confirmed it.
 - [x] **P0.13** Add a `docs/threat-model.md` skeleton based on §7.1.
 
 **Security:**
@@ -820,9 +777,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
 **Introduces:** `azalea` (pinned), `tokio`.
 
-> Note (P1):
-> - **One branch.** At the user's request, the whole phase uses one branch, `p1/azalea-spike`, and one PR, like Phase 0.
-> - **Spike-only dependencies.** With the user's approval, the spike also uses `tracing` and `tracing-subscriber` (to see azalea's own logs), plus `uuid` and `reqwest` (P1.8, because `AccountTrait` names `uuid::Uuid` and `reqwest::Proxy`). All four use their §5 versions. The workspace doesn't change.
+> Note (P1): One branch, `p1/azalea-spike`, and one PR, like Phase 0 (the user's request). Spike-only dependencies, approved by the user: `tracing` and `tracing-subscriber` (azalea's own logs), `uuid` and `reqwest` (P1.8, named by `AccountTrait`), all at their §5 versions; the workspace doesn't change.
 
 - [x] **P1.1** `just mc-up` starts `itzg/minecraft-server` with:
   - `EULA=TRUE`, `ONLINE_MODE=FALSE`, `VERSION=<pinned>`
@@ -831,10 +786,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   A bot joins it with `Account::offline`.
 
-  > Note (P1.1):
-  > - **Compose file.** `deploy/compose.dev.yaml` (project `afkfleet-dev`, service `minecraft`), image pinned by tag and digest. Phase 5 adds the agent to the same file.
-  > - **Settings.** Bound to `127.0.0.1:25565` only. RCON is enabled with the image's random per-start password and an unpublished port; commands run through `docker compose … exec minecraft rcon-cli`. `MAX_PLAYERS` defaults to 60 (overridable with `MC_MAX_PLAYERS`) for the load tests.
-  > - **Recipes.** `mc-down` also deletes the world (`--volumes`).
+  > Note (P1.1): `deploy/compose.dev.yaml` (project `afkfleet-dev`, service `minecraft`, image pinned by tag and digest), bound to `127.0.0.1:25565` only. RCON uses the image's random per-start password on an unpublished port, through `docker compose … exec minecraft rcon-cli`. `MAX_PLAYERS` defaults to 60 (`MC_MAX_PLAYERS`) for the load tests, and `mc-down` also deletes the world (`--volumes`).
 - [x] **P1.2** Run a client on a dedicated OS thread (current-thread runtime + `LocalSet`) and hand `(Client, events)` back to the multi-threaded runtime through a oneshot. Confirm that `Client` is `Send` and can be used from other threads.
 
   > Note (P1.2): `Client` is `Send + Sync + Clone` and works from tokio worker threads. Three start-up variants were compared; the hand-rolled join ("Variant C") won. `ClientBuilder` and Swarms can self-deadlock on teardown (an azalea bug). See ADR-0008 §1.
@@ -842,9 +794,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - how a connection failure shows up (`Event::ConnectionFailed`?)
   - what disconnect reasons look like, and whether translation keys are available for banned, not whitelisted, duplicate login, server full and outdated client
 
-  > Note (P1.3):
-  > - **Extra scenarios.** IP ban, idle timeout, server stop, `docker kill`, a frozen server (`docker pause`), and an older-version server.
-  > - **Findings.** The frozen server showed that ticks keep going while the server is dead, so the watchdog also needs a packet-liveness timeout. azalea has no connect timeout. See ADR-0008 §5–6.
+  > Note (P1.3): Extra scenarios: IP ban, idle timeout, server stop, `docker kill`, a frozen server (`docker pause`) and an older-version server. Ticks keep going while a frozen server is dead, so the watchdog also needs a packet-liveness timeout, and azalea has no connect timeout. See ADR-0008 §5–6.
 - [x] **P1.4** Chat:
   - receiving it, and telling player, system and whisper messages apart
   - getting the sender and the plain text
@@ -861,34 +811,20 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - select a hotbar slot
   - respawn after death
 
-  > Note (P1.5):
-  > - **Attack.** `Client::attack` in azalea 0.16.0 sends a mis-encoded packet and gets the bot kicked on 26.1. A raw-packet workaround (`attack_raw`) works.
-  > - **Idle timer (extra test).** Rotation alone doesn't reset the server's idle timer. See ADR-0008 §8.
+  > Note (P1.5): `Client::attack` in azalea 0.16.0 sends a mis-encoded packet and gets the bot kicked on 26.1; a raw-packet workaround (`attack_raw`) works. Rotation alone doesn't reset the server's idle timer. See ADR-0008 §8.
 - [x] **P1.6** Inject a panic into a custom ECS system. What happens to that client, its event channel, and other clients on the same host thread? Use the result to confirm the `Tick`-based watchdog design.
 
-  > Note (P1.6):
-  > - **Extra tests.** A hang, a Swarm, and pool starvation, run in the Linux container.
-  > - **Panics** are detected at once (the runner's `AppExit` receiver), so the Tick watchdog is only needed for hangs.
-  > - **Hangs** can starve Bevy's process-wide compute pool and freeze every bot, which is why each App uses the single-threaded executor. See ADR-0008 §3 and §5.
+  > Note (P1.6): Also tested: a hang, a Swarm and pool starvation, in the Linux container. Panics are detected at once (the runner's `AppExit` receiver), so the Tick watchdog is only needed for hangs. Hangs can starve Bevy's process-wide compute pool and freeze every bot, so each App uses the single-threaded executor. See ADR-0008 §3 and §5.
 - [x] **P1.7** Resources: compare one world per bot (`Client::join`) against Swarm shards at 10, 25 and 50 bots, measuring RSS, CPU and thread count. Choose a model, weighing in that one panic kills an entire shard.
 
-  > Note (P1.7):
-  > - **Method.** Measured in a Linux container (`--cpus 4`), at the user's choice. "One world per bot" uses Variant C instead of `Client::join` (P1.2).
-  > - **Models.** The matrix added one host thread per bot (ADR-0004's alternative) and Bevy's single-threaded executor.
-  > - **Choice.** One App and one host thread per bot, single-threaded executor: 222 MiB and 0.43 cores at 50 bots. Bevy's default multi-threaded executor needs ~7× the CPU. See ADR-0008 §2.
+  > Note (P1.7): Measured in a Linux container (`--cpus 4`, the user's choice). Deviation: "one world per bot" uses Variant C instead of `Client::join` (P1.2), and the matrix added one host thread per bot (ADR-0004's alternative) and Bevy's single-threaded executor. Chosen: one App and one host thread per bot with the single-threaded executor, 222 MiB and 0.43 cores at 50 bots; the default executor needs ~7× the CPU. See ADR-0008 §2.
 - [x] **P1.8** Write a custom `AccountTrait` that uses an externally supplied Minecraft access token, UUID and name, and stores the chat-signing certs. Compile-check it. The **user** may test it against a real online-mode server with their own account, running that step themselves. Real tokens never go into code, logs, commits or the AI chat.
 
-  > Note (P1.8):
-  > - **Local online-mode server.** At the user's request, the spike adds `spikes/azalea/compose.online.yaml` (online mode, secure profile enforced, `127.0.0.1:25567`), so the real-account test never touches a public server.
-  > - **Checked without credentials.** A garbage token and an offline account were tested against it.
-  > - **Real-account join.** That's the user's optional step: `fetch-token` (device code through azalea's re-exported auth, no cache file, token written to gitignored `secrets/`), then `account-join`. **Done by the user on 2026-10-06:** the bot spawned on the local online-mode server, its chat message was accepted with secure profiles enforced, and it disconnected cleanly.
-  > - **Gotchas.** Auth failures raise no azalea event, `join()` does nothing by default, and azalea's `MicrosoftAccount` derives `Debug` over its token. See ADR-0008 §9.
+  > Note (P1.8): At the user's request, `spikes/azalea/compose.online.yaml` (online mode, secure profile enforced, `127.0.0.1:25567`) keeps the real-account test off public servers; a garbage token and an offline account were tested against it. The user's optional step, `fetch-token` (device code through azalea's re-exported auth, no cache file, token in the gitignored `secrets/`) then `account-join`, was **done by the user on 2026-10-06**: the bot spawned, its chat was accepted with secure profiles enforced, and it disconnected cleanly.
+  > Gotchas: auth failures raise no azalea event, `join()` does nothing by default, and azalea's `MicrosoftAccount` derives `Debug` over its token. See ADR-0008 §9.
 - [x] **P1.9** Disconnect cleanly and check that no threads or tasks leak and that memory returns afterwards.
 
-  > Note (P1.9):
-  > - **Criterion.** At the user's approval, "memory returns" was checked as: RSS **plateaus** across cycles, and threads, fds and Worlds return to the post-warm-up baseline. glibc keeps freed memory, so RSS never drops back to the pre-join value.
-  > - **Result.** 20 cycles of 25 bots in Linux, a fresh host thread per bot: threads and fds back to baseline every cycle, every World freed, RSS after teardown flat at ~110 MiB from cycle ~9. No leak.
-  > - **Teardown.** `exit()`, drop every handle, close the host thread. `disconnect()` alone keeps the ECS running. See ADR-0008 §10.
+  > Note (P1.9): Deviation, approved by the user: "memory returns" means RSS **plateaus** across cycles, and threads, fds and Worlds return to the post-warm-up baseline, since glibc keeps freed memory. 20 cycles of 25 bots in Linux showed no leak. Teardown is `exit()`, dropping every handle and closing the host thread; `disconnect()` alone keeps the ECS running. See ADR-0008 §10.
 - [x] **P1.10** Write **ADR-0008 "azalea integration"** with:
   - the answers
   - the chosen model
@@ -897,11 +833,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   Update ADR-0004 to confirm or revise it.
 
-  > Note (P1.10):
-  > - **ADR-0008** also lists the open questions as answered or explicitly deferred (§11).
-  > - **ADR-0004** is now Accepted, revised to one host thread per bot with the single-threaded executor.
-  > - **Archived.** The spike stays in `spikes/azalea/` with an "Archived" banner, at the user's choice.
-  > - **Plan changes.** ADR-0008 lists changes to P2.4, P2.7, P2.10, P3.2, P3.4, P3.5 and P4.6. The user accepted them in the Phase 1 review, and they were applied in the same PR, together with P3.1, P3.8, P9.3, the fault table (§6) and the agent config (Appendix A).
+  > Note (P1.10): ADR-0008 lists the open questions as answered or explicitly deferred (§11); ADR-0004 is Accepted, revised to one host thread per bot with the single-threaded executor. The spike stays in `spikes/azalea/` with an "Archived" banner (the user's choice). The plan changes ADR-0008 lists (P2.4, P2.7, P2.10, P3.2, P3.4, P3.5, P4.6) were accepted in the Phase 1 review and applied in the same PR, together with P3.1, P3.8, P9.3, the fault table (§6) and the agent config (Appendix A).
 
 **Security:** never commit real account tokens. Use offline mode for everything except P1.8.
 
@@ -923,22 +855,12 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >   | C | `p2/p2.7-p2.8-modes-and-scheduler` | P2.7–P2.8 |
 >   | D | `p2/p2.9-authorization` | P2.9 |
 >   | E | `p2/p2.10-p2.11-ports-errors-docs` | P2.10–P2.11 |
-> - **Decisions.** The phase-wide conventions and the user's answers to the Phase 2 plan's open questions are in [ADR-0010](docs/adr/0010-fleet-core-conventions-and-phase-2-refinements.md):
->   - time (`DateTime<Utc>` passed in, `Instant` for liveness)
->   - injected randomness
->   - errors per task
->   - persistence formats
->
->   The notes below summarize the decisions that change a task.
-> - **Dependencies.** `serde_json` is an extra dev-dependency, for the mode JSON tests. `rstest` and `proptest` are declared without default features (§5).
-> - **DoD.** "No tokio or IO crates" is checked on normal dependencies: `cargo tree -p fleet-core -e normal`. Dev-only crates such as insta's tempfile don't ship.
+> - **Decisions.** The phase-wide conventions (time, injected randomness, errors per task, persistence formats) and the user's answers to the Phase 2 plan's open questions are in [ADR-0010](docs/adr/0010-fleet-core-conventions-and-phase-2-refinements.md); the notes below summarize the decisions that change a task.
+> - **DoD.** "No tokio or IO crates" is checked on normal dependencies: `cargo tree -p fleet-core -e normal`.
 
 - [x] **P2.1** 🔴 ID newtypes `UserId`, `AccountId`, `BotId`, `AgentId`, `ModeId`: uuid v7, `#[serde(transparent)]`, `Display`. They can't be confused with each other.
 
-  > Note (P2.1):
-  > - **Minting.** IDs are minted from caller data with `new_v7(created_at, [u8; 10])`; the server supplies `getrandom` bytes. uuid's `v7` feature stays off, because it pulls in getrandom.
-  > - **Parsing.** Parsing and deserializing accept only v7 UUIDs.
-  > - **serde.** It uses `try_from`/`into` `Uuid` instead of `transparent`: the same wire format, but validated (ADR-0010).
+  > Note (P2.1): IDs are minted with `new_v7(created_at, [u8; 10])` from server-supplied `getrandom` bytes (uuid's `v7` feature stays off), and parsing and deserializing accept only v7. Deviation: serde uses `try_from`/`into` `Uuid` instead of `transparent`: the same wire format, but validated (ADR-0010).
 - [x] **P2.2** 🔴 Value objects with fallible constructors (`TryFrom<&str>`). Each one gets a test for every rejection case, plus a proptest that it **never panics on arbitrary input**.
   - `ServerAddress`: host or IP, optional port 1–65535 (default 25565), no scheme or path, ≤ 253 chars.
   - `ChatMessage`: 1–256 chars after trimming, no control characters, no `§`.
@@ -946,66 +868,28 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `Username` (app login): 3–32 characters, normalized to lowercase.
   - Command detection: `ChatMessage::command_name()` for allowlist checks.
 
-  > Note (P2.2) (ADR-0010):
-  > - **`ChatMessage`** counts the 256 limit in UTF-16 code units, because vanilla checks the Java string length. It also rejects bidi controls.
-  > - **`Username`** allows ASCII `[a-z0-9_.-]`, starting with a letter or digit.
-  > - **`ServerAddress`:**
-  >   - remembers whether a port was given
-  >   - rejects non-ASCII hosts, `_`, a trailing dot and userinfo
-  >   - requires the last label of a domain to start with a letter, so `0x7f000001` and `127.0.0.0x1` aren't read as IP addresses
-  >   - needs brackets around IPv6 when a port follows
+  > Note (P2.2): `ChatMessage` counts the 256 limit in UTF-16 code units and rejects bidi controls; `Username` allows ASCII `[a-z0-9_.-]`, starting with a letter or digit; `ServerAddress` remembers whether a port was given, rejects non-ASCII hosts, `_`, a trailing dot and userinfo, requires a domain's last label to start with a letter, and needs brackets around IPv6 when a port follows (ADR-0010).
 - [x] **P2.3** 🔴 `IncomingChat` sanitizer: strip format codes and control characters, cap the length, and keep the kind (player, system or whisper) and the sender. This turns untrusted server text into something safe to store and display.
 
-  > Note (P2.3) (ADR-0010):
-  > - **Kinds.** `chat`, `emote`, `whisper`, `announcement` and `system`; the spike saw all five (ADR-0008 §7).
-  > - **Sender.** Only non-system kinds have one: a sanitized display name of at most 64 chars, plus an optional UUID.
-  > - **Text.** It's capped at 1024 chars, with a `truncated` flag, and `\n` is kept. These are stripped from the text and from sender names:
-  >   - other control characters
-  >   - `§` pairs
-  >   - bidi controls
-  >   - invisible characters: the format characters that show no glyph (U+200B–U+200D, U+2060–U+2064, U+FEFF, U+00AD, …), U+2028/U+2029, the Hangul fillers, tags and every variation selector except U+FE0F; the ranges are in `text.rs`
-  > - **Storage.** Chat is stored as columns, so there's no serde.
+  > Note (P2.3): Kinds are `chat`, `emote`, `whisper`, `announcement` and `system` (ADR-0008 §7); only non-system kinds have a sender (a sanitized name of at most 64 chars, an optional UUID). The text is capped at 1024 chars with a `truncated` flag and keeps `\n`; other control characters, `§` pairs, bidi controls and invisible characters (ranges in `text.rs`) are stripped. Stored as columns, so no serde (ADR-0010).
 - [x] **P2.4** 🔴 `DisconnectReason` and a classifier that returns `Transient`, `Permanent(kind)`, `Conflict(DuplicateLogin)` or `AuthInvalid`. Table-driven tests use real kick messages and translation keys from the spike (ADR-0008 §6).
 
-  > Note (P2.4): The input also covers these reasons (ADR-0010):
-  > - `AuthRejected`, classified as `AuthInvalid`
-  > - `SessionCrashed`, `WatchdogTimeout`, `LivenessTimeout` and `ConnectFailed` (including `HostUnavailable`), all transient
-  >
-  > **Known limit.** A duplicate login that a proxy or plugin reports as plain text has no key, so it classifies as transient. Decided in group B: P4.1 adds per-server conflict texts (see P2.6).
+  > Note (P2.4): The input also covers `AuthRejected` (classified `AuthInvalid`) and the transient `SessionCrashed`, `WatchdogTimeout`, `LivenessTimeout` and `ConnectFailed` (including `HostUnavailable`). Known limit: a plain-text duplicate login has no key and classifies as transient; P4.1 adds per-server conflict texts (see P2.6) (ADR-0010).
 - [x] **P2.5** 🔴 Resilience policies:
   - `RetryPolicy` wraps `backon`'s exponential builder: base, factor, cap, jitter, and a reset after a stable period. Tests assert **bounds**, not exact values.
   - `CircuitBreaker` (closed, open, half-open) is pure, with time passed in.
   - Proptests: delay ≤ cap, and the breaker never lets an attempt through while open.
 
-  > Note (P2.5) (ADR-0010):
-  > - **Factor.** Fixed at 2; there's no config key for it.
-  > - **Jitter.** backon adds its jitter after the cap (`d + d·U[0,1)`), so it's given `max / 2`. Jittered delays then stay ≤ `max`, which requires `max ≥ 2 × base`. The jitter is seeded from the injected RNG.
-  > - **`FailureWindow`.** A pure counter for "N failures within a window". It backs the breaker, and later P4.7.
-  > - **Breaker.** One per bot, and it only decides how long to wait. Appendix E's "circuit open too long → Failed" arrow is dropped.
+  > Note (P2.5): The factor is fixed at 2. backon's jitter, seeded from the injected RNG, is given `max / 2`, so jittered delays stay ≤ `max` (which requires `max ≥ 2 × base`). `FailureWindow` counts "N failures within a window" for the breaker and later P4.7. One breaker per bot, which only decides how long to wait; Appendix E's "circuit open too long → Failed" arrow is dropped (ADR-0010).
 - [x] **P2.6** 🔴 The **bot state machine**: `BotState`, `BotEvent`, `Effect`, and `transition(&state, event, now) -> Transition` (Appendix E). It needs example tests for every transition and proptest invariants:
   - A `Stop` from any state ends in `Stopped`, and emits `Disconnect` if a session exists.
   - `Failed` and `Paused` never emit `Connect` before `Reset` or `Resume`.
   - There is never a `Connect` effect while `Connecting` or `Online`.
   - The attempt counter resets after the stable-online period.
 
-  > Note (P2.6): Decided in the Phase 2 plan and built in group B (ADR-0010):
-  > - **Signature.** `transition(&state, event, now, &RetryPolicy)`.
-  > - **State fields.** `Online{since, attempt}`, `AwaitingSession{attempt, fresh}`, `Connecting{attempt, auth_retried}`, `Stopping{restart}`; *from Phase 11 (ADR-0020, U24, S1)* `Backoff{attempt, fresh}`.
-  > - **New event.** `CrashLoop`.
-  > - **Auth.** The state machine owns "request one fresh token, then `Failed(Auth)`".
-  > - **Stop.** Without a session, `Stop` goes straight to `Stopped`. The first invariant reads "Stop, then SessionClosed, ends in Stopped".
-  > - **Unfitting events** are no-ops.
-
-  > Note (P2.6, built in group B): The user decided three questions on 2026-10-06 (ADR-0010):
-  > - **Plain-text duplicate login.** No state-machine change: P4.1 adds per-server conflict texts. Until then, a keyless kick while Online backs off like any transient one, and a test pins that.
-  > - **Paused and Failed are sticky.** `Start` and `Stop` are no-ops there; only `Resume`, `Reset` and `CrashLoop` leave them. So the first invariant holds for every other state, and the second holds for any event sequence without `Reset` or `Resume`.
-  > - **Breaker effects.** `RecordFailure` (a session failed before the stable period, always right before `ScheduleRetry`), `RecordSuccess` (leaving Online after the stable period, whatever the exit) and `ResetBreaker` (`Start`, `Reset` or `Resume` (re)starts the bot).
-  >
-  > Also settled while building it (ADR-0010):
-  > - **Attempts.** `Backoff{n}` and `ScheduleRetry{n}` name the attempt that failed, and the actor waits `RetryPolicy::delay(n)`, so the first retry waits 5–10 s. The `RetryPolicy` docs now count failures, too.
-  > - **Session ends.** `ConnectFailed`, `Disconnected`, `WatchdogTimeout` and `SessionClosed` are handled alike in Connecting and Online. `AuthInvalid` while Online counts as transient, so a server can't drive reconnects without a backoff.
-  > - **`Notify`** only on entering Paused or Failed. The actor publishes every state change, plus `Died`, for the app.
-  > - **More proptest invariants:** session and mode effects balance; at most 2 connects per `Start`, `Reset`, `Resume` or `RetryDue`; `Notify` and the breaker effects match the state change.
+  > Note (P2.6): Deviation: `transition(&state, event, now, &RetryPolicy)`, with the states `Online{since, attempt}`, `AwaitingSession{attempt, fresh}`, `Connecting{attempt, auth_retried}`, `Stopping{restart}`; *from Phase 11 (ADR-0020, U24, S1)* `Backoff{attempt, fresh}`. A new event `CrashLoop`; the state machine owns "request one fresh token, then `Failed(Auth)`"; unfitting events are no-ops; without a session, `Stop` goes straight to `Stopped`, so the first invariant reads "Stop, then SessionClosed, ends in Stopped" (ADR-0010).
+  > The user's decisions (2026-10-06): a plain-text duplicate login backs off like any transient kick until P4.1's per-server conflict texts; Paused and Failed are sticky (`Start` and `Stop` are no-ops there, only `Resume`, `Reset` and `CrashLoop` leave them, so the first invariant holds for every other state and the second for any event sequence without `Reset` or `Resume`); the breaker effects are `RecordFailure`, `RecordSuccess` and `ResetBreaker`.
+  > `Backoff{n}` and `ScheduleRetry{n}` name the failed attempt, so the first retry waits 5–10 s; `AuthInvalid` while Online counts as transient; `Notify` only on entering Paused or Failed; more proptest invariants: session and mode effects balance, at most 2 connects per `Start`, `Reset`, `Resume` or `RetryDue` (ADR-0010).
 - [x] **P2.7** 🔴 The mode model:
   - `Action` enum: `Look{yaw,pitch}`, `RotateRandom{max_yaw,max_pitch}`, `Jump`, `Sneak{on}`, `SwingArm`, `UseItem`, `AttackFacingEntity`, `SelectHotbarSlot(0..=8)`, `SendChat(ChatMessage)`.
   - `Schedule`: `AtStart` or `Every{interval, jitter}`, plus a `probability`.
@@ -1024,68 +908,19 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
     - **`farm`**: a fixed look direction, a hotbar slot chosen at start, and attack every 0.65–0.8 s.
   - insta snapshots of the serialized presets, so stored modes stay compatible.
 
-  > Note (P2.7): Decided in the Phase 2 plan and built in group C (ADR-0010):
-  > - **`afk`:** `RotateRandom` ±30°/±10° every 45–120 s, plus `SwingArm` every 20–40 s.
-  > - **`farm`:** hotbar slot 0 at start, plus an attack every 650–800 ms, with no Look.
-  > - **JSON:** struct variants (`{"type":"select_hotbar_slot","slot":3}`), and `validate()` is `ModeDraft::validate`.
-  > - **Limits:** probability is a percent from 1 to 100; interval and jitter are each ≤ 24 h; at most one `AtStart` chat step.
-  > - **Commands:** `commands()` feeds the authorization check.
-
-  > Note (P2.7, built in group C): The user decided five questions on 2026-10-06 (ADR-0010):
-  > - **Limited steps.** A mode has at most one at-start and one repeating step each for `AttackFacingEntity` and `SendChat`. Otherwise two steps would get around the attack or chat interval, or fire together on every join.
-  > - **Angles** are degrees. `Look`: yaw −180 to 180, pitch −90 to 90. `RotateRandom`: `max_yaw` 0 to 180, `max_pitch` 0 to 90, not both 0. NaN and ±∞ are rejected.
-  > - **Errors.** `validate` returns the first `ModeError` in step order. `step` is the index into `steps`, and angle errors name their field.
-  > - **New types fail closed.** An older server can't read a stored mode that uses a newer action or schedule type; the rollback promise covers new fields only.
-  > - **Presets** are only the definitions `ModeDefinition::afk()` and `farm()`. Their names come with P5.1 and their fixed IDs with P11.1.
-  >
-  > Also settled while building it (ADR-0010):
-  > - **JSON:** `{"steps":[{"action":{"type":"swing_arm"},"schedule":{"type":"every","interval_ms":20000,"jitter_ms":20000},"probability":100}]}`. Every field is required, and reading a `ModeDefinition` runs `validate`.
-  > - **`HotbarSlot`** is a newtype for 0..=8, because azalea panics above 8 (ADR-0008 §8). An invalid slot fails while deserializing, like an invalid `ChatMessage`.
-  > - **Whole milliseconds.** `validate` drops anything finer than a millisecond before checking, so a definition round-trips through its JSON exactly.
-  > - **Snapshots** pin serde_json's own output: `afk_preset`, `farm_preset` and `all_variants` (every type and field name).
+  > Note (P2.7): `afk` is `RotateRandom` ±30°/±10° every 45–120 s plus `SwingArm` every 20–40 s. Deviations: `farm` is hotbar slot 0 at start plus an attack every 650–800 ms, with no Look; the JSON uses struct variants (`{"type":"select_hotbar_slot","slot":3}`), every field required, and `validate()` is `ModeDraft::validate`, which reading a `ModeDefinition` runs. Probability is a percent from 1 to 100, interval and jitter are each ≤ 24 h, durations count in whole milliseconds, `HotbarSlot` is a 0..=8 newtype since azalea panics above 8 (ADR-0008 §8), and `commands()` feeds the authorization check (ADR-0010).
+  > The user's decisions (2026-10-06): at most one at-start and one repeating step each for `AttackFacingEntity` and `SendChat`; angles in degrees (`Look` yaw −180 to 180, pitch −90 to 90; `RotateRandom` `max_yaw` 0 to 180, `max_pitch` 0 to 90, not both 0; NaN and ±∞ rejected); `validate` returns the first `ModeError` in step order; new types fail closed on older servers; the presets are only `ModeDefinition::afk()` and `farm()`, their names coming with P5.1 and their fixed IDs with P11.1 (ADR-0010).
 - [x] **P2.8** 🔴 `ModePlan`: a pure scheduler that takes a definition, an RNG and the current time and returns `(next_due, Vec<Action>)`. The runtime then only sleeps and executes. Tests use a seeded RNG.
 
-  > Note (P2.8) (ADR-0010):
-  > - **Return value.** `PlanTick { actions: Vec<PlannedAction>, next_due: Option<…> }`. `RotateRandom` is resolved to a relative `Turn`, and chat is kept separate for the P4.5 queue.
-  > - **Timing.** Gaps are uniform in [interval, interval + jitter], the first run comes one gap after the start, and there's no catch-up.
-  > - **Pitch.** After applying a `Turn`, the adapter (P3.6) clamps the pitch to [-90, 90].
-
-  > Note (P2.8, built in group C) (ADR-0010):
-  > - **API.** `ModePlan::start(&definition, now, rng) -> (ModePlan, PlanTick)` runs the at-start steps, and `tick(now, rng) -> PlanTick` runs every due step in step order. `PlannedAction` is `Game(GameAction)` or `Chat(ChatMessage)`.
-  > - **`GameAction`** lives in `fleet_core::mode`, as the user decided; P2.10's `perform` takes it.
-  > - **Rescheduling from `now`.** A step that ran is due again one gap after `now`, not after its old due time. So there's no catch-up, and two runs are never closer than the interval, even when the runtime wakes late. A skipped roll reschedules too.
-  > - **No serde** on `ModePlan`, `PlanTick`, `PlannedAction` or `GameAction`.
+  > Note (P2.8): Deviation: `ModePlan::start(&definition, now, rng) -> (ModePlan, PlanTick)` runs the at-start steps and `tick(now, rng) -> PlanTick` every due step in step order, with `PlanTick { actions: Vec<PlannedAction>, next_due: Option<…> }`. `PlannedAction` is `Game(GameAction)` or `Chat(ChatMessage)`, chat kept apart for the P4.5 queue; `RotateRandom` becomes a relative `Turn`; `GameAction` lives in `fleet_core::mode` (the user's decision), and P2.10's `perform` takes it.
+  > Gaps are uniform in [interval, interval + jitter], the first run comes one gap after the start, and a step that ran (or skipped its roll) is due again one gap after `now`, so there's no catch-up. The adapter (P3.6) clamps the pitch, and these types have no serde (ADR-0010).
 - [x] **P2.9** 🔴 Authorization: `Role`, `GrantLevel`, `Permission`, `Actor`, `ResourceContext`, `authorize()`.
   - An **exhaustive matrix test** covers every role × grant × permission. It's generated and snapshotted with insta, so every change shows up in review.
   - Edge cases: an Admin acting on the Owner or another Admin, granting above your own level, deny by default.
 
-  > Note (P2.9) (ADR-0010):
-  > - **Admins.** An Admin's implicit Manage covers Members' accounts and the Admin's own, but not the Owner's or other Admins'.
-  > - **Commands.** `CommandAllowlist` is a core type. Changing to a mode that contains a non-allowlisted command needs Manage.
-  > - **Built-in modes.** `ResourceContext::Mode{owner: None}` is a built-in mode.
-
-  > Note (P2.9, from the group A review): **Allowlist format.** Appendix A writes allowlist entries as `"/spawn"`, but `ChatMessage::command_name()` returns `spawn`, so the formats must match. Compare exactly and case-sensitively against the allowlist, so the check fails closed: `/Spawn`, `/minecraft:spawn` and `/spawn` followed by a zero-width space all need Manage.
-
-  > Note (P2.9, built in group D): The user decided eight questions on 2026-10-06 (ADR-0010):
-  > - **Private modes** follow the account rule: their owner, the Owner, and Admins for Members' modes see and edit them. Everyone else gets 404.
-  > - **Shared modes** are visible to everyone. Their creator and the Owner edit them. Shared modes need Admin+ (Appendix B), so a creator who's demoted to Member can no longer edit theirs.
-  > - **Grants.** Only Manage edits grants, so "never above your own level" always holds; a test pins it. Nobody grants to themselves, so an Admin can't turn implicit Manage into a grant that outlives a Member's promotion to Admin. A grant to an alt account is an accepted risk (threat model; P11.9 shows the grants at a promotion).
-  > - **Roles.** Only the Owner changes roles, between Member and Admin, never their own or the Owner's. Admins disable and enable Members. Ownership transfer gets no permission until it has a route (P7.9).
-  > - **Allowlist entries** keep the slash: `/` plus a command name without arguments, at most 64 entries. A missing key means an empty list, so every command needs Manage.
-  > - **Invites.** Admins list all invites. Revoking follows creating: Member invites need Admin+, Admin invites the Owner, and Owner invites are never allowed.
-  > - **Self-service routes** check `ResourceContext::Personal{owner}` with `Permission::UsePersonal`: allowed for the owner, 404 for everyone else, the Owner included.
-  > - **Agents.** Only the Owner enrolls agents; viewing and disabling them stays Admin+. An agent receives session tokens for the bots assigned to it, so an Admin's own agent could otherwise get the Owner's. This deviates from §7.3. *(Since Phase 11's group J, enrollment tokens come only from the server's host; ADR-0020, U76.)*
-  >
-  > Also settled while building it (ADR-0010):
-  > - **API.**
-  >   - `ResourceContext` is `Global`, `Account{owner, grant}`, `Mode{owner, visibility}`, `User(UserRef)`, `Invite{role}` or `Personal{owner}`. `grant` is the actor's own grant, and a bot is authorized through its account.
-  >   - `AuthzError` is `NotFound` (the actor can't even see it: 404), `Forbidden` (403) or `WrongResource` (a permission checked against the wrong kind of resource: a caller bug).
-  >   - `Permission` is `Copy`. `SendChat` and `SetBotMode` carry a `CommandCheck` that only `CommandAllowlist::check` and `check_mode` create, so no chat text ends up in `Debug` output.
-  > - **Server address and auto-start** need Manage (`ConfigureBot`): Appendix B's `PATCH /bots/{id}` needs Manage except for the mode.
-  > - **The Owner's limits.** §7.3's "can do everything" doesn't cover these: editing built-in modes, changing their own role or disabling themselves, acting on another Owner, Owner invites, granting to themselves, and other users' personal resources.
-  > - **Names.** `Role`, `GrantLevel` and `ModeVisibility` map to `users.role`, `account_grants.level` and `modes.visibility` through `as_str` and `FromStr`.
-  > - **Not in `authorize`:** step-up (§7.2) is an authentication check in P7, and the account quota belongs to P9.4.
-  > - **Matrix.** The snapshot `authorization_matrix` has a table per kind of resource: accounts by actor, owner and grant; the rest by actor and target. A separate test checks every permission against every other kind of resource.
+  > Note (P2.9): An Admin's implicit Manage covers Members' accounts and the Admin's own, not the Owner's or other Admins'. `CommandAllowlist` is a core type, and changing to a mode with a non-allowlisted command needs Manage; `ResourceContext::Mode{owner: None}` is a built-in mode. From the group A review: allowlist entries keep the slash (`"/spawn"`, at most 64; a missing key is an empty list) and are compared exactly and case-sensitively, so `/Spawn`, `/minecraft:spawn` and `/spawn` followed by a zero-width space all need Manage (ADR-0010).
+  > The user's decisions (2026-10-06): private modes follow the account rule (everyone else gets 404); shared modes are visible to everyone and edited by their creator and the Owner; only Manage edits grants and nobody grants to themselves (a grant to an alt account is an accepted risk, threat model; P11.9 shows the grants at a promotion); only the Owner changes roles, and Admins disable and enable Members; invites follow their role; self-service routes check `ResourceContext::Personal{owner}` with `Permission::UsePersonal`; only the Owner enrolls agents, a deviation from §7.3. *(Since Phase 11's group J, enrollment tokens come only from the server's host; ADR-0020, U76.)*
+  > `AuthzError` is `NotFound` (404), `Forbidden` (403) or `WrongResource` (a caller bug); the server address and auto-start need Manage; the Owner's limits leave out built-in modes, their own role, another Owner, Owner invites, self-grants and others' personal resources; step-up (P7) and the account quota (P9.4) aren't in `authorize`; the snapshot `authorization_matrix` has a table per kind of resource (ADR-0010).
 - [x] **P2.10** 🔴 Minecraft ports, traits only:
   - `MinecraftConnector::connect(ConnectParams) -> (SessionHandle, SessionEvents)`
   - `SessionHandle` (clone, perform `Action`, send chat, disconnect, read liveness)
@@ -1096,42 +931,12 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   Use RPITIT with `+ Send` futures.
 
-  > Note (P2.10) (ADR-0010):
-  > - **`connect`** returns a `Result`.
-  > - **`SessionHandle`** gains `respawn()`. `perform` takes a `GameAction`, and chat goes through `send_chat`.
-  > - **`disconnect()`** is the full ADR-0008 §10 teardown.
-  > - **Liveness** stamps are `std::time::Instant`, set when the session is created, so they're never empty.
-  > - **`SessionCredentials`** is `Offline` or `Online`.
-
-  > Note (P2.10, from group C): `perform` takes `fleet_core::mode::GameAction`, which P2.8 already defines. Its hotbar slot is a `HotbarSlot`, so the port can't get a slot above 8 (ADR-0010).
-
-  > Note (P2.10, built in group E): The user decided four questions on 2026-10-06 (ADR-0010):
-  > - **Errors.** `SessionError` is `Closed`, `QueueFull`, `TimedOut` or `NotInWorld`; `ConnectError` is `HostUnavailable`, which the actor reports as `ConnectFailure::HostUnavailable`.
-  > - **Event delivery.** Only `Chat` may be dropped when the consumer lags, and the adapter counts the drops. `Joined`, `Died`, `Disconnected` and `ConnectionFailed` are always delivered.
-  > - **Liveness** is data only: `Liveness { last_tick, last_packet }`. The watchdog's comparison is P4.6's.
-  > - **`ConnectParams`** is `{bot_id, server, credentials, connect_timeout}`. The `BotId` lets fleet-mc name host threads and tag its logs.
-  >
-  > Also settled while building it (ADR-0010):
-  > - **Traits.** `MinecraftConnector` has the associated types `Session` and `Events`. The connector and the handle are `Send + Sync + 'static`, the events `Send + 'static`, and every future is `Send`. A doctest drives the ports from generic code and checks that.
-  > - **`connect`** resolves once the session has started, before the bot reaches the server. The outcome arrives as an event, and a connect timeout as `ConnectionFailed(TimedOut)`.
-  > - **`SessionEvents::next`** is cancel-safe and returns `None` after the session's one terminal event (`Disconnected` or `ConnectionFailed`). `Died` comes once per death.
-  > - **`disconnect()`** returns `()`: the teardown always finishes, and calling it again is harmless. `liveness()` is synchronous.
-  > - **`Liveness`** has public fields and no constructor. std can't make an `Instant` without `Instant::now()`, which `fleet-core`'s clippy config bans, so core can't test one; the fakes (P3.1) build them.
-  > - **TDD.** Only the redaction test has a meaningful red phase: a stub `Debug` that printed the token failed it. The rest of the task is declarations.
+  > Note (P2.10): Deviations: `connect` returns a `Result` and resolves once the session has started (a connect timeout arrives as `ConnectionFailed(TimedOut)`); `SessionHandle` gains `respawn()`; `perform` takes `fleet_core::mode::GameAction` (its slot a `HotbarSlot`) and chat goes through `send_chat`. `ConnectParams` is `{bot_id, server, credentials, connect_timeout}`; `disconnect()` is the full ADR-0008 §10 teardown, returns `()` and is harmless to repeat; `SessionCredentials` is `Offline` or `Online` (ADR-0010).
+  > The user's decisions (2026-10-06): `SessionError` is `Closed`, `QueueFull`, `TimedOut` or `NotInWorld`, and `ConnectError` is `HostUnavailable`; only `Chat` may be dropped, and counted, and `next()` is cancel-safe and returns `None` after the one terminal event; liveness is data only, `Liveness { last_tick, last_packet }` as `std::time::Instant`s set at creation, with public fields and no constructor (the fakes, P3.1, build them), compared in P4.6. The traits' associated types and `Send` futures are checked by a doctest (ADR-0010).
 - [x] **P2.11** A `thiserror` error enum per module, and crate- and module-level docs.
 
-  > Note (P2.11): Error enums are built in each task, because each task tests its error paths first. P2.11 audits them and writes the crate docs (ADR-0010).
-
-  > Note (P2.11, built in group E): **Audit result.**
-  > - **Errors.** 15 enums, one per fallible module: the 13 from groups A–D plus `ConnectError` and `SessionError`. Each is `Copy`, its fields are positions, lengths, limits or the crate's own enums, and foreign errors are dropped instead of wrapped, so no message can echo input. Every variant has a test that asserts it, and every public fallible function has an `# Errors` section.
-  > - **Fixes.**
-  >   - A test pins the one composed message, `CommandAllowlistError::Invalid`.
-  >   - The `GameAction` docs link to `SessionHandle::perform`.
-  >   - The allowlist error's `index` fields say they're positions.
-  >   - The `authz` docs list `WrongResource` (500).
-  >   - One sentence in the `id` docs is fixed.
-  > - **Crate docs.** The module list now includes `mc`, plus a "How it fits together" section and the conventions from ADR-0010.
-  > - **Flagged:** serde_json's own errors quote their input (see P11.4). *Decided in Phase 11, group C ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S12): serde refuses only a request's shape, as the extractor's bare 400 that never shows or logs its message; every value rule is a 422 at its field.*
+  > Note (P2.11): Error enums are built in each task, which tests its error paths first; P2.11 audited them (one `Copy` enum per fallible module, never echoing input, every variant tested) and wrote the crate docs (ADR-0010).
+  > Flagged: serde_json's own errors quote their input (see P11.4). *Decided in Phase 11, group C ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S12): serde refuses only a request's shape, as the extractor's bare 400 that never shows or logs its message; every value rule is a 422 at its field.*
 
 **Security:**
 - Every constructor rejects oversized input and control characters.
@@ -1149,22 +954,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** A tested azalea implementation of the Minecraft ports, plus a scriptable fake for every layer above it.
 **Introduces:** `azalea`, `tokio`, `tokio-util`, `tracing`. Dev: `testcontainers`.
 
-> Note (P3):
-> - **Five group branches, plus one task branch.** At the user's request, Phase 3 is built in group PRs like Phase 2. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
->
->   | Group | Branch | Tasks |
->   |---|---|---|
->   | A | `p3/p3.1-testkit-fakes` | P3.1 |
->   | B | `p3/p3.2-p3.5-host-pool-and-events` | P3.2, P3.5 |
->   | C | `p3/p3.3-account-adapter` | P3.3, alone, so the Minecraft token handling gets a focused review |
->   | D | `p3/p3.4-p3.6-connector-actions-slow-suite` | P3.4, P3.7, P3.6, in that commit order: P3.6 can only be proven live, so the slow harness comes first |
->   | E | `p3/p3.8-teardown-and-wrap-up` | P3.8 and the phase wrap-up |
->   | — | `p3/p3.9-hold-use` | P3.9, its own task after group E |
-> - **Decisions.** The user answered the Phase 3 plan's open questions on 2026-10-06. [ADR-0011](docs/adr/0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md) records them; the notes below summarize what changes a task.
-> - **azalea's advisories and licenses** are accepted (RUSTSEC-2023-0071, -2026-0118, -2026-0119) or excepted per crate (`minecraft_folder_path`, `socks5-impl`), with recorded reasons. The `deny.toml` entries and ADR-0012 land in group B, together with azalea.
-> - **Dependencies.** Also approved: `uuid` and `reqwest` (no features) in fleet-mc, only to name types in azalea's `AccountTrait`; `tracing-subscriber` and `rstest` as fleet-mc dev-dependencies; `tokio` in fleet-testkit. `tokio-util` comes only if a task needs it.
-> - **Lint guards.** Clippy bans `unbounded_channel`, with two approved `#[expect]`s for azalea's mandated channels (P3.4). fleet-mc's clippy config bans azalea's Microsoft login functions. A `scripts/` test checks that every crate-local `clippy.toml` carries the root's settings.
-> - **Test servers.** Only local Docker servers: itzg in offline and online mode through testcontainers, with the image pinned in `deploy/compose.dev.yaml`. No public game servers.
+> Note (P3): built in groups A–E, plus P3.9 on its own branch, one PR each; their decisions, the approved dependencies, the lint guards (the `unbounded_channel` ban, fleet-mc's ban on azalea's Microsoft login functions) and the local-only Docker test servers are in [ADR-0011](docs/adr/0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md); azalea's advisories and licenses are accepted or excepted per crate in ADR-0012.
 
 - [x] **P3.1** 🔴 `fleet-testkit`: `FakeConnector` and `FakeSession`. They need to support:
   - scripted connect results
@@ -1175,165 +965,35 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   Write tests for the fake itself.
 
-  > Note (P3.1, from Phase 2): Liveness stamps are `std::time::Instant`. The fake stamps them with `tokio::time::Instant::now().into_std()`, so paused time works. Both stamps are set when the session is created (ADR-0010).
-
-  > Note (P3.1, from the Phase 3 plan) (ADR-0011):
-  > - **Types.** `FakeConnector`, `FakeSession`, `FakeEvents` and a test-side `SessionController` per session.
-  > - **Liveness.** Both stamps follow tokio's clock until a test freezes one.
-  > - **Hang** freezes both stamps, and every call fails with `TimedOut`.
-  > - **The event contract** of ADR-0010 is enforced by the fake: one terminal event, then `None`; `Died` once until `respawn()`; only `Chat` is dropped, and counted.
-  > - **No panics.** It's library code, so misuse returns an error.
+  > Note (P3.1): `FakeConnector`, `FakeSession`, `FakeEvents` and a test-side `SessionController` per session. Liveness stamps come from `tokio::time::Instant::now().into_std()`, set when the session is created and following tokio's clock until a test freezes one, so paused time works; hang freezes both and every call fails with `TimedOut`; the fake enforces ADR-0010's event contract, and misuse returns an error instead of panicking (ADR-0010, ADR-0011).
 - [x] **P3.2** 🔴 `McHostPool` spawns one host thread per session (ADR-0008 §2):
   - Each thread has a current-thread runtime and a `LocalSet`, and ends when its session ends.
   - Work reaches the thread over a bounded queue.
   - A hung thread is **abandoned** and counted, never joined or respawned. Test this with an injected job that never returns.
 
-  > Note (P3.2, from the Phase 3 plan) (ADR-0011):
-  > - **Thread names.** `mc-` plus the last 12 hex characters of the `BotId`, its random part. That's 15 bytes, Linux's limit, and the leading timestamp would make truncated names collide.
-  > - **Limit.** Above `max_abandoned_threads` (default 3, Appendix A), the pool refuses new threads, so `connect()` returns `HostUnavailable`. The library never ends the process; the agent does (P5.3).
-  > - **Diagnostics.** `live_threads()` and `abandoned_threads()` are public, for P3.8 and P4.9.
-  > - **Test time.** These tests wait for a real OS thread, which tokio's paused clock would race. So they use real time with upper-bound timeouts that only fire on failure, and never a sleep. The hung job blocks on a std `sync_channel` that the test releases at the end.
-
-  > Note (P3.2, from group B, the user's decisions) (ADR-0011):
-  > - **Limit.** The pool refuses new threads once `abandoned_threads() >= max_abandoned_threads`, the same point where the agent exits (P5.3).
-  > - **Counting.** `abandoned_threads()` only counts up, even when an abandoned thread ends after all; `live_threads()` goes down then. A pool's counts are shared by its clones.
-  > - **No `CancellationToken`.** A host thread's jobs are tasks of its `JoinSet`. The stop signal ends the loop, and dropping the `JoinSet` and the `LocalSet` cancels them. That's a deliberate exception to the CLAUDE.md task rule, and `tokio-util` stays out.
-  > - **Handles.** `HostThread` is `Clone`. The thread also ends when every clone is dropped (the job channel and the stop signal close), so an actor that panics or is aborted without `disconnect()` can't leave a bot running. A test covers it.
-  > - **API.** `McConfig` holds the defaults (`max_abandoned_threads` is a `NonZeroUsize`, since 0 would refuse every thread). `spawn(bot_id)` returns a `HostThread` or a `SpawnError`, which becomes `ConnectError::HostUnavailable`. `run(job)` queues at once and fails with a `JobError`, which becomes the matching `SessionError`. A job whose caller has given up is skipped. `shutdown()` returns `Ended` or `Abandoned`, the first outcome on every later call; `ended()` resolves when the thread is gone.
-  > - **Threads are never joined.** Joining would block the caller's runtime; the exit signal, sent last by the thread, says when it has ended.
-
-  > Note (P3.2, from the group B review) (ADR-0011): **Threads dropped while hung count too.** When the last `HostThread` handle drops before a shutdown decided the outcome, the pool keeps the thread as an orphan: its exit signal and a deadline, the shutdown timeout after the drop. `spawn()` and `abandoned_threads()` settle the orphans first, without blocking or spawning: one that has ended is forgotten, and one past its deadline is counted as abandoned and logged at `warn`. So a hung session whose owner never called `disconnect()` still counts against the limit.
+  > Note (P3.2): Threads are named `mc-` plus the `BotId`'s last 12 hex characters (Linux's 15-byte limit). Once `abandoned_threads() >= max_abandoned_threads` (default 3, a `NonZeroUsize`), the pool refuses new threads and `connect()` returns `HostUnavailable`; the library never ends the process, the agent does (P5.3). `abandoned_threads()` only counts up, and a thread whose handles dropped while it hung counts once past its deadline (ADR-0011).
+  > Threads are never joined: a thread also ends when every `HostThread` clone drops, and its exit signal says when. Its jobs are tasks of its `JoinSet`, with no `CancellationToken`, a deliberate exception to the CLAUDE.md task rule; the tests use real time with upper-bound timeouts, never a sleep (ADR-0011).
 - [x] **P3.3** Account adapter: a custom `AccountTrait` for server-issued `SessionCredentials`, and offline accounts for dev and tests.
 
-  > Note (P3.3, from the Phase 3 plan) (ADR-0011):
-  > - **Session-server errors.** `InvalidSession` and `ForbiddenOperation` give `AuthRejected`. `Banned` and `MultiplayerDisabled` give a new permanent reason. An outage, HTTP error, rate limit, unknown response or timeout gives a new transient reason. That's a small fleet-core change in this task, which amends ADR-0010.
-  > - **`refresh()`** is a no-op that returns `Ok(())`. An error would make azalea log a misleading Microsoft-flow error.
-  > - **`join()`** runs on Bevy's IO pool, not on the host thread. It's bounded by a timeout, because azalea's HTTP client has none, and it reports to the session over a bounded channel.
-  > - **The adapter doesn't check `expires_at`.**
-  > - **Log redaction.** The tests capture every level from every target, azalea included, and assert that the token never appears. A failing assertion reports only the target and a count, never the captured lines or the token.
-
-  > Note (P3.3, from group C, the user's decisions) (ADR-0010, ADR-0011):
-  > - **New reasons.** `AccountRestricted{restriction}` (`Banned`, `MultiplayerDisabled`) is permanent, with the new kinds `PermanentKind::AccountBanned` and `MultiplayerDisabled`. `SessionServerFailed{failure}` (`Unreachable`, `RateLimited`, `TimedOut`, `Unexpected`) is transient.
-  > - **`FailReason::Kicked` is now `FailReason::Permanent`**, since a session-server refusal isn't a kick.
-  > - **On our timeout**, `join()` returns azalea's `Unknown("no answer within the session-join timeout")`. The timeout is `McConfig::session_join_timeout` (10 s).
-  > - **Reports** go over a bounded channel of one, written with `try_send`: `account(credentials, bot_id, join_timeout)` returns azalea's `Account` and the receiver, which P3.4's pump turns into `EventSink::terminate`.
-  > - **The log** is one `debug` line per failed join, with a fixed label, never azalea's error text.
-  > - **Tests.** The join's bookkeeping takes the session-server future, so fast tests script it; the one call into azalea is covered by P3.7's online-mode scenario. The log capture also bridges `log` records (reqwest, rustls) through `tracing-log`; `log` is a new fleet-mc dev-dependency.
-  > - **Dead code until P3.4.** `mod account` carries a temporary `#[expect(dead_code)]` in non-test builds, approved by the user; P3.4 removes it.
-  > - **Found:** azalea logs the chat-signing private key at `trace` (`azalea_auth::certs`). It's a known limit in the threat model. P5.2 caps `azalea_auth` at `info`, like fleet-server does (P9.3).
+  > Note (P3.3): `InvalidSession` and `ForbiddenOperation` give `AuthRejected`; the new `AccountRestricted{restriction}` (`Banned`, `MultiplayerDisabled`) is permanent and `SessionServerFailed{failure}` transient, and `FailReason::Kicked` is now `FailReason::Permanent` (ADR-0010, ADR-0011). `refresh()` is a no-op returning `Ok(())`; `join()` runs on Bevy's IO pool under `McConfig::session_join_timeout` (10 s) and reports over a bounded channel of one; the adapter doesn't check `expires_at`; a failed join logs one `debug` line with a fixed label; the redaction tests capture every level from every target and never print the token.
+  > Found: azalea logs the chat-signing private key at `trace` (`azalea_auth::certs`), a known limit in the threat model; P5.2 caps `azalea_auth` at `info`, like fleet-server does (P9.3).
 - [x] **P3.4** `AzaleaConnector` implements `MinecraftConnector`:
   - azalea's auto-reconnect and auto-respawn are **disabled**
   - connect timeout
   - start, hosting model and executor as decided in ADR-0008 §1–3
 
-  > Note (P3.4, from Phase 2): open questions, flagged and not yet decided:
-  > - Appendix A has no config key for the connect timeout that `ConnectParams` carries.
-  > - The account's `refresh()` fails fast, because the core state machine now requests the fresh token (ADR-0010).
-
-  > Note (P3.4, from group E): `ConnectParams` carries the `BotId`, so host threads can be named after their bot, which helps when one is abandoned (ADR-0010).
-
-  > Note (P3.4, from the Phase 3 plan) (ADR-0011):
-  > - **Connect timeout.** It runs from `connect()` until `Joined`: resolve, TCP, login, session join and configuration. The default is 30 s, from the new key `[runtime] connect_timeout_secs` (Appendix A). Resolving happens inside the session, so a resolve error arrives as `ConnectionFailed`.
-  > - **`refresh()`** is decided in P3.3.
-  > - **The two azalea-mandated unbounded channels** carry the approved `#[expect(clippy::disallowed_methods, …)]`.
-  > - **Diagnostics.** `live_worlds()` and `dropped_chat()` are public.
-  > - **Fault injection.** A hook behind a fleet-mc cargo feature, off by default, adds a system to a session's App for the containment test (P3.7).
-
-  > Note (P3.4, from group B):
-  > - **Host-thread handles.** A host thread ends when every `HostThread` clone is dropped (P3.2), so no task on the thread itself may hold a clone, or the thread never ends without `disconnect()`.
-  > - **Wiring the event bridge (P3.5).** P3.4 removes the temporary `#[expect(dead_code)]` on `mod events` and wires the producer side:
-  >   - a pump on the host thread passes each event from azalea's `LocalPlayerEvents` channel to `EventSink::forward`
-  >   - every App gets the `PacketLivenessPlugin`
-  >   - the connect timeout, `AppExit` and the account's auth result go through `EventSink::terminate`
-  >   - `disconnect()` calls `EventSink::close`, and `liveness()` reads the session's `LivenessStamps`
-  >   - the connector shares one `EventCounters` between its sessions and exposes `ignored_action_bar()` next to `dropped_chat()`
-
-  > Note (P3.4, from group D, the user's decisions) (ADR-0011):
-  > - **Shape.** `AzaleaConnector::new(&McConfig)` owns its `McHostPool`. It exposes `pool()`, `live_worlds()`, `dropped_chat()` and `ignored_action_bar()`. `connect()` spawns the host thread, queues the session's driver with the new `HostThread::start` (a `JoinSet` task with no answer and no job timeout) and returns at once. `McSession` is the `SessionHandle`.
-  > - **The driver** runs on the host thread for the whole session. Every wait before `Joined` (resolving, the join callback, the connect) also watches the stop signal, the connect deadline and azalea's runner.
-  > - **Loop order** *(the user's notice)*: stop, auth reports, the connect deadline until joined, the runner's end, then events. So a server that keeps sending events before `Joined` can't starve the connect timeout. A test floods the loop with events and was red against an events-first order.
-  > - **Endings.**
-  >   - A resolve error is `ConnectionFailed(Unresolvable)`.
-  >   - A runner end nobody asked for (an `Ok` too), a closed join callback or a closed event channel is `Disconnected(SessionCrashed)`.
-  >   - A call that finds no `Client` or no components on the host thread is `NotInWorld`.
-  > - **Teardown.** `disconnect()` closes the bridge first, so a normal teardown never reports a crash. Then it stops the driver, which exits azalea, waits up to `McConfig::app_exit_timeout` (2 s) for the runner and drops the `Client`. Then it waits up to that plus 1 s for the driver, and shuts the host thread down. It's idempotent from every clone.
-  > - **The owner's bridge handle** is a non-counting `BridgeControl` (`phase`, `close`, `respawned`), so the rule that a dropped sink ends the session still holds.
-  > - **The `Client`** lives in a slot that only host-thread jobs clone from. A drop guard empties it when the driver ends.
-  > - **Stubs until P3.6/P3.7** *(the user's decision)*. `perform`, `send_chat` and `respawn` check the session state and run an empty host job; `respawn` already tells the bridge. P3.7 wires `send_chat`, and P3.6 the rest.
-  > - **Fault injection.** `AzaleaConnector::with_app_hook(self, impl Fn(BotId, &mut azalea::app::App) + Send + Sync + 'static) -> Self`, behind the off-by-default `fault-injection` feature. *(The user's notice)* A build without `debug_assertions` and with the feature hits a `compile_error!`, so no release build can include the hook.
-  > - **Tests.** The loopback tests (Plan §8 allows loopback outside the slow profile) cover a silent server timing out, a refused port, teardown, dropped handles and the host limit. The session loop, the pre-join waits, the App's plugins and executor, and `HostThread::start` have unit tests.
-  > - **Found in CI on Linux: the first events could be lost.** azalea spawns the bot and reports a failed connect in the same frame, and the driver attached `LocalPlayerEvents` only after the join callback. So a fast refused connect on a loaded Linux runner ended as `TimedOut` at the connect timeout. Now an observer on `Add` of `LocalEntity` moves the one sender into the bot's component when azalea spawns it *(the user's decision)*. Unit tests and a Linux stress run (19 of 24 failed before, 24 of 24 pass after) cover it (ADR-0011).
+  > Note (P3.4): The connect timeout runs from `connect()` until `Joined`, resolving included, 30 s by default from the new key `[runtime] connect_timeout_secs` (Appendix A); a resolve error is `ConnectionFailed(Unresolvable)`. `AzaleaConnector::new(&McConfig)` owns its `McHostPool`; the session's driver runs on its host thread and checks stop, auth reports and the connect deadline before events, so events can't starve the timeout (the user's notice). `ConnectParams` carries the `BotId`, to name host threads (ADR-0010).
+  > `disconnect()` closes the bridge, stops the driver (`app_exit_timeout`, 2 s) and shuts the host thread down, idempotent from every clone; no task on the host thread holds a `HostThread` clone. azalea's two mandated unbounded channels carry approved `#[expect]`s; `live_worlds()`, `dropped_chat()` and `ignored_action_bar()` are public.
+  > Fault injection: `with_app_hook`, behind the off-by-default `fault-injection` feature; a build with it and without `debug_assertions` hits a `compile_error!`. Found in CI on Linux: a fast refused connect could lose the first events, so an observer on `Add` of `LocalEntity` moves the event sender into the bot when azalea spawns it (ADR-0011).
 - [x] **P3.5** 🔴 Map azalea events to `SessionEvent`, with unit tests on the pure mapping functions. Chat goes through the core sanitizer, with the sender taken only from where ADR-0008 §7 allows; kick reasons go through the core classifier input. `Tick` and server events such as `KeepAlive` only update the session's liveness timestamps (ADR-0008 §4–5).
 
-  > Note (P3.5, from the group A review): **Logging chat.** Sanitized chat text keeps `\n`. Log it as a structured field (`?` or JSON), never with `%` (Display), so a server can't forge log lines.
-
-  > Note (P3.5, from group E): **Event delivery.** The bounded bridge (ADR-0008 §4) may drop only `Chat` events, and it counts them. `Joined`, `Died`, `Disconnected` and `ConnectionFailed` are always delivered, at most one terminal event per session, after which `next()` returns `None` (ADR-0010).
-
-  > Note (P3.5, from the Phase 3 plan) (ADR-0011):
-  > - **Chat.** Action-bar (`overlay`) messages are dropped and counted. An unknown `ChatKind` falls back to `chat`. The text is what the vanilla client shows, without the chat-type decoration.
-  > - **Lifecycle.** `Joined` is the first `Spawn` only. A `Died` before `Joined` is held until after it.
-  > - **Liveness.** Received packets are observed through `ReceiveGamePacketEvent`, so `packet-event` stays off.
-  > - **Terminal signals.** Other sources inject them into the bridge (the account's auth result, the connect timeout, `AppExit`), and the first one wins.
-
-  > Note (P3.5, from group B, the user's decisions) (ADR-0011):
-  > - **Chat kinds.** The server assigns the registry ids, and they're read in vanilla's order (azalea's `ChatKindKey::ALL`): 1 is an emote, 2 an incoming whisper, 4 `/say`. Everything else is `chat`: the echo of a whisper the bot sent, team chat, unknown ids and inline chat types. A server whose data packs reorder chat types can mislabel a kind; the text and the sender don't depend on it. That's a known limit.
-  > - **Action bar.** Overlay messages are counted on their own (`ignored_action_bar`), apart from `dropped_chat`, and log nothing, so `dropped_chat` stays a signal of overload.
-  > - **System messages** keep their whole sanitized text, and their sender is never guessed (see the chat-format note under P4.1).
-  > - **Unknown azalea events** land in the mapping's catch-all and are logged at `debug`. Every azalea bump re-checks the variants (ADR-0003).
-  > - **Dead code until P3.4.** Outside the tests, nothing calls the bridge's producer side yet (the mapping, `EventSink`, the liveness plugin). So `mod events` carries a temporary `#[expect(dead_code)]`, approved by the user, in non-test builds only. P3.4 removes it.
-  > - **Shape.**
-  >   - `McEvents` is the public `SessionEvents`. Its queue follows the fake's design (a `Mutex<VecDeque>` plus `Notify`): chat is dropped at the capacity (64, `McConfig::event_capacity`), and lifecycle events always go in.
-  >   - `EventSink` maps and applies azalea's events, takes injected terminal events (`terminate`, the first one wins), learns of respawns (`respawned`) and closes the bridge.
-  >   - `LivenessStamps` are atomic offsets that never move backwards. `PacketLivenessPlugin` stamps every `ReceiveGamePacketEvent` in `Update`.
-  >   - The tests build kick reasons from JSON, through `serde_json` as a dev-dependency.
-
-  > Note (P3.5, from the group B review, the user's decisions) (ADR-0011): **Bounded rendering of server text.**
-  > - **The problem.** azalea's `FormattedText::to_string()` re-renders every argument of a translation. For an unknown key, the template is the key itself (or the JSON `fallback`), so a key like `%1$s%1$s%1$s%1$s`, nested, grows exponentially: a 507-byte system message renders to 16.7 million characters.
-  > - **The renderer.** fleet-mc renders server text itself, at all six places the mapping used `to_string()`: system chat, player and disguised names and texts, and kick reasons.
-  >   - It follows azalea-chat's `TranslatableComponent::read` rules: `%%`, `%s`, `%N$s`, known keys through `azalea_language::get`, else the fallback, else the key; a malformed template shows the key.
-  >   - It walks the text by reference with an explicit stack, never cloning a subtree.
-  >   - It stops after 4,096 characters or 16,384 steps, and reports whether it stopped. A step is a component visited, an argument substituted (whatever it renders to) or a character written, so templates of empty substitutions are paid for too.
-  > - **Cut-off chat** goes through `IncomingChat::from_parts` with `truncated = true`. Only the text counts: a cut-off sender name is just capped. A kick keeps its class, because classifying uses only the top-level key.
-  > - **Dependencies.** fleet-mc depends directly on `azalea-chat` (to name the argument type, which azalea doesn't re-export) and `azalea-language`, both `=0.16.0` and already in azalea's graph (§5).
-  > - **Every azalea bump** re-checks the renderer against azalea-chat (ADR-0003).
-
-  > Note (P3.5, from the group B review) (ADR-0011): **A dropped sink ends the session.** When the last `EventSink` clone is dropped, for example because the host thread is gone, a session that hasn't ended gets `Disconnected(SessionCrashed)`, logged at `warn`, so the actor never waits for events that can't come. Once the session ended or was closed, dropping the sink changes nothing.
+  > Note (P3.5): Only `Chat` may be dropped, and is counted; lifecycle events are always delivered, with at most one terminal event per session, the first injected one winning (the account's auth result, the connect timeout, `AppExit`), and a dropped last `EventSink` ends the session as `Disconnected(SessionCrashed)` (ADR-0010, ADR-0011). `Joined` is the first `Spawn` only, a `Died` before it is held until after it, and received packets come through `ReceiveGamePacketEvent`, so `packet-event` stays off.
+  > Chat is logged as a structured field (`?` or JSON), never with `%`; action-bar messages are counted apart (`ignored_action_bar`); chat kinds are read in vanilla's registry order (1 emote, 2 incoming whisper, 4 `/say`, else `chat`), a known limit when data packs reorder them; system messages keep their whole sanitized text and never get a guessed sender (see the chat-format note under P4.1); unknown azalea events are logged at `debug`.
+  > Server text goes through fleet-mc's own bounded renderer (4,096 characters or 16,384 steps; cut-off chat is `truncated`), since azalea's `to_string()` grows nested translation keys exponentially; fleet-mc depends directly on `azalea-chat` and `azalea-language` `=0.16.0` for it, and every azalea bump re-checks the renderer and the event variants (ADR-0003, ADR-0011).
 - [x] **P3.6** 🔴 Map each `Action` to azalea calls: look, rotate, jump, sneak, swing, use item, attack facing entity (with a reach check), hotbar, respawn, chat.
 
-  > Note (P3.6, from group C, the user's idea): Check whether azalea can hold right-click (use item) down continuously, the way `Sneak{on}` holds sneak. If it can, propose a `HoldUse{on}` action as an additive change to the mode model. It's a new action type, so older servers reject modes that use it (ADR-0010).
-
-  > Note (P3.6, from group E, the user's decision): The adapter skips any `GameAction` with a non-finite angle and logs it, as a safety net behind mode validation. The `SessionHandle::perform` docs say so (ADR-0010).
-
-  > Note (P3.6, from the Phase 3 plan) (ADR-0011):
-  > - **Commit order.** In group D, P3.6 comes after P3.7, so its red tests run against a live server and check the effects through RCON. P3.7's "every action" scenario arrives with it.
-  > - **HoldUse.** azalea 0.16.0 only has a one-shot use. Holding would send `UseItem` and later a raw `PlayerAction{ReleaseUseItem}`, for items with a use duration. This task verifies that on the test server and records the result in ADR-0011. The mode-model change is P3.9.
-
-  > Note (P3.6, from group B): **Respawn.** After the respawn, the session calls `EventSink::respawned()`, so the bot's next death is reported again (P3.5).
-
-  > Note (P3.6, from group D, the user's decisions) (ADR-0011):
-  > - **Mapping.** Each action runs in one synchronous job on the host thread.
-  >   - Components that azalea's `Client` methods would panic on (`LookDirection`, `PhysicsState`, the hit result, the entity index, the connection) are checked first; a missing one gives `NotInWorld`.
-  >   - `Turn` reads the direction, wraps the yaw to −180..180 and clamps the pitch to −90..=90.
-  >   - `AttackFacingEntity` takes azalea's target, which already respects the reach. With nothing in reach it returns `Ok` and logs at `debug`. Otherwise it writes the attack packet by hand (ADR-0008 §8), swings, and resets `TicksSinceLastAttack`.
-  >   - `respawn()` sends `PerformRespawnEvent` and tells the bridge in the same job.
-  >   - A non-finite angle is skipped, logged at `warn`, and returns `Ok`.
-  > - **Tests.** Unit tests cover the turn, the finite check and the attack packet's bytes; they were red against stubs first. The new `slow_actions_scenario` was red against P3.4's stub `perform` and is green now. It checks through RCON:
-  >   - the rotation after a look and after a turn
-  >   - the `jump` statistic
-  >   - sneaking on and off (an inline predicate)
-  >   - `SelectedItemSlot`
-  >   - a thrown snowball's `used` statistic
-  >   - a pig hurt within reach and one untouched beyond it
-  >   - a `/me` emote's echo
-  >   - full health after a respawn, and a second `Died` after a second kill
-  >
-  >   Swings are seen by a watcher bot through a test-only system *(the user's decision)*. The containment scenario's action is now a look that RCON confirms.
-  > - **HoldUse is feasible** *(a temporary probe, never committed; the user's decision)*. With a bow and arrows, `start_use_item` started drawing. Released after about 1 tick, it shot nothing; held for 25 ticks, it shot nothing yet. A raw `ServerboundPlayerAction{ReleaseUseItem}` (`pos` default, `direction` Down, `seq` 0) then shot one arrow: the bow's `used` statistic went to 1 and an arrow entity appeared. The packet encodes correctly through azalea's normal writer, so no hand-written bytes are needed. P3.9 can map `HoldUse{on}` to `start_use_item` and that release packet (ADR-0011).
-
-  > Note (P3.6, from group E, the user's decision) (ADR-0011): **The respawn step was flaky.**
-  > - **The failure.** About 4 local runs in 10 failed with "the second death didn't happen within 60s", from before group E's changes too.
-  > - **The cause, as far as the runs show.** The step killed the bot as soon as the server reported full health after the respawn. A respawned player takes no damage, not even from `/kill`, until its client says it has loaded (`PlayerLoaded`), and azalea sends that only once the bot is in a loaded chunk again.
-  > - **The fix.** The scenario's hook now also counts each time azalea adds its `HasClientLoaded` marker, and the step waits for that before the second kill. It then passed 8 runs in 8.
+  > Note (P3.6): Each action runs in one synchronous host-thread job that first checks the components azalea's `Client` methods would panic on (a missing one is `NotInWorld`); `Turn` wraps the yaw and clamps the pitch to −90..=90; `AttackFacingEntity` takes azalea's reach-limited target (nothing in reach: `Ok`, logged at `debug`) and writes the attack packet by hand (ADR-0008 §8); a non-finite angle is skipped, logged at `warn`, and returns `Ok` (ADR-0010). `respawn()` tells the bridge (`EventSink::respawned()`) in the same job, and the live respawn step waits for azalea's `HasClientLoaded` before the second kill (ADR-0011).
+  > HoldUse (the user's idea) is feasible: a probe held a bow with `start_use_item`, and a raw `ServerboundPlayerAction{ReleaseUseItem}` through azalea's normal writer shot the arrow; P3.9 builds it (ADR-0011).
 - [x] **P3.7** 🔴 Slow integration tests (`slow_*`, testcontainers + itzg, offline mode):
   - join and see the join message
   - send chat and see it echoed back
@@ -1341,100 +1001,25 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - get kicked by RCON (`docker exec … rcon-cli kick`) and receive `Disconnected` with a reason
   - reconnect
 
-  > Note (P3.7, from the Phase 3 plan) (ADR-0011):
-  > - **A few scenario tests.** Each owns one container and runs several steps. nextest can't share a container between test processes, so a nextest test group serializes them. A fast test checks that the image and `VERSION` match the pins in `deploy/compose.dev.yaml`.
-  > - **Online mode, added.** A local online-mode container: a garbage token gives `AuthRejected` within seconds, and an offline account gives `unverified_username`. Neither uses real credentials. Azalea's full login path runs under the log-redaction check (P3.3).
-  > - **Fault containment, added.** A panic injected into one session's ECS ends it as `Disconnected(SessionCrashed)`, while a second session from the same pool keeps ticking, sends chat and performs an action.
-  > - **ADR-0003's bump procedure** gains the test pin.
-
-  > Note (P3.7, from group D, the user's decisions) (ADR-0011):
-  > - **Layout.** One test binary, `crates/fleet-mc/tests/minecraft/`, holds the harness, the fast `pins` test and one module per scenario. Each `slow_` scenario starts its own container, and the nextest test group `minecraft` (one thread) runs them one at a time. `just test-slow` turns on the `fault-injection` feature, which the containment module needs; it's `cfg`-gated, so the binary and `pins` build without it.
-  > - **Containers.** Each uses the compose pins (`tag@digest`) and the dev stack's environment, with `MEMORY` 1G, and waits for the image's healthcheck (5 min bound). Only the game port is published, on `127.0.0.1` and a random port, with `publish_all_ports` off, so RCON stays inside; `rcon-cli` runs through `exec`.
-  > - **Found: a bot never sees its own join message.** The server broadcasts it before adding the new player; the spike also saw it through a second bot. So the offline scenario has a watcher, AfkBot2, that sees AfkBot1 join and rejoin. Both see AfkBot1's chat echo. That deviates from the approved plan's wording ("see `AfkBot1 joined the game`"), not from this task's.
-  > - **Red, then green.** The chat steps failed against P3.4's stub `send_chat`, which P3.7 then wired to `client.chat`. All three scenarios pass in about 50 s together.
-  > - **Online mode** *(as planned)*: a garbage token ends in `AuthRejected` within seconds, and an offline account is kicked with `unverified_username`. The marker token never shows in the TRACE capture of every target.
-  > - **The log capture moved to fleet-testkit** *(the user's decision)*: `install()` and `check_absent()` return errors instead of panicking.
-  > - **Failure output.** A failed wait shows the events the session sent meanwhile.
-
-  > Note (P3.7, from group E, found by the user's real-account check; the user's decisions) (ADR-0010, ADR-0011): **Chat waits for signing.**
-  > - **The bug.** `send_chat` returned `Ok` for chat that a server enforcing secure chat drops. azalea sets up the chat-signing session in the background after the join and sends chat unsigned until then.
-  > - **The fix.** A plugin publishes each session's signing state: `NotNeeded` (offline account, offline-mode server, or a server that doesn't enforce secure chat, from its login packet), `Pending`, `Ready` or `Failed`.
-  > - **Waiting.** A chat message, not a command, waits while signing is `Pending`, at most until the game state plus `McConfig::chat_signing_timeout` (10 s).
-  > - **Refusing.** `Failed`, or still `Pending` at that deadline, gives the new `SessionError::ChatUnavailable`, logged at `warn` once. The session stays up.
-  > - **The fake** gains `fail_chat`.
-  > - **A key fetch that hangs** keeps chat unavailable until the next reconnect, since azalea never retries it.
-  > - **Commands** are never signed by azalea. A server that enforces secure chat rejects those with message arguments, while `send_chat` returns `Ok` (found by the user's real-account check; flagged under P4.5 and P11.3). *Decided in Phase 11, group A ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S2): fleet-mc refuses such a command with `ChatUnavailable` before sending, wherever chat must be signed, judged by the server's command tree.*
+  > Note (P3.7): One test binary, `crates/fleet-mc/tests/minecraft/`: one container per `slow_` scenario, run one at a time by the nextest test group `minecraft`, and a fast `pins` test against `deploy/compose.dev.yaml`; only the game port is published, on `127.0.0.1`. Added: an online-mode scenario (a garbage token gives `AuthRejected`, an offline account `unverified_username`) and fault containment. A bot never sees its own join message, so a watcher bot, AfkBot2, sees it: a deviation from the approved plan's wording, not from this task's (ADR-0011).
+  > Chat waits for signing (found by the user's real-account check): a chat message waits while signing is `Pending`, at most until the game state plus `McConfig::chat_signing_timeout` (10 s); `Failed`, or `Pending` at that deadline, gives the new `SessionError::ChatUnavailable`, logged at `warn` once, and the session stays up; a key fetch that hangs keeps chat unavailable until the next reconnect (ADR-0010, ADR-0011).
+  > Commands are never signed by azalea. A server that enforces secure chat rejects those with message arguments, while `send_chat` returns `Ok` (found by the user's real-account check; flagged under P4.5 and P11.3). *Decided in Phase 11, group A ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S2): fleet-mc refuses such a command with `ChatUnavailable` before sending, wherever chat must be signed, judged by the server's command tree.*
 - [x] **P3.8** 🔴 Clean-up test: after the full teardown from ADR-0008 §10 (not just `disconnect()`), the thread count and the number of live Worlds go back to baseline.
 
-  > Note (P3.8, from the Phase 3 plan) (ADR-0011):
-  > - **Baseline.** Taken after a warm-up join (P1.9).
-  > - **Every platform.** `live_threads()` and `live_worlds()` must return to it.
-  > - **Linux only.** The OS thread count from `/proc/self/status` must as well; Windows has no portable count without `unsafe` or a new crate.
-  > - **Group E also adds:**
-  >   - **The user's real-account check.** A `manual_` test in its own nextest profile, run by a `just` recipe. It reads `secrets/p1.8-account.txt`, which the user creates with the archived spike's `fetch-token`, and the AI never reads it. No error message ever includes the file's contents.
-  >   - **A `slow-tests` CI workflow.** Weekly and on demand; not a required check.
-  >   - **The threat model's B4 section.**
+  > Note (P3.8): "The full teardown" is `McSession::disconnect()`, which follows ADR-0008 §10; "not just `disconnect()`" means azalea's `Client::disconnect()`. `slow_teardown_scenario` runs a warm-up and three cycles of four bots, ended by the full teardown, an RCON kick and dropped handles; after each, `live_threads()` and `live_worlds()` are 0 and nothing is abandoned (ADR-0011).
+  > Linux only (Windows has no portable count without `unsafe` or a new crate): the OS thread count returns to the baseline within 30 s; the baseline is taken after the warm-up, once no `mc-…` thread is left in `/proc/self/task`, and every check runs while the container is up, so testcontainers' cleanup thread never counts (ADR-0011).
 
-  > Note (P3.8, from group D): **testcontainers adds a thread.** Dropping a container from a current-thread runtime starts one process-wide cleanup thread, so the OS thread count's baseline must be taken after the container has started and been dropped once, or allow for that thread. `live_threads()` and `live_worlds()` don't count it.
-
-  > Note (P3.8, from group E, the user's decisions) (ADR-0011):
-  > - **"The full teardown"** is `McSession::disconnect()`, which follows ADR-0008 §10. "Not just `disconnect()`" means azalea's `Client::disconnect()`.
-  > - **The scenario.** `slow_teardown_scenario` runs one warm-up cycle and three measured ones. Each cycle puts four bots online at once and ends them each way a session can end:
-  >   - two with the full teardown
-  >   - one kicked through RCON before its `disconnect()`
-  >   - one whose handles are all dropped without `disconnect()` (P3.2)
-  > - **Checks.**
-  >   - After the warm-up and after every cycle, `live_threads()` and `live_worlds()` are 0 (they count only fleet-mc's own), and nothing is abandoned.
-  >   - On Linux, the OS thread count reaches at most the baseline, within 30 s, longer than tokio's 10 s blocking-thread keep-alive. The baseline is taken after the warm-up, once no host thread is left in the OS's list.
-  >   - Every check runs while the container is up, so the cleanup thread above never counts.
-  > - **Red runs.**
-  >   - A temporary, uncommitted break (the driver kept a `Client` clone) failed it on the Worlds.
-  >   - In CI on Linux, a temporary commit parked one thread after the baseline. The run used a temporary `push` trigger on the branch, removed before the PR opened.
-  > - **Found by that run: the baseline hid the parked thread.**
-  >   - The first run passed when it had to fail. fleet-mc counts a host thread as ended just before its OS thread exits, so a warm-up thread that was still exiting inflated the baseline.
-  >   - The baseline is now taken only once no thread named `mc-…` is left in `/proc/self/task`, and a failed check shows the threads by name.
-  >   - The next run failed as it should ("8 OS threads … more than the 7 after the warm-up", the extra one under the test thread's name), and the revert passed.
-
-  > Note (Phase 3 wrap-up, group E, the user's decisions) (ADR-0011):
-  > - **The real-account check.**
-  >   - `manual_real_account_scenario` joins the online-mode container with the user's real token, sends signed chat and sees its echo, and tears down.
-  >   - The token must not appear in any log, and `PRIVATE KEY` only under `azalea_auth::certs` (azalea-auth 0.16.0 logs the certificate response at `trace`, which P5.2 caps).
-  >   - Only the nextest `manual` profile includes `manual_` tests. Only the user runs `just test-real-account` (CLAUDE.md).
-  >   - Errors name only a line number and the expected key, and a failed wait names only the step and event kinds. A rejected token says it may have expired, since `fetch-token` writes no expiry.
-  >   - It also sends `/me` and expects the server to reject it: the known limit under P11.3. If the emote's echo arrives instead, the step fails with "azalea now signs commands: update this step and the P11 note". *Changed in Phase 11, group A ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S2, the user's approval): the step, now `emote_refused`, expects fleet-mc's `ChatUnavailable` and a later signed chat's echo before any rejection or emote echo; its verdict is a pure function with default-profile tests. Only the user runs the check.*
-  >   - The steps only record their results: the teardown and the log checks always run, and failed steps are reported after them. The first run failed at the signed chat (see P3.7's note) and skipped the log checks.
-  >   - **The user's results** (2026-10-07, after the P3.7 fix):
-  >     - passed: the join, the signed chat, the token absent from every log at every level, and `PRIVATE KEY` only under `azalea_auth::certs`
-  >     - `/me` was rejected: the bot got one system message and stayed up, and the server logged at ERROR "Received unsigned command packet from AfkBot1, but the command requires signable arguments: …"
-  > - **The `slow-tests` workflow** runs weekly (Mondays, 07:17 UTC) and on demand, on ubuntu; it isn't a required check.
-  > - **The threat model's B4 section** is written. It adds two accepted risks: Minecraft servers aren't authenticated, and a server can grow a bot's memory.
-  > - **The Phase 3 DoD** is checked in group E and again in P3.9's PR, which finishes the phase.
+  > Note (Phase 3 wrap-up): The user's real-account check, `manual_real_account_scenario` (the nextest `manual` profile, run only by the user with `just test-real-account`), joins the online-mode container with the user's real token and sends signed chat. The user's results (2026-10-07): passed the join, the signed chat, the token absent from every log at every level, and `PRIVATE KEY` only under `azalea_auth::certs` (which P5.2 caps); `/me` was rejected (ADR-0011). *Changed in Phase 11, group A ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S2, the user's approval): the step, now `emote_refused`, expects fleet-mc's `ChatUnavailable` and a later signed chat's echo before any rejection or emote echo; its verdict is a pure function with default-profile tests. Only the user runs the check.*
+  > The `slow-tests` workflow runs weekly (Mondays, 07:17 UTC) and on demand, not a required check; the threat model's B4 section adds two accepted risks (Minecraft servers aren't authenticated, and a server can grow a bot's memory). The Phase 3 DoD is checked in group E and again in P3.9's PR, which finishes the phase.
 - [x] **P3.9** 🔴 `HoldUse{on}`: hold the use button down, the way `Sneak{on}` holds sneak (the user's idea, from P3.6). It's its own branch and PR, right after group E.
   - fleet-core: an additive `Action::HoldUse{on}` and `GameAction` variant, with validation and the mode snapshots updated. It's a new tag, so older servers reject modes that use it (ADR-0010).
   - fleet-mc: the mapping that P3.6 verified, with a live test.
 
   If P3.6 finds it isn't feasible, this task is closed with a note instead.
 
-  > Note (P3.9, from group D): **Feasible.** P3.6's probe held a bow for 25 ticks with one `start_use_item` and shot the arrow on a raw `ServerboundPlayerAction{ReleaseUseItem}`, sent through azalea's normal packet writer. Releasing after about 1 tick shot nothing. Items without a use duration (block and entity clicks) would still need repeated packets (ADR-0011).
-
-  > Note (P3.9, the user's decisions, 2026-10-07 and -08) (ADR-0010, ADR-0011):
-  > - **Limits.** A repeating hold-use step needs at least 500 ms (`MIN_HOLD_USE_INTERVAL`), like an attack. Holding and letting go are limited apart, at most one at-start and one repeating step each, so a mode can shoot a bow again and again: draw at start, then every 2 s let go and draw again. It's never a command.
-  > - **Order.** A use is queued for azalea's next game tick, but a release goes out at once, so a hold and a release in the same tick would reach the server the wrong way round.
-  >   - `HoldUse{on: true}` and `UseItem` insert azalea's `StartUseItemQueued` directly, instead of calling `start_use_item`.
-  >   - `HoldUse{on: false}` removes a use that's still queued, then always writes the release.
-  >   - `UseItem` now returns `NotInWorld` once the bot has left its world, like the other actions; in game it behaves as before.
-  > - **What ends a hold:** letting go, death and respawn, a hotbar slot change, the item finishing (food), and a disconnect, as the vanilla server handles them; only letting go is checked live. An at-start hold comes back after a reconnect but not after a respawn (flagged under P4.2). For a shield, look at the sky or into open air, since a use clicks a block or entity in reach.
-  > - **Found: projectiles.** azalea doesn't move projectiles between the server's position updates, so right after a throw or a shot, a use can click the projectile in front of the bot instead of drawing. A temporary probe saw it. It's a known limit; the live step clears projectiles first.
-  > - **Tests.**
-  >   - Unit tests cover the release packet's bytes, and queuing and cancelling a use.
-  >   - `slow_actions_scenario`'s `hold_use` step checks three things: on, then off right away, leaves nothing drawn; a full draw shoots nothing while held; the release shoots one arrow.
-  >   - Red first: against a release that did nothing, and against an immediate release without the cancel, which shot an arrow from the bow it had left drawn.
-  > - **Runs** (2026-10-08): `slow_actions_scenario` alone passed 10 of 10. Three full `just test-slow` runs passed every scenario (actions, offline, online, fault containment, teardown), 3 of 3 each.
-  > - **A slot change and a hold in the same tick** *(from the PR review)*. An at-start "select a slot, then hold" runs in one tick on every join. azalea doesn't directly order its slot packet (`ensure_has_sent_carried_item`) against the use (`handle_start_use_item_queued`). If the slot packet reached the server after the use, it would end the hold.
-  >   - The `hold_use` step now selects the bow's slot from slot 0 and holds with no wait between, waits a full draw, lets go, and expects one more arrow. The bow is only the instrument.
-  >   - It passed 5 runs of 5 on its own, and one full `just test-slow` run.
-  >   - A temporary probe, never committed, logged the bot's packets in 3 more runs. Both actions landed before the same tick, and in that tick `set_carried_item` went out about 0.05–0.1 ms before `use_item`.
-  >   - That order is what azalea 0.16.0's schedule does today; no direct ordering constraint declares it. So the live step guards it at every azalea bump (ADR-0003).
+  > Note (P3.9): Feasible (P3.6's probe; items without a use duration would still need repeated packets). The user's decisions (2026-10-07 and -08): a repeating hold-use step needs at least 500 ms (`MIN_HOLD_USE_INTERVAL`), like an attack, and is never a command; holding and letting go are limited apart, at most one at-start and one repeating step each, so a mode can shoot a bow again and again (ADR-0010).
+  > `HoldUse{on: true}` and `UseItem` insert azalea's `StartUseItemQueued` directly, and `{on: false}` removes a use that's still queued, then always writes the release, so a hold and a release in one tick keep their order; `UseItem` now returns `NotInWorld` once the bot has left its world. A hold ends at letting go, death and respawn, a slot change, the item finishing or a disconnect; an at-start hold comes back after a reconnect but not after a respawn (flagged under P4.2).
+  > Known limits: right after a throw or a shot, a use can click the projectile instead; a slot change and a hold in the same tick rely on azalea 0.16.0's schedule, not a declared order, so the live `hold_use` step guards it at every azalea bump (ADR-0003, ADR-0011).
 
 **Security:**
 - Credentials are never logged.
@@ -1451,40 +1036,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** Self-healing bots, one supervised actor each, with modes and a watchdog. All of it is proven with fakes and paused time.
 **Introduces:** `governor`, `metrics`, `tokio-util` (only `CancellationToken`; Phase 3 didn't need it). Dev: `fleet-testkit`.
 
-> Note (P4):
-> - **Five group branches.** At the user's request, Phase 4 is built in group PRs like Phases 2 and 3. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
->
->   | Group | Branch | Tasks |
->   |---|---|---|
->   | A | `p4/p4.1-p4.3-spec-and-credentials` | P4.1, P4.3 |
->   | B | `p4/p4.4-p4.5-chat-queue-and-mode-runner` | P4.5, then P4.4: mode chat goes through the queue. The runtime clock and the governor clock land in P4.5, their first user |
->   | C | `p4/p4.2-p4.6-bot-actor-and-watchdog` | P4.2, P4.6 |
->   | D | `p4/p4.7-supervisor-and-fleet` | P4.7 |
->   | E | `p4/p4.8-p4.9-metrics-chaos-and-wrap-up` | P4.9, P4.8 and the phase wrap-up |
->
->   The queue and the mode runner are built against the fake before the actor, so the actor PR wires real pieces instead of placeholders.
-> - **Decisions.** The user answered the Phase 4 plan's open questions on 2026-10-08. [ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md) records them; the notes below summarize what changes a task.
-> - **Dependencies.** `governor` without default features plus `std` (no quanta, dashmap or jitter, so no rand 0.9 or getrandom 0.3 in normal dependencies), `tokio-util` without features, `metrics`, and `chrono` in fleet-runtime for `DateTime` only. No `metrics-util`.
-> - **Determinism.** `Fleet::new` takes a wall-clock anchor and a seed from its caller; the runtime never reads the wall clock or the OS's randomness. fleet-runtime's `clippy.toml` bans those entry points, so all time goes through tokio's clock, which paused-time tests control.
+> Note (P4): built in five groups (A–E), one PR each; their decisions, which the user answered on 2026-10-08, are in [ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md), with the dependencies and the determinism rule: `Fleet::new` takes a wall-clock anchor and a seed from its caller, and the runtime never reads the wall clock or the OS's randomness (fleet-runtime's `clippy.toml` bans those entry points).
 
 - [x] **P4.1** 🔴 `BotSpec` (account, server, mode, desired run state) and `BotSnapshot` (state, since, last disconnect reason, attempt, uptime).
 
-  > Note (P4.1, from Phase 2): open question, flagged and not yet decided: fleet-proto and fleet-server also need to build a `BotSpec` (Appendix C `AssignBot`), but they may only depend on `fleet-core`.
+  > Note (P4.1): `BotSpec { id, account, server, mode, desired, conflict_texts }` and `BotSnapshot { bot_id, state, since, last_disconnect }` are pure data in `fleet_core::bot`, without serde, so fleet-proto and fleet-server can build them; `attempt()` and `uptime(now)` are derived when read. The conflict texts, kick texts that count as a duplicate login for proxies that kick with plain text (ADR-0010), are at most 16 of 1–1024 characters, compared exactly, and `ConflictTexts::classify` applies them on top of the unchanged `DisconnectReason::classify` ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)).
 
-  > Note (P4.1, from group B): **Conflict texts.** A bot's spec gets an optional list of kick texts that count as a duplicate login, empty by default. Some proxies kick with plain text when a human logs in; BungeeCord/Waterfall in online mode probably does. The classifier compares the sanitized kick message exactly against the list, so vanilla servers still go by translation key. The list's limits and config keys are decided here (ADR-0010).
-
-  > Note (P4.1, from Phase 3, the user's request): **Chat format, flagged and not decided.** Next to the conflict texts, a server may later get a chat format for plugin chat that arrives as system messages, such as `[CLAN] Name : message`. It extracts the sender for display only:
-  > - A parsed sender is marked as parsed from the text. Like every chat sender, it's never used for any permission or trigger decision.
-  > - *(corrected in the group B review)* Chat senders are server-attributed, not verified. azalea 0.16 never verifies chat signatures, and fleet-mc shows a Player packet's `unsigned_content`, so even a Player packet's UUID and text are only what the server claims. A feature that needs a trustworthy sender must verify the signature and use the signed body, in its own ADR.
-  > - fleet-mc keeps the whole sanitized text of system messages, so this stays possible (P3.5, ADR-0011).
-
-  > Note (P4.1, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Where.** `BotSpec` and `BotSnapshot` are pure data in `fleet_core::bot`, without serde, so fleet-proto and fleet-server can build them.
-  > - **`BotSpec`** is `{ id, account, server, mode, desired, conflict_texts }`. The account is `BotAccount::Offline(McUsername)` or `BotAccount::Online(AccountId)`, and it never changes for a bot. The mode is the resolved `ModeDefinition`.
-  > - **`BotSnapshot`** is `{ bot_id, state, since, last_disconnect }`; `attempt()` and `uptime(now)` are derived when read, so nothing goes stale between state changes.
-  > - **Conflict texts.** `DisconnectReason::classify(&self)` stays unchanged, since fleet-mc calls it. `ConflictTexts::classify` applies the texts on top of it, for every kick that `classify()` calls Transient, whatever its key; a key that means Permanent, Conflict or AuthInvalid wins. `transition()` takes `&BotRules { retry, conflict_texts }` instead of `&RetryPolicy`.
-  > - **Limits.** At most 16 texts of 1–1024 characters, compared exactly and case-sensitively, taken as written. A text with a character the kick sanitizer strips is rejected; errors name the index, never the text.
-  > - **The chat format** is deferred to the server side (P11.9). *Scheduled at Phase 11's group H planning ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S66): in group H4, after the per-server conflict texts. Planned at H4's planning: the per-server texts in H4 (S74–S78), the chat format in H7 (S79, S80, U55, U59).*
+  > Note (P4.1, the chat format): chat senders are server-attributed, never verified (ADR-0011). The display-only chat format for plugin chat went to the server side (P11.9), scheduled at Phase 11's group H planning ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S66): the per-server texts in H4 (S74–S78), the chat format in H7 (S79, S80, U55, U59).
 - [x] **P4.2** 🔴 `BotActor`:
   - `tokio::select!` over the inbox (`Start`, `Stop`, `UpdateSpec`, `SendChat`, `Reset`, `Resume`), session events, timers and cancellation.
   - It executes the core `Effect`s and computes retry delays with `RetryPolicy`.
@@ -1499,157 +1057,48 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - changing the server reconnects
   - changing the mode does **not** reconnect
 
-  > Note (P4.2, from Phase 2) (ADR-0010):
-  > - **Clock.** The actor's clock derives `DateTime<Utc>` from tokio's `Instant`, anchored at startup, so paused time drives `transition`, the breaker and `ModePlan`.
-  > - **Leaving a state** cancels that state's timer or session request.
-  > - **`SessionClosed`** is sent once teardown has finished or timed out.
-  > - **Restart** and a server change go through `Stopping{restart}`.
+  > Note (P4.2): Deviation: the inbox has no `Start` or `Stop`. It takes one `BotCommand` per `Fleet` call (`UpdateSpec`, `Restart`, `Reset`, `Resume`, `SendChat`), and the bot starts and stops only as the spec's desired state says, so the two can never disagree; "`Stop` during backoff" is an `UpdateSpec` with desired = Stopped ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)).
 
-  > Note (P4.2, from the group A review): **Half-open breaker.** `CircuitBreaker::permits` doesn't limit the half-open state to one attempt. The actor makes one attempt at a time and reports its outcome before it asks again.
+  > Note (P4.2): the actor executes the core effects and the breaker effects (ADR-0010), publishes every state change, `Died` and `Alert` as `FleetEvent`s, applies the ready session events before any input that ends a session, and tears sessions down off its loop ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)). From the group A review: `CircuitBreaker::permits` doesn't limit the half-open state to one attempt; the actor makes one attempt at a time and reports its outcome before it asks again.
 
-  > Note (P4.2, from group B) (ADR-0010):
-  > - **Breaker effects.** The actor runs `RecordFailure`, `RecordSuccess` and `ResetBreaker` on its `CircuitBreaker`, in order. Then for `ScheduleRetry{n}` it waits `RetryPolicy::delay(n)`, or until the breaker's cool-down ends if that's later.
-  > - **Session events.** Only the current session's events reach `transition()`. Once `Disconnect` has run, the actor drops that session's events, and it sends `SessionClosed` for it only if no newer session has connected since.
-  > - **Session requests.** Every `RequestSession` gets exactly one answer; a timeout becomes `SessionUnavailable{retryable: true}`.
-  > - **Published events.** Every state change, plus `Died`, goes out as an event for the app (P4.7, P11). `Notify` is only for alerts that need a human.
-  > - **Paused and Failed.** `Start` and `Stop` are no-ops there, so applying a spec's desired run state leaves them alone. A server change to a Paused or Failed bot takes effect at Resume or Reset.
-
-  > Note (P4.2, from P3.9): **Not decided: re-apply holds after a respawn.** A death ends a `HoldUse` hold, and only a new join runs the at-start steps again. So an at-start hold comes back after a reconnect but not after a respawn (ADR-0011).
-
-  > Note (P4.2, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Holds after a respawn** aren't re-applied; that's a known limit. A repeating `HoldUse{on: true}` step does re-apply a hold after a death. P11.4 decides about "on respawn" steps. *Decided in Phase 11, group C ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S20): an opt-in `on_respawn` schedule after a respawn the server confirmed, built in C3.*
-  > - **A failed `respawn()`** is retried every 5 s while the session lives; the first failure logs at `warn`, the retries at `debug`. After 12 failed calls in a row the session ends with the new `DisconnectReason::RespawnFailed` (Transient, added to fleet-core in this task), so the bot reconnects and respawns on join. *(Since Phase 11, [ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S23: an `Ok` the server doesn't confirm within 5 s counts as a failure too.)*
-  > - **Events.** `FleetEvent { bot_id, at, kind }` with `StateChanged(BotSnapshot)`, `Died`, `ChatReceived`, `ChatSent{ticket}` and `ChatFailed{ticket, reason}`, on one bounded `broadcast` per fleet.
-  > - **The session-request timeout** is 30 s, a `RuntimeConfig` default. *(150 s from Phase 11, ADR-0020, S1, PR #59's review: longer than the server may take to mint a session, so a bot asking fresh after a refused login takes the session minted for it.)*
-
-  > Note (P4.2, from group B, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **`FleetEvent` already exists** (P4.5), with every kind above plus `ModeChatSent{message}`.
-  > - **Order.** At `StartMode` the actor opens the chat queue before it starts the mode runner. At `StopMode` or a disconnect it cancels the runner first and closes the queue after that, so mode chat never meets a closed queue. The runner and the queue's delivery get separate child tokens of the session's token.
-  > - **Spans.** The actor spawns the queue's `ChatDelivery` and the `ModeRunner` instrumented with the bot's span; neither opens one of its own.
-
-  > Note (P4.2, from group C, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Deviation: the inbox has no Start or Stop.** It takes one `BotCommand` per `Fleet` call: `UpdateSpec`, `Restart`, `Reset`, `Resume` and `SendChat` (with a `oneshot` reply). Start and Stop come only from the spec's desired state, when the actor starts and on every `UpdateSpec`, so the two can never disagree. `Restart` runs Stop then Start inside the actor, so a full inbox can't leave it half done, and it does nothing while the desired state is Stopped. "Stop during backoff" is an `UpdateSpec` with desired = Stopped.
-  > - **API.** `BotActor::new(BotActorParts { spec, connector, credentials, retry, config, clock, rng, events, bucket, tickets, snapshot, breaker })` returns the actor and its `BotInbox` (`try_send`, `InboxError::{Full, Closed}`); `run(cancel)` returns an `ActorExit`. The caller owns the snapshot and breaker `watch`es: the breaker watch's current value is where the actor starts, and the actor writes a copy after each breaker effect. The `RetryPolicy` is passed in; `ResetBreaker` is `record_success()`, which leaves the breaker as a new one.
-  > - **In-flight work.** The session request, the retry timer and the respawn retry are futures the actor owns and polls in its `select!`; leaving the state drops them, which cancels them. `connect()` is bounded by the connect timeout, a new `RuntimeConfig` field (Appendix A's key); running out is `ConnectFailed(TimedOut)`.
-  > - **Teardown** runs as a task in the actor's `JoinSet`, so the actor keeps serving its inbox and timers. Each session has a generation; a finished teardown is `SessionClosed` only while no newer session has connected. It takes no timeout and no token of its own, because the port guarantees `disconnect()` finishes (the second exception in CLAUDE.md's task rule).
-  > - **A server change or `Restart`** goes through `Stopping{restart}` while Connecting or Online. In AwaitingSession or Backoff it starts a new run at once, dropping the backoff, the pending request and the breaker's cool-down. A spec for another bot or account is ignored and logged at `error`.
-  > - **Order.** The `select!` is biased: cancellation, finished tasks, inbox, session-request answer, retry timer, respawn retry, then the session's events last, so a chat flood can't hold up the rest. Before every input that ends a session (Restart, an `UpdateSpec` that changes the server or sets desired = Stopped, cancellation, a closed inbox, the respawn retry's last failure, a crash exit), the actor applies the session events that are already ready, at most `session_drain` = 67 (fleet-mc's 64 plus 3 lifecycle events). So a queued duplicate-login kick always pauses the bot first (§6 row 3).
-  > - **Ending.** Cancellation or a closed inbox stops the bot through `transition()`, waits for every teardown and returns `ActorExit::Stopped`. A runner, delivery or teardown that panics is logged at `error` (the task, never the payload); the actor tears the session down without a state change and returns `ActorExit::TaskCrashed{task}`, so the last published state stays.
-  > - **Respawn** retries 5 s after each failed call; `Closed` ends the retry at `debug` and never counts; each death warns on its first failure.
-  > - **Events and logs.** `Notify` is published as the new `FleetEventKind::Alert(BotNotification)`, right after its `StateChanged`. No event for the starting state: the snapshot watch gets Stopped. `last_disconnect` changes only when a session ends on its own. State changes log at `info`; a session that ends on its own and is retried, a session-request timeout and a retryable credential error at `warn` (a kick's text only at `debug`); Paused at `warn`, Failed at `error`.
-  > - **Tests.** fleet-testkit's fake session gained `fail_respawn`, `succeed_respawn` and `delay_disconnect`. Crashes come from a test-only wrapper in fleet-runtime's `tests/`, as for P4.8.
-
-  > Note (P4.2, found and fixed in P4.7) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **Reset and Resume ignored the desired state.** A Paused bot whose spec said desired = Stopped connected again on Resume, and a Failed one on Reset. Both now feed their event and then apply the desired state, as `UpdateSpec` does: with desired = Stopped the bot passes `AwaitingSession{1}` and ends Stopped, and the session request is dropped before the provider is ever asked. A regression test covers both.
-
-  > Note (P4.2, found and fixed in P4.8) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **A crashing actor stopped reading its inbox.** After its mode runner, chat delivery or a teardown panicked, the actor waited for its teardowns, which can take seconds, before it returned `TaskCrashed`. Meanwhile a `send_chat` forwarded to it ended `TimedOut` after 5 s, and a Reset, Resume or Restart was answered `Ok`, then lost with the actor: a resumed Paused bot came back Paused. The P4.8 plan found it.
-  > - **The fix.** `crash()` now closes the inbox first, so the supervisor's next forward is refused at once (`Busy`), and drops the commands already queued, which answers a waiting `send_chat` with `Busy` too.
-  > - **Known limit.** A command that reaches the inbox in the same instant as the crash is still lost, as with a panic of the actor itself. The chaos test treats a call in the same instant as a crash of that bot as possibly lost.
-  > - **Test.** A regression test in `tests/fleet/supervisor.rs` first failed with `TimedOut` for `send_chat` and `Ok` for `resume`. It now checks that `send_chat`, `resume` and `restart` answer `Busy` without the clock moving.
+  > Note (P4.2, later changes): holds aren't re-applied after a respawn (ADR-0011) until Phase 11's opt-in `on_respawn` schedule ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S20); an `Ok` from `respawn()` that the server doesn't confirm within 5 s counts as a failure (S23); the session-request timeout is 150 s, not 30 s (S1, PR #59's review). Found and fixed in P4.7 and P4.8 ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): Reset and Resume apply the desired state, and a crashing actor closes its inbox first.
 - [x] **P4.3** 🔴 `SessionCredentialProvider` port:
   - In standalone mode it returns offline credentials.
   - In managed mode it asks the control plane (Phase 10).
   - On an expired token it refreshes once, then goes to `Failed(Auth)`.
 
-  > Note (P4.3, from Phase 2): The "refresh once" is driven by the core state machine. The first `AuthInvalid` emits `RequestSession{fresh: true}`, and the provider must bypass any token cache for it. The second goes to `Failed(Auth)` (ADR-0010).
-
-  > Note (P4.3, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The port lives in `fleet_core::mc`, so fleet-testkit can provide its fake: `session(SessionRequest { bot_id, account, fresh })` returns `SessionCredentials` or `CredentialError { retryable }`. `OfflineCredentials` lives in fleet-runtime, the managed implementation in fleet-agent (P10.6). The runtime doesn't check `expires_at`.
+  > Note (P4.3): the port lives in `fleet_core::mc`, so fleet-testkit provides its fake; `OfflineCredentials` is in fleet-runtime, the managed implementation in fleet-agent (P10.6). The "refresh once" is the core state machine's: the first `AuthInvalid` emits `RequestSession{fresh: true}`, which bypasses any token cache, and the second goes to `Failed(Auth)` (ADR-0010, [ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)).
 - [x] **P4.4** 🔴 `ModeRunner` drives the core `ModePlan` through the `SessionHandle`.
   - A failed action is logged and skipped, never fatal.
   - It stops cleanly on disconnect or mode change.
   - Tests assert the timing on a paused clock.
 
-  > Note (P4.4, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Logging.** A failed action logs at `warn` for the first failure of each kind per session, then at `debug`.
-  > - **A mode change** lets go first (`HoldUse{on:false}`, `Sneak{on:false}`), then starts the new plan with its at-start steps. The slot stays, and an equal definition changes nothing.
-
-  > Note (P4.4, from group B, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Shape.** One `ModeRunner` task per Online session. The actor starts it at `StartMode` with a `CancellationToken` and a `watch::Receiver<ModeDefinition>`. A changed definition lets go and restarts the plan inside the same task, so the warn-once memory lasts the whole session. The runner ends at cancellation, when the session has ended (a call fails with `Closed`), or when the owner drops the `watch` sender.
-  > - **Cancellation** interrupts a tick's actions; a mode change waits until they're done.
-  > - **Logging.** Failed actions and refused mode chat (`RateLimited`, `QueueFull`) share the runner's warn-once log; the queue's delivery keeps its own for failed sends. *(the user's addition)* Mode chat that finds the queue closed (`NotOnline`) always logs at `debug`, so a disconnect can't produce a spurious warning. *(PR #15 review)* The same goes for a session call that fails with `Closed`: the runner stops at `debug`, and the delivery logs a mode-chat send the ended session refuses at `debug` too.
-  > - **Timing.** The runner wakes at most once per sleep, and a late tick doesn't catch up (P2.8). tokio's timer rounds a deadline up to the next millisecond, which the jitter test allows for.
-  > - **Tests** read log levels through a small level-recording subscriber in the test file: fleet-testkit's log capture doesn't record levels.
+  > Note (P4.4): one `ModeRunner` task per Online session; a failed action logs at `warn` for the first failure of each kind per session, then at `debug`; a mode change lets go first (`HoldUse{on:false}`, `Sneak{on:false}`), then restarts the plan in the same task; the runner wakes at most once per sleep, and a late tick doesn't catch up (P2.8) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)).
 - [x] **P4.5** 🔴 Outbound chat queue:
   - bounded at 16, with one governor token bucket per bot
   - when the bucket or queue is full it returns `RateLimited` or `QueueFull` **instead of blocking**
   - user chat and mode chat share it
   - governor's clock is injected, so the tests run on controlled time (see §8)
 
-  > Note (P4.5, from Phase 3, group E): **flagged, not decided.** `send_chat` can fail with `SessionError::ChatUnavailable` when an online session can't sign chat for a server that enforces it. The session stays up, and a later call may succeed. This task decides what the queue does then, for user chat and mode chat (ADR-0011).
-  >
-  > Mode chat with a command that takes message arguments (`/me`, `/msg`, `/tell`, `/w`, `/say`, `/teammsg`) is rejected by a server that enforces secure chat, while `send_chat` returns `Ok`. That's undecided here too; see P11.3's note. *Decided in Phase 11 ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S2): fleet-mc refuses it with `ChatUnavailable`, so the mode's step is skipped at `debug`.*
+  > Note (P4.5): admission takes a queue slot, then a token from the bucket (one message per 3 s, burst 3), which outlives the sessions and actor restarts; `send_chat` returns a ticket, and the outcome comes later as `ChatSent` or `ChatFailed`; `ChatUnavailable` drops the message; refused mode chat is skipped and logged ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)). A temporary probe proved that every ban on chrono's and rand's clock and OS-randomness paths in fleet-runtime's `clippy.toml` fires (PR #14's review, as ADR-0010's probe did).
 
-  > Note (P4.5, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Admission.** The bucket (one message per 3 s, burst 3) is checked when a message is queued. User chat while the bot isn't Online returns `NotOnline`.
-  > - **Results.** `send_chat` returns a ticket once queued; the outcome comes later as `ChatSent` or `ChatFailed`. Queued messages fail with `ChatFailed{Disconnected}` on a disconnect. A failed send doesn't refund its token.
-  > - **`ChatUnavailable`** drops the message: user chat gets `ChatFailed{ChatUnavailable}`, mode chat is logged at `debug` and skipped. No retry.
-  > - **Mode chat** that's rate-limited or finds the queue full is skipped and logged.
-  > - **Commands with message arguments** get nothing special here; P11.3's rule applies to mode chat too.
-
-  > Note (P4.5, from the PR #14 review, the user's request): **Prove the chrono and rand bans.** fleet-runtime's `clippy.toml` lists chrono's and rand's clock and OS-randomness paths with `allow-invalid`, which would hide a path that doesn't resolve. When chrono and rand become fleet-runtime dependencies, show a red clippy run proving that each banned chrono and rand path fires. That means `chrono::Utc::now` and `Local::now`, rand's `rng`, `random`, `random_iter`, `random_range`, `random_bool`, `random_ratio`, `fill` and `make_rng`, and the `ThreadRng` and `SysRng` types. Use a temporary probe, never committed, with the features that make these paths exist enabled only for the probe, as ADR-0010's probe did (ADR-0013).
-
-  > Note (P4.5, from group B, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Events now.** `FleetEvent { bot_id, at, kind }` is defined here with all its kinds, so the queue's `ChatDelivery` publishes `ChatSent` and `ChatFailed` on the fleet's `broadcast` itself, stamped by the `RuntimeClock`. A new kind, **`ModeChatSent{message}`**, reports mode chat that was sent; mode chat that isn't sent is only logged.
-  > - **Tickets** come from one fleet-wide counter, `ChatTickets`, so a ticket never repeats while the agent runs, even across actor restarts.
-  > - **`ChatFailure`** is `Disconnected`, `ChatUnavailable`, `TimedOut`, `SessionBusy` or `NotInWorld`. A message still queued at a close, or a send that finds the session `Closed`, is `Disconnected`.
-  > - **Admission** reserves a queue slot before it takes a token, so a refused message uses up neither.
-  > - **Mode chat that's refused** (`RateLimited`, `QueueFull`) or fails in the session logs at `warn` the first time per kind and session, then at `debug`. `ChatUnavailable` is always `debug`, since fleet-mc already warns once per session. *(PR #15 review)* So is `Closed`: it only means the session has ended, so a disconnect that catches mode chat in flight or still queued can't produce a spurious warning. The text is never logged.
-  > - **The bucket** (`ChatBucket`) is shared and outlives the sessions, so a reconnect doesn't refill it, and the supervisor keeps it across actor restarts (P4.7).
-  > - **Shape.** `ChatQueue::open(session, events, clock, cancel)` returns the session's `ChatDelivery`, which the actor spawns, and a `ModeChat` handle for the mode runner. `close()` cancels the delivery, which fails what's still queued. A send that's already running finishes, since every `SessionHandle` call has its own timeout. The settings are `RuntimeConfig` fields.
-  > - **Naming.** The delivery task is `ChatDelivery`, not `ChatSender`: fleet-core's incoming chat already has a `ChatSender`.
-
-  > Note (P4.5, from group B): **The bans are proven.** chrono arrived in P4.5 and rand in P4.4. A temporary probe, never committed, then enabled chrono's `clock` and rand's `thread_rng` (which brings `std_rng` and `sys_rng`) for fleet-runtime only and used each banned path. Clippy flagged all 12 with their reasons: `disallowed_methods` for `chrono::Utc::now`, `chrono::Local::now`, `rand::rng`, `random`, `random_iter`, `random_range`, `random_bool`, `random_ratio`, `fill` and `make_rng`, and `disallowed_types` for `rand::rngs::ThreadRng` and `SysRng`. The files were restored afterwards.
+  > Note (P4.5, from Phase 3): mode chat with a command that takes message arguments got nothing special here (ADR-0011); decided in Phase 11: fleet-mc refuses it with `ChatUnavailable`, so the mode's step is skipped at `debug` ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S2).
 - [x] **P4.6** 🔴 Watchdog, while Online (fault table in ADR-0008 §5):
   - no `Tick` for `watchdog_timeout`: raise `WatchdogTimeout`, tear the session down and reconnect
   - no packet from the server for `packet_liveness_timeout`: tear the session down and treat it as a transient disconnect
 
   Both timeouts come from `[runtime]` in the agent config (Appendix A).
 
-  > Note (P4.6, from group E, the user's decision): The session's `Liveness` holds the two stamps, and the comparison lives here. When both stamps are stale, the tick stall wins: `WatchdogTimeout`, not `LivenessTimeout`, because a hung host thread stops both (ADR-0010).
-
-  > Note (P4.6, from the Phase 4 plan) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The watchdog checks every 1 s, a `RuntimeConfig` default.
-
-  > Note (P4.6, from group C, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **In the actor.** The watchdog is a timer in the actor's `select!`, armed when the bot goes Online and dropped when it leaves. The first check comes 1 s after the join, and each check arms the next one a period later.
-  > - **Stale** means at least the timeout old: with 30 s and a 1 s period, a stall is caught 30–31 s after the last tick or packet. The check reads tokio's clock as a std `Instant` and uses `saturating_duration_since`, never the banned `elapsed()`. A tick stall is `WatchdogTimeout`, a packet stall `Disconnected(LivenessTimeout)`; when both are stale the tick wins.
-  > - **Ready session events go first,** as before every session-ending input (P4.2): a queued duplicate-login kick pauses the bot instead of a trip that would reconnect it.
-  > - **Settings.** `watchdog_timeout` and `packet_liveness_timeout` (30 s each) are `RuntimeConfig` fields for Appendix A's keys; `watchdog_period` (1 s) is a default only, and a zero period counts as 1 ms. A trip is recorded in `last_disconnect` and logs at `warn` like any session that ends on its own.
-  > - **Tests** are in `tests/bot_actor.rs`, next to the actor's helpers, instead of a separate file: sharing those helpers through `tests/common` would leave them unused in the other test files.
+  > Note (P4.6): a timer in the actor's `select!` checks every 1 s while Online; a stamp is stale at its timeout (30 s each), so a stall is caught 30–31 s after the last tick or packet; when both are stale the tick stall wins (`WatchdogTimeout`), since a hung host thread stops both; the ready session events go first, so a queued duplicate-login kick pauses the bot instead (ADR-0010, [ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)).
 - [x] **P4.7** 🔴 `Supervisor` and `Fleet` handle:
   - actors run in a `JoinSet` or `TaskTracker`
   - panics are detected and the actor restarted, within the intensity limit
   - API: `apply(spec)`, `remove(id)`, `send_chat`, `snapshot_all`, `subscribe`
   - graceful shutdown: cancel, then disconnect every bot within the timeout
 
-  > Note (P4.7, from Phase 2):
-  > - **Restart limit.** "5 restarts in 10 min" uses the core `FailureWindow` and ends with the core `CrashLoop` event (ADR-0010).
-  > - **Open question, flagged and not yet decided.** `Paused` (a human is playing) and `Failed` must survive an actor or agent restart. Otherwise a fresh `Start` kicks the human (§6 row 3).
+  > Note (P4.7): actors run in tokio's `JoinSet` with child tokens; the API adds `reset`, `resume`, `restart`, `snapshot` and `shutdown`, and `apply(spec, restore: Option<StickyState>)`. Restarts never skip the backoff: the supervisor keeps each bot's spec, snapshot, restart window, breaker copy and `ChatBucket`, and `fleet_core::bot::restore` decides the restored state; a panic or a crashed task counts in the window (`FailureWindow`, ADR-0010), and the 6th within 10 min ends in `CrashLoop` ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)).
 
-  > Note (P4.7, from Phase 3): The abandoned-thread limit lives in fleet-mc: above it, `connect()` returns `HostUnavailable`. Ending the agent process at the limit is P5.3's job (ADR-0011).
-
-  > Note (P4.7, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Inside.** Actors run in tokio's `JoinSet` with child `CancellationToken`s. The `Fleet` handle talks to the supervisor task over a bounded queue with a reply timeout.
-  > - **API.** Also `reset`, `resume`, `restart` (a no-op when desired = Stopped), `snapshot(id)` and `shutdown(timeout)`; bots start and stop only through the desired state. `apply(spec, restore: Option<StickyState>)` refuses a new bot above `max_bots` (`AtCapacity`) and a changed account (`AccountChanged`). `remove` returns once accepted; until the `Removed` event, `apply` for that bot returns `Busy`.
-  > - **Restarts never skip the backoff.** The supervisor keeps each bot's spec, snapshot, restart window and a copy of its circuit breaker, which the actor publishes after each breaker effect. A pure `fleet_core::bot::restore` turns AwaitingSession, Connecting, Online and Backoff into `Backoff{attempt}` with `ScheduleRetry` (`Backoff{1}` after a stable Online); Paused, Failed and Stopped stay, and Stopping becomes Stopped. A panic isn't a breaker failure.
-  > - **Crash loop.** The 6th panic within 10 min starts the actor once more with `CrashLoop` first. If it panics again, the supervisor publishes `Failed(CrashLoop)` itself and starts an actor only on Reset.
-  > - **Agent restarts.** The server is the source of truth (P10.5); the standalone agent persists nothing, a documented limit.
-
-  > Note (P4.7, from group B, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **The chat bucket survives a restart.** The supervisor keeps each bot's `ChatBucket`, like its breaker copy, and hands the same one to a restarted actor, so a crash doesn't refill it. It also owns the fleet's `ChatTickets` and gives every actor a clone, so a ticket never repeats.
-
-  > Note (P4.7, from group C, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **A crashed task counts like a panic.** When the actor's mode runner, chat delivery or a teardown panics, `run()` returns `ActorExit::TaskCrashed{task}` instead of panicking itself. The supervisor counts that in the restart window exactly like a panic, so it restarts with the backoff and ends in `CrashLoop` after the 6th within 10 min. The actor leaves its last published state, so `restore()` works on it as after a real panic.
-  > - **The actor's inbox** takes one `BotCommand` per `Fleet` call: `UpdateSpec`, `Restart`, `Reset`, `Resume` and `SendChat`. Bots start and stop only through the spec's desired state; `restart` is the `Restart` command, which the actor ignores while desired = Stopped.
-  > - **The supervisor owns the `watch`es.** It creates each bot's snapshot and breaker `watch` and passes the senders in `BotActorParts`; the breaker watch's current value is where a new actor starts.
-  > - **A restored starting point.** `BotActorParts` will need one for a restarted actor: the `Transition` from `fleet_core::bot::restore()` (e.g. Backoff with `ScheduleRetry`), or a sticky Paused or Failed from `apply`'s restore. Today the actor starts Stopped and applies the desired state. P4.7 decides what the actor publishes for a restored state.
-
-  > Note (P4.7, from group D, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Shape.** `Fleet::new(FleetParts)` returns `(Fleet, Supervisor)` after checking the chat quota and every channel capacity against tokio's limits (`FleetSetupError`). The caller runs `supervisor.run(cancel)` in a task it owns; a cancelled token or every `Fleet` dropped shuts down within `RuntimeConfig::shutdown_timeout` (10 s).
-  > - **Calls.** A full supervisor queue is `Busy` at once, no answer within 5 s is `TimedOut`, and an ended supervisor is `ShuttingDown`. One `BotCommand` per call by `try_send`; a refused one is `Busy` and stores no spec. `send_chat` returns `SendChatError { Fleet, Chat }`.
-  > - **`apply`.** New: `AccountInUse` when a live bot's account clashes (`BotAccount::clashes_with`: offline names ignore ASCII case), `Busy` when only a removing bot holds it, `AtCapacity` at `max_bots` (every known bot counts until `Removed`). Known: `AccountChanged` compares exactly, an equal spec isn't forwarded, a restore is ignored. `StickyState` lives in `fleet_core::bot`.
-  > - **Starting points.** `BotActorParts.start: Transition`: Stopped, a sticky state, `restore()`, or `CrashLoop` on the restored state. Only a start state that differs from the `watch` is published (a sticky start without an `Alert`); `last_disconnect` carries over. `restore()` of a stable Online also records a success.
-  > - **Crashes.** A panic, a `TaskCrashed` and an unexpected exit (logged at `error`) count in the window; a restart logs at `warn` in the bot's span, the crash loop at `error`. After the crash-loop actor crashes too, calls act like a Failed actor's, and `reset` starts a new one. The window is cleared only by a `reset` while the bot is crash-looped: its actor was started for a crash loop, or it has none. *(PR #17 review)* That goes by the supervisor's own record, since a Reset can come before the crash-loop actor has published `Failed(CrashLoop)`.
-  > - **Removal** publishes `StateChanged(Stopped)` only for a bot its actor stops through `transition()`; a Paused, Failed or crash-looped bot gets only `Removed`, so P10.5 keeps the server's stored state. While removing: `apply` is `Busy`, the other commands `UnknownBot`, a second `remove` `Ok`, and reads still show the bot.
-  > - **Shutdown** returns `ShutdownReport { stopped, aborted, crashed }`; calls meanwhile are `ShuttingDown`, and an accepted removal still publishes `Removed`.
-  > - **Tests** are the folder crate `tests/fleet/` (`main.rs`, `panicky.rs`, `supervisor.rs`).
+  > Note (P4.7): Paused and Failed survive an agent restart because the server is the source of truth (P10.5); the standalone agent persists nothing, a documented limit ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)). Above fleet-mc's abandoned-thread limit `connect()` returns `HostUnavailable`; ending the agent there is P5.3's job (ADR-0011).
 - [x] **P4.8** 🔴 **Chaos property test.** Random sequences of these events, run with paused time:
   - transient and permanent kicks
   - connection failures
@@ -1663,90 +1112,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - Connect attempts stay inside the policy bounds (no reconnect storms).
   - The `Fleet` API always responds.
 
-  > Note (P4.8, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): A fixed 500 cases (`with_cases(500)`), as an exception to `PROPTEST_CASES`. Panics come from a test-only connector wrapper in fleet-runtime's `tests/`; the fakes stay panic-free. The storm invariant holds across actor panics too, with no exception for connects after a restart.
+  > Note (P4.8): a fixed 500 cases (`with_cases(500)`, an exception to `PROPTEST_CASES`) in `tests/fleet/chaos.rs`, with panics from the test-only `PanickyConnector`; the storm invariant leaves a deliberate new run's connects out of its bound; probes every 5 s catch the crash gap, and 8 coverage targets must each be reached ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)). Red runs, each a temporary break: the reverted crash-gap fix, `restore()` returning `Backoff{1}` for every state, and `restore()` without `ScheduleRetry` each failed with a shrunk one-bot case.
 
-  > Note (P4.8, from group C, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **Deliberate restarts start a new run.** A `Restart` or a server change starts a new run at once, in AwaitingSession and Backoff too, dropping the backoff and the breaker's cool-down, as Start, Reset and Resume already do. So the storm invariant must leave the connects of a deliberate new run out of its bound.
-
-  > Note (P4.8, from group D, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The chaos test becomes `tests/fleet/chaos.rs` in the fleet test crate and reuses `tests/fleet/panicky.rs`, whose `PanickyConnector` panics on chosen connects (the actor itself) or in a session's `perform` or `disconnect` (`TaskCrashed`).
-
-  > Note (P4.8, from group E, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Cases.**
-  >   - **Size.** 1–3 bots (`AfkBot1`–`AfkBot3`), 1–30 steps, and 0–90 s of paused time after each step. Settings are Appendix A's defaults.
-  >   - **Faults:**
-  >     - transient, permanent and duplicate-login kicks
-  >     - failed connects (`Refused`, `Unresolvable`, `Other`, `HostUnavailable`), a connect that never joins (the test fails it after the connect timeout, as fleet-mc would), auth rejections, retryable, refused and stuck credentials
-  >     - a hung session, a dead link, a tick stall, and teardowns of 0–20 s, so new sessions often connect while an old one still tears down
-  >     - panics in connect, perform or teardown, and a crash burst of 1–8 panics on the next connects; at most 8 crashes per bot
-  >   - **Calls:** spec updates (`afk` ↔ a cheap mode with a jump every 5 s and chat every 60 s, two placeholder servers, the desired state), Restart, Reset, Resume, `send_chat`, `snapshot`, `snapshot_all`, and remove plus re-add. The re-add works as P10.5 does: it retries on `Busy` until `Removed`, and restores a Paused or Failed last state.
-  > - **Per-bot scripts in the test.** `panicky.rs` scripts connects and panics per bot and logs every connect and panic. `credentials.rs` (`ScriptedCredentials`) answers per bot. A "server" task joins each new session unless the bot's script says otherwise. fleet-testkit is unchanged.
-  > - **The model.**
-  >   - A fault counts only once it has landed: the event was queued, the scripted answer used, or the panic fired.
-  >   - A bot leaves the class that must end Online when a non-transient fault lands, and comes back on a Reset (Failed) or Resume (Paused) answered `Ok`. A call in the same instant as a crash of its bot doesn't bring it back (see the P4.2 note).
-  > - **Invariants:**
-  >   - **No panic escapes:** the supervisor's task ends without a panic at the final shutdown.
-  >   - **Healing:** a bot that should run, with only transient faults and at most 5 fired crashes, ends Online; with 6 or more it may end `Failed(CrashLoop)`.
-  >   - **No storms,** on the events and the connect log:
-  >     - `AwaitingSession{1}` only after a deliberate call.
-  >     - `AwaitingSession{m≥2}` only after `Backoff{m−1}`, at least `bounds(m−1).0` later.
-  >     - `Backoff{n}` keeps the attempt it came from, or is `Backoff{1}` after a stable Online.
-  >     - Each connect follows its own published `Connecting`, so none while Paused or Failed. The fresh-token retry is allowed.
-  >     - A `Lagged` on the test's receiver or the connector's fails the case.
-  >   - **The API answers** before the clock moves and never `TimedOut`. `Busy` is allowed. The final shutdown answers within its timeout plus the reply timeout, and every call after it answers `ShuttingDown`.
-  >   - **Metrics:** the bots gauge equals `snapshot_all` after settling and is 0 after the shutdown. The reconnect counter equals the published `Connecting`s with attempt > 1 or `auth_retried`.
-  > - **Settling.** No new faults are injected; the scripted ones run out. It ends once every bot is in a state it stays in, with no stalled session left and no perform panic waiting on an Online bot. The cap is each scripted fault's worst wait (max backoff, breaker cool-down, timeouts, the slowest teardown) times the number of faults plus 3.
-  > - **Probes** *(added during the build, the user's decision)*. Every bot the test holds and isn't removing gets a `send_chat` every 5 s, during the pauses and the settling. Any answer but `TimedOut`, `ShuttingDown` or `UnknownBot` passes, if it comes before the clock moves. Without them, the test passed all 500 cases with the crash-gap fix reverted (P4.2's note), because random steps rarely call a bot whose crashed actor is still tearing down. The probes cost about 1.5 s.
-  > - **Coverage.**
-  >   - The test runs exactly 500 cases (`Config::with_cases(500)`, plus any seeds in the regressions file), and `PROPTEST_CASES=1000` still runs 500.
-  >   - It prints how many cases reached each target and fails if one is 0. Targets: a crash loop, a duplicate-login pause, the fresh-token retry, a sticky re-add, a teardown running at a connect, a tick trip, a packet trip, and *(the user's addition)* a probe while a session whose `perform` panicked is still inside its `disconnect()`, from the connector's own log.
-  >   - A typical run: crash loop 51, pause 134, fresh token 92, sticky re-add 48, teardown at a connect 58, tick trip 163, packet trip 124, probe in a crash teardown 65. To lift the last one, perform panics and slow teardowns weigh 6 instead of 3 and 4, and the probes run every 5 s instead of only after each step.
-  >   - Failures persist next to the file, as `tests/fleet/chaos.proptest-regressions`.
-  > - **Red runs** (temporary, uncommitted breaks, each restored afterwards):
-  >   - **Without the crash-gap fix:** "a Fleet call took time to answer", shrunk to one bot with `SlowTeardown(6)`, `Panic(Perform)` and a transient kick, all at pause 0. A probe reached the actor while it waited for its teardown.
-  >   - **`restore()` returning `Backoff{1}` for every state:** "Backoff{1} after Connecting { attempt: 3, … }", shrunk to one bot with a retryable credential refusal, a server change, stuck credentials and a connect panic.
-  >   - **`restore()` without `ScheduleRetry`:** "the fleet didn't settle within 5240s", shrunk to one bot with a crash burst of 1.
-  > - **Time.** The chaos test takes about 7–7.7 s, and `just test fleet-runtime` (288 tests) about 7.9 s.
-  > - **Helpers.** `awaiting`, `PAUSED` and `DUPLICATE_LOGIN` moved back from `harness.rs` to `supervisor.rs`, the only file that uses them.
-
-  > Note (P4.8, a bug found in Phase 6, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **The model missed a bot's last events.**
-  > - **Found.** CI's coverage job on PR #23 hit a case where `afkfleet_bot_reconnects_total` was 4 and the test's model 3. The case failed on Windows too, so it wasn't a platform difference.
-  > - **The cause was the test, not the runtime.** `settle()` absorbed the events first, then awaited the probes and `snapshot_all()`. In this case a bot's retry fell due in the instant the settle loop woke up. The bot then went `AwaitingSession{7}` → `Connecting{7}` → Online while the loop awaited, and the snapshots already showed Online, so `settle()` returned without the model ever seeing those three changes. Attempt 7 was a real reconnect, a connect the bot made on its own, so the counter's 4 was right; the model's storm checks had skipped those changes too.
-  > - **The fix.** `settle()` absorbs the events again right after `snapshot_all()`, before it judges the snapshots. The actor publishes each snapshot and its event in one synchronous step, so every state the snapshots show is absorbed. Neither the runtime nor what the metric counts changes.
-  > - **The regression test.** CI's seed is in `tests/fleet/chaos.proptest-regressions`, which proptest replays before the 500 new cases. The test failed on it (4 against 3) before the fix and passes after it.
+  > Note (P4.8, a bug found in Phase 6): the test's model missed a bot's last events, so on PR #23 the reconnect counter (4) disagreed with it (3); `settle()` now absorbs the events again after `snapshot_all()`, and CI's seed stays in `tests/fleet/chaos.proptest-regressions` ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)).
 - [x] **P4.9** Metrics: bots per state, reconnects, watchdog trips, actor restarts.
 
-  > Note (P4.9, from Phase 3): Also export fleet-mc's diagnostics: live and abandoned host threads, live Worlds, and dropped chat (ADR-0011).
+  > Note (P4.9): `afkfleet_bots{state}`, `afkfleet_bot_reconnects_total`, `afkfleet_watchdog_trips_total{kind}` and `afkfleet_actor_restarts_total`, with no `bot_id` label; every snapshot write moves the bots gauge, and `Fleet::new` registers every series at 0 in the recorder installed at that moment (see P5.3) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)). Deviation: fleet-mc's diagnostics (counters and gauges, ADR-0011) moved to P5.3, since fleet-runtime may depend only on fleet-core.
 
-  > Note (P4.9, from Phase 3, group B): `abandoned_threads()`, `dropped_chat()` and `ignored_action_bar()` only count up, so they're counters; `live_threads()` and `live_worlds()` are gauges (ADR-0011).
-
-  > Note (P4.9, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The metrics are `afkfleet_bots{state}`, `afkfleet_bot_reconnects_total`, `afkfleet_watchdog_trips_total{kind}` and `afkfleet_actor_restarts_total`, with no `bot_id` label. Tests install a hand-written recorder per test with metrics' thread-local `set_default_local_recorder`. **fleet-mc's diagnostics move to P5.3:** fleet-runtime may depend only on fleet-core (§4), so the two notes above are the agent's job.
-
-  > Note (P4.9, from group E, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **The bots gauge** changes with every snapshot write:
-  >   - The supervisor's `Entry` holds a `SnapshotOwner`, which isn't `Clone`. It counts the bot in its first state, and its `Drop` takes the bot out of its current one, so removing a bot or ending the supervisor does too.
-  >   - Actors publish through a clonable `SnapshotPublisher`, which `BotActorParts.snapshot` now takes instead of the raw `watch::Sender`. Each publish moves the bot from the old state's label to the new one. Dropping a publisher changes nothing.
-  >   - So no write can skip the gauge. P4.8's chaos test checks it against `snapshot_all` too.
-  > - **What counts:**
-  >   - **A reconnect:** every connect that isn't the first of a deliberate run (`attempt > 1 || auth_retried`), the fresh-token retry and failed connects included.
-  >   - **A watchdog trip:** only one that ends the session, after the drained events. It's labelled `kind="tick"` or `kind="packet"`.
-  >   - **An actor restart:** every actor the supervisor starts after a crash, the crash-loop start included. A new bot, a Reset, and a crash during removal, during a shutdown or after a crash loop don't count.
-  > - **Labels.** The 8 `state` labels come from a private, exhaustive match in fleet-runtime with no catch-all arm: `stopped`, `awaiting_session`, `connecting`, `online`, `backoff`, `paused`, `failed`, `stopping`. A new `BotState` variant doesn't compile without one, and fleet-core is unchanged.
-  > - **Registration.** `Fleet::new` describes the four metrics and registers every series at 0, in the recorder installed at that moment (see P5.3).
-  > - **Dependency.** `metrics` 0.24.6, whose only dependency is `rapidhash`.
-  > - **Tests:**
-  >   - `tests/fleet/metrics.rs` uses a hand-written recorder (`tests/fleet/recorder.rs`). The helpers it shares with `supervisor.rs` moved to `tests/fleet/harness.rs`.
-  >   - Three cases the `Fleet` can't reach are unit tests, with a second, `cfg(test)` recorder in `src/metrics.rs`: a crash of the crash-loop actor, the supervisor's own `Failed(CrashLoop)`, and a trip that the drained events overtake.
-  >   - Two temporary mutations, never committed, showed that the "doesn't count" tests catch the bug: counting a trip before the drain, and counting every crash as a restart.
-
-  > Note (Phase 4 wrap-up, group E) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **The Phase 4 DoD, checked on 2026-10-09:**
-  >   - **Coverage ≥ 85 %:** `just cov` gives fleet-runtime 98.25 % of lines (4666/4749), and the workspace 98.94 %; every gate passes.
-  >   - **The chaos test passes 500 cases:** it asserts the count itself, and still runs 500 with `PROPTEST_CASES=1000`.
-  >   - **`just test fleet-runtime` under 30 s:** 288 tests in about 7.9 s, the chaos test about 7.5 s of it.
-  > - **The phase's security list:**
-  >   - **Every channel is bounded:** the supervisor queue, the actor inboxes and the chat queues are `mpsc::channel`s with a capacity from `RuntimeConfig`, checked against tokio's limits; the events are one bounded `broadcast`; `watch` and `oneshot` hold one value. clippy bans `unbounded_channel`.
-  >   - **Chat only through a validated `ChatMessage`:** `Fleet::send_chat`, the queue and mode chat all take `fleet_core::chat::ChatMessage`.
-  >   - **No `unwrap`:** none, nor `expect` or `panic!`, outside test modules; the lints deny them.
-  > - **Later phases inherit** four new notes, in P5.3 and P5.6.
+> Note (Phase 4 wrap-up, group E): the DoD and the security list, checked on 2026-10-09: `just cov` gives fleet-runtime 98.25 % of lines; the chaos test passes 500 cases, also under `PROPTEST_CASES=1000`; `just test fleet-runtime` (288 tests) takes about 7.9 s; every channel is bounded, chat takes only a validated `ChatMessage`, and no `unwrap`, `expect` or `panic!` is outside test modules ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)).
 
 **Security:**
 - Every channel is bounded.
@@ -1764,19 +1137,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** `afkfleet-agent run --config agent.toml` runs a few dev bots (offline mode) against a local server. It survives server restarts and shuts down cleanly.
 **Introduces:** `clap`, `figment`, `garde`, `tracing-subscriber`, `metrics-exporter-prometheus`, `getrandom`, `rustls`. *(anyhow was planned here; group B didn't need it, so it arrives with the first `main.rs` that uses it, ADR-0014.)*
 
-> Note (P5):
-> - **Four group branches.** At the user's request, Phase 5 is built in group PRs like Phases 2–4. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
->
->   | Group | Branch | Tasks |
->   |---|---|---|
->   | A | `p5/p5.1-p5.2-config-and-telemetry` | P5.1, P5.2. fleet-agent is a library only, without a binary or a placeholder command |
->   | B | `p5/p5.3-p5.4-wiring-and-shutdown` | P5.3, P5.4: `afkfleet-agent run`, `just dev-agent`, `deploy/dev/agent.toml` |
->   | C | `p5/p5.5-p5.6-healthcheck-and-docker` | P5.5, P5.6: the healthcheck exists for the container |
->   | D | `p5/p5.7-e2e-and-wrap-up` | P5.7, the DoD demo and the phase wrap-up |
->
->   Each later group asks its own implementation-level questions in its session.
-> - **Decisions.** The user answered the Phase 5 plan's open questions on 2026-10-09. [ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md) records them; the notes below summarize what changes a task.
-> - **Dependencies.** `figment` (`toml`, `env`; `test` for `Jail` in tests), `garde` with `derive`, `tracing-subscriber` with `env-filter` and `json`, and `log` as a fleet-agent dev-dependency (group A). Group B adds `clap` (`derive`), `getrandom`, `metrics-exporter-prometheus` (no features), `rustls` (its defaults: aws-lc-rs), chrono's `now`, tokio's `rt-multi-thread` and `signal`, and fleet-testkit as a dev-dependency.
+> Note (P5): built in four groups (A–D), one PR each; their decisions, which the user answered on 2026-10-09, are in [ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md), with the dependencies.
 
 - [x] **P5.1** 🔴 Config (Appendix A):
   - loaded with figment from TOML plus `AFKFLEET_AGENT__…` env variables
@@ -1784,190 +1145,23 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `[standalone]` and `[control_plane]` are mutually exclusive
   - standalone mode only allows **offline** accounts
 
-  > Note (P5.1, from group C): `mode = "afk"` and `mode = "farm"` in `[[standalone.bots]]` map to `ModeDefinition::afk()` and `ModeDefinition::farm()`. Core has no lookup by name; this task adds it (ADR-0010).
+  > Note (P5.1): `fleet_agent::config::load` reads the file at exactly the given path, then `AFKFLEET_AGENT__…` overrides; unknown keys are errors; missing `[runtime]` and `[retry]` keys take Appendix A's values, among them `connect_timeout_secs` and `max_abandoned_threads` (ADR-0011) and `max_bots` and `shutdown_timeout_secs` ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)); each bot may list `conflict_texts`, bots whose accounts clash are refused (`BotAccount::clashes_with`), and modes go by name (`ModePreset`, ADR-0010); `name` is an `AgentName` ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)).
 
-  > Note (P5.1, from Phase 3): `[runtime]` gains `connect_timeout_secs` (default 30), which goes into `ConnectParams`, and `max_abandoned_threads` (default 3), which goes to `McHostPool` (Appendix A, ADR-0011).
-
-  > Note (P5.1, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): `[[standalone.bots]]` gains `conflict_texts = […]`, kick texts that count as a duplicate login; a missing key means an empty list (`ConflictTexts`, at most 16 entries of 1–1024 characters). P5 also supplies the runtime's wall-clock anchor and seed to `Fleet::new`.
-
-  > Note (P5.1, from P4.7) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): `[runtime] max_bots` and `shutdown_timeout_secs` map to `RuntimeConfig::max_bots` and `shutdown_timeout`. Two `[[standalone.bots]]` entries whose accounts clash are refused with a clear message, using `BotAccount::clashes_with` (offline names compare ignoring ASCII case), the same rule as the runtime's `AccountInUse`.
-
-  > Note (P5.1, from the Phase 5 plan, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
-  > - **Loading.** The file must exist at exactly the given path: figment's `Toml::file` would search parent directories and treat a missing file as empty, so `load` checks first and uses `Toml::file_exact`. `AFKFLEET_AGENT__…` variables override any key.
-  > - **Unknown keys are errors,** in the file and in the environment (`deny_unknown_fields`, and no `flatten`, which would silently turn it off). `[standalone]` and `[control_plane]` are two optional fields, and exactly one must be present.
-  > - **Optional keys.** Every `[runtime]` and `[retry]` key takes Appendix A's value when it's missing. `name` is required, and so are each bot's `username`, `server` and `mode`. `heartbeat_file` defaults to the OS temp directory's `afkfleet-agent.alive`, so `just dev-agent` works on Windows too.
-  > - **Ranges:**
-  >   - `[runtime]`: `max_bots` 1–1000, the watchdog and liveness timeouts 5–600 s, the connect timeout 5–300 s, `max_abandoned_threads` 1–100, the shutdown timeout 1–300 s.
-  >   - `[retry]`: the base delay 1–3600 s, the max delay 1–86 400 s (and at least twice the base), `stable_after_secs` **60**–86 400 s, `circuit_failures` 1–1000, the circuit window and cool-down 1–86 400 s.
-  >   - `stable_after_secs` starts at a minute, so a server that kicks the bot a few seconds after every join can't cause endless reconnects at the base delay, with the breaker never opening.
-  > - **`name`** is the new `fleet_core::value::AgentName`: 1–64 ASCII letters, digits, `-`, `_` and `.`, starting with a letter or digit. P10 sends it to the server.
-  > - **`heartbeat_file`** must be absolute. **`[control_plane]`** keys are typed and non-empty; P10 checks the URL and the files.
-  > - **Bots.**
-  >   - 1 to `max_bots` entries.
-  >   - Accounts that clash are refused on the later entry.
-  >   - Each entry is offline by construction: it only has a `username`.
-  >   - Entries get no `BotId`; P5.3 mints one at every start.
-  > - **Modes by name:** the new `fleet_core::mode::ModePreset { Afk, Farm }`, with exact lowercase names. Its error lists the valid names and never the input.
-  > - **Errors.**
-  >   - Parse errors (bad TOML, a wrong type, an unknown key) stop at the first. They name the key and the file or the environment variable; a TOML syntax error shows only its position.
-  >   - Validation then lists every problem at once, sorted by key, without echoing values.
-  >   - So texts are read as `String`s and required keys as `Option`s, and converted with the core constructors in the validation pass.
-
-  > Note (P5.1, as built, group A) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
-  > - **Shape.** `fleet_agent::config::load(path) -> Result<AgentConfig, ConfigError>`.
-  >   - `AgentConfig { name, runtime: RuntimeConfig, mc: McConfig, retry, circuit, heartbeat_file, mode: AgentMode }`, where `AgentMode` is `Standalone(Vec<StandaloneBot>)` or `ControlPlane(ControlPlaneConfig)`.
-  >   - `ConfigError` is `NotFound { path }`, `Parse(Box<ParseError>)` or `Invalid(Problems)`. Each `Problem` has a `KeyPath` and a `ProblemKind`.
-  > - **Deviation: garde checks only the ranges.** The texts go through fleet-core's constructors in a second pass, so every problem is reported at once.
-  > - **figment's error is never kept or printed.** Its own text shows a `default.` profile prefix, and for environment variables a key that isn't the variable's name. `ParseError` rebuilds the variable's name from the key path.
-  > - **Environment limits.** A value that reads as a number can't fill a text key: `AFKFLEET_AGENT__NAME=123` fails as a wrong type, so quote it as `'"123"'`. `[[standalone.bots]]` can only be replaced as a whole.
-  > - **A lint exception in tests** (the user's approval). figment's `Jail` fixes its closure's error type to `figment::Error`, which is larger than `clippy::result_large_err` allows, so every config test goes through one helper with an `#[expect]`.
-  > - **Tests:** `tests/config.rs` (39 cases, each in `figment::Jail`) plus unit tests of the error conversion and the key mapping. They were red against stubs first, as were `ModePreset`'s and `AgentName`'s.
+  > Note (P5.1): Deviation: garde checks only the ranges; the texts go through fleet-core's constructors in a second pass, so validation lists every problem at once, sorted by key, without echoing values ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)).
 - [x] **P5.2** Telemetry: pretty logs in dev and JSON in prod, an env filter, and a panic hook that logs through `tracing`.
 
-  > Note (P5.2, from Phase 3, group B review): **azalea's log targets stay at `warn`** in the default filter. azalea_client's disconnect plugin formats kick reasons at `info`, with azalea's own rendering, which grows exponentially on hostile nested translations (P3.5) and panics on a `%0$s` placeholder, since it computes `d - 1` on an unsigned digit with overflow checks on. A disabled level never formats, so neither can happen (ADR-0011).
-
-  > Note (P5.2, from Phase 3, group C, the user's decisions): **`azalea_auth` is capped at `info`**, whatever the operator's filter says. `azalea_auth::certs` logs the whole chat-signing certificate response at `trace`, private key included, in every online session. It's the same cap as fleet-server's (P9.3), and a test checks it (ADR-0011, threat model).
-
-  > Note (P5.2, from the Phase 5 plan, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
-  > - **A new `[log]` section** (Appendix A): `format = "json" | "pretty"` (default `json`) and `filter` (EnvFilter syntax, default `info`). `AFKFLEET_AGENT__LOG__…` overrides them; `RUST_LOG` has no effect. Logs go to stdout.
-  > - **JSON** puts the event's fields at the top level (`flatten_event`), with `span` and `spans`. CLAUDE.md forbids field names that would collide. **Pretty** is the single-line format, with colors only on a terminal.
-  > - **azalea's levels.** The filter is `(EnvFilter ∧ azalea cap ∧ azalea_auth cap) ∨ panic target`:
-  >   - EnvFilter gets `azalea=warn` in front unless the operator writes a plain `azalea` directive.
-  >   - A separate cap holds every `azalea…` target at `warn` unless an operator directive names it, so a target-free span directive like `[mc_session]=debug` can't lift azalea.
-  >   - `azalea_auth` stays at `info`.
-  >   - Panic reports always get through.
-  >   - One startup warning when the operator names an azalea target above `warn`.
-  > - **The panic hook** replaces the default one and logs one `error` event with the location, the thread and the payload.
-  >   - The payload is untrusted. It goes through fleet-core's new `text::sanitize_untrusted`, which makes each line break ` | `, and is cut at 1024 characters with ` [truncated]` appended.
-  >   - A backtrace is included only when `RUST_BACKTRACE` asks for one.
-  > - **The `log` bridge** (reqwest, rustls, hickory) is checked by a test: filters and caps see a `log` record's real target.
-
-  > Note (P5.2, as built, group A) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
-  > - **Shape.**
-  >   - `fleet_agent::telemetry::init(&LogConfig)` installs the global subscriber and the `log` bridge, the startup warning and the panic hook. It returns `TelemetryError::AlreadyInstalled` when a subscriber or logger is already there.
-  >   - `telemetry::layer(config, ansi, writer)` builds the layer, so tests can write into a buffer.
-  >   - The config gains `LogConfig { format: LogFormat, filter: LogFilter }`. `LogFilter` reads each directive with tracing-subscriber's own `Directive` parser and refuses a bad one by its index, without echoing it.
-  > - **Found in the build: azalea's default only lowers** (the user's decision).
-  >   - The `azalea=warn` in front of the operator's directives is more specific than their global level, so `filter = "off"` or `"error"` still let azalea's warnings through, and so did a filter without a global level.
-  >   - The default is now `warn`, or the operator's global level if that's lower (`off` when there's none).
-  > - **Found: EnvFilter applies a span directive's target to the span too.** So `azalea[x]=debug` means azalea's own spans named `x`. Inside such a span EnvFilter enables every target at that level, and the caps still hold: `azalea_auth` stays at `info` and azalea at what's named.
-  > - **Panic reports** have the target `afkfleet::panic`, a name no crate prefix shares, with the fields `thread`, `location`, `payload` and `backtrace`.
-  > - **fleet-core** makes `text` a public module that exposes only `sanitize_untrusted` and `UntrustedText`; the chat sanitizer's own items stay private.
-  > - **Tests.**
-  >   - Unit tests run the real layer in JSON into a buffer:
-  >     - 11 filters × 5 probe targets, including the span cases
-  >     - panic reports getting through `off`, `afkfleet::panic=off` and a filter without a global level
-  >     - the startup warning
-  >     - the JSON shape and the pretty format with and without colors
-  >     - the panic helpers
-  >   - `tests/telemetry_init.rs` covers the second `init` and the `log` bridge (`azalea_auth::certs` at `debug` is dropped, `info` is kept, `reqwest` at `debug` is kept).
-  >   - `tests/panic_hook.rs` panics on a named thread and checks the one event.
-  >   - Each was red against stubs first.
+  > Note (P5.2): a `[log]` section (`format` json or pretty, `filter`); azalea's targets stay at `warn` unless the operator names them, since azalea's kick rendering grows exponentially on hostile translations and can panic, and `azalea_auth` is capped at `info` whatever the filter says, since `azalea_auth::certs` logs the chat-signing private key at `trace` (ADR-0011, threat model); panic reports (`afkfleet::panic`) always get through, the payload sanitized and cut at 1024 characters ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)).
 - [x] **P5.3** Wiring: `McHostPool` + `AzaleaConnector` + `Fleet`, with the standalone spec source.
 
-  > Note (P5.3, from Phase 3): When `McHostPool::abandoned_threads()` reaches `max_abandoned_threads`, the agent shuts down and exits with an error, so Docker restarts it (§6 row 8). The library never ends the process itself (ADR-0011).
-
-  > Note (P5.3, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **fleet-mc's diagnostics** are exported here, since fleet-runtime can't read them: `abandoned_threads()`, `dropped_chat()` and `ignored_action_bar()` as counters, `live_threads()` and `live_worlds()` as gauges.
-  > - **Paused and Failed across an agent restart.** The standalone agent persists nothing, so a restart starts every bot again; that's a documented limit for a dev-only mode with offline accounts. In managed mode the server sends the sticky state (P10.5).
-
-  > Note (P5.3, from P4.7) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): `Fleet::new` returns the handle and the `Supervisor`; the agent runs `supervisor.run(cancel)` in a task it owns and reports a `FleetSetupError` at startup.
-
-  > Note (P5.3, from Phase 4, group E, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **A real seed.** The agent passes `Fleet::new` a random seed from `getrandom`, never a fixed one, so two agents never jitter their reconnects in lockstep.
-  > - **An unexpected end of the supervisor.** If the supervisor's task ends without a requested shutdown (a `JoinError` or an early return), the agent logs it at `error` and exits with an error code, so Docker restarts it, as at the abandoned-thread limit.
-  > - **The recorder first.** The agent installs the Prometheus recorder before it calls `Fleet::new`. The `metrics` crate sends the descriptions and the 0-series to the recorder installed at that moment; anything registered earlier goes to the no-op recorder and is lost (P4.9).
-
-  > Note (P5.3, from the Phase 5 plan, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
-  > - **`run` is generic** over the connector, an agent-side `HostDiagnostics` trait (fleet-mc's five numbers) and a shutdown future. Tests use fleet-testkit's `FakeConnector` and fakes on paused time, so the exits at the abandoned-thread limit and at the supervisor's end are tested.
-  > - **Bot IDs.** Each standalone bot gets a random `BotId::new_v7(anchor, getrandom bytes)` at every start. One `info` line per bot logs its ID with its username, server and mode.
-  > - **Metrics:** `install_recorder()` only, with no listener and no port; P12.4 adds the endpoint.
-  > - **Exit codes,** listed in the README and in `--help`:
-  >   - 0: clean shutdown after a signal
-  >   - 1: startup error
-  >   - 2: clap's usage errors
-  >   - 3: abandoned-thread limit
-  >   - 4: the supervisor ended unasked
-  > - **Fleet events.** One task logs `ChatReceived` and `ModeChatSent` at `debug`, and `Lagged` at `debug` with its count. Nothing else.
-  > - `run` refuses `[control_plane]` until P10.
-
-  > Note (P5.3, as built, group B) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
-  > - **Shape.**
-  >   - The binary is `afkfleet-agent` (`crates/fleet-agent/src/main.rs`); `fleet_agent::cli` holds its clap structs, so they're testable and group C can add `healthcheck`.
-  >   - `fleet_agent::run::run(RunParts { config, connector, diagnostics, anchor, seed }) -> Outcome { exit, report }`. `Exit` gives the exit code: `StartupFailed` 1, `AbandonedLimit` 3, `SupervisorFailed` 4 (0 comes with P5.4).
-  >   - `fleet_agent::diagnostics::HostDiagnostics` has one method, `sample() -> HostSample` (fleet-mc's five numbers), implemented for `AzaleaConnector`, which owns its `McHostPool`. main.rs passes one connector as both the connector and the diagnostics.
-  > - **main.rs** (the user's decisions):
-  >   - The order: `Cli::try_parse` (clap's own output and code), `config::load` (before any runtime exists: it reads a file), `telemetry::init`, the aws-lc-rs provider, the Prometheus recorder, a multi-threaded tokio runtime, `run`, `Runtime::shutdown_timeout(1 s)`, then the last line, "the agent stopped" with `exit_code`.
-  >   - Errors before logging exists go to stderr as one plain message through `writeln!` (no `#[expect(clippy::print_stderr)]`) and exit 1. Every later startup error is one `error` event, "the agent can't start", and exits 1.
-  >   - No anyhow: main.rs maps typed errors to codes itself.
-  >   - The anchor is `Utc::now()` (chrono's `now`), the seed `getrandom::u64()`.
-  >   - The Prometheus handle isn't kept: nothing serves it until P12.4, and with no histograms the recorder needs no upkeep.
-  > - **One deadline for a shutdown** (the user's decision): shutdown_timeout + reply_timeout from its start.
-  >   - `Fleet::shutdown` answers `Ok(report)`: the supervisor's task is joined by the deadline.
-  >   - `Busy` or `ShuttingDown`: a `warn`, the supervisor's token is cancelled (it then shuts down without a report), and its task is joined by the deadline.
-  >   - `TimedOut` has used up the deadline: the token is cancelled, and the run exits 4 at once.
-  >   - A supervisor that doesn't end by the deadline, or panics, is an `error` and exits 4. **Exit code 4 also means "didn't end when asked".**
-  >   - A bot the fleet refuses at startup is logged at `error` with its ID and username; the fleet shuts down the same way, and the run exits 1 (or 4).
-  > - **Diagnostics:** sampled at once and every 5 s (a constant; missed ticks are skipped). The counters `afkfleet_mc_abandoned_threads_total`, `afkfleet_mc_dropped_chat_total` and `afkfleet_mc_ignored_action_bar_total` take fleet-mc's totals with `absolute()`; `afkfleet_mc_host_threads` (abandoned threads that still run included) and `afkfleet_mc_worlds` are gauges. All are described and registered at 0 right after `Fleet::new`.
-  > - **Logs.**
-  >   - `run` enters the root span `agent{agent=…}` itself, so the bots' spans nest in it; main.rs logs its own lines in a span of the same name. fleet-mc's `mc_session` spans are created on host threads and stay roots.
-  >   - `info`: "starting a standalone bot" (`bot_id`, `username`, `server`, `mode`), "the agent is running" (`bots`), "the agent stopped" (`exit_code`, plus `stopped`, `aborted` and `crashed` with a report).
-  >   - `error`: "the abandoned-thread limit is reached; shutting down" (`abandoned`, `limit`); "the fleet's supervisor ended unasked" (`panicked`). A `JoinError` is never logged: its text carries the panic payload, which is untrusted and already logged, sanitized, by the panic hook.
-  >   - The event task logs "the bot received chat" (`kind`, `sender`, `text`, `truncated`), "the bot's mode sent chat" (`text`) and a lag (`skipped`) at `debug`. Chat text is a plain string field, so both formats escape its line breaks.
-  > - **Dev:** `deploy/dev/agent.toml` runs AfkBot1 and AfkBot2 on `afk` and AfkBot3 on `farm` against `127.0.0.1:25565`, with pretty logs; `just dev-agent` runs it.
-  > - **Tests.**
-  >   - `tests/run/`: the IDs and the startup lines, the span nesting, every startup error, the limit, the sampling period and the metrics, on fleet-testkit's `FakeConnector`, a fake diagnostics source and paused time.
-  >   - Unit tests: the specs, the watch, the event log, the metrics, and `finish` against a real `Fleet` whose supervisor a test task holds, runs, drops or panics. Each `finish` case checks the exit code and the paused time it ends at (15 s for `TimedOut` and a hung supervisor).
-  >   - `tests/cli.rs` runs the binary: a missing or invalid config exits 1 with the plain message on stderr, a usage error exits 2, `run --help` lists the codes, `--version`. Each run has its own deadline, and a guard kills the child.
-  >   - 48 tests were red against stubs first.
-  > - **Until P5.4,** the binary has no graceful stop: a signal ends it the default way.
+  > Note (P5.3): `afkfleet-agent run` wires a generic `run`, tested on fakes on paused time; it seeds `Fleet::new` from `getrandom`, installs the Prometheus recorder first, samples fleet-mc's diagnostics into metrics every 5 s, and exits 3 at the abandoned-thread limit (ADR-0011) or 4 when the supervisor ends unasked; the standalone agent persists no Paused or Failed state ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md), [ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)).
 - [x] **P5.4** 🔴 Signals (Ctrl+C, SIGTERM) trigger a graceful shutdown within `shutdown_timeout`.
 
-  > Note (P5.4, from P4.7) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): A signal calls `Fleet::shutdown(shutdown_timeout)`, or cancels the supervisor's token, which shuts down within `RuntimeConfig::shutdown_timeout`. `shutdown` returns a `ShutdownReport { stopped, aborted, crashed }` for the log.
+  > Note (P5.4): the first signal (SIGTERM or SIGINT on Linux, Ctrl+C or Ctrl+Break on Windows) calls `Fleet::shutdown(shutdown_timeout)` with one deadline and exits 0 with the report; a later signal is only logged ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md), [ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)). Deviation: `run` takes a signal source (`ShutdownSignals`), not a shutdown future, since one future can't show the second signal.
 
-  > Note (P5.4, from the Phase 5 plan, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): A signal calls `Fleet::shutdown(shutdown_timeout)` and logs the report. A second signal only logs that the shutdown is already running. Signals: SIGTERM and SIGINT on Linux, Ctrl+C and Ctrl+Break on Windows.
-
-  > Note (P5.4, as built, group B) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
-  > - **Deviation: a signal source, not a shutdown future** (the user's decision). One future can't show the second signal, so `run` takes a `fleet_agent::signals::ShutdownSignals` with a cancel-safe `recv() -> Signal`.
-  >   - `OsSignals::install()` registers SIGTERM and SIGINT (Unix) or Ctrl+C and Ctrl+Break (Windows). main.rs calls it inside the runtime, which tokio's signal handling needs, and before the fleet starts, so an early signal isn't lost. An error there is a startup error (exit 1).
-  >   - A stream that ends never makes a signal up: the source then waits forever, and so does the tests' channel fake once its sender is gone.
-  >   - Other platforms fail to build with a `compile_error!`.
-  > - **The first signal** logs "shutting down" with `signal` ("SIGTERM", "SIGINT", "Ctrl+C", "Ctrl+Break") and shuts down with P5.3's single deadline. The run ends with `Exit::Stopped`, code 0, even if bots had to be aborted. P5.3's fallbacks keep the code: `Busy` or `ShuttingDown` still give 0 once the supervisor ends; `TimedOut` or a hung supervisor give 4.
-  > - **A later signal** only logs "already shutting down" with `signal`, while the fleet shuts down and while its supervisor is awaited; the deadline doesn't move.
-  > - **Tests**, all red first on assertions, against stubs that compiled: a source that installed the real handlers but never yielded (so a signal was swallowed instead of ending the process), names that were wrong, and a watch and shutdown that ignored signals.
-  >   - Unit tests: the names, the source's stream merging (an ended stream leaves the other working; with both ended, nothing comes), the watch, and `finish` after a signal (each fallback, and repeats while the fleet shuts down and while the supervisor is awaited).
-  >   - `tests/run/signals.rs`: a signal stops the bots with exit 0 and the report; a bot slower than the shutdown timeout is aborted at 10 s, still exit 0; a second signal is only logged and doesn't change the 8 s shutdown; a signal sent before the start is handled once the agent runs; a source that ends never stops the agent.
-  >   - Unix only: `tests/signals.rs` (one test: `OsSignals` receives SIGTERM, then SIGINT, sent to its own process with `kill`) and `tests/cli.rs`'s SIGTERM test (the binary with one bot at `127.0.0.1:1`, `kill -TERM` after "the agent is running", exit 0 and "the agent stopped" with the report as the last line). Windows' Ctrl+C and Ctrl+Break can't be sent without unsafe code; `just dev-agent` exercises them.
-  >   - The Unix tests were run red and green in a Linux container, since the dev machine is Windows.
-  > Note (P5.4, from the manual test of PR #20, group C): On Windows, Ctrl+C during `just dev-agent` stopped the agent cleanly ("the agent stopped" with `exit_code=0`), but `just` then printed "error: recipe `dev-agent` failed … with exit code 1": Ctrl+C reaches `just`, PowerShell and `cargo` too. The recipe now has `[no-exit-message]`, so `just` prints no message of its own; it still exits non-zero, and the agent logs its own errors. The README says the agent's exit code is the one in "the agent stopped".
+  > Note (P5.4, from the manual test of PR #20, group C): Ctrl+C reaches `just`, PowerShell and `cargo` too, so `just dev-agent` has `[no-exit-message]`; it still exits non-zero, and the agent's own exit code is the one in "the agent stopped".
 - [x] **P5.5** 🔴 A `healthcheck` subcommand. The agent touches a heartbeat file every 10 s, and the check fails when the file is stale. This works in distroless images, which have no curl.
 
-  > Note (P5.5, from the Phase 5 plan, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
-  > - **Heartbeat.** The file is touched every 10 s, and only when `fleet.snapshot_all()` returns `Ok`. `Busy`, `TimedOut` and `ShuttingDown` never touch it: a hung supervisor's queue fills with timed-out calls, after which every call answers `Busy` at once. A test covers that case.
-  > - **`healthcheck --config <path>`** loads the same config. The file is stale when it's missing or 30 s old or more.
-  > - It exits only 0 or 1, since Docker reserves 2. clap usage errors for `healthcheck` map to 1 too.
-
-  > Note (P5.5, as built, group C) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md); the user answered group C's questions on 2026-10-09):
-  > - **Shape.**
-  >   - `fleet_agent::heartbeat` has `PERIOD` (10 s), `STALE_AFTER` (30 s), the `Heartbeat` port (`touch()`) and `FileHeartbeat`. A touch opens the file with `create(true).write(true).truncate(false)` and sets its modification time, in `spawn_blocking`. It never truncates or deletes the file, so a wrong path can't destroy data.
-  >   - `RunParts` gains `heartbeat: H`; main.rs passes `FileHeartbeat` on `heartbeat_file`, and tests pass a counting fake.
-  >   - `fleet_agent::healthcheck::check(path, now) -> Health` (`Fresh`, `Stale`, `Future`, `Missing` or `Unreadable`), with `exit_code()` and the one line it prints.
-  >   - `afkfleet-agent healthcheck --config <PATH>`. Its help lists codes 0 and 1. `cli::exit_code` turns clap's usage error into 1 when the first argument is `healthcheck`; `--help` and `--version` stay 0.
-  > - **The beat** is a task the run owns, with its own child token. It starts once "the agent is running" (a start that fails never beats) and is cancelled when the shutdown starts.
-  >   - It beats at once, then every 10 s, with missed ticks skipped. Each touch ends before the next beat.
-  >   - Logs, once per streak: `warn` "the fleet didn't answer the heartbeat" (`error`), then `info` "the fleet answers the heartbeat again"; `warn` "the heartbeat file can't be touched" (`file`, `error`), then `info` "the heartbeat file is touched again" (`file`). A wrong path shows up within a second of the start.
-  > - **The check** (the user's decisions):
-  >   - One line on stdout either way: `healthy: the heartbeat is N s old`, `unhealthy: the heartbeat file is N s old`, `unhealthy: no heartbeat file at <path>`, or `unhealthy: the heartbeat file at <path> can't be read: <error>`.
-  >   - stderr is left for errors that keep the check from running: a config that can't be loaded (the same text as `run`'s, exit 1) and usage errors.
-  >   - **A time in the future** counts as age 0 up to 30 s ahead, so a small clock correction never fails the check. Further ahead gives `unhealthy: the heartbeat file's time is N s in the future`: a healthy agent's next beat fixes it, and a hung agent can't look healthy for the length of a big backward jump.
-  > - **Tests**, red against stubs that compiled (a touch that did nothing, a beat that only waited for its token, a check that always answered healthy, clap's codes unchanged), then green:
-  >   - `healthcheck`'s unit tests: the 30 s limits in both directions, the lines and codes, a missing file, and on Unix a path through a file (`ENOTDIR`).
-  >   - The beat's unit tests, on a real `Fleet` and paused time: a beat at once and every 10 s; **no beat from a held supervisor through 70 beats, past the point where its full queue answers `Busy` at once**, with one `warn`; beats coming back with an `info`; a file streak; cancelling while a snapshot waits.
-  >   - `tests/run/heartbeat.rs`: the first beat right after "the agent is running", none once the shutdown starts, none after a failed start.
-  >   - `tests/heartbeat.rs`: `FileHeartbeat` on real files: it creates the file, moves an old time to now, keeps the content, and fails without its directory.
-  >   - `tests/cli.rs`: the binary's healthcheck for a fresh, a stale and a missing file, a missing config, a usage error (exit 1) and `--help` (exit 0). The Unix SIGTERM test also waits for its configured heartbeat file before it sends the signal, so the wiring is checked end to end.
-  >   - The Unix-only tests ran red and green in a Linux container.
-  >   - The shared test fleet of `run`'s unit tests moved into `run::testing`, used by `finish`'s tests and the beat's.
+  > Note (P5.5): a task the run owns touches the file every 10 s, only when `fleet.snapshot_all()` answers `Ok`, and never truncates or deletes it; `healthcheck --config <path>` loads the same config, exits only 0 or 1 (Docker reserves 2), and calls a file that's missing, 30 s old or more, or more than 30 s in the future unhealthy ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)).
 - [x] **P5.6** `deploy/docker/agent.Dockerfile`:
   - cargo-chef
   - a nightly builder
@@ -1975,162 +1169,25 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   Also `deploy/compose.dev.yaml` with an itzg server plus the agent.
 
-  > Note (P5.6, from Phase 4, group E, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The compose file gives the agent a `stop_grace_period` above `shutdown_timeout`, e.g. 15 s for the 10 s default, since `docker stop` kills a container after 10 s by default, before the fleet's graceful shutdown ends.
+  > Note (P5.6): Deviation: the runtime is `gcr.io/distroless/cc-debian13:nonroot`, not `cc-debian12`, whose images reached end of life in September 2026 under distroless's SUPPORT_POLICY.md (GoogleContainerTools/distroless#2129); the builder is `rust:1.99.0-slim-trixie`, so the binary's glibc matches ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)).
 
-  > Note (P5.6, from group B, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): The agent's worst-case shutdown is shutdown_timeout + reply_timeout, plus main.rs's 1 s runtime-shutdown bound. So `stop_grace_period` must be above that: **20 s** for the 10 s default, not the 15 s above. Otherwise Docker's SIGKILL replaces exit code 4 and the last line, "the agent stopped".
-
-  > Note (P5.6, as built, group C) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md); the user answered group C's questions on 2026-10-09):
-  > - **Deviation: `gcr.io/distroless/cc-debian13:nonroot`, not `cc-debian12`.** Under distroless's SUPPORT_POLICY.md, the Debian 12 `cc` images reached end of life in September 2026 (GoogleContainerTools/distroless#2129), so they get no more updates. Its README still has a Debian 12 table; group C wrongly gave the README as the reason, and group D corrected it. The builder is Debian 13 too (`rust:1.99.0-slim-trixie`), so the binary's glibc matches.
-  > - **Production is linux/arm64** (the user's requirement).
-  >   - Both base images are pinned by their multi-arch index digest, never by one platform's, and nothing in the Dockerfile names an architecture, so it builds natively on amd64 and arm64.
-  >   - deny.toml's `[graph] targets` gains `aarch64-unknown-linux-gnu`. `cargo deny check` stays clean, with no `ring` on aarch64.
-  >   - The arm64 builder stage was built under QEMU as a smoke check; a full arm64 build is P12.1's.
-  > - **`deploy/docker/agent.Dockerfile`:**
-  >   - `chef` installs cargo-chef 0.1.78 (`cargo install --locked`, with the image's stable toolchain), then copies `rust-toolchain.toml` alone and runs `rustup toolchain install`. Both are cached layers before any source, and the toolchain file stays the nightly's only pin.
-  >   - `planner` runs `cargo chef prepare`. `builder` cooks the dependencies, then builds `--release --locked --package fleet-agent --bin afkfleet-agent`.
-  >   - The runtime has static OCI labels (title, description, source, licenses), the binary at `/usr/local/bin/afkfleet-agent`, `CMD ["run", "--config", "/etc/afkfleet/agent.toml"]`, and `HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3` through `healthcheck` with the same path. A comment and the README say that another `--config` path needs the same override on the HEALTHCHECK.
-  > - **`.dockerignore`** is an allowlist: the workspace manifests, `rust-toolchain.toml`, `.cargo/config.toml` and `crates/`. After them, `.gitignore`'s secret patterns are excluded again at any depth.
-  > - **`deploy/compose.dev.yaml`** gains the `agent` service after `minecraft`, since fleet-mc's `pins` test reads the first `image:` line:
-  >   - `afkfleet-agent:dev`, built with `pull_policy: build`
-  >   - started once the server is healthy, so the bots don't use up their retries while its first start builds the world
-  >   - `deploy/dev/agent.compose.toml` mounted read-only at `/etc/afkfleet/agent.toml`
-  >   - `stop_grace_period: 20s` and `restart: on-failure`
-  >   - `read_only` with a 1 MiB tmpfs at `/tmp`, `cap_drop: [ALL]`, `no-new-privileges`, 512 MiB and 1 CPU
-  > - **`deploy/dev/agent.compose.toml`** runs AfkBot4 and AfkBot5 on `afk` and AfkBot6 on `farm` at `minecraft:25565`, with JSON logs, so it never logs out `just dev-agent`'s AfkBot1–3.
-  > - **`just stack-up`** builds the image and starts both services, waiting until they're healthy; `just mc-down` stops both.
-  > - `RUNTIME_SHUTDOWN` (1 s) moved from main.rs to `fleet_agent::run`, so a test can read it.
-  > - **`tests/deploy.rs`** (fast):
-  >   - Both dev configs load, inside `Jail` with an empty environment.
-  >   - Every compose bot joins `minecraft:25565`, and none clashes with a dev bot.
-  >   - The grace period exceeds the compose config's shutdown and reply timeouts plus `RUNTIME_SHUTDOWN`. With 15 s, the test failed.
-  >   - Compose mounts the config at `/etc/afkfleet/agent.toml`, and the Dockerfile's `ENTRYPOINT`, `CMD` and `HEALTHCHECK` use that path.
-  >   - The approved `in_jail` helper moved to `tests/common/jail.rs`; it's still one `#[expect]`.
-  > - **Demo:** `just stack-up` brought both services up healthy (`healthy: the heartbeat is 5 s old`), and AfkBot4–6 came online. `docker compose stop agent` ended in 0.4 s with exit code 0 and "the agent stopped" (`stopped: 3`) last, with no `warn` or `error` line.
+  > Note (P5.6): production is linux/arm64, so both base images are pinned by multi-arch index digest; `.dockerignore` is an allowlist; the compose agent, after `minecraft` in `deploy/compose.dev.yaml` since fleet-mc's `pins` test reads the first `image:` line, runs read-only with every capability dropped and a `stop_grace_period` of 20 s, above the worst-case shutdown of shutdown_timeout + reply_timeout + 1 s ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md), [ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)).
 - [x] **P5.7** 🔴 Slow end-to-end test:
   1. `compose up`, and all bots come Online.
   2. Restart the MC container; the bots reconnect within the policy.
   3. Stop the agent; the disconnect is clean.
 
-  > Note (P5.7, from the Phase 5 plan, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
-  > - **Shape.** A `slow_` test in `crates/fleet-agent/tests/` drives `docker compose` through `std::process::Command`, with its own project name. It reads the agent's JSON logs and RCON `list`, and checks the exit code and the `ShutdownReport`.
-  > - **The image is built first.** `just test-slow` builds it before the timed test, since a cold build can outlast the slow profile's 10 minutes.
-  > - **Clean-up.** The test runs `down -v` for its own project before it starts, and in a guard that also runs when the test panics.
+  > Note (P5.7): one `slow_compose_scenario` in `crates/fleet-agent/tests/slow_compose/` runs the dev stack as `afkfleet-e2e` with `deploy/compose.isolated.yaml` and five bots; it holds every reconnect wait to the retry policy's bounds and every bot to a deadline from the server's healthy moment, and shares `deploy/dev/stack-checks.json` with the demo ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)). No CI job builds the image on every PR: a PR that changes the Dockerfile, `.dockerignore`, `Cargo.lock` or `rust-toolchain.toml` runs the "Slow tests" workflow on its branch, which the user starts.
 
-  > Note (P5.7, from group C, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): **No CI job builds the image on every PR.** Instead, group D's PR, and every later PR that changes the Dockerfile, `.dockerignore`, `Cargo.lock` or `rust-toolchain.toml`, runs the "Slow tests" workflow on its branch before it's merged. The user starts it under Actions → Slow tests → Run workflow, so the image build is checked in CI.
-
-  > Note (P5.7, as built, group D) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md); the user answered group D's questions on 2026-10-09):
-  > - **Shape.** `crates/fleet-agent/tests/slow_compose/` (`main.rs`, `docker.rs`, `logs.rs`, `checks.rs`) holds one `slow_compose_scenario`. It runs the dev stack as the project `afkfleet-e2e`, with the new `deploy/compose.isolated.yaml` on top (`ports: !reset []` on minecraft), so it can run beside `just mc-up`. `!reset` needs Compose 2.24, which the test checks first.
-  >   - Every docker call runs from the repository root with a deadline.
-  >   - A guard runs `down -v --timeout 10` when the test ends or panics, and the same runs before the start, which covers a run nextest killed.
-  > - **Five bots.** `agent.compose.toml` gains AfkBot7 and AfkBot8 on `afk` (AfkBot6 stays on `farm`), so `just stack-up`, the test and the demo run the same five.
-  > - **The image.** `just test-slow` pulls the server image and builds the agent's (`compose build agent`) first. It then sets `AFKFLEET_E2E_IMAGE_BUILT=1` through a `$`-parameter; without it, the test stops at once, so it never tests an old image. The stack starts with `up --wait --no-build`.
-  > - **The steps:**
-  >   1. Every bot is Online (state lines and RCON `list`) within connect + bounds(1).max + connect + 1 s of "the agent is running": 71 s with the defaults.
-  >   2. `restart --no-deps minecraft`.
-  >      - **The healthy moment** is the end of the first good probe after the server's new StartedAt. It's polled from `docker inspect` at once, since Docker keeps only five probes.
-  >      - **Every bot is Online again** by bounds(n).max + connect + bounds(n+1).max + connect + 1 s from that moment, where n is its last Backoff before then. That allows one more failed attempt, since an attempt in flight when the probe passes can still fail.
-  >      - **Every wait** from `Backoff { attempt: n }` to the next `AwaitingSession` in the whole log lies in bounds(n), with 100 ms of slack below and 1 s above. A failure says whether the breaker may have been open.
-  >      - **The agent didn't restart:** its StartedAt and restart count are unchanged, and "the agent is running" appears once.
-  >   3. `stop agent`:
-  >      - exit code 0
-  >      - the last line is "the agent stopped" with exit_code 0, stopped 5, aborted 0 and crashed 0
-  >      - no WARN or ERROR from "shutting down" on
-  >      - RCON's list drops every bot within 5 s
-  >
-  >   Then the whole log must hold no ERROR and only the expected warnings, and every offending line is printed in full. Every check also asserts that it saw data (5 bots, a wait per bot after the restart, a probe, the bots on RCON's list).
-  > - **Shared numbers.** `deploy/dev/stack-checks.json` is shared with the demo. It holds:
-  >   - the expected warnings (target, message prefix, why)
-  >   - the bounds(n) table up to the capped window
-  >   - the connect timeout and the agent's grace period
-  >
-  >   `tests/deploy.rs` checks every number against `agent.compose.toml` and `compose.dev.yaml`. It also checks that the override unpublishes the port, and that minecraft's `stop_grace_period` is at least 30 s. It's now 60 s, so a stop is graceful: Docker's default 10 s could kill the server, and the bots would see reset sockets.
-  > - **The budget.** Before each deadline, elapsed + deadline + the agent's grace period + 60 s of teardown must fit the slow profile's limit, 600 s, read from `.config/nextest.toml`.
-  > - **Clocks.** The test judges only by Docker-VM timestamps (the agent's log, StartedAt, the probes). Its waits wake on the agent's next line (a `logs --follow` child) or after 250 ms, and never sleep.
-  > - **Found in the runs:**
-  >   - The restart took about 3 s.
-  >   - The bots saw `ConnectionClosed`, not the "Server closed" kick, so azalea's "Got disconnect packet" didn't appear. It stays expected, since a slower stop sends it.
-  >   - The server took joins a few seconds before its first good probe.
-  > - **Connection resets** (found by the demo's first run, after the runs above; the user's decisions). vanilla's shutdown sometimes resets a bot's socket before its kick, and azalea logs that at ERROR. The whole-log check allows that one error:
-  >   - only between the agent's last line before the restart and the server's healthy moment
-  >   - no more often than bot sessions ended there with `ConnectionClosed`
-  >
-  >   It's `expected_restart_errors` in `stack-checks.json`, shared with the demo; the DoD note explains it. `tests/deploy.rs` checks that every expected line names its target, prefix and reason. The checks' new unit tests were red against a stub first.
-  > - **Deviation:** the compose-file helpers stay in `tests/deploy.rs`, now for any service, since the scenario reads the agent's grace period from `stack-checks.json`. Only the `stack-checks.json` reader moved to `tests/common/`.
-  > - **Tests:**
-  >   - 52 fast unit tests of the helpers, red against stubs first.
-  >   - 6 new tests in `deploy.rs`, red against placeholder data first.
-  >   - The scenario was red against stub parsers ("every bot Online within 71s; last seen: Online in the log: {}"), and once against `stop_signal: SIGKILL` (exit 137). Then it passed in about 45 s.
+  > Note (P5.7): Deviation: the compose-file helpers stay in `tests/deploy.rs`; only the `stack-checks.json` reader moved to `tests/common/`.
 
 **DoD:** Demo with 5 bots AFK on a local server for 1 h, with one server restart in between. The logs show no errors except the expected disconnect warnings.
 
-> Note (DoD, from the Phase 5 plan, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): `just demo-agent` (logic in a script under `scripts/`) runs the demo and prints a summary:
-> - warn and error lines by target and count
-> - the state-change timeline
-> - reconnect times after the restart
-> - the shutdown report
->
-> The AI runs it in group D and puts its output in the PR; the user can re-run it, for example after a Minecraft-version bump.
+> Note (DoD): `just demo-agent [minutes]` (`scripts/demo-agent.mjs`) runs the stack for 60 minutes by default, restarts the server at half time, records the agent's memory and CPU, and prints a summary with a verdict, PASS or FAIL; raw data stays under `target/demo-agent/`, and only `summary.txt` goes into a pull request. The Minecraft-version bump runs it (ADR-0003's verify step) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)).
 
-> Note (DoD, from group C, the user's decision): The demo also records the agent's peak memory and CPU (`docker stats`), so P12.2's limits come from a measured value with headroom, not a guess.
+> Note (DoD): Deviation: during a server restart azalea can log a TCP reset at ERROR; the e2e test and the demo allow it only between the agent's last line before the restart and the server's healthy moment, at most once per session closed there with `ConnectionClosed` (`expected_restart_errors` in `stack-checks.json`) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)).
 
-> Note (DoD, as built, group D) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md); the user answered group D's questions on 2026-10-09):
-> - **`just demo-agent [minutes]`** runs `scripts/demo-agent.mjs`, which uses Node's built-ins only and is tested in `scripts/demo-agent.test.mjs`. It runs 60 minutes by default:
->   - It builds the agent's image, then runs the stack as the project `afkfleet-demo`, with `compose.isolated.yaml` on top.
->   - It restarts the server at half time (`restart --no-deps minecraft`) and stops the agent at the end.
->   - Last, it removes the stack (`down -v --timeout 10`), also after Ctrl+C or an error, once the logs are saved.
-> - **The summary:**
->   - where it was measured: `docker info`'s architecture, CPUs, OS and memory, plus the CPU model from `lscpu`, else `/proc/cpuinfo`, else "unknown"
->   - the agent's memory and CPU from a streamed `docker stats`: the peak, with its time relative to the restart, the mean and the p95. These are never judged.
->   - warn and error lines by target and count
->   - the state-change timeline
->   - each bot's reconnect after the restart
->   - the shutdown report
-> - **The verdict** is PASS (exit 0) or FAIL (exit 1). A FAIL lists each failed criterion with its lines:
->   - an ERROR line, except the connection resets a server restart may cause (below)
->   - a warning `stack-checks.json` doesn't expect, or a line that isn't the agent's JSON
->   - a bot not Online again by its deadline (the e2e test's formula, from the server's healthy moment)
->   - an agent restart
->   - a shutdown that isn't exit 0 with aborted 0 and crashed 0
->
->   A run under 60 minutes says "not the DoD run".
-> - **Too short to judge** (exit 2):
->   - Before the start: the minimum comes from `stack-checks.json`. Half the run must hold attempt 3's reconnect deadline plus the agent's stop, which is 7 minutes with the defaults.
->   - After the restart: if the deadlines it observes, plus the stop, don't fit in the time left, it saves the logs and stops.
-> - **Raw data** goes under `target/demo-agent/<UTC time>/`: `agent.log`, `minecraft.log`, `stats.jsonl` and `summary.txt`. Only `summary.txt` goes into a pull request, since `minecraft.log` holds the bots' container IPs.
-> - **Deviation, found in the first run** (the user's decisions): azalea logs a TCP reset at ERROR (`azalea_client::plugins::connection`, "Error reading packet from Client: IoError { … ConnectionReset …").
->   - **Why it happens.** A server that closes a socket with unread client data sends a TCP reset, and during vanilla's shutdown that can arrive before the "Server closed" kick. In the 8-minute check run, 2 bots got the kick and 3 were closed without it, one of them with a reset.
->   - **The agent recovers as designed:** `ConnectionClosed`, a backoff, and back Online in about 25 s.
->   - **The allowance.** `stack-checks.json` gains `expected_restart_errors` with that one entry. The e2e test and the demo accept it only:
->     - between the agent's last line before the restart and the server's healthy moment, both by the Docker VM's clock
->     - no more often than bot sessions ended in that window with `ConnectionClosed`, since each reset ends one live session, and azalea's line carries no bot ID
->
->     Every other ERROR, and this one at any other time, still fails. The summary reports how many were allowed.
-> - **The Minecraft-version bump** runs it: ADR-0003's verify step gains `just demo-agent` (1 h), with its `summary.txt` in the bump's pull request, and P12.6's runbook carries the step.
-
-> Note (DoD, the run, group D): `just demo-agent` ran on 2026-10-10 with its default 60 minutes. Its `summary.txt` is in the PR. **PASS:**
-> - 5 bots (four on `afk`, AfkBot6 on `farm`) came Online within a second, and the server restarted once, at minute 30.
-> - Every bot got the "Server closed" kick, and every bot was Online again 8–21 s later, well inside its deadline (attempts 2 and 3).
-> - The log holds no ERROR, and only the 16 expected disconnect warnings:
->   - 8 "the session ended; the bot connects again"
->   - 5 of azalea's "Got disconnect packet"
->   - 3 of azalea's "failed to create connection"
-> - The agent never restarted. Its stop gave exit code 0 and stopped 5, aborted 0, crashed 0.
-> - The agent's container peaked at 26.9 MiB and 6.59 % of one core (P12.2's note has the numbers).
-
-> Note (Phase 5 wrap-up, group D) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
-> - **The Phase 5 Goal, checked on 2026-10-10:**
->   - **"`afkfleet-agent run --config agent.toml` runs a few dev bots (offline mode) against a local server":** `just dev-agent` runs three bots on the host (group B), and the compose agent runs five in Docker (`just stack-up`, group C; five since group D).
->   - **"It survives server restarts":**
->     - The e2e test restarts the server, holds every wait between attempts to the retry policy and every bot to its deadline, and checks that the agent itself didn't restart.
->     - The hour-long demo did the same at minute 30.
->   - **"It shuts down cleanly":** in the e2e test and the demo, the stop gave exit code 0 and the report (stopped 5, aborted 0, crashed 0), and the server dropped every bot at once.
-> - **The Phase 5 DoD:** the demo above. It ran 5 bots, four of them AFK and one farming (the user's decision), for an hour against the local server, with one restart. Its logs show no error, only the expected disconnect warnings.
->   - **Deviation:** a restart can cause one error the DoD didn't foresee, azalea's connection reset. The e2e test and the demo accept it only during the restart, at most once per session closed there (the DoD note above). It didn't occur in this run.
-> - **Every task, P5.1–P5.7, is ticked.** The crates the phase introduces are in, except `anyhow`, which arrives with the first `main.rs` that needs it (ADR-0014).
-> - **Later phases inherit:**
->   - P12.2: the measured memory and CPU, as a baseline per bot
->   - P12.6: the demo in the Minecraft-version bump
->   - the notes for P10, P11.1, P12.1 and P12.4 that ADR-0014 lists
+> Note (DoD, the run and the Phase 5 wrap-up, group D): PASS on 2026-10-10, when the Goal was checked too: 5 bots (four on `afk`, AfkBot6 on `farm`) for an hour with one server restart at minute 30, every bot Online again 8–21 s later, no ERROR and only the 16 expected disconnect warnings, and a stop with exit code 0 (stopped 5, aborted 0, crashed 0); the agent's container peaked at 26.9 MiB and 6.59 % of one core (P12.2) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)).
 
 ---
 
@@ -2138,116 +1195,45 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** An HTTP service skeleton that is secure by default, with persistence, an error model and an audit trail, but no business endpoints yet.
 **Introduces:** `axum`, `axum-extra`, `tower`, `tower-http`, `sqlx`, `utoipa`, `utoipa-axum`, `ts-rs`, `serde_json`, `tokio-util`.
 
-> Note (P6):
-> - **Five group branches.** At the user's request, Phase 6 is built in group PRs like Phases 2–5. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
->
->   | Group | Branch | Tasks |
->   |---|---|---|
->   | A | `p6/p6.1-p6.2-layout-and-config` | The fleet-startup extraction, P6.1, P6.2. fleet-server is a library only, without a binary |
->   | B | `p6/p6.3-p6.8-persistence-and-audit` | P6.3, P6.4, P6.8, plus the time and randomness ports, the `sqlx-offline` job and `just db-prepare` |
->   | C | `p6/p6.5-p6.9-api-types-and-errors` | P6.9 first (ApiError's body DTO lives in fleet-api-types), then P6.5; the `ts-types-fresh` job and `just gen` |
->   | D | `p6/p6.6-p6.7-middleware-and-health` | P6.6, P6.7 |
->   | E | `p6/p6.10-p6.12-cli-and-wrap-up` | P6.10, P6.11, P6.12, the DoD integration test and the phase wrap-up |
->
->   Each later group asks its own implementation-level questions in its session.
-> - **Decisions.** The user answered the Phase 6 plan's open questions on 2026-10-10. [ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md) records them; the notes below summarize what changes a task.
-> - **fleet-startup** (the user's decision). A new crate holds the binaries' start-up code: the config loader with its key-path errors, the `[log]` types, the log layer and the panic hook (§4). Group A's first commit moves it out of fleet-agent with no change in behavior, and fleet-agent's tests pass with only import changes. Its filter always caps `azalea_auth` at `info` and lets panic reports through. A binary adds its own rules through `FilterRules`, which can't weaken those two; only the agent's `azalea=warn` rules stay in fleet-agent.
-> - **Time and randomness are injected ports** (the user's decision), from group B on. fleet-core gets `system::{Clock, SecureRandom, RandomError}`, fleet-testkit `ManualClock` and `SeededRandom`, and fleet-server's infra `SystemClock` and `OsRandom`:
->   - The seeded fake exists only in fleet-testkit, a dev-dependency everywhere, and a script under `scripts/` checks that no workspace member has fleet-testkit as a normal dependency. `OsRandom` is the only other implementation, and main.rs always wires it. The port's docs say every implementation must be cryptographically secure (security rule 4).
->   - `crates/fleet-server/clippy.toml` bans reading the clock or the OS's randomness directly; `SystemClock` and `OsRandom` each carry one approved `#[expect(clippy::disallowed_methods)]`.
->   - Tests never hard-code `SeededRandom`'s bytes or the IDs made from them, and snapshots redact them: rand doesn't promise `StdRng`'s output across versions.
->
->   As built (group B, the user's decisions, [ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
->   - **fleet-core `system`:** `Clock::now()` returns whole milliseconds (the precision the database stores and a v7 ID holds); `SecureRandom::fill`; `RandomError::{Os { code }, Unavailable}`; `random_bytes::<N>()`; and `mint::<I: V7Id>(at, random)`, where `define_id!` implements fleet-core's new `V7Id` trait for every ID type. The caller reads its clock once, so a record's creation time equals its ID's.
->   - **fleet-testkit:** `ManualClock` (`new`, `set`, `advance`, all truncating to ms) and `SeededRandom` (`fail_next` queues one failure that doesn't move the stream).
->   - **fleet-server `infra::system`:** `SystemClock` and `OsRandom`, each with its approved `#[expect]`.
->   - **Deviation: the testkit guard is `just testkit-check`, not a TOML-parsing script** (the user's decision). It asks Cargo: `cargo tree --workspace -e normal,build --target all -i fleet-testkit` must list nothing but fleet-testkit, so `workspace = true`, renames, target-specific tables and members anywhere are covered with no parser to maintain. `scripts/testkit-check.mjs` reads cargo's output and fails on any line it can't read; `just check`, `just ci` and the `deny` CI job run it.
->   - **The bans go further than planned** (the user's decision): uuid's self-minting functions and the `SysRng`/`ThreadRng` types too. A temporary probe, never committed, proved that all 28 entries fire with their reasons.
-> - **stable-check.** fleet-startup and fleet-server join `stable_crates` in group A, fleet-api-types in group C. P9.3 removes fleet-server when azalea-auth arrives.
-> - **Dependencies (group B, the user's approval).** New in `[workspace.dependencies]`: sqlx (0.9.0, no default features), async-trait (0.1.92) and tempfile (3.27.0, already in the lockfile). fleet-server gains fleet-core, async-trait, chrono (`now`), getrandom, log (only for sqlx's `LevelFilter`), secrecy, serde_json, sqlx (`runtime-tokio`, `sqlite-bundled`, `macros`, `migrate`, `uuid`), tokio (`fs`) and uuid; in dev, insta, proptest (`std`), tempfile and tokio (`macros`, `rt`). fleet-testkit gains chrono and rand (`std_rng`). fleet-core gains nothing.
-> - **Dependencies (group C, the user's approval).** New in `[workspace.dependencies]`, each without default features: ts-rs (12.0.1), axum (0.8.9) and tower (0.5.3), plus fleet-api-types by path. fleet-api-types uses fleet-core, serde (`derive`), thiserror and ts-rs (`serde-compat`); in dev, rstest, serde_json and tempfile. fleet-server gains fleet-api-types and axum (no features); in dev, tower (`util`), and insta gains `json`. Cargo.lock gains only ts-rs, ts-rs-macros and termcolor. ts-rs's `chrono-impl` and `uuid-impl` come with the first DTO that holds a time or an ID.
-> - **Dependencies (group D, the user's approval).** New in `[workspace.dependencies]`: tower-http (0.7.1; it has no default features). fleet-server gains tower-http (`catch-panic`, `timeout`, `limit`, `sensitive-headers`, `set-header`), tower as a normal dependency (no features, for `ServiceBuilder`), axum's `matched-path` and tokio's `time`; in dev, tokio's `test-util`. fleet-core gains the `RequestId` type, no dependency. Cargo.lock gains only tower-http 0.7.1, next to reqwest's 0.6.11.
-> - **Dependencies (group E, the user's approval).** New in `[workspace.dependencies]`: utoipa (6.0.0, without default features) and utoipa-axum (0.3.0). fleet-api-types gains utoipa (`macros`, and `preserve_order`, the user's approval during the build); fleet-server gains utoipa (`macros`), utoipa-axum, clap (`derive`) and tokio-util, axum's `tokio` and `http1`, and tokio's `rt`, `rt-multi-thread`, `macros`, `net` and `io-util`; fleet-startup gains tokio (`signal`, `macros`; in dev `rt`, `sync`, `time`, `test-util`), and fleet-agent drops tokio's `signal`, which fleet-startup now enables. Cargo.lock gains only utoipa, utoipa-gen, utoipa-axum and its macro helper pastey. No anyhow, and no hyper, hyper-util or reqwest as a direct dependency.
-> - **Dependencies.** Group A adds no external crate. fleet-startup uses figment (`toml`, `env`), serde, thiserror, tracing and tracing-subscriber (`env-filter`, `json`); fleet-testkit gains figment (`test`) and serde_json; fleet-server uses fleet-startup, garde (`derive`), serde (`derive`), thiserror and tracing.
+> Note (P6): built in five groups (A–E), one PR each; their decisions, which the user answered on 2026-10-10, are in [ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md), with the dependencies.
+> The phase also added the crate fleet-startup (the binaries' shared start-up code) and time and randomness as injected ports (`Clock`, `SecureRandom`), with `ManualClock` and `SeededRandom` in fleet-testkit, which `just testkit-check` keeps a dev-dependency everywhere.
 
 - [x] **P6.1** Module layout (see `CLAUDE.md`): `config`, `app` (services), `ports`, `infra/{sqlite,crypto}`, `http/{router,middleware,extractors,handlers,error}`, `grpc`, `cli`.
 
-  > Note (P6.1, as built, group A) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **Deviation: modules arrive with their code** (the user's decision). `crates/fleet-server` starts as a library whose crate doc describes the whole layout, each module with the task that fills it, and the layering (`http` handlers → `app` services → `ports` → `infra`). Group A adds `config` (P6.2); every other module arrives with the group that first puts code in it, so the tree has no empty modules.
-  > - **No binary yet.** `afkfleet-server` arrives with the CLI in P6.11 (group E).
-  > - fleet-server joins the justfile's `stable_crates` (P9.3 takes it out again).
+  > Note (P6.1): Deviation: modules arrive with their code; the crate doc describes the whole layout, the task that fills each module and the layering, so the tree has no empty modules ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 - [x] **P6.2** 🔴 Config:
   - figment + garde
   - secrets only via `*_file` paths
   - fail fast with a clear message
 
-  > Note (P6.2, from the Phase 6 plan, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **The agent's rules,** through fleet-startup's loader: the file must exist at exactly the given path, `AFKFLEET_SERVER__…` variables override any key, unknown keys are errors in the file and in the environment, parse errors stop at the first, and validation lists every problem at once, sorted by key, without echoing a value.
-  > - **Only Phase 6's keys.** Each later phase adds its own, so a key of a later phase is still an unknown key until then (Appendix A's note).
+  > Note (P6.2): the agent's rules through fleet-startup's loader, with `AFKFLEET_SERVER__…` overrides; only Phase 6's keys, so a key of a later phase is still an unknown key until then ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
   >
-  >   | Key | Default | Rule |
-  >   |---|---|---|
-  >   | `dev_mode` | `false` | When it's on, the server logs one `warn` at startup |
-  >   | `[http] bind` | `127.0.0.1:8080` | An IP address and a port other than 0 |
-  >   | `[http] request_timeout_secs` | 15 | 1–300 (1–19 since P8.1, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
-  >   | `[http] max_body_bytes` | 65536 | 1024–1048576 |
-  >   | `[database] path` | required | Absolute |
-  >   | `[log] format`, `filter` | `json`, `info` | As the agent's (P5.2) |
-  > - **Deviation: `bind` defaults to `127.0.0.1:8080`,** not Appendix A's `0.0.0.0:8080`, so a server started without it never listens on the network. The container config sets `0.0.0.0:8080` itself (P12).
-  > - **Port 0 is refused:** a server on a port the OS picks can't be reached by Caddy, and the healthcheck probes the configured port.
-  > - **`database.path` is required and absolute:** `/data/afkfleet.db` is a container path, and a relative path would resolve against wherever the server is started, so a start from another directory would silently create a fresh, empty database.
-  > - **The dev-mode warning:** "dev mode is on: development-only features are enabled; never run a production server in dev mode". It names no feature, so it stays true as later phases hang more on `dev_mode`.
-  > - **Secrets: the rule and a test now, the loader in P7.4.** A key whose name has a `_`-separated part `key`, `token`, `password`, `secret`, `passphrase`, `pepper` or `credential` (singular or plural) must end in `_file` or `_files`, or be on the test's allowlist with a reason. The test walks every key through serde's own field lists, so a new key can't escape it.
-  > - **`[log]`** is the agent's section from fleet-startup. The server's filter is `(EnvFilter ∧ azalea_auth cap) ∨ panic reports`, through fleet-startup's `NoRules`: no azalea default and no startup warning.
-
-  > Note (P6.2, as built, group A) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **Shape.** `fleet_server::config::load(path) -> Result<ServerConfig, ConfigError>`, with `ServerConfig { dev_mode, http: HttpConfig { bind, request_timeout, max_body_bytes }, database: DatabaseConfig { path }, log: LogConfig }`, `HttpConfig::DEFAULT_BIND`, `ENV_PREFIX` and `ServerConfig::warn_if_dev_mode()`.
-  >   - `ConfigError`, `Problems` and `Problem` are aliases of fleet-startup's generic types over the server's `ProblemKind`: `Missing`, `Empty`, `OutOfRange`, `NotAbsolute`, `SocketAddress`, `PortZero`, `LogFormat` and `LogFilter`. No message echoes a value.
-  >   - `fleet_startup::telemetry::NoRules` is the server's `FilterRules`: no defaults, a cap that lets everything through, no warning.
-  > - **A dependency edge beyond the plan's list** (the user's approval): `tracing-subscriber` as a fleet-server dev-dependency, so the dev-mode test checks the warning's level through fleet-startup's layer.
-  > - **Tests**, red against stubs that compiled (a `validate` that returned fixed defaults, a `warn_if_dev_mode` that did nothing, a `NoRules` cap that blocked everything, a key walker that found nothing): 40 of 106 failed on assertions, then all passed.
-  >   - `tests/config.rs` (31 cases, each through `fleet_testkit::jail::in_jail`): the defaults, every key, environment overrides, the bind forms, the dev-mode warning on and off, a missing file, unknown keys in the file and the environment, a later phase's section, a wrong type, the database path, bad binds and port 0, the range edges, bad log settings, and every problem at once without values.
-  >   - Unit tests: the secret-name rule (14 names), the walk finding every Phase 6 key, no key holding a secret, the allowlist's entries, and the problem list's text.
-  >   - fleet-startup: `NoRules` across 7 filters and 4 targets (`azalea_auth` stays at `info` under `trace`), panic reports under `off`, and no defaults or warning.
+  > | Key | Default | Rule |
+  > |---|---|---|
+  > | `dev_mode` | `false` | When it's on, the server logs one `warn` at startup |
+  > | `[http] bind` | `127.0.0.1:8080` | An IP address and a port other than 0 |
+  > | `[http] request_timeout_secs` | 15 | 1–300 (1–19 since P8.1, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
+  > | `[http] max_body_bytes` | 65536 | 1024–1048576 |
+  > | `[database] path` | required | Absolute |
+  > | `[log] format`, `filter` | `json`, `info` | As the agent's (P5.2) |
+  >
+  > Deviation: `bind` defaults to `127.0.0.1:8080`, not Appendix A's `0.0.0.0:8080`, so a server started without it never listens on the network. A key whose name has a secret word must end in `_file` or `_files`, or be on the test's allowlist; the loader comes in P7.4.
 - [x] **P6.3** SQLite setup:
   - `journal_mode=WAL`, `synchronous=NORMAL`, `foreign_keys=ON`, `busy_timeout=5s`
   - a **write pool with 1 connection** plus a read pool
   - migrations embedded with `sqlx::migrate!` and run at startup
   - offline data in `.sqlx/`, and a CI job running `cargo sqlx prepare --check`
-  > Note (P6.3, from group A, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **sqlx's statement logging is set explicitly** when the connection is configured: every statement at `debug`, slow statements at `warn`. sqlx has logged every statement at `info` in some versions, which the default `info` filter would let through on every request.
 
-  > Note (P6.3, as built, group B, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **Shape.** `infra::sqlite::open(&DatabaseConfig, DatabaseOptions) -> Result<Database, OpenError>` is the startup call: there's no binary yet, so "run at startup" means this function, which group E's `serve` and `migrate` call. It prepares the file, then `Database::connect` builds the write pool, runs every pending migration and builds the read pool.
-  > - **One function owns every per-connection setting,** `connect_options(base, PoolRole, &DatabaseOptions)`, for production and tests alike: `foreign_keys=ON`, `busy_timeout=5s`, `synchronous=NORMAL`, `trusted_schema=OFF` (the user's addition: no function with side effects runs from the schema), statements at `debug` and slow ones (from 250 ms) at `warn`, and `create_if_missing(false)`. The write connection adds WAL; the 4 read connections add `query_only=ON`, so a write through them fails instead of bypassing the single writer. Both pools wait at most 5 s for a connection.
-  > - **The file is open()'s job:** a missing folder stops startup (`MissingFolder`, nothing created); open() creates a missing file itself, `0600` on Unix, so sqlx never makes one with default permissions; and on Unix a database, `-wal` or `-shm` that group or others can use stops startup with the path, the fix (`chmod 600`) and the Docker Desktop bind-mount case in the message. That covers Phase 6's "only the service user reads the DB file".
-  > - **Migration errors** an operator must understand get their own variants: `EditedMigration { version }` and `NewerSchema { version }`.
-  > - **Timeouts** are documented in the module instead of a wrapper per query: the acquire timeout, `busy_timeout` and P6.6's request timeout bound every query; migrations are unbounded on purpose.
-  > - **Deviation: the offline data lives in `crates/fleet-server/.sqlx/`,** prepared from the crate without `--workspace`: only fleet-server uses sqlx, the Docker allowlist already includes `crates/`, and prepare compiles only fleet-server, never azalea. `SQLX_OFFLINE = "true"` in `.cargo/config.toml` pins every build to it. `just db-prepare` and `just db-check` (in `check` and `ci`) rebuild `target/sqlx-prepare.db` from the migrations, through an absolute URL, since rustc runs the macros in the workspace root.
-  > - **The `sqlx-offline` job** installs sqlx-cli pinned and SQLite-only, fetches `main`'s tip, and runs `just migrations-check` (a migration on `main` may never be modified, deleted or renamed) and `just db-check`.
-  > - **Tests** (`tests/database.rs`, `tests/database_logging.rs`, real time, never paused) were red against compiling stubs first: 15 of the 20 that run on Windows failed; the 3 Unix-only permission tests run in Linux CI.
+  > Note (P6.3): `infra::sqlite::open` prepares the file (a missing folder stops startup; a new file is `0600` on Unix, and one that group or others can use is refused), and `connect_options` sets every per-connection setting: `trusted_schema=OFF`, `query_only=ON` on the 4 read connections, and sqlx's statements at `debug`, slow ones at `warn` ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)). Deviation: the offline data lives in `crates/fleet-server/.sqlx/`; the `sqlx-offline` job runs `just migrations-check` and `just db-check`.
 - [x] **P6.4** 🔴 First migration and repositories for `users` and `audit_log`, tested with `#[sqlx::test]`.
 
-  > Note (P6.4, as built, group B, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **Schema conventions for every table:** STRICT; entity IDs as lowercase hyphenated v7 TEXT with a CHECK on the exact canonical form; times as `YYYY-MM-DDTHH:MM:SS.mmmZ` TEXT with a CHECK on the shape; CHECKs on closed sets only (`role`, `disabled`, `outcome`), never on sets later phases extend (`action`, `target_type`); append-only logs (`audit_log`, later `chat_messages`) keyed `INTEGER PRIMARY KEY AUTOINCREMENT` and ordered by ID only. IDs and times convert in one place (`infra/sqlite/convert.rs`); IDs are bound as `uuid::fmt::Hyphenated`, never as a plain `Uuid`, which sqlx would bind as a BLOB.
-  > - **Two migrations,** `0001_users.sql` (Appendix D in full, `username = lower(username)`, an algorithm-neutral PHC shape on `password_hash`, `password_changed_at` = `created_at` for a new user, and the partial unique index on `role` for `'owner'` from P7.1's note) and `0002_audit_log.sql` (`actor_user_id` references `users` without cascade, `actor_ip` canonical, target type and ID both set or both NULL, metadata NULL or a JSON object). No trigger blocks DELETE: P11.6 deletes old entries.
-  > - **The unit of work:** `ports::store::Store` hands out read handles (`users()`, `audit()`) and `write()`, a `WriteTx` started with `BEGIN IMMEDIATE`. Its `commit(entry)` records the audit entry and commits, so a change can't be committed unaudited; dropping it rolls back. There is no unaudited commit (P7 adds one with named exemptions, see P7.1's note). `StoreError::{Busy, Corrupt { table, column, rowid }, Unstorable { table, column }, Backend(source)}` names no sqlx type; `Corrupt` never carries the value.
-  > - **Users:** `insert`, `get` and `find_by_username`. `UsernameTaken` and `OwnerExists` are mapped from SQLite's code 2067 and its message, pinned by tests. `User` and `NewUser` live in `ports::users`; `PasswordHash` wraps a `SecretString` and checks the PHC shape the CHECK enforces.
-  > - **The audit vocabulary lives in fleet-core** (`audit`): `AuditAction` (a validated dotted name; each phase lists its constants in one `audit_actions!` block, group B none), `AuditOutcome`, `AuditTarget` with a tolerant `RecordedTarget`, and `AuditMetadata`, which never refuses an entry for its size: a text value is cut to the room left (ending in `…`), every free slot keeps room for the largest integer or boolean entry, and a `const` assertion checks that invariant, so the JSON never exceeds 4 KiB and recording never fails on metadata (the PR #25 review). `SECRET_WORDS` moved there from the config test, which now uses it too.
-  > - **Tests,** red first against compiling stubs (37 of 144 fleet-server tests failed, and 24 of the 27 store tests against migrations without their CHECKs): `tests/store.rs` (`#[sqlx::test]`, opened through `Database::connect` so the production settings apply), `tests/database.rs` (an edited migration, a full row through `open()`), `tests/migrations.rs` (the checksum snapshot) and the unit tests, including two property tests on the time conversion.
+  > Note (P6.4): the schema conventions for every table: STRICT; v7 TEXT IDs and millisecond UTC TEXT times, each with a CHECK; CHECKs only on closed sets; append-only logs (`audit_log`, later `chat_messages`) keyed `INTEGER PRIMARY KEY AUTOINCREMENT` and ordered by ID only, with no trigger blocking DELETE, since P11.6 deletes old entries ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
+  > The store's `write()` is a `WriteTx` whose `commit(entry)` records the audit entry, so a change can't be committed unaudited (P7 adds named exemptions, see P7.1's note); the audit vocabulary lives in fleet-core's `audit`.
 - [x] **P6.5** 🔴 `ApiError` maps each error to a status code and `{ "error": { "code", "message", "request_id", "fields"? } }`.
   - Internal errors are logged with the request ID and returned as a generic 500.
   - Every variant gets an insta snapshot.
 
-  > Note (P6.5, as built, group C, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **Thirteen codes,** one `ApiError` variant each, every code the plan names, so the envelope and the TypeScript union are complete in Phase 6; later phases add only domain-specific codes. `bad_request` 400, `unauthorized` 401, `forbidden` 403, `not_found` 404, `method_not_allowed` 405, `timeout` 408, `conflict` 409, `payload_too_large` 413, `unsupported_media_type` 415, `validation_failed` 422 (with `fields`), `rate_limited` 429, `internal` 500, `busy` 503.
-  > - **The message is a fixed sentence per code** (`ErrorCode::message()` in fleet-api-types, e.g. "The server is busy. Try again shortly."), never runtime data; a case that needs other words gets its own code.
-  > - **Headers:** a 401 always sends `WWW-Authenticate: Bearer`, with no realm and no error detail. A 429 sends `Retry-After` from the error's own delay, in whole seconds, rounded up. A 503 sends `Retry-After: 1` (`BUSY_RETRY_AFTER`), so the app has one retry rule for both.
-  > - **Conversions:** `StoreError::Busy` becomes `busy`, and `Corrupt`, `Unstorable` and `Backend` become `internal`. `AuthzError::NotFound` and `Forbidden` become 404 and 403, and `WrongResource` becomes `internal`, logged at `error` (P7.8's note). A garde `Report` becomes `validation_failed`, one field error per broken rule in garde's order and path notation (`steps[0].angle`).
-  > - **The request ID.** `IntoResponse` can't see the request, so `ApiError::into_response` sets the status and headers and leaves a private marker in the response's extensions, with an empty body. The `render_errors` middleware, which group D places inside the request-ID layer, reads the ID from the request's `x-request-id` (`REQUEST_ID_HEADER`) as a `BoundedText<64>`, takes the marker, logs, and writes the body with `serde_json::to_vec`. A response without a marker passes unchanged.
-  >   - A missing, empty or non-text ID is a wiring bug: the body says `"unknown"` and it's logged at `error`.
-  >   - If writing the body ever failed (it can't for these types), a fixed, hard-coded `internal` body with `request_id: "unknown"` is sent and the failure logged, never serde's text; a test checks that the fixed body equals what serde would write.
-  > - **Logging:** `internal` at `error`, with `request_id` and the whole source chain joined as "a: b: c" (e.g. "the database failed: disk I/O error"), cleaned by `sanitize_untrusted` and cut at 1024 characters; `busy` at `warn`, with `request_id`; 4xx codes not at all, since group D's trace layer logs every request's status.
-  > - **Tests**, red against stubs that compiled (every variant 500 and `internal`, conversions that all gave `internal`, a middleware that passed responses through): 51 of 57 failed on assertions, then all passed. 13 snapshots, one per variant, hold the status, the `content-type`, `retry-after` and `www-authenticate` headers and the body, through the middleware with a fixed request ID; they were read before accepting. A garde test struct (length and range rules) proves that the 422 body names rules, never values: `hunter2-secret`, `7654321` and `12345` appear nowhere in it, and garde's texts fit their caps uncut.
+  > Note (P6.5): thirteen codes, one `ApiError` variant each, each with a fixed message; a 401 sends `WWW-Authenticate: Bearer`, a 429 and a 503 `Retry-After`; `render_errors` writes the body with the request ID, from a marker the error leaves in the response's extensions; `internal` logs its sanitized source chain at `error`, `busy` at `warn` ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 - [x] **P6.6** 🔴 Middleware stack, in this documented order:
   1. request-id (set and propagate)
   2. trace (no bodies, sensitive headers redacted)
@@ -2258,116 +1244,35 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   Rate limiting is added in P7.
 
-  > Note (P6.6, from group C, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **`render_errors` goes inside the request-ID layer,** so every `ApiError` gets its ID. Errors that don't pass through `ApiError` (tower-http's timeout and body-limit responses, 405, the 404 fallback) must end up in the same `ErrorResponse` envelope with a `request_id`, e.g. by mapping them to `ApiError` or by having the middleware wrap any error status without a marker. A 405 keeps axum's `Allow` header. An integration test sends one request for each error the router can produce and asserts that every response has the JSON body with a `request_id`, so a missing body is caught, not just safe.
-  > - **The request ID is always generated by the server.** tower-http's `SetRequestIdLayer` keeps an `x-request-id` the client already sent, so the client's header is removed or overwritten before the ID is set; otherwise a client could choose the ID that gets logged and echoed back (fake or colliding IDs, log injection). The tests send a request with its own `x-request-id` and assert that the logged and returned ID is a fresh server-generated one. The ID fits `BoundedText<64>` unchanged: at most 64 characters, none that `sanitize_untrusted` strips.
+  > Note (P6.6): Deviations: the security headers sit outermost, so every response gets them (outermost first: sensitive headers, security headers, request ID, trace, `render_errors`, catch-panic, timeout, body limit); the request-ID and trace layers are the server's own, not tower-http's; and two security headers more than §7.6 listed, `Content-Security-Policy` and `X-Frame-Options` ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
-  > Note (P6.6, as built, group D, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **Deviation: the order.** The security headers sit outermost, so every response gets them, including those the layers below make themselves: a refused request, a timeout, a body-limit 413, a panic.
-  >   - **The stack, outermost first:** sensitive headers, security headers, request ID, trace, `render_errors`, catch-panic, timeout (`[http] request_timeout_secs`, 408), body limit (`[http] max_body_bytes`), then the router with its 404 and 405 fallbacks.
-  >   - `http::middleware::apply(routes, &HttpConfig, RequestIds)` adds them, and its module docs give each layer's reason.
-  > - **The request ID** is a version 7 `RequestId` (a new `define_id!` in fleet-core), minted with `system::mint` from the `Clock` and `SecureRandom` ports: lowercase hyphenated, 36 characters.
-  >   - **Deviation: the layer is the server's own,** not tower-http's `request-id`, which turns on uuid's `v4` and `rng`.
-  >   - It removes every `x-request-id` the client sent, then sets the new ID on the request and on the response, replacing any value a handler set.
-  >   - If minting fails, the request is refused with the internal error (`request_id: "unknown"`) and the cause is logged at `error`; the handler never runs.
-  > - **Deviation: two security headers more than §7.6 listed.** Every response carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` and `X-Frame-Options: DENY`. They're set with `overriding`, so a handler can't weaken them.
-  > - **Sensitive headers:** `Authorization`, `Proxy-Authorization` and `Cookie` on requests, and `Set-Cookie` on responses, are marked before anything else runs.
-  > - **Deviation: the trace layer is the server's own,** not tower-http's `trace`, whose response hook can't see the route.
-  >   - An `info` span `request` carries `request_id`, `method` and `route`. `method` is one of the nine standard methods or `"<other>"`. `route` is axum's `MatchedPath` template or `"<unmatched>"`, never the path a client sent or its query string.
-  >   - One line, "request finished", carries `status`, `latency_ms` (a float, to the microsecond) and, for an error, `code`. It's logged at `info`, or at `debug` for `/health/…`.
-  >   - It logs no header and no body. A test sends credentials and a JSON body with marker values, and no marker appears in any line at `debug`.
-  > - **The safety net:** `render_errors` gives every 4xx or 5xx without a marker the envelope.
-  >   - The code comes from the status. A status without a code of its own keeps its status and says `bad_request` (4xx) or `internal` (5xx). A bare 422 has `fields: []`.
-  >   - The old body is replaced, and `Content-Length` and `Content-Encoding` are removed. Every other header stays, such as axum's `Allow` and a limiter's `Retry-After`.
-  >   - A missing `WWW-Authenticate: Bearer` (401) or `Retry-After: 1` (503) is added.
-  >   - Every bare error status is logged at `error` as a wiring bug, except the timeout's 408 and the body limit's 413.
-  >   - The 404 and 405 fallbacks and the panic handler return `ApiError` themselves.
-  > - **A panic** answers with the internal error, whose source is the fixed "a request handler panicked". The payload reaches the log only through fleet-startup's panic hook, whose line carries the request span. That's tested with a stand-in hook in a test binary of its own, since the hook is process-wide.
-  > - **Group C's test changed:** `a_response_without_an_api_error_passes_unchanged` sent a bare 418 and expected it unchanged. The safety net now wraps a 418, so the test sends a 201 (`a_success_without_an_api_error_passes_unchanged`), and the 418 is one of the safety-net cases.
-  > - **Tests**, red against compiling stubs: pass-through ID and trace layers, no safety net, no security or sensitive headers, no timeout or body limit, and tower-http's default panic response. 53 of 110 failed on assertions, then all passed.
-  >   - `tests/middleware.rs` sends one request per error: 404, 405, 408, 413 by its length and when read, a panic, and a failed mint. It also sends one per bare status. Each gets a snapshot, 16 in all, read before accepting.
-  >   - The timeout's tests run on paused time.
+  > Note (P6.6): the request ID is a v7 `RequestId` the server mints after removing every `x-request-id` the client sent; `render_errors` gives every bare 4xx or 5xx the envelope; the trace span logs the route's template, never the path, query string, headers or body ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 - [x] **P6.7** 🔴 `GET /health/live` and `GET /health/ready` (DB ping), with no internal details in the response.
 
-  > Note (P6.7, as built, group D, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **Shape.** `http::router::router(AppState, &HttpConfig, RequestIds)` holds the two routes, without the `/api/v1` prefix (Appendix B), behind P6.6's stack.
-  >   - The handlers live in `http::handlers::health`.
-  >   - `ready` calls `app::health::HealthService::ready()`, which calls the new `Store::ping()`.
-  >   - `ping()` is `SELECT 1` (`query_scalar!`) on the read pool, so it never competes with the one write connection.
-  > - **Answers.** Both checks answer `200` with an empty body.
-  >   - `live` checks nothing else.
-  >   - A failed `ready` answers like any store failure, through `From<StoreError>`. A busy database (no read connection within the acquire timeout) gives `busy`: 503, `Retry-After: 1`, logged at `warn`. Any other failure gives `internal`: 500, its source chain logged at `error` with the request ID.
-  >   - No response holds anything of the cause.
-  > - **Bounded like every query:** the pools' 5 s acquire timeout, `busy_timeout` and the request timeout. There's no extra timeout.
-  > - **Logging.** The trace layer logs both routes at `debug`, so a probe every few seconds doesn't flood the log. A failed check is still logged by `render_errors`.
-  > - **Tests**, red against a `ping` that always failed and handlers that answered 500: 10 of 44 failed on assertions, then all passed.
-  >   - `tests/health.rs` runs in real time against a database from `#[sqlx::test]`. It covers 200 and `HEAD` for both routes, 405 with `Allow`, `live` with a closed database, `ready` busy (every read connection held, a 1 s acquire timeout), and `ready` with a closed database.
-  >   - It has 4 snapshots, read before accepting.
-  >   - `tests/store.rs` checks the ping: it succeeds, it doesn't wait for a held write connection, it's busy while every read connection is taken, and it's a backend error on a closed database.
+  > Note (P6.7): both routes answer `200` with an empty body, without the `/api/v1` prefix; `ready` pings the read pool (`SELECT 1`) through `HealthService`, and a busy database answers 503, any other failure 500; the trace layer logs both routes at `debug` ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 - [x] **P6.8** 🔴 Audit service:
   - append-only: the trait has only `record` and `list`
   - each entry: actor, IP, action, target, outcome, metadata (no secrets), timestamp
 
-  > Note (P6.8, as built, group B, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **`app::audit::AuditService { clock, store }`:** `entry(action, outcome)` returns a `NewAuditEntry` stamped with the `Clock` (milliseconds), with the builder methods `actor`, `ip`, `target` and `metadata`; `record(entry)` runs its own short write transaction (`write()`, then `commit(entry)`), for a failure or denial whose change was rolled back; `list(page)` reads through the read pool. A use case that changes state builds its entry here and passes it to `WriteTx::commit`, so every timestamp comes from one clock.
-  > - **Append-only** means the store has exactly two operations for the log, `AuditWrites::record` inside a `WriteTx` and `AuditReads::list` (P6.4's note); nothing updates or deletes an entry, and no trigger blocks P11.6's retention. *One exception since P11.6 ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), R50, R57):* the retention task deletes the log's oldest entries, a prefix by ID past `[audit] retention_days`, in a transaction of its own (`Store::retention_batch`) that nothing else opens; nothing ever updates an entry.
-  > - **No secrets:** the metadata's rules live in fleet-core's `AuditMetadata` (P6.4's note), checked when it's built.
-  > - **Tests** (`tests/audit_service.rs`, `ManualClock`, IDs minted from `SeededRandom` and compared with each other), red against a stub that stamped the epoch, recorded nothing and listed nothing: 5 of 6 failed.
+  > Note (P6.8): `app::audit::AuditService { clock, store }` stamps each entry with the `Clock`; `record(entry)` runs its own short write transaction for a failure or denial whose change was rolled back; the metadata's rules live in fleet-core's `AuditMetadata` ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
+  >
+  > **Append-only** means the store has exactly two operations for the log, `AuditWrites::record` inside a `WriteTx` and `AuditReads::list` (P6.4's note); nothing updates or deletes an entry, and no trigger blocks P11.6's retention. *One exception since P11.6 ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), R50, R57):* the retention task deletes the log's oldest entries, a prefix by ID past `[audit] retention_days`, in a transaction of its own (`Store::retention_batch`) that nothing else opens; nothing ever updates an entry.
 - [x] **P6.9** `fleet-api-types`:
   - DTOs with serde, garde and `ts-rs`
   - `#[serde(deny_unknown_fields)]` on request DTOs
   - `just gen` exports them to `packages/ui/src/generated/`
   - CI job `ts-types-fresh` fails on any diff
 
-  > Note (P6.9, as built, group C, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **What's in it.** The error envelope's DTOs (`ErrorResponse`, `ErrorBody`, `FieldError`, `ErrorCode`; P6.5) and three building blocks for every later DTO:
-  >   - **`SafeInt`**: the only way a 64-bit integer crosses the API. It's a range-checked `i64` within ±(2^53 − 1), the integers JavaScript reads exactly; reading a number outside that range fails. In TypeScript it's `export type SafeInt = number;`. `SafeInt::MAX` is the crate's own constant, and a test checks that it equals `AuditMetadata::MAX_INT`. Its serde is written by hand, since ts-rs can't read serde's `try_from`/`into` and warns about them on every build.
-  >   - **`Open<E>`**: a response value a later version may extend, such as `ErrorCode`. A value this version doesn't know still reads back, as text cleaned by `sanitize_untrusted` and cut at 64 characters; only a non-string fails. The server can build one only from a known value. `E` implements `OpenEnum` (`ALL`, `as_str`), and a field holding one carries `#[ts(as = "E")]`, so the TypeScript union lists exactly the known values.
-  >   - **`BoundedText<MAX>`**: response text, cleaned by `sanitize_untrusted` and cut at `MAX` characters both when built and when read, never failing on content. It has no TypeScript type of its own, so a field without `#[ts(type = "string")]` doesn't compile.
-  > - **Requests and responses.** Responses derive `Serialize` and `Deserialize` without `deny_unknown_fields`, so `fleet-client` reads them and a newer server's extra field doesn't break an older app; each round-trips in a test. Requests are `Deserialize` + garde + `deny_unknown_fields`, which the crate docs state. **Deviation:** Phase 6 has no request DTO, so garde joins fleet-api-types with P7's first one.
-  > - **The export.** `typescript::export(scratch)` writes the root DTOs through ts-rs's `export_all` with `Config::new()` (which ignores the `TS_RS_*` variables) into an empty scratch folder, and refuses one that isn't empty. No DTO carries `#[ts(export)]`, so tests never write files. One file per type, no index file.
-  >   - `just gen` (`typescript::write`) exports into a fresh temp folder inside `target/gen/`, then syncs `packages/ui/src/generated/` with it. The sync deletes only `.ts` files that start with ts-rs 12.0.1's exact header, and stops before deleting anything, naming the entry, if the folder holds any other file or a subfolder.
-  >   - `just gen-check` (`typescript::check`), in `just check` and `just ci`, compares the folder with a fresh export and names every missing, extra or changed file. CI's `ts-types-fresh` job (ubuntu, Rust only) runs it.
-  > - **`packages/ui/src/generated/`** holds only the generated files until P8.2 scaffolds `packages/ui` around it. With no package.json there, pnpm ignores it (checked: `pnpm -r ls` lists only the root). Biome already skips it, and `.gitattributes` marks it `linguist-generated`.
-  > - fleet-api-types joins `stable_crates`.
-  > - **Tests**, red against stubs that compiled (a `SafeInt` that took any value, text that wasn't cleaned, an `Open` that knew nothing, empty messages and names, an export, comparison and sync that did nothing): 54 of 81 failed on assertions, then all passed. Among them: a sync over a previous real ts-rs export (a stale `Probe.ts` included) proves that it recognizes ts-rs's real header, and every generated file is checked for `bigint`. After the implementation, the coverage report showed error paths without a test; their tests followed in their own commit, and one found a bug: `sync` noticed a subfolder in the scratch folder only after it had deleted and written files. It now checks both folders before changing anything.
+  > Note (P6.9): the error envelope's DTOs plus `SafeInt` (the only way a 64-bit integer crosses the API, within ±(2^53 − 1)), `Open<E>` (a value a later version may extend) and `BoundedText<MAX>`; `just gen` syncs one file per type, and `just gen-check` (CI's `ts-types-fresh`) compares ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)). Deviation: Phase 6 has no request DTO, so garde joins fleet-api-types with P7's first one.
 - [x] **P6.10** OpenAPI via utoipa. `/api/openapi.json` is served only when `dev_mode = true`.
 
-  > Note (P6.10, as built, group E, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **The schemas live in fleet-api-types,** always on like ts-rs: the DTOs derive `ToSchema` next to `TS`. `SafeInt` is a component of its own (an integer within ±(2^53 − 1)), as it's a type of its own in TypeScript. A `BoundedText<MAX>` field carries `#[schema(schema_with = BoundedText::<MAX>::schema)]` (a string with `maxLength` MAX; utoipa's derive can't read a const generic, so a field without it doesn't compile), an `Open<E>` field `#[schema(value_type = E)]`, and an optional field `#[schema(nullable = false)]`. `openapi::components()` lists the root DTOs, like the TypeScript export.
-  > - **Deviation: four fields lose their description.** utoipa doesn't carry a doc comment onto a `schema_with` field, so the text fields have no description in the document; the TypeScript keeps it.
-  > - **A test keeps the two exports equal:** a test-only renderer turns every component into the TypeScript declaration ts-rs writes and compares them (comments stripped, whitespace collapsed); the component names must equal the exported files; and what TypeScript can't express is checked directly: `SafeInt`'s range, every text field's cap against its constant, an open field's enum against `E::ALL`. The renderer fails on any construct it doesn't handle, and a test proves it on 15 of them. **Deviation: utoipa's `preserve_order`** (the user's approval during the build), since utoipa wrote properties alphabetically and ts-rs in field order.
-  > - **The document:** routes are registered through utoipa-axum's `OpenApiRouter` with `#[utoipa::path]` on each handler, so a route can't exist without its entry. Each operation lists its own statuses (`live` 200; `ready` 200, 500, and 503 with `Retry-After`) plus a `default` response with `ErrorResponse`. `info`: title "afkfleet", the crate's version, GPL-3.0-or-later, no contact and no servers. The document doesn't list itself.
-  > - **Serving:** `router()` takes `ApiDocs::{Served, Hidden}` (`ApiDocs::for_dev_mode`). In dev mode `GET /api/openapi.json` answers the document as JSON, written per request, behind the whole middleware stack; otherwise the route doesn't exist and the path answers exactly like an unknown one.
-  > - **Tests,** red against compiling stubs: in fleet-api-types 9 of 26 failed (an empty component list, `SafeInt` without its range, text without its cap); in fleet-server 8 of 9 (no route in dev mode, no schemas). One snapshot holds the whole document, read before accepting.
+  > Note (P6.10): the schemas live in fleet-api-types next to ts-rs, a test keeps them equal to the TypeScript export, and routes register through utoipa-axum's `OpenApiRouter`; outside dev mode the path answers exactly like an unknown one ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)). Deviations: four text fields lose their description, since utoipa doesn't carry a doc comment onto a `schema_with` field; utoipa's `preserve_order` (the user's approval during the build) keeps the field order.
 - [x] **P6.11** CLI skeleton: `serve`, `migrate`, `healthcheck`.
 
-  > Note (P6.11, from group A, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **The dev-mode warning.** `serve` calls `ServerConfig::warn_if_dev_mode()` right after logging starts.
-  > - **The healthcheck's address.** When `bind` is an unspecified address (`0.0.0.0` or `::`), as the container config will set, the healthcheck probes loopback (`127.0.0.1` or `::1`) on the same port instead: connecting to `0.0.0.0` only happens to work on Linux and fails on Windows.
-  > - **The dev config's database path must be absolute,** and a committed file can't hold one that works on every machine. How `just dev-server` provides it is group E's question, e.g. a `$`-parameter built from `justfile_directory()`.
-
-  > Note (P6.11, from group D) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `serve` builds `http::router::router` with `RequestIds` over `SystemClock` and `OsRandom` and the `Database` as the health service's store. The healthcheck probes `/health/ready`, whose only success is `200` with an empty body.
-
-  > Note (P6.11, as built, group E, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **The agent's shape** (ADR-0014): `afkfleet-server`; `fleet_server::cli` holds the clap structs and each command's logic; main.rs handles clap's errors (a `healthcheck` usage error exits 1), loads the config before any runtime, writes errors from before logging to stderr as one line, and **uses no anyhow**. `--config <PATH>` is required on every command.
-  > - **`serve`:** logging, `warn_if_dev_mode()`, a multi-threaded runtime, then inside it the stop signals and the bound listener, then `serve::run`, which opens the database (with its migrations) and serves `serve::app` over `SystemClock`, `OsRandom` and the database. Startup errors are one `error`, "the server can't start", with the whole chain; the last line, "the server stopped", carries the exit code.
-  > - **A free port without weakening the config:** `serve::run` takes an already-bound tokio `TcpListener`. main.rs binds `[http] bind`; tests bind `127.0.0.1:0`. The port-0 rule is unchanged.
-  > - **`migrate`** logs like `serve`: "the database is migrated" (`info`, with `path`) or "the database can't be migrated" (`error`). It opens the database through `open()` and closes it with the new `Database::close_within(DATABASE_CLOSE)` (5 s). Exit codes 0, 1, 2.
-  > - **`healthcheck`:** our own HTTP/1.1 GET over tokio's `TcpStream` on a current-thread runtime, `Connection: close`, one 3 s timeout for the whole exchange, at most 16 KiB read, no TLS. Healthy only on `HTTP/1.1 200` with an empty body; an unspecified bind is asked on loopback on its port. One line on stdout, exit 0 or 1; no logging. It loads the whole config, like the agent's, so it needs the server's environment variables too. The tests reuse `healthcheck::get` as their HTTP client.
-  > - **`just dev-server`** runs `deploy/dev/server.toml` (dev mode, pretty logs, default bind, no database path) with `$AFKFLEET_SERVER__DATABASE__PATH`, a `$`-parameter defaulting to `target/dev-server/afkfleet.db` under `justfile_directory()`; Node creates the folder first.
-  > - **Tests,** red against compiling stubs (35 of 185 failed): the command line, the probe and its parser, `close_within`, the dev config, and the real binary: missing and invalid configs, usage errors, each command's help, the version, `migrate` twice and into a missing folder, `healthcheck` with nothing listening, against an in-process server, and through an unspecified bind.
+  > Note (P6.11): `afkfleet-server` follows the agent's shape (ADR-0014), with no anyhow and `--config <PATH>` on every command; `serve` warns in dev mode and takes an already-bound listener; `healthcheck` is our own HTTP/1.1 probe of `/health/ready` with one 3 s timeout, asking loopback for an unspecified bind; `just dev-server` passes the database path as a `$`-parameter under `target/dev-server/` ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 - [x] **P6.12** 🔴 Graceful shutdown: axum's `with_graceful_shutdown` plus a `CancellationToken`.
 
-  > Note (P6.12, from group B) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `Database::close()` closes the read pool, then the write pool, and waits for every checked-out connection, so shutdown bounds it with a timeout.
-
-  > Note (P6.12, as built, group E, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **The signals moved to fleet-startup** (§4) in a pure-move commit: `Signal`, `ShutdownSignals`, `OsSignals` and their tests. fleet-agent re-exports them and keeps its own test sources; fleet-server's tests have their own `ChannelSignals`.
-  > - **One deadline, `request_timeout + 5 s`, from the first signal; no new key.** The drain may take up to `[http] request_timeout_secs`, which the timeout layer already enforces per request; the database closes with the rest, at least `DATABASE_CLOSE` (5 s). A later signal is only logged.
-  > - **Connections:** `axum::serve(…).with_graceful_shutdown(token.cancelled_owned())`. axum spawns each connection itself and never aborts them, so at the drain limit the server stops waiting, logs one `warn` and closes the database; by then the timeout layer has cut every handler, so a leftover connection holds no database connection, and the runtime's 1 s shutdown ends it.
-  > - **Exit codes, as the agent's:** 0 stopped by a signal (even with connections cut at the drain limit), 1 startup error, 2 usage error, 4 the server ended unasked or the database didn't close by the deadline; 3 is unused.
-  > - **`serve::drive`** holds the sequence, generic over the server's and the close's futures, with biased `select!`s whose cancel-safety is commented.
-  > - **Tests,** red against a `drive` that returned at once (13 of 29 failed): its timing on paused time with stand-in futures; `serve` in real time over sockets and SQLite (an in-flight request finishing while new connections are refused, an idle keep-alive connection, a held database connection failing at the deadline); and on Unix the real binary stopping on SIGTERM with exit 0, "the server stopped" last. That test finds a free port, then binds it, and retries only when the server exits 1 with the bind error for that port before listening, at most 3 times (the user's addition).
+  > Note (P6.12): the stop signals moved to fleet-startup; one deadline, `request_timeout + 5 s` from the first signal, bounds the drain and `Database::close()`; exit codes as the agent's: 0 stopped by a signal, 1 startup error, 2 usage error, 4 the server ended unasked or the database didn't close by the deadline, and 3 unused ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
 **Security:**
 - No CORS layer.
@@ -2380,11 +1285,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - Snapshots reviewed.
 - `just ci` green.
 
-> Note (DoD, group E): checked point by point.
-> - **The integration test** (`tests/serve/boot.rs`) runs `serve::run` with the binary's wiring on a fresh temporary database and a `127.0.0.1:0` listener: `GET /health/live` and `/health/ready` answer 200 with an empty body over a real connection, the healthcheck reports healthy, and a signal stops it with exit 0, the database closed and every migration applied. A temporary break in the wiring, never committed, made it fail.
-> - **Snapshots:** every snapshot of the phase was read before accepting: the migrations' checksums (group B), 13 error responses (group C), 16 middleware and 4 health responses (group D), and the OpenAPI document (group E).
-> - **`just ci`:** CI runs every recipe of `just ci`, one per job, on the group E PR.
-> - **Security:** no CORS layer; `Cache-Control: no-store` on every response; no secret in any committed TOML (Phase 6's config has none, and the secret-name test guards every key); the database file is owner-only on Unix, and the server refuses one others can read.
+> Note (DoD, group E): checked point by point: `tests/serve/boot.rs` boots `serve::run` on a fresh temporary database, both health checks answer 200 and the healthcheck reports healthy; every snapshot of the phase was read before accepting; CI runs every recipe of `just ci` on the group E PR; the security list holds: no CORS layer, `Cache-Control: no-store` on every response, no secret in any committed TOML, and an owner-only database file on Unix ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
 ---
 
@@ -2392,292 +1293,72 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** Invite-only login with 2FA, rotating tokens, central authorization and layered rate limits, all backed by adversarial tests.
 **Introduces:** `argon2`, `getrandom`, `sha2`, `subtle`, `base64`, `zeroize`, `chacha20poly1305`, `totp-rs`, `zxcvbn`, `governor`, `hmac`, `rpassword`; no `tower_governor` (group C, the user's decision).
 
-> Note (P7):
-> - **Five group branches.** At the user's request, Phase 7 is built in group PRs like Phases 2–6. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
->
->   | Group | Branch | Tasks |
->   |---|---|---|
->   | A | `p7/p7.2-p7.5-passwords-vault-owner` | P7.2, P7.4 (with the `*_file` loader), P7.5; `fleet_core::auth` with the password length rule |
->   | B | `p7/p7.3-p7.8-sessions-and-auth-user` | P7.1's `sessions` (with `stepped_up_at`), P7.3, P7.8 |
->   | C | `p7/p7.10-p7.11-routes-and-rate-limits` | P7.1's `login_attempts`, P7.11, P7.10 |
->   | D | `p7/p7.6-p7.7-login-and-2fa` | P7.1's `user_mfa` (and wherever the login challenges live), P7.7; P7.6's `login`, `login/mfa`, `refresh`, `logout`; `/me/mfa/*`; `POST /auth/step-up` |
->   | E | `p7/p7.6-p7.9-accounts-admin-wrap-up` | P7.1's `invites`; P7.6's `register`, `/me`, `/me/password`, `/me/sessions`; P7.9; the DoD, the threat model and the wrap-up |
->
->   - **The guards come before any endpoint.** Every new endpoint needs its rate-limit class and route-coverage entry from day one (security rule 3), so the guards (B, C) come before the first endpoint (D).
->   - **Tasks spread over groups:** P7.1 and P7.6 are ticked in E.
->   - Each later group asks its own implementation questions in its session.
-> - **Decisions.** The user answered the Phase 7 plan's open questions on 2026-10-11, one at a time. [ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md) records them; the notes below summarize what changes a task.
-> - **Security tests and audit events ship with the feature** (the user's decision).
->   - **Audit actions:** every new write adds its action to Phase 7's one `audit_actions!` block in the group that adds the write:
->     - A: create-owner
->     - B: token reuse
->     - C: the lockout
->     - D: login, logout, 2FA
->     - E: password, roles, invites
->   - **Service-level P7.12 tests** go in the service's group:
->     - B: refresh reuse, a disabled user through `AuthUser`
->     - C: lockout counting
->     - D: TOTP replay
->   - **End-to-end HTTP tests** go in the endpoint's group:
->     - D: enumeration, lockout through login, expired sessions and refresh reuse through `/auth/refresh`
->     - E: escalation, disabling, invite reuse and expiry
->   - **E only checks:** the DoD, each P7.12 item named with its test, the threat model's auth section, and the P7.12 and P7.13 ticks.
-> - **Pure rules live in `fleet_core::auth`** (the user's decision): the lockout schedule, session expiry, the refresh outcome, TOTP acceptance and replay, invite validity, the step-up window and the password length rule, with `DateTime<Utc>` passed in. Each group adds the rules its feature needs. The crypto stays in fleet-server.
-> - **Tests drive the real router with `oneshot`** (the user's decision):
->   - the full stack and the limiter
->   - `#[sqlx::test]` SQLite, `ManualClock` and `SeededRandom`
->   - the peer address as axum's `ConnectInfo`
->   - one real-socket test for `into_make_service_with_connect_info`
->
->   fleet-client's full-stack tests stay P8.1's.
-> - **Coverage gates as lists of path prefixes** (the user's decision).
->   - **Auth:** fleet-core's `auth`, `app/auth`, `app/users`, `app/invites`, `infra/crypto/` except the vault, `http/extractors/`, the rate-limit middleware and the route registry.
->   - **Vault:** the vault and the `*_file` loader.
->   - **Dead prefixes fail:** a listed prefix that matches no file in the report fails the gate.
->   - **Adding prefixes:** each group adds a prefix only when it creates that module.
->   - **Required from A on:** both gates are `required` from group A on.
-> - **Dependencies (group A, the user's approval).**
->   - **New in `[workspace.dependencies]`:**
->     - argon2 0.6.0, no default features; `alloc`, `password-hash`, `zeroize`
->     - chacha20poly1305 0.11.0, no default features; `alloc`, `zeroize`
->     - zxcvbn 3.1.1, no default features
->     - rpassword 7.5.4
->     - base64 0.23.1, no default features, so no `simd-unsafe`
->     - subtle 2.6.1
->     - zeroize 1.9.0
->   - **fleet-server:** all of them, plus tokio's `sync`.
->   - **fleet-startup:** secrecy and zeroize, and tempfile in dev.
->   - **The profile:** `[profile.dev.package]` compiles argon2, blake2 and zxcvbn at `opt-level = 3`.
-> - **Dependencies (group C, the user's approval).**
->   - **No tower_governor:** 0.8.0 hard-codes governor's quanta clock, forces governor's and axum's default features on the workspace, and rounds its wait down. fleet-server uses the workspace's governor with `std` only, behind its own middleware.
->   - **New in `[workspace.dependencies]`:** hmac 0.13.0 (fleet-server enables `zeroize`), and ipnet 2.12.2, a fleet-server dev-dependency only. Both were already in Cargo.lock, which gains only the direct edges.
+> Note (P7): built in groups A–E, one PR each, with P7.1 and P7.6 spread over several groups and ticked in E; their decisions (the Phase 7 plan's questions, answered by the user on 2026-10-11, then each group's) are in [ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md).
+> Security tests and audit actions ship with their feature, pure rules live in `fleet_core::auth`, tests drive the real router with `oneshot`, and the auth and vault coverage gates are lists of path prefixes, required from group A on.
 
 - [x] **P7.1** 🔴 Migrations and repositories: `sessions` (with token families), `invites`, `login_attempts`, `user_mfa`.
 
-  > Note (P7.1, from the Phase 7 plan, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **each table arrives with its first user,** in its own migration, so its columns are designed together with the feature:
-  > - `sessions` with `stepped_up_at` (B)
-  > - `login_attempts` (C)
-  > - `user_mfa`, and wherever the `mfa_token` and setup token live (D)
-  > - `invites` (E)
-  >
-  > The task is ticked in E.
+  > Note (P7.1): each table arrived with its first user, in its own migration, under the schema conventions of P6.4's note: `sessions` (B), `login_attempts` (C), `user_mfa` (D), `invites` (E); ticked in E.
+  > `WriteTx::commit` always records an audit entry; `commit_unaudited(reason)` takes only an enum of named exemptions (`SessionTouch` first, later `EventBatch`), each with its own ADR note, never free text ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md), [ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
-  > Note (P7.1, from Phase 6, group B, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **Follow the schema conventions** of P6.4's note: STRICT, canonical TEXT IDs and millisecond TEXT times with their CHECKs, CHECKs only on closed sets.
-  > - **Unaudited writes.** `WriteTx::commit` always records an audit entry. The first write that needs none (a session's `last_used_at`) adds `commit_unaudited(reason)`, whose reason is an enum of named exemptions (`SessionTouch`, later `EventBatch`), each with its own ADR note, never free text.
+  > Note (P7.1): **IDs aren't secrets** (the group A review): v7 IDs reveal their creation time, so invite codes and session tokens come from `getrandom`, never from an ID, and access is decided by `authorize()`, not by how hard an ID is to guess.
 
-  > Note (P7.1, from the group A review): **IDs aren't secrets.** v7 IDs reveal their creation time. Invite codes and session tokens come from `getrandom`, never from an ID, and access is decided by `authorize()`, not by how hard an ID is to guess.
+  > Note (P7.1): **`0003_sessions.sql`** (B): one `sessions` row per login's token family, its `SessionId` the same across every refresh: `user_id` (no cascade), `access_hash` and `refresh_hash` (32-byte BLOBs, UNIQUE), `created_at`, `refreshed_at`, `last_used_at`, `stepped_up_at`, `revoked_at`; no expiry columns, no IP address or user agent.
+  > `rotated_refresh_tokens (hash, session_id, rotated_at)` keeps every refresh token a session replaced, ON DELETE CASCADE ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P7.1, as built, group B) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`0003_sessions.sql`.**
-  > - **`sessions`**, one row per login's token family, its ID (`SessionId`) the same across every refresh: `user_id` (references `users`, no cascade), `access_hash` and `refresh_hash` (32-byte BLOBs, UNIQUE), `created_at`, `refreshed_at`, `last_used_at`, `stepped_up_at` and `revoked_at` (NULL until set). No expiry columns: `fleet_core::auth` computes them from `created_at` and `refreshed_at` with the running config. No IP address or user agent.
-  > - **`rotated_refresh_tokens`** `(hash, session_id, rotated_at)`: every refresh token a session replaced, ON DELETE CASCADE, so reuse of any of them is recognized while the session exists.
-  > - **Indexes:** `sessions(user_id)`, `sessions(created_at)` (P11.6's cleanup), `rotated_refresh_tokens(session_id)`.
-  > - **The repository** has what B uses: insert, the joined lookup by access hash, and inside the write transaction the lookup by refresh hash (current or rotated), rotate, revoke and the conditional touch. `WriteTx::commit_unaudited(UnauditedWrite)` arrives with its first exemption, `SessionTouch`.
-  > - **Tests,** red against compiling stubs: 21 of 26 repository tests and 3 of 8 `TokenHash` tests failed on assertions, then all passed.
+  > Note (P7.1): **`0004_login_attempts.sql`** (C): one row per username with a running failure streak (`failures`, `last_failure_at`, `locked_until`), keyed by HMAC-SHA256 of the normalized `Username` under the lockout key (P7.10's note), never the name, since people type their password into that field; no `user_id`, so an unknown name's row looks exactly like a real user's. Purges commit with `UnauditedWrite::LoginAttemptsPurge` ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P7.1, group C, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`0004_login_attempts.sql`.**
-  > - **One row per username with a running failure streak,** keyed by `username_key`: HMAC-SHA256 of the normalized `Username` under a lockout key derived from the vault's active key (P7.10's note), a 32-byte BLOB. Never the name, since people type their password into that field.
-  > - **Columns:** `failures` (`>= 1`), `last_failure_at`, `locked_until` (NULL until a lock). No `user_id`, so an unknown name's row looks exactly like a real user's.
-  > - **Index** on `last_failure_at`, for the purge of expired streaks.
-  > - **The repository:** `find` (read pool and transaction), `upsert`, `delete`, and `purge_stale(failed_by, now, limit)` (a `rowid IN (SELECT … LIMIT ?)` subquery). Purge batches commit with the new exemption `UnauditedWrite::LoginAttemptsPurge`.
-  > - **Tests,** red against compiling stubs: 14 of 18 failed, then all passed.
+  > Note (P7.1): **One Owner** (group D): the `users` migration adds a partial unique index on `role` for `'owner'`, and `authorize()` also refuses to act on any other user with the Owner role (ADR-0010).
 
-  > Note (P7.1, from group D): **One Owner.** The `users` migration adds a partial unique index on `role` for `'owner'`. `authorize()` also refuses to act on any other user with the Owner role (ADR-0010).
+  > Note (P7.1): **`0005_user_mfa.sql`** (D): `user_mfa` holds confirmed enrollments only (`user_id`; `secret_envelope`, a vault envelope v1 of the 20-byte TOTP secret bound by its AAD to the user's ID and `totp_secret`; `last_used_step`; `confirmed_at`). `recovery_codes (hash, user_id, used_at)` stores plain SHA-256, safe only because each code has at least 80 bits, and isn't keyed, so P9's key rotation can't make the codes unusable.
+  > The login challenges live in memory, not in a table, held as SHA-256 hashes, so a restart drops them ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P7.1, group D, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`0005_user_mfa.sql`.**
-  > - **The login challenges live in memory,** not in a table: the mfa token and the setup token are held as SHA-256 hashes, at most one login challenge and one replace token per user, and a restart drops them (P7.7's note).
-  > - **`user_mfa`** holds confirmed enrollments only, so a user has 2FA exactly when their row exists: `user_id` (the key, references `users`, no cascade), `secret_envelope` (a vault envelope v1 of the 20-byte TOTP secret, 65 bytes, bound by its AAD to the user's ID and `totp_secret`), `last_used_step` (`>= 0`) and `confirmed_at`. No `key_id` column: the envelope's header carries it.
-  > - **`recovery_codes`** `(hash, user_id, used_at)`: plain SHA-256 of the normalized code, safe only because each code has at least 80 bits from `SecureRandom` (100 in fact). Not keyed, since a key derived from the vault's active key would make every code unusable after P9's key rotation. A used code keeps its row; indexed on `user_id`.
-  > - **The repository:** `find` (read pool and transaction), `find_unused_code`, `insert` (a second first enrollment is refused), `replace`, the conditional `advance_step` (only a later step, and only while `confirmed_at` is unchanged), `replace_codes` and the conditional `use_code`. The sessions gain `refresh_hash_exists`, `revoke_all_for_user(user, except)`, `find` and `stamp_step_up`; the users `get` in a transaction and `set_password_hash`, which never touches `password_changed_at`.
-  > - **Tests,** red against compiling stubs: 27 of 39 failed, then all passed. The migrations' snapshot gained line 5.
-
-  > Note (P7.1, group E, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`0006_invites.sql`**, the last of the four tables.
-  > - **Columns:** `id`; `code_hash` (SHA-256 of the `afk_iv_…` code, a 32-byte BLOB, UNIQUE); `role` (`member` or `admin` only: an Owner invite can't exist); `created_by` and `used_by` referencing `users` without cascade, `used_by` UNIQUE (one invite per user); `created_at` and `expires_at` (stored at creation from `[auth] invite_ttl_hours`, so a config change doesn't move it); `used_by`, `used_at` and `revoked_at` NULL until set. A used or revoked invite keeps its row.
-  > - **Belt CHECKs behind the services:** a user and the time of the use come together; an invite is never both used and revoked; it expires after its creation (the fixed time form compares as text). Each has a refusal test.
-  > - **Indexes** on `created_by` (the cap and revoking a creator's pending invites) and `expires_at` (P11.6's cleanup).
-  > - **The repository** (`ports::invites`, `infra::sqlite::invites`): `find` and `find_by_code_hash` on the read pool and in the transaction, `list` (newest first, every state, joined with the people's names, one row more than the page), `insert`, `count_pending_by`, and the conditional `use_invite`, `revoke` and `revoke_pending_by` (each only while unused, unrevoked and unexpired; the last with `RETURNING`). `ports::page` holds the shared `PageLimit` (1–100, 50 by default), `Page` and `Paged::split`.
-  > - **fleet-core:** `InviteId`, `AuditTarget::Invite` (`invite`) and `auth::invite` (`InviteTtl` 1–720 h, 72 by default; `invite_state`: used, then revoked, then expired at `now >= expires_at`; `MAX_PENDING_INVITES` = 20 and `pending_cap_reached`).
-  > - **Tests,** red against compiling stubs (a rule that kept every invite pending and accepted every lifetime, a target named like a session, a page that never split, a repository that found and wrote nothing): fleet-core 18 of 25 rule tests and the two target tests, fleet-server 6 of 11 page tests and 13 of 20 repository tests failed on assertions. The repository tests that passed check the table's CHECKs and foreign keys, which the real migration already enforces, and an unknown lookup. Then all passed. Snapshots, read before accepting: the serialized IDs gained `invite`, the migrations' line 6.
+  > Note (P7.1): **`0006_invites.sql`** (E), the last table: `code_hash` (SHA-256 of the `afk_iv_…` code), `role` (`member` or `admin` only), `created_by` and `used_by` (UNIQUE) without cascade, `expires_at` stored at creation, `used_at`, `revoked_at`, and belt CHECKs behind the services.
+  > `ports::page` holds the shared `PageLimit` (1–100, 50 by default); `invite_state` is used, then revoked, then expired at `now >= expires_at` ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 - [x] **P7.2** 🔴 `PasswordService`:
   - Argon2id with the configured parameters
   - runs in `spawn_blocking` behind a semaphore
   - dummy hash for unknown users
   - password policy (length, zxcvbn)
 
-  > Note (P7.2, from Phase 6, group C, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a full argon2 queue answers `busy` (503, `Retry-After`), like a busy database (Plan.md §6's overload row).
+  > Note (P7.2): a full argon2 queue answers `busy` (503, `Retry-After`), like a busy database (Plan.md §6's overload row) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
-  > Note (P7.2, group A, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Ports and adapters.** `ports::passwords::Passwords` with `hash(&NewPassword, &Username)`, `verify` and `verify_unknown_user`, implemented by `infra::crypto::passwords::Argon2Passwords`.
-  > - **The queue.**
-  >   - **Admission:** at most 4 × `argon2_max_concurrent` callers wait (`try_acquire`); past that, `busy` at once.
-  >   - **The hashing permit** is taken with `acquire_owned()` and moved into the `spawn_blocking` closure. A cancelled caller never frees a slot while argon2 still runs.
-  >   - **Tests use a blocking stand-in** for both rules.
-  > - **The dummy hash** is made at startup with the configured parameters, through a private path without the strength check. `verify_unknown_user` takes the real check's queue, permit and verify call, and always answers "wrong password".
-  > - **`fleet_core::auth::NewPassword(SecretString)`.**
-  >   - **Length:** 12–128 `chars()`, no trimming and no normalization.
-  >   - **Control characters** are refused.
-  >   - **Errors:** `NewPasswordError::{TooShort, TooLong, ControlCharacter}`, carrying only the limits.
-  > - **zxcvbn** runs inside `hash`, in the same blocking task, before argon2, with score ≥ 3.
-  >   - **User inputs:** the username, "afkfleet" and "minecraft".
-  >   - **Weak passwords:** `HashError::Weak` carries `fleet_core::auth::{WeakWarning, WeakSuggestion}`, our own enums, mapped from zxcvbn's by exhaustive `match`es.
-  > - **`[auth]`'s argon2 keys.**
-  >   - **Ranges:** memory 19456–1048576 KiB, iterations 2–10, parallelism 1–16, max_concurrent 1–64.
-  >   - **No constructor below the floor exists,** not even for tests: every test hashes at the baseline, and the dev profile compiles argon2, blake2 and zxcvbn at `opt-level = 3`. That's 10 ms per hash instead of 228 ms, measured.
-  > - **The hash format:** argon2id v19 with the configured m/t/p, a 16-byte salt from `SecureRandom` and a 32-byte output.
-  >   - **What `verify` accepts:** argon2id v19 with in-range parameters.
-  >   - **`VerifyError::Corrupt`** covers anything else: another algorithm or version, a string that doesn't parse, or m/t/p above the config's upper bounds.
-
-  > Note (P7.2, as built, group A) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **`[auth]`'s ranges are checked in validation, not by garde.** `RawAuth`'s fields drop the `argon2_` prefix (clippy's `struct_field_names`) and serde names the keys. garde would report the field's name instead of the key: 0.23 parses `rename` but never applies it. So validation checks each value against `Argon2Params`' bounds, reports every problem under its key in garde's words ("lower than …", "greater than …"), and then builds `Argon2Params::try_new`, the type's only checked constructor besides `Default`.
-  > - **Tests,** red against compiling stubs (a `NewPassword` that accepted anything, empty texts and `ALL` lists, a `try_new` without checks, config that ignored the keys, a service that hashed nothing, a queue that was always busy, mappings to one variant):
-  >   - fleet-core: 19 of 29 failed on assertions
-  >   - fleet-server: 68 of 77 failed on assertions
-  >
-  >   Then all passed. The queue's tests use a blocking stand-in and bound every wait at 10 s.
+  > Note (P7.2): `Passwords` (`Argon2Passwords`) admits at most 4 × `argon2_max_concurrent` waiting callers, moves the hashing permit into the `spawn_blocking` closure, and checks unknown users against a dummy hash made at startup with the configured parameters. `NewPassword` is 12–128 `chars()` without control characters; zxcvbn (score ≥ 3) runs inside `hash`, before argon2.
+  > `[auth]`'s argon2 ranges are checked in validation, not by garde, and no constructor below the floor exists, not even for tests; a stored hash of another algorithm or version, one that doesn't parse, or one above the config's bounds is `VerifyError::Corrupt` ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 - [x] **P7.3** 🔴 `TokenService`:
   - tokens from `getrandom`, with prefixes
   - SHA-256 hashing and constant-time comparison (`subtle`)
   - TTLs
   - refresh rotation, and **family revocation when an old token is reused**
 
-  > Note (P7.3, group B, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **One `sessions` row per family,** with the current access and refresh hashes; every replaced refresh hash stays in `rotated_refresh_tokens`, so reuse of any of them is caught. A refresh replaces the access token too.
-  > - **The tokens:** 32 bytes from `SecureRandom`, base64url without padding, behind `afk_at_` or `afk_rt_`. Stored as SHA-256 of the whole text (a 32-byte BLOB). A presented token must be its prefix plus 43 base64url characters before it's hashed; after the indexed lookup, `TokenHash::ct_eq` confirms the match.
-  > - **Expiry from anchors:** access = `refreshed_at` + `access_token_ttl_secs`, idle = `refreshed_at` + `refresh_token_idle_days`, both capped at `created_at` + `refresh_token_absolute_days`, from the running config. Expired at `now >= expiry`.
-  > - **The refresh rule** (`fleet_core::auth::refresh_decision`), inside the write transaction: unknown, revoked or expired → 401; a replaced token of a live session → reuse (revoke + `security.refresh_token_reuse` in the same commit, one `warn`); the current token of a disabled user → 401; otherwise rotate (`commit_unaudited(SessionRotate)`). No grace window; reuse in a dead session records nothing.
-  > - **The reuse entry:** Failure, no actor, the client's IP, target the session's user, metadata `session_id` and `rotated_at` (fleet-core's new typed `AuditMetadata::id` and `time`).
-  > - **`TokenService::prepare`** makes a session before any transaction; D's login inserts it and commits with `auth.login`.
-
-  > Note (P7.3, as built, group B) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **The pieces:** `fleet_core::auth::{SessionPolicy, SessionTimes, refresh_decision}`; `ports::tokens::{Tokens, TokenKind, MintedToken}` and `infra::crypto::tokens::Sha256Tokens` (sha2 with `zeroize`); `app::auth::TokenService` with `prepare` and `refresh`; `[auth]`'s three token keys.
-  > - **Tests,** red against compiling stubs (rules that allowed everything, typed metadata that added nothing, an adapter that minted nothing, config that ignored the keys, a service that refused every refresh): fleet-core 20 of 25 rule tests and 5 metadata tests plus the names snapshot; fleet-server 11 adapter, 8 config and 13 of 21 service tests failed on assertions. The tests that passed against the stubs check refusals and `Debug`. Then all passed.
+  > Note (P7.3): one `sessions` row per family, every replaced refresh hash kept in `rotated_refresh_tokens`, and a refresh replaces the access token too. Tokens are 32 bytes from `SecureRandom`, base64url behind `afk_at_` or `afk_rt_`, stored as SHA-256 and confirmed with `TokenHash::ct_eq`; expiry is computed from `created_at` and `refreshed_at` with the running config.
+  > `refresh_decision` rotates (`commit_unaudited(SessionRotate)`), or for a replaced token of a live session revokes it and records `security.refresh_token_reuse` in the same commit; there's no grace window ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 - [x] **P7.4** 🔴 Vault cipher: the envelope from §7.5 with `key_id` and AAD. TOTP secrets need it now; Phase 9 extends it. Tests cover tampering, the wrong key and the wrong AAD.
 
-  > Note (P7.4, from Phase 6, group A, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **The `*_file` loader comes here,** with its first user, the vault key: how a secret file is read into a `SecretBox` (a size cap, its permissions, a trailing newline) is decided and tested in this task.
-  > - **The secret-name test** (P6.2) already checks every config key: a name with a part `key`, `token`, `password`, `secret`, `passphrase`, `pepper` or `credential` must end in `_file` or `_files`. Keys that match but hold no secret, such as `[auth] access_token_ttl_secs`, go on the test's allowlist (`NOT_SECRETS` in fleet-server's `config/raw.rs`), each with its reason.
+  > Note (P7.4): the `*_file` loader arrived here with its first user, the vault key. P6.2's secret-name test (a key with a part `key`, `token`, `password`, `secret`, `passphrase`, `pepper` or `credential` must end in `_file` or `_files`) lists keys that hold no secret, such as `[auth] access_token_ttl_secs`, on `NOT_SECRETS` in fleet-server's `config/raw.rs`, each with its reason ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
-  > Note (P7.4, group A, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **The envelope, version 1:** `0x01 | key_id (u32 BE) | nonce (24) | ciphertext + tag`.
-  >   - **AAD:** `0x01 ‖ key_id ‖ record UUID (16) ‖ purpose name` (`VaultPurpose::TotpSecret` = `totp_secret`).
-  >   - **A committed golden envelope** pins the format. It's never regenerated: a real change means version 2.
-  > - **Key files:** standard padded base64 of exactly 32 bytes; a 33-byte key is a wrong length, not "not base64".
-  > - **`[vault]`:** `master_key_files` holds 1–16 entries, with u32 IDs and absolute paths. `active_key_id` must be one of them.
-  >   - **Duplicate keys** are refused (`subtle`).
-  >   - **Who reads the files:** `serve` reads them before the runtime starts and stops with exit 1 on a bad one; `migrate` and `healthcheck` never read them.
-  >   - **Not held yet:** the vault is built and dropped until D's MFA service holds it.
-  > - **The loader is `fleet_startup::secret_file`,** shared with the agent and P10.
-  >   - **Checks:**
-  >     - stat first, so anything but a regular file is refused without opening it
-  >     - then every check again on the opened handle: a regular file, `mode & 0o077 == 0` on Unix, not empty, at most 64 KiB
-  >   - **Reading** is from that handle, capped.
-  >   - **Trailing newline:** one trailing `\n` or `\r\n` is removed.
-  >   - **Errors** name the file, its mode and the fix, never the content.
-  > - **The dev key:** `just dev-server` creates `target/dev-server/vault-key-1` when it's missing and passes it through `AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1`. CLAUDE.md's rule 12 lists it among the files never to read.
-
-  > Note (P7.4, as built, group A) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Characters before length** (the user's decision during the build). base64 0.23.1's `decode_slice` checks that the whole input fits before it looks at any character, so a 45-character text with a stray space would have been "the wrong length". So the key decoding checks the characters first:
-  >   - **A byte-order mark** (UTF-8 `EF BB BF`, UTF-16 `FF FE` or `FE FF`) gets its own error, "starts with a byte-order mark; save it as plain text without BOM". Windows editors and Windows PowerShell 5.1's `>` add one.
-  >   - **Any byte outside the standard alphabet and `=`** is "not base64".
-  >   - **Then `decode_slice`** decides the padding, the trailing bits and the length; a 33-byte key is still `WrongLength`.
-  > - **No copy of a key.** The key decodes straight into its `SecretBox<[u8; 32]>`, and `XChaChaVault::new` consumes the loaded keys: each goes into its cipher (wiped on drop through chacha20poly1305's `zeroize` feature) by reference, and the loaded copy is dropped (wiped) right after. The loader allocates its buffer once at full size, so reading never leaves a copy behind.
-  > - **`VaultError::TooLarge`** joins the port's errors: XChaCha20-Poly1305 refuses plaintexts beyond about 256 GiB, and `seal` returns a `Result`, so nothing may panic there. No stored secret comes near it.
-  > - **base64 stays without `alloc`.** The tests encode with `encode_slice` into a fixed buffer, and the serve tests' key is a constant (checked with Node).
-  > - **Tests,** red against compiling stubs (a loader that returned nothing, keys that loaded nothing, a vault that sealed nothing and opened nothing, validation that accepted anything):
-  >   - fleet-startup: 15 of 16 failed on Windows; the Unix-only cases (modes, a symlink, a FIFO read on its own thread with a 5 s bound) run in Linux CI
-  >   - fleet-server: 49 failed, including the real binary refusing a bad key file
-  >   - the dev script's tests: 7 of 8 (the mode case is Unix-only)
-  >
-  >   Then all passed. The byte-flip test asserts the envelope's length first, so it can't pass on an empty one. The golden envelope was made once by a temporary test, never committed.
+  > Note (P7.4): the envelope v1 is `0x01 | key_id (u32 BE) | nonce (24) | ciphertext + tag`, its AAD `0x01 ‖ key_id ‖ record UUID (16) ‖ purpose name`, pinned by a committed golden envelope that's never regenerated (a real change means version 2). Key files hold padded base64 of exactly 32 bytes, their characters checked first (a byte-order mark gets its own error).
+  > `[vault]` holds 1–16 `master_key_files` and an `active_key_id`; only `serve` reads them, through `fleet_startup::secret_file` (a regular file, `mode & 0o077 == 0` on Unix, not empty, at most 64 KiB, checked again on the opened handle). `just dev-server` creates `target/dev-server/vault-key-1` ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 - [x] **P7.5** 🔴 CLI `user create-owner`: hidden prompt with `rpassword`; refuses when an Owner already exists.
 
-  > Note (P7.5, group A, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **The command:** `user create-owner --config <PATH> --username <NAME> [--password-stdin]`.
-  >   - **The Owner check** runs before any prompt or stdin read.
-  >   - **The prompt:** the password twice, at most 3 rounds, with zxcvbn's hints.
-  >   - **`--password-stdin`:** one password, capped at 1 KiB, with no retry; refused when stdin is a terminal.
-  >   - **Neither available:** without a terminal and without `--password-stdin`, it exits 1. There's no password flag or variable.
-  >   - **Exit codes:** 0 created; 1 refused or failed; 2 usage.
-  > - **`just dev-owner username`** runs it against the dev database.
-  > - **The audit entry:** `user.create` (Success, target the new user, metadata `role` and `via`, no actor or IP). E's register shares the action.
-  > - **The naming rule for audit actions:**
-  >   - Actions someone performs are `area.verb`.
-  >   - Things the server detects are `security.<noun>`.
-  >   - The outcome never goes into the name.
-  >   - An insta snapshot of every name keeps merged names from being renamed.
-
-  > Note (P7.5, as built, group A) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **The pieces:**
-  >   - `UserReads::owner_exists`, an `EXISTS` query
-  >   - `app::users::UserService::create_owner`: the hash first, outside the transaction, then the insert and its `user.create` entry in one commit
-  >   - `CreatedVia::Cli` for `via`
-  >   - `cli::user` with a `PasswordPrompt` trait (rpassword's terminal, a stand-in in tests) and a `PasswordInput` of the prompt or stdin
-  > - **No unwiped copies of a password:** a typed password is copied into a `SecretString` of exactly its length (so boxing it never reallocates) and the original is zeroized; stdin is read into a `Zeroizing` buffer allocated once at full size.
-  > - **The output:** "the Owner "alice" is created" on stdout. Every refusal is one `afkfleet-server: …` line on stderr. A round's refusal (a mismatch, the length rule, a weak password with its hints) is a plain line before the next prompt.
-  > - **The log:** `info` "the Owner is created" with the user's ID; a failure of the database or the password service is one `error` with its chain.
-  > - **Tests,** red against compiling stubs (no Owner check, a service that refused everything, a command that did nothing): 26 failed on assertions, then all passed.
-  >   - In-crate: the rounds through a stand-in prompt, `--password-stdin` through a stand-in stdin, and prompts and stdin that fail the test when they're used.
-  >   - The real binary: `--password-stdin` creates the Owner with one audit entry, and a second run exits 1 with its stdin still open and unwritten.
-
-  > Note (P7.5, from the group A review, fixed in group B) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **the reads never block the runtime.** The prompt and the `--password-stdin` read run in `spawn_blocking`, each moving its owned source onto the blocking thread and back; the Owner check still comes first. Two current-thread tests failed (the reads blocked the runtime for their 5 s bound), then passed.
+  > Note (P7.5): `user create-owner --config <PATH> --username <NAME> [--password-stdin]` checks for an Owner before any prompt or stdin read. The prompt asks for the password twice, at most 3 rounds; `--password-stdin` takes one password of at most 1 KiB and is refused when stdin is a terminal; there's no password flag or variable, and both reads run in `spawn_blocking` (the group A review, fixed in group B).
+  > Exit codes: 0 created, 1 refused or failed, 2 usage. The entry is `user.create` (`role`, `via`), and `just dev-owner username` runs the command against the dev database ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 - [x] **P7.6** 🔴 Endpoints:
   - `POST /auth/login`, `/auth/login/mfa`, `/auth/refresh`, `/auth/logout`, `/auth/register` (invite)
   - `GET /me`, `POST /me/password` (step-up)
   - `GET /me/sessions`, `DELETE /me/sessions/{id}`
 
-  > Note (P7.6, from Phase 6, group C, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **The first request DTOs.** garde joins fleet-api-types here. Each request DTO derives `Deserialize`, `Validate` and `#[serde(deny_unknown_fields)]`, with tests for an unknown field and every rule; a handler turns garde's report into `validation_failed` with `?` (`From<garde::Report> for ApiError` exists).
-  > - **axum's JSON rejections** get their mapping here: which of `bad_request`, `unsupported_media_type` and `validation_failed` a malformed body, a wrong content type and an unknown or mistyped field answer with. axum's `json` feature arrives with them.
-  > - **A DTO that uses garde's `pattern` rule** (its `regex` feature) gets the test that a value breaking it appears nowhere in the 422 body.
+  > Note (P7.6): the first request DTOs bring garde to fleet-api-types: each derives `Deserialize`, `Validate` and `#[serde(deny_unknown_fields)]`, tested for an unknown field and every rule. axum's JSON rejections (a malformed body, a wrong content type, an unknown or mistyped field) get their mapping to `bad_request`, `unsupported_media_type` or `validation_failed` here, with axum's `json` feature.
+  > A DTO using garde's `pattern` rule gets the test that a value breaking it appears nowhere in the 422 body ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
-  > Note (P7.6, from the Phase 7 plan, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Split between D and E.** D builds `login`, `login/mfa`, `refresh` and `logout`, plus `POST /auth/step-up`. E builds `register`, `/me`, `/me/password` and `/me/sessions`. The task is ticked in E.
-  > - **Step-up.** `POST /auth/step-up {password}` stamps the session's `stepped_up_at`.
-  >   - A step-up action needs a stamp at most 5 min old; otherwise it answers 403 `step_up_required`.
-  >   - A wrong password counts toward the lockout.
-  > - **Open for D: re-hashing.** A stored hash made with older `argon2_*` parameters verifies with different timing than the dummy hash. Whether a successful login re-hashes it with the current parameters, and which audit action that write records, is group D's question.
-  > - **Open for D: an oversized login.** Login's request DTO gets a generous upper bound on the password field, so an oversized login is refused before any hashing. The bound itself is D's question.
-  > - **Open for D and E: the 422 for weak passwords.** `HashError::Weak` carries `WeakWarning` and `WeakSuggestion`; how a 422 exposes them is D's and E's question.
+  > Note (P7.6): split between D (`login`, `login/mfa`, `refresh`, `logout`, plus `POST /auth/step-up`) and E (`register`, `/me`, `/me/password`, `/me/sessions`), ticked in E. `POST /auth/step-up {password}` stamps the session's `stepped_up_at`; a step-up action needs a stamp at most 5 min old (otherwise 403 `step_up_required`), and a wrong password counts toward the lockout ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P7.6, group D, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **The password step** never hands out real tokens: `{status: "mfa_required" | "mfa_setup_required", token, expires_in}`, an mfa token (`afk_mt_`, 5 min, 3 wrong codes) or a setup token (`afk_st_`, 10 min). An unknown name, a wrong password and a disabled user are one 401 `invalid_credentials`, counted toward the lockout and audited (`auth.login` Failure; no target for an unknown name, which is never stored). A name that isn't a valid `Username` is 422 before the lockout or any hashing; the password field is capped at 1024 characters.
-  > - **The code step** takes one `code` field: 6 digits are a TOTP code, 20 base32 characters a recovery code. Wrong codes count toward the lockout; the streak is cleared only when tokens are issued. Its commit re-reads the user (disabled: counted; password changed: not counted) and accepts the step or uses the code conditionally (an authenticator replaced meanwhile: `mfa_changed`, not counted). Answer: `{access_token, refresh_token, access_expires_in, refresh_expires_in}`.
-  > - **Re-hashing** a stored hash whose variant, version, m, t or p differ from today's: best-effort at the password step, written in the `auth.login` success commit (`rehashed`), never touching `password_changed_at`.
-  > - **Refresh** checks the read pool first, so an unknown token never takes the write connection; a refusal is 401 `unauthorized`.
-  > - **Logout** revokes the request's session (`auth.logout`, target the session), 204.
-  > - **Step-up** is a plain authed route on the Login bucket: a wrong password is 403 `forbidden`, counted; its commit re-reads the session and the user (401 when gone or disabled, 403 uncounted when the password changed), stamps exactly that session and clears the streak (`auth.step_up`), 204.
-  > - **`invalid_credentials`** (401) joins the error codes; every 401 carries `WWW-Authenticate: Bearer`, whatever its code.
+  > Note (P7.6): D: the password step never hands out real tokens, only an mfa token (`afk_mt_`, 5 min, 3 wrong codes) or a setup token (`afk_st_`, 10 min). An unknown name, a wrong password and a disabled user are one counted 401 `invalid_credentials`; a name that isn't a valid `Username` is 422 before the lockout or any hashing, and the password field is capped at 1024 characters.
+  > Login calls `LockoutService::begin` before any verify; the code step takes one `code` field; a hash made with other parameters is re-hashed best-effort, written in the `auth.login` success commit; refresh checks the read pool first; logout revokes its session; step-up is a plain authed route on the `Login` bucket; every 401 carries `WWW-Authenticate: Bearer`.
+  > Deviation (the user's decision): "two concurrent stale logins of the same user both succeed" can't happen under the lockout's in-flight guard, so a cross-flow test pins the property instead ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P7.6, as built, group D) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **The pieces:** `app::login::LoginService` (`password_step`, `code_step`, `step_up`); `TokenService::logout` and the refresh's read-pool check; `IssuedTokens` with the seconds left; `Passwords::{needs_rehash, rehash_verified}`; the handlers in `http::handlers::auth`; fleet-api-types' `auth` DTOs (`LoginRequest`, `LoginResponse` with the open `LoginStatus`, `LoginMfaRequest`, `TokenResponse`, `RefreshRequest`, `StepUpRequest`); the actions `auth.login`, `auth.logout`, `auth.step_up`. `serve` builds the password service before the app (its dummy hash is async work); a failure is a new start error.
-  > - **Deviation, one test (the user's decision during the build):** "two concurrent stale logins of the same user both succeed" can't happen: the lockout's in-flight guard holds the name from a step's `begin` to its commit (a second login gets 429), and a password step between another's two steps replaces its challenge. The test that pins the property instead runs across flows: a 2FA replacement's confirm still succeeds after a login re-hashed the password meanwhile; and a second attempt while one is in flight is 429.
-  > - **Tests,** the login tests in `tests/auth/` (one binary: login, refresh, logout, step-up), red against compiling stubs (a login service that refused everything, a logout that revoked nothing, a refresh without the read-pool check, a re-hash that never ran, a 401 header for `unauthorized` only, DTO rules that accepted anything, tokens without their lifetimes): 51 of the 73 new tests failed on assertions. The ones that passed check 422s, shapes, `Debug`, registrations, limits and refusals a do-nothing stub satisfies too. Then all passed. Changes landing between a step's checks and its commit come from a store wrapper that applies a queued change right before the next write transaction opens.
-
-  > Note (P7.6, from group D, for E; to ask the user): **failed code attempts on `/me`.** A wrong code means someone has the password, so `/me` could show the failed code attempts (`auth.login` Failure, `step` = `code`) since the user's last login, and P8 show them as a warning.
-
-  > Note (P7.6, from group D, for E; the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **a credential change revokes every other session.** A 2FA replacement does (D), and E's `/me/password` must too, through `SessionWrites::revoke_all_for_user(user, except)`, which `PATCH /users/{id}` reuses for all of a user's sessions.
-
-  > Note (P7.6, group E, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **`POST /auth/register {invite, username, password}`** (public, `Register`): the cheapest checks first, the invite then the username on the read pool, then the strength check and the hash, then one transaction that re-checks the invite and its creator (enabled, still allowed to `CreateInvite` its role), inserts the user and uses the invite conditionally. 201 `{id, username, role}`, never tokens: the first login answers `mfa_setup_required`.
-  > - **Its refusals:** every invite it can't use is one 422 on `invite` ("isn't valid: it's unknown, used, revoked or expired; ask for a new invite"); a real one is recorded as `user.create` Failure (no actor, the IP, target the invite, `reason` `used` | `revoked` | `expired` | `creator_unauthorized`), every attempt, while an unknown or malformed code never is. A taken name is 422 on `username` ("is taken") and leaves the invite pending, a race at the insert included. A success records `invite.use` and `user.create` (`via` = `invite`, `invite_id`) in one commit, actor the new user.
-  > - **A refused new password** (register and `/me/password`) is 422 on its field: "is too weak", then one entry per zxcvbn warning and suggestion in its own words; the length and control-character rule's own message comes first, from garde.
-  > - **`GET /me`:** `{id, username, role, created_at, password_changed_at, mfa_confirmed_at?, recovery_codes_left, failed_code_attempts: {count, last_at?}}`, the wrong codes after the previous successful login (or since the account's creation), over the new index `0007_audit_log_target.sql`.
-  > - **`POST /me/password {new_password}`** (`step_up_route`, `Login`): the same password is 422 ("is the current password"); the commit re-checks the session (live, the user's: else 401), the user (enabled: else 401) and the stamp (within 5 minutes, and `password_changed_at` not after it: else 403 `step_up_required`, nothing written), then writes the hash and `password_changed_at`, revokes every other session and clears this session's stamp (`user.change_password` with `sessions_revoked`). 204.
-  > - **`GET /me/sessions`** lists the live sessions (not revoked, refresh not expired) newest first in keyset pages, `{id, created_at, last_used_at, expires_at, current}`; **`DELETE /me/sessions/{id}`** ends another one (`session.revoke`), the current one is 409 (logout ends it), and someone else's, an ended or an unknown one is 404.
-
-  > Note (P7.6, as built, group E) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **The pieces:** `InviteService::{code_hash, check, check_in}` with `InviteCheck` and `Unusable`; `UserService::{register, me, change_password}`; `TokenService::{list_sessions, revoke_own}`; the queries `AuditReads::failed_code_attempts`, `MfaReads::count_unused_codes`, `UserWrites::change_password`, `SessionReads::list_live` and `SessionWrites::clear_step_up`; `http::handlers::me` and register in `auth`; fleet-api-types' `RegisterRequest`, `RegisterResponse`, `MeResponse`, `FailedCodeAttempts`, `PasswordChangeRequest`, `SessionResponse`, `SessionPage`; `AuditAction::{INVITE_USE, USER_CHANGE_PASSWORD, SESSION_REVOKE}`.
-  > - **`mfa_confirmed_at` is optional** on the wire: a user who logged in always has an authenticator, but a profile without one reads as left out rather than failing.
-  > - **An over-long invite code** fails its garde rule with the same message as every other bad invite, so a client can't tell it from an unknown one.
-  > - **Tests,** red against compiling stubs (rules that accepted anything, queries that found and wrote nothing, services that refused everything): fleet-api-types 3 rule tests, the queries 7 of 8, the HTTP tests 25 of 35 failed on assertions. The ones that passed check refusals a do-nothing stub gives too (the step-up 403, rule 422s, a 401, the unknown-invite 422, a 404, the limits). Then all passed. Snapshots, read before accepting: the audit-action names (three added), the migrations' line 7, `registered`, `register_weak`, `me`, `sessions_page` and the OpenAPI document.
-
-  > Note (P7.6, from group C, for group D) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Login and the lockout:**
-  >   - Login parses the typed name as a `Username` at the boundary; how an invalid name answers is D's question.
-  >   - It calls `LockoutService::begin` before the dummy or the real verify, holds the `Attempt` through its transaction, puts `record_failure` into the `auth.login` failure commit and `clear` into the success commit, and maps `LockoutError` to `ApiError` with `?`.
-  >   - Step-up's wrong password counts the same way.
-  > - **Routes and the client:** handlers take `ClientIp` for their audit entries; the login routes register with `RateClass::Login`, refresh with `Refresh` (E's register with `Register`).
-  > - **Open: refresh without the write connection.** `/auth/refresh` could check on the read pool whether the presented refresh hash exists at all (current or rotated) before opening the write transaction, so an unknown token is a 401 without taking the one write connection. That's safe because a token reaches a client only after its commit, so the check never misses one; only known tokens take the race-safe path inside the transaction. D's question (the user's note).
+  > Note (P7.6): E: `POST /auth/register {invite, username, password}` re-checks the invite and its creator in one transaction and answers 201 `{id, username, role}`, never tokens; every invite it can't use is one 422 on `invite`, a real one recorded as `user.create` Failure, and a refused new password is 422 "is too weak" with zxcvbn's hints. `GET /me` includes `failed_code_attempts` (group D's suggestion) and an optional `mfa_confirmed_at`.
+  > A credential change revokes every other session through `revoke_all_for_user(user, except)`: a 2FA replacement (D) and `POST /me/password` (`step_up_route`). `GET /me/sessions` lists the live sessions in keyset pages; `DELETE /me/sessions/{id}` is 409 for the current one and 404 for someone else's ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 - [x] **P7.7** 🔴 2FA:
   - enroll returns the otpauth URI and a QR code as PNG data
   - confirm, then reset (with step-up), which forces a fresh enrollment at the next login
@@ -2686,141 +1367,62 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - mandatory for **every** user, not configurable: until they enroll, login returns `mfa_setup_required` plus a single-use setup token that only works for enroll and confirm (§7.2). That includes users who just registered with an invite.
   - tests: the setup token is rejected on every other endpoint, expires after 10 min and can't be reused
 
-  > Note (P7.7, from group C, open for D; the user's note) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **2FA codes and the lockout.** Whether wrong 2FA codes (and recovery codes) count toward the per-username lockout, and how many code attempts one `mfa_token` allows, are D's questions. Per-IP limits alone don't stop code guessing from many addresses; `Attempt::record_failure` can count a wrong code like a wrong password.
+  > Note (P7.7): **Deviation: the QR code is SVG, not PNG.** totp-rs's `qr` feature brings image codecs (some with SIMD and unsafe code), so the server draws qrcodegen's module grid as an SVG, sent as `data:image/svg+xml;base64,…`; the app shows it only through an `<img>` ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P7.7, group D, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Deviation: the QR code is SVG, not PNG.** totp-rs's `qr` feature brings image codecs (image, moxcms, png and more, some with SIMD and unsafe code). qrcodegen builds the module grid, and the server writes it as an SVG with nothing but a white background path and one black path of unit squares (ECC Medium, a 4-module quiet zone), sent as `data:image/svg+xml;base64,…`. The app shows it only through an `<img>`.
-  > - **Setup tokens only** for enroll and confirm (`Authorization: Bearer afk_st_…`), under a new registry kind `Access::Setup`. Enroll may be repeated (each call replaces the pending secret, which waits in memory); confirm before enroll is 409; a wrong or malformed code is 422 on `code` and keeps the token; confirm takes the token once the code matched, so a second concurrent confirm gets 401. The response of enroll: `{otpauth_uri, qr_svg, secret}`.
-  > - **TOTP:** SHA-1, 6 digits, 30 s steps, ±1 step, a 20-byte secret from `SecureRandom`, issuer "afkfleet", label `afkfleet:<username>`. A code is accepted only for a step strictly after `last_used_step`; confirm stores its own step, so the confirming code can't log in afterwards.
-  > - **Recovery codes:** 10, each 20 base32 characters (100 bits), shown once as `abcd-efgh-ijkl-mnop-qrst`, typed back in any case with or without `-` and spaces, stored as plain SHA-256.
-  > - **Replace, never reset:** `POST /me/mfa/reset` (step-up) answers 200 `{setup_token, expires_in}`, bound to the session that asked; nothing changes until its confirm, which swaps the authenticator and the codes, revokes the user's other sessions (`mfa.reset` with `sessions_revoked`) and re-checks that this session is live, the user enabled and the password unchanged. `DELETE /me/mfa` doesn't exist.
-  > - **The vault** joins `AppState` through the 2FA service; the secret's AAD names the user's ID and `totp_secret`.
-
-  > Note (P7.7, as built, group D) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **The pieces:** `fleet_core::auth::{totp, recovery, challenge}` (the window and the replay rule, `RecoveryCode`, `SecondFactor`, the lifetimes); `ports::{totp, qr, recovery_codes}` with `infra::crypto::{totp::TotpRs, recovery_codes::Sha256RecoveryCodes}` and `infra::qr::SvgQr`; `app::challenges::Challenges` and `app::mfa::MfaService`; the extractors `SetupToken`, `SteppedUpUser` and `ValidJson`; `Routes::{setup_route, step_up_route}` with the security schemes and `x-step-up`; `ErrorCode::StepUpRequired`; fleet-api-types' `SecretText` and the 2FA DTOs; `VaultKeys::from_keys`, the in-memory half of `load`.
-  > - **The registry test** calls every authed, step-up and setup route without credentials (401), every authed and step-up route with a live setup token (401), every setup route with an access token (401), and every step-up route with a live session that never stepped up (403 `step_up_required`); a step-up route whose handler forgets the check is caught. Each operation's security and `x-step-up` match its access.
-  > - **Tests,** red against compiling stubs (a store that found no challenge, a service that refused everything, adapters that matched, drew and hashed nothing, an extractor that skipped the stamp, a body extractor that answered 400 to everything, a registry that documented nothing): 68 of the 88 new server tests, 37 of the 74 new rule tests in fleet-core, and 8 of the 13 new tests in fleet-api-types failed on assertions. The ones that passed check refusals, pinned values and registration, which the stubs satisfy too. Then all passed. New snapshots, read before accepting: the audit-action names (`mfa.enroll`, `mfa.reset`), the 403 `step_up_required` envelope, the OpenAPI document and the SVG of the test URI.
+  > Note (P7.7): enroll and confirm take only a setup token (`Access::Setup`), and the registry test refuses a live setup token on every authed and step-up route; enroll may be repeated, its pending secret waiting in memory, and confirm stores its own step, so the confirming code can't log in afterwards. TOTP is SHA-1, 6 digits, 30 s steps, ±1 step, accepted only for a step after `last_used_step`; 10 recovery codes of 20 base32 characters; wrong codes count toward the lockout (group C's open question).
+  > Deviation: replace, never reset. `POST /me/mfa/reset` (step-up) answers a setup token bound to the session, nothing changes until its confirm, and `DELETE /me/mfa` doesn't exist ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 - [x] **P7.8** 🔴 The `AuthUser` extractor (Bearer token via `axum-extra`) loads session and user and rejects disabled users. A `require(permission, resource)` helper calls `fleet_core::authz::authorize`.
 
-  > Note (P7.8, group B, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Every refusal is the same 401** (`ApiError::Unauthorized`, a bare `WWW-Authenticate: Bearer`): no header, more than one `Authorization` header, another scheme, a malformed, unknown or expired token, a revoked session, a disabled user. A database failure isn't a refusal: 503 or 500.
-  > - **One lookup per request:** the session joined with its user on the read pool, decided by `fleet_core::auth::access_decision` (revoked, then expired, then disabled).
-  > - **The touch:** `last_used_at` at most once a minute (`touch_due`), a conditional write committed with `commit_unaudited(SessionTouch)`. Only the wait for the write connection is bounded (250 ms); the touch never fails a request, and a skipped one is logged at `debug`.
-  > - **Logging:** each refusal is one `debug` line with its reason (and the session's and user's IDs once found); no token, hash or header value is ever logged.
-  > - **Step-up:** `AuthUser::stepped_up_at` and `fleet_core::auth::is_stepped_up` (5 minutes); D adds `step_up_required` with its first step-up route.
-  > - **Wiring:** `AppState` carries the `TokenService`, built by `serve` from `[auth]`.
+  > Note (P7.8): every refusal is the same 401 (`ApiError::Unauthorized`, a bare `WWW-Authenticate: Bearer`): no header, more than one `Authorization` header, another scheme, a malformed, unknown or expired token, a revoked session, a disabled user; a database failure is 503 or 500.
+  > One joined lookup per request, decided by `access_decision`; `last_used_at` is touched at most once a minute (`commit_unaudited(SessionTouch)`, only the wait for the write connection bounded, at 250 ms); `Bearer` matches in any case, the spaces after it trimmed (RFC 6750) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P7.8, as built, group B) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **The scheme:** headers 0.4's `Authorization<Bearer>` matches `Bearer` in any case and trims the spaces after it, as RFC 6750's `"Bearer" 1*SP b64token` allows (the user's decision during the build); the token's own shape check does the rest.
-  > - **Tests,** through a test-only router behind the real middleware stack, red against compiling stubs (an extractor that didn't count the headers, a service that skipped the decision and the touch): 7 of 15 failed on assertions, then all passed. The test that the held write connection doesn't hold up a request passed against the stub too, which never touched.
-
-  > Note (P7.8, from group D) (ADR-0010):
-  > - **Errors.** `AuthzError::NotFound` becomes 404 and `Forbidden` 403. `WrongResource` is a bug in the handler: 500, logged at `error`.
-  > - **Self-service routes** (`/me/*`, `/me/sessions/{id}`, `/auth/logout`, `/events/ticket`) check `Permission::UsePersonal` on `ResourceContext::Personal{owner}`, so every authed handler calls `authorize()`. Someone else's session gives 404.
-  > - **Step-up** (§7.2) is checked here or in the handler, not by `authorize()`.
-
-  > Note (P7.8, from Phase 6, group C) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `From<AuthzError> for ApiError` already exists, as the note above maps it, so `require(…)` returns `authorize()`'s error with `?`. The 401 answer, `ApiError::Unauthorized`, always sends `WWW-Authenticate: Bearer` with no error detail, so it never tells whether a token existed.
+  > Note (P7.8): `AuthzError::NotFound` becomes 404 and `Forbidden` 403; `WrongResource` is a bug in the handler: 500, logged at `error`. `From<AuthzError> for ApiError` already exists, so `require(…)` returns `authorize()`'s error with `?`.
+  > Self-service routes check `Permission::UsePersonal` on `ResourceContext::Personal{owner}`, so every authed handler calls `authorize()`, and someone else's session gives 404; step-up is checked here or in the handler, not by `authorize()` (ADR-0010, [ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 - [x] **P7.9** 🔴 Admin endpoints:
   - `GET /users`
   - `PATCH /users/{id}` (role, disabled). Changing either revokes all of that user's sessions.
   - `POST`, `GET` and `DELETE` on `/invites`
 
-  > Note (P7.9, from group D) (ADR-0010):
-  > - **Roles** change only through the Owner (`SetRole`, Member ↔ Admin), never on the Owner themselves or another Owner. Admins only disable and enable Members (`SetDisabled`), so Appendix B's "Admin+" for `PATCH /users/{id}` means the `disabled` field for Admins.
-  > - **Ownership transfer** has no permission yet. It gets one together with a route.
-  > - **Invites.** Admins create and revoke Member invites; Admin invites are the Owner's (`CreateInvite{role}` on `Global`, `RevokeInvite` on `ResourceContext::Invite{role}`). Admins list all invites.
+  > Note (P7.9): roles change only through the Owner (`SetRole`, Member ↔ Admin), never on the Owner themselves or another Owner; Admins only disable and enable Members (`SetDisabled`), so Appendix B's "Admin+" for `PATCH /users/{id}` means the `disabled` field for Admins.
+  > Admins create and revoke Member invites and list all invites; Admin invites are the Owner's; ownership transfer gets a permission together with a route (ADR-0010).
 
-  > Note (P7.9, group E, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **`GET /users`** (Admin+): keyset pages (`?before=<id>&limit=1..100`, 50 by default, newest first by v7 ID; `{items, next}`, `next` left out on the last page), each user `{id, username, role, disabled, created_at, mfa_enrolled, last_seen_at?}`; `last_seen_at` is the newest `last_used_at` of any of their sessions.
-  > - **`PATCH /users/{id}`** takes exactly one of `role` and `disabled` (422 otherwise) and answers the user as the list shows them. A value equal to the current one, decided on the row the transaction re-reads, writes nothing. A change revokes every session of the user (`user.set_role` with `role`, `previous_role`, `sessions_revoked`; `user.set_disabled` with `disabled`, `sessions_revoked`); a demotion to Member or disabling also revokes their pending invites, one `invite.revoke` each with `reason` `creator_demoted` or `creator_disabled`.
-  > - **Invites:** `POST /invites {role}` answers 201 `{code, invite}`, the code `afk_iv_…` (32 bytes, `TokenKind::Invite`) shown only there; `[auth] invite_ttl_hours` (default 72, 1 to 720) sets `expires_at` at creation; a creator holds at most 20 pending invites (409 beyond, counted inside the transaction). `GET /invites` lists every invite in its state (`pending`, `used`, `revoked`, `expired`) with `created_by` and `used_by` as `{id, username}`. `DELETE /invites/{id}` revokes a pending one (`invite.revoke`); a used one is 409; a revoked or expired one 204 again without a second entry.
-  > - **Every admin write re-checks in its transaction** (`app::users::recheck`): the acting session live and theirs, the actor enabled, then `authorize()` again on the fresh role and target. A dead session or disabled actor is 401; a refusal is what `authorize()` answers on the fresh facts (an Admin demoted meanwhile gets 404 on a Member, since a Member can't see other users).
-  > - **The API's new building blocks:** fleet-api-types' `Timestamp` (`YYYY-MM-DDTHH:MM:SS.mmmZ`, written and read by hand; chrono joins the crate with no features), IDs as fleet-core's typed IDs on the wire as strings, `PageQuery<I>` with its own `IntoParams`, and `bool` fields (the renderer test gained `boolean`). Absent values are left out, never `null`. A path ID that isn't a v7 UUID is 404 (`ValidPath`); a query that doesn't parse is 400 and a rule broken 422 (`ValidQuery`, over axum's `query` feature, the user's approval).
-
-  > Note (P7.9, as built, group E) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **The pieces:** `UserReads::{list, listed}` and `UserWrites::{set_role, set_disabled}`; `app::users::{ActingUser, recheck, UserChange, UserService::{list, user_ref, set}}`; `app::invites::InviteService`; `http::handlers::{users, invites}` with explicit operation IDs; `http::extractors::{ValidPath, ValidQuery}`; `AppState` gains both services; `AuditAction::{USER_SET_ROLE, USER_SET_DISABLED, INVITE_CREATE, INVITE_REVOKE}`.
-  > - **garde has no rule across fields,** so `UserPatchRequest` implements `Validate` by hand, reporting on the request as a whole (an empty path).
-  > - **`PageQuery` uses no serde `default`:** it would bound the ID type by `Default`; a missing `Option` reads as `None` anyway.
-  > - **Unique operation IDs:** utoipa names an operation after its function, so `users::list` and `invites::list` were both `list`; each new operation names its own, and a test keeps every operation ID unique (red on the duplicate first).
-  > - **Tests,** red against compiling stubs (services that listed and found nothing and refused every change, repositories that read and wrote nothing, a `Timestamp` that wrote nothing and read anything, rules that accepted everything, extractors that refused everything or skipped garde, a prefix and a config key that were ignored): fleet-api-types 26 tests, the users' repository 6 of 6, config 3, the token prefix 2, the extractors 3 of 6, the HTTP tests 33 of 46 failed on assertions. The ones that passed check refusals the handler makes before the service is called. Then all passed. Snapshots, read before accepting: the audit-action names (four added), `users_page`, `user_patched`, `invite_created`, `invites_page` and the OpenAPI document.
+  > Note (P7.9): `GET /users` (Admin+) lists keyset pages (`?before=<id>&limit=1..100`, 50 by default) with `mfa_enrolled` and `last_seen_at`. `PATCH /users/{id}` takes exactly one of `role` and `disabled` (garde has no rule across fields, so `Validate` by hand); a change revokes every session of the user, and a demotion to Member or disabling also their pending invites.
+  > `POST /invites {role}` shows the `afk_iv_…` code only once, with at most 20 pending invites per creator; every admin write re-checks the acting session, the actor and the target in its transaction (`app::users::recheck`). Absent values are left out, never `null`, and every operation ID is unique ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 - [x] **P7.10** 🔴 Rate limiting:
   - tower_governor per IP, globally and on auth routes, via `into_make_service_with_connect_info`
   - `trusted_proxies` CIDRs decide when `X-Forwarded-For` is honored
-
-  > Note (P7.10, from Phase 6, group A) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `[http] trusted_proxies` doesn't exist yet: the server's config has only Phase 6's keys, so this task adds it, with its validation.
   - a periodic `retain_recent()` clean-up
   - governor limits per user
   - a per-username lockout stored in the DB
   - `429` with `Retry-After`
 
-  > Note (P7.10, from Phase 6, group C) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a limit answers with `ApiError::RateLimited { retry_after }`, the limiter's delay, which is sent in whole seconds, rounded up.
+  > Note (P7.10): from Phase 6: this task adds `[http] trusted_proxies` with its validation and switches `serve` to `into_make_service_with_connect_info`; a limit answers `ApiError::RateLimited { retry_after }`, sent in whole seconds, rounded up.
+  > A 429 that bypasses `ApiError` keeps its envelope and headers but is logged at `error` as a wiring bug, and the dev-only `GET /api/openapi.json` needs a rate-limit class too ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
-  > Note (P7.10, from Phase 6, group D) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a 429 that tower_governor answers itself, without `ApiError`, still gets the envelope from `render_errors`' safety net and keeps its `Retry-After` and rate-limit headers, but it's logged at `error` as a wiring bug, so the limiter's error handler should return `ApiError::RateLimited`. Whether the health routes count against the global limit is this task's question.
+  > Note (P7.10): **Deviation: governor without tower_governor.** tower_governor 0.8.0 hard-codes governor's quanta clock, forces governor's and axum's default features, and rounds its wait down, so the server's own middleware runs governor's keyed limiters on its `Clock` port (`MonotonicClock` in production).
+  > Limits per IP (every request, health checks and unmatched paths included; IPv6 by its /64), per route class (`Login` shared by `/auth/login` and `/auth/login/mfa`, `Refresh`, `Register`) and per user; `X-Forwarded-For` is read only from a trusted proxy, walked from the right; one real-socket test proves the peer address reaches the limiter ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P7.10, from Phase 6, group E) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): the dev-only `GET /api/openapi.json` needs a rate-limit class too, like every route. The limiter needs the client's address: `serve` passes the router to `axum::serve` directly, so this task switches to `into_make_service_with_connect_info` there.
+  > Note (P7.10): the lockout: 5 failures (`[auth] lockout_threshold`, 3–20) lock for 1 min, each further one doubles the lock up to 1 h, and a streak expires 24 h after its last failure; while locked, 429 before any password check, not counted, and one attempt per name in flight. Rows are keyed by HMAC-SHA256 of the normalized `Username` under a key derived from the vault's active key, unknown names taking exactly the same path.
+  > `security.lockout` is recorded at each lock. The housekeeping task runs every 60 s: `retain_recent()`, the purge of expired streaks, and one `info` summary of the refusals ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P7.10, from the Phase 7 plan, the user's decision; open for group C) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): the one real-socket test sends a request over a real connection to a route with the per-IP limit, and fails if the peer address doesn't reach the limiter. `oneshot` sets `ConnectInfo` itself, so it can't catch a missing `into_make_service_with_connect_info`.
-
-  > Note (P7.10, group C, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Deviation: governor without tower_governor.** tower_governor 0.8.0 hard-codes governor's quanta clock, forces governor's and axum's default features, and rounds its wait down. The server's own middleware runs governor's keyed limiters, and every refusal is `ApiError::RateLimited` with the limiter's wait, rounded up to whole seconds.
-  > - **The limits:**
-  >   - **Per IP:** every request, health checks and unmatched paths included, in the middleware stack right inside `render_errors`.
-  >   - **Per route class,** given at registration (P7.11): `Login` (one bucket shared by `/auth/login` and `/auth/login/mfa`), `Refresh`, `Register`; `Standard` spends nothing more. A route layer, so a 404 or 405 spends none.
-  >   - **Per user:** every authed request, in `AuthUser`, right after authentication.
-  >   - **Keys:** an IPv4 client by its address, an IPv6 client by its /64; only the key is masked, the audit log keeps the full address.
-  > - **The client** (`ClientIp`, a request extension and an extractor for D's handlers): the canonical peer address. Only when it's in `[http] trusted_proxies` is `X-Forwarded-For` read: all its headers as one list, walked from the right past trusted proxies to the first untrusted address. A bad entry stops at the last trusted hop; all trusted means the left-most. No `Forwarded`, no `X-Real-IP`. A request without `ConnectInfo` is a 500, logged as a wiring bug.
-  > - **The limiters' clock** is the server's `Clock` port: a new `MonotonicClock` in production, only for the limiters, and the same `ManualClock` as everything else in tests. Stored and audited times keep `SystemClock`.
-  > - **The lockout** (`app::lockout::LockoutService`):
-  >   - **The rule** (`fleet_core::auth::lockout`): 5 failures (`[auth] lockout_threshold`, 3–20) lock for 1 min, each further one doubles the lock up to 1 h, and a streak expires 24 h after its last failure.
-  >   - **While locked:** 429 with the rest of the lock, before any password check, not counted. One attempt per name in flight; a concurrent one gets 429 with `Retry-After: 1`.
-  >   - **Keys:** rows keyed by HMAC-SHA256 of the normalized `Username` under a key derived from the vault's active key; unknown names take exactly the same path.
-  >   - **`security.lockout`:** recorded in the failing attempt's transaction at each lock, with an `info` line.
-  > - **The housekeeping** (`cli::housekeeping`), the server's first long-lived background task: every 60 s it runs `retain_recent()`, purges expired streaks in batches of 1000 (each committed with `UnauditedWrite::LoginAttemptsPurge`), and logs one `info` summary of the refusals since its last run. A refused request's own line is at `debug`. It belongs to `serve`'s `JoinSet` and stops at the first signal.
-  > - **Config:** `[http] trusted_proxies` (at most 32 strict CIDRs: host bits zero, no bare addresses, no duplicates, no IPv4-mapped networks, no /0 since group D) and every `[rate_limits]` key but chat's and `ws_connections_per_user`:
+  > Note (P7.10): config: `[http] trusted_proxies` (at most 32 strict CIDRs: host bits zero, no bare addresses, no duplicates, no IPv4-mapped networks, no /0 since group D, since trusting every address lets any client choose its own through `X-Forwarded-For`, past every per-IP limit and into the audit log's IPs) and every `[rate_limits]` key but chat's and `ws_connections_per_user` ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
   >
-  >   | Key | Default | Range |
-  >   |---|---|---|
-  >   | `per_ip_per_sec` / `per_ip_burst` | 20 / 40 | 1–1000 / 1–10000 |
-  >   | `login_per_ip_per_min` | 5 | 1–60 |
-  >   | `refresh_per_ip_per_min` | 30 | 1–600 |
-  >   | `register_per_ip_per_hour` | 5 | 1–100 |
-  >   | `per_user_per_sec` / `per_user_burst` | 10 / 30 | 1–1000 / 1–10000 |
-  > - **Tests,** each written first and red against compiling stubs:
-  >   - the lockout rule: 25 of 40
-  >   - `IpNet`: 33 of 46
-  >   - config: 19 of 21
-  >   - the limiter and the client's address: 19 of 33
-  >   - the router-level limits: 13 of 16
-  >   - the HMAC, the derivation and `MonotonicClock`: 9 of 13
-  >   - the lockout service, P7.12's lockout counting: 16 of 19
-  >   - the housekeeping: 5 of 8
-  >   - the real-socket test, with `serve` stripped of `into_make_service_with_connect_info`: it saw a 500
-  >   - the housekeeping's stop, with a token the shutdown never cancels: it hit its 30 s bound
-  >
-  >   Then all passed. The ones that passed against the stubs check allowances, refusals or `Debug` that a do-nothing stub satisfies too. A proptest cross-checks `IpNet` and the /64 key with `ipnet`. The 429 response and the audit-action names have snapshots, read before accepting.
-
-  > Note (P7.10, from the group C review, fixed in group D's first commit) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **no /0 proxy.** `[http] trusted_proxies` accepted `0.0.0.0/0` and `::/0`. Trusting every address lets any client choose its own address through `X-Forwarded-For`, which bypasses every per-IP limit (login's included) and forges the audit log's IPs. `IpNet` now refuses a prefix length of 0 for both families with `IpNetError::Everything` ("a prefix length of 0 would trust every address; list only your proxies' own networks"). The unit tests that had used /0 as a valid network moved to the refusal table or to /1 networks, and the proptests draw lengths from 1. Tests, red first: 6 failed (two parse cases, the message test, the no-echo test and one config case per family), then all passed.
+  > | Key | Default | Range |
+  > |---|---|---|
+  > | `per_ip_per_sec` / `per_ip_burst` | 20 / 40 | 1–1000 / 1–10000 |
+  > | `login_per_ip_per_min` | 5 | 1–60 |
+  > | `refresh_per_ip_per_min` | 30 | 1–600 |
+  > | `register_per_ip_per_hour` | 5 | 1–100 |
+  > | `per_user_per_sec` / `per_user_burst` | 10 / 30 | 1–1000 / 1–10000 |
 - [x] **P7.11** 🔴 **Route-coverage test.**
   - Routes are registered only through `public_route(…)` or `authed_route(…)` helpers, which also record them in a registry.
   - The test calls every authed route without credentials and expects `401`.
   - It also checks that the public list is exactly the expected allowlist.
 
-  > Note (P7.11, from Phase 6, group D) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `GET /health/live` and `GET /health/ready` exist since P6.7, registered with plain `Router::route`. They move to `public_route` and belong on the public allowlist.
+  > Note (P7.11): routes are registered through utoipa-axum's `OpenApiRouter`, so `public_route` and `authed_route` wrap it and every route keeps its `OpenAPI` entry; `GET /health/live` and `GET /health/ready` (plain `Router::route` since P6.7) move to `public_route` and the allowlist, and the dev-only `GET /api/openapi.json` is public, the allowlist test checking both modes ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
-  > Note (P7.11, from Phase 6, group E) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): routes are registered through utoipa-axum's `OpenApiRouter` (`routes!` with `#[utoipa::path]`), so `public_route` and `authed_route` wrap it and every route keeps its `OpenAPI` entry. `GET /api/openapi.json` exists only in dev mode: it's public, and the allowlist test checks both modes.
-
-  > Note (P7.11, from the Phase 7 plan, the user's decision; open for group C) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): the route-coverage test must not pass while the authed list is empty. One way: a test-only authed route proves the 401 check, and D's and E's routes join the test automatically.
-
-  > Note (P7.11, as built, group C) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **`http::routes`:** `Routes` wraps utoipa-axum's `OpenApiRouter`. Its only ways in are `public_route(class, routes!(…))` and `authed_route(class, routes!(…))`, each taking the route's `RateClass` (`Standard`, `Login`, `Refresh`, `Register`) and recording every method and path as a `RouteEntry { method, path, access, class }`.
-  > - **The router:** `http::router::api_routes` registers the production routes (health live and ready, public, `Standard`), and `Routes::finish` adds the dev-only `GET /api/openapi.json` (public, `Standard`, recorded, not in the document) and the middleware stack. `router()` is `api_routes(Routes::new()).finish(…)`.
-  > - **`tests/routes.rs`:**
-  >   - The public routes are exactly the allowlist outside dev mode and in it.
-  >   - A test-only authed route whose handler takes `AuthUser` keeps the authed list from being empty, and every authed route answers 401 with `WWW-Authenticate: Bearer` without credentials.
-  >   - An authed route whose handler forgets `AuthUser` is caught.
-  >   - The registry equals the document's operations.
-  > - **Tests,** red against a registry that recorded nothing: 8 of 9 failed, then all passed.
-  > - **For D and E:** a handler takes `AuthUser` before any body extractor, or its request without credentials isn't a 401 and the route-coverage test fails.
+  > Note (P7.11): `http::routes::Routes` takes routes only through `public_route(class, routes!(…))` and `authed_route(class, routes!(…))`, recording each method and path with its access and `RateClass`.
+  > `tests/routes.rs` checks the public allowlist, calls every authed route without credentials (401), keeps the authed list from being empty with a test-only authed route, and checks that the registry equals the document's operations; a handler takes `AuthUser` before any body extractor ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 - [x] **P7.12** 🔴 Security tests:
   - **User enumeration:** an unknown user and a wrong password give the same status and body.
   - **Lockout.**
@@ -2830,34 +1432,15 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - **Invites:** reuse and expiry.
   - **TOTP replay.**
 
-  > Note (P7.12, from the Phase 7 plan, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **each test ships with what it attacks,** written first, so it's red before its defense exists.
-  > - **Service-level tests:**
-  >   - B: refresh reuse revokes the family; a disabled user's session is rejected by `AuthUser`
-  >   - C: lockout counting
-  >   - D: TOTP replay
-  > - **End-to-end tests over HTTP:**
-  >   - D: enumeration (same status and body); lockout through login; expired sessions and refresh reuse through `/auth/refresh`
-  >   - E: escalation; disabling through `PATCH /users/{id}`; invite reuse and expiry
-  >
-  > E names each item with its test and ticks the task.
+  > Note (P7.12): each test shipped with the defense it attacks, red first: service-level tests in B (refresh reuse, a disabled user through `AuthUser`), C (lockout counting) and D (TOTP replay); end-to-end tests over HTTP in D (enumeration, lockout through login, expired sessions and refresh reuse) and E (escalation, disabling, invite reuse and expiry).
+  > Every item is named with its tests in the threat model's B1 section ("P7.12's security tests"), whose citations `scripts/threat-model-citations.mjs` checks ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P7.12, from group C, for E and the threat model; the user's note) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Lockout counting** is `tests/lockout_service.rs` (group C): the fifth failure locks for a minute, each further one doubles the lock up to an hour, a locked name is refused without being counted, and an unknown name locks exactly like a real one.
-  > - **An accepted residual risk the threat model names:** the lockout lets an attacker keep one account locked by failing once per lock (one failure an hour, once the lock reached its cap), while existing sessions keep working.
-
-  > Note (P7.12, group D, for E's naming of each item) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Enumeration:** `tests/auth/login.rs`'s `an_unknown_name_a_wrong_password_and_a_disabled_user_answer_alike` (same status, headers and body but the request ID) and `the_typed_name_is_stored_nowhere`.
-  > - **Lockout through login:** `the_fifth_wrong_password_locks_the_name_and_the_right_one_waits` and `wrong_codes_count_toward_the_lockout` there, and `step_up.rs`'s `wrong_step_up_passwords_lock_the_name_for_login_too`.
-  > - **Expired sessions and refresh reuse through `/auth/refresh`:** `tests/auth/refresh.rs`'s `reusing_a_replaced_refresh_token_revokes_the_whole_session`, `a_session_idle_for_seven_days_cant_refresh` and `a_session_past_thirty_days_cant_refresh_however_often_it_did`.
-  > - **TOTP replay:** `tests/mfa_service.rs`'s `a_totp_code_is_accepted_once_and_no_older_code_after_it` and `the_confirming_code_cant_log_in_afterwards`, and `tests/mfa_repository.rs`'s conditional-write tests.
-
-  > Note (P7.12, from group D, for E's threat model; the user's notes) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **accepted residual risks** to list next to the lockout DoS:
+  > Note (P7.12): the accepted residual risks, under the threat model's "Accepted risks and known limits" ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **Keeping an account locked:** an attacker can fail once per lock (one failure an hour, once the lock reached its cap), while existing sessions keep working.
   > - **Stale hashes:** after an `argon2_*` change, users who don't log in keep their old hashes, so their names stay distinguishable by timing until they do.
   > - **TOTP guessing by a password holder:** at the default threshold of 5, about 33 wrong codes a day get through (5 free, then locks of 1, 2, 4, 8, 16 and 32 minutes, then one an hour). Each guess hits one of about 3 in 10^6 codes (the window's three steps), so about 1e-4 a day and 3.5 % a year for an attacker who has the password and never stops, while the real user stays locked out nearly all the time.
   > - **An account without 2FA** (an invitee who abandons setup) belongs to whoever first enrolls with its password.
   > - **Displacing a login:** a password holder can replace the user's live login challenge with a password step of their own (the same class as the lockout DoS).
-
-  > Note (P7.12, group E) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **every item is named with its tests** in the threat model's B1 section (`docs/threat-model.md`, "P7.12's security tests"), whose citations `scripts/threat-model-citations.mjs` checks against the crates. E's own: escalation (`a_member_cant_make_themselves_an_admin`, `an_admin_cant_change_the_owner`, `an_admin_cant_disable_another_admin`, `an_admin_cant_change_any_role`, `nobody_makes_another_owner`, `an_admin_cant_invite_an_admin`, `nobody_invites_an_owner`), disabling through `PATCH /users/{id}` (`an_admin_disables_a_member_who_is_refused_from_then_on`), invite reuse (`an_invite_registers_once_and_its_reuse_is_refused_and_recorded`, `two_registrations_with_one_invite_create_one_user`) and expiry (`an_invite_is_refused_from_its_expiry_on`), each red against its stub first. The accepted residual risks of groups C, D and E are under the threat model's "Accepted risks and known limits".
 - [x] **P7.13** Audit events for:
   - login success and failure, logout
   - password and 2FA changes
@@ -2865,29 +1448,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - invites created and used
   - token reuse
 
-  > Note (P7.13, from Phase 6, group B, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a failed login for an unknown username never stores the typed name raw in the audit log: people sometimes type their password into the username field. Each phase lists its actions in one `audit_actions!` block in fleet-core.
+  > Note (P7.13): a failed login for an unknown username never stores the typed name raw in the audit log: people sometimes type their password into the username field. Each phase lists its actions in one `audit_actions!` block in fleet-core ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
-  > Note (P7.13, from the Phase 7 plan, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Each action arrives with its write:**
-  >   - A: `user.create`
-  >   - B: token reuse
-  >   - C: the lockout
-  >   - D: login, logout, 2FA
-  >   - E: password, roles, invites
-  >
-  >   E ticks the task.
-  > - **The naming rule:**
-  >   - Actions someone performs are `area.verb` in the imperative (`auth.login`, `user.set_role`, `invite.create`, `invite.use`).
-  >   - Things the server detects are `security.<noun>` (`security.refresh_token_reuse`).
-  >   - The outcome is never part of the name.
-  >   - Metadata values come from closed enums.
-  >   - A snapshot of every name keeps merged names from being renamed or dropped.
-
-  > Note (P7.13, as built, group D) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`auth.login`, `auth.logout`, `auth.step_up`, `mfa.enroll` and `mfa.reset`.** `auth.login` Success when tokens are issued (actor and target the user, `session_id`, `method`, `rehashed` only when true); Failure on every counted refusal and on a code step refused because the password or the authenticator changed (no actor, target the user or none, `step` and `reason`). `auth.logout` and `auth.step_up` target the new `AuditTarget::Session`; a step-up's Failure carries `reason`. `mfa.enroll` records a first confirm, `mfa.reset` a replacement's with `sessions_revoked`. Starting a replacement, 422s and 429s record nothing. The names snapshot gained all five, read before accepting.
-
-  > Note (P7.13, as built, group C) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`security.lockout`**, recorded in the failing attempt's own transaction each time a failure starts a lock. Outcome Failure; no actor; the client's IP; target the user when the name is a user's, none otherwise (the typed name is never stored); metadata `failures` and `locked_until`. The names snapshot gained it, read before accepting.
-
-  > Note (P7.13, as built, group E) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`user.set_role`, `user.set_disabled`, `user.change_password`, `invite.create`, `invite.use`, `invite.revoke` and `session.revoke`,** plus `user.create` through an invite (Success, `via` = `invite`) and its Failure for a real invite that can't be used. Every entry whose commit revokes sessions carries `sessions_revoked`; the pending invites a demotion or disabling revokes get one `invite.revoke` each with `reason`. The names snapshot gained all seven, read before accepting.
+  > Note (P7.13): each action arrived with its write: A `user.create`; B `security.refresh_token_reuse`; C `security.lockout`; D `auth.login`, `auth.logout`, `auth.step_up`, `mfa.enroll`, `mfa.reset`; E `user.set_role`, `user.set_disabled`, `user.change_password`, `invite.create`, `invite.use`, `invite.revoke`, `session.revoke`, and `user.create` through an invite.
+  > Actions someone performs are `area.verb`, things the server detects `security.<noun>`, the outcome is never part of the name, and a snapshot of every name keeps merged names from being renamed or dropped ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
 **DoD:**
 - auth + vault coverage ≥ 90 %.
@@ -2902,21 +1466,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - **Rust:** `tauri` (≥ 2.11.1), `tauri-plugin-single-instance`, `keyring-core` + `windows-native-keyring-store`, `reqwest`, `rustls`.
 - **npm:** react, vite, typescript, TanStack Query & Router, zustand, zod, react-hook-form, tailwindcss, shadcn/ui, lucide-react, sonner, vitest, Testing Library, msw, `@tauri-apps/api`, biome.
 
-> Note (P8):
-> - **Five group branches.** At the user's request, Phase 8 is built in group PRs like Phases 2–7. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
->
->   | Group | Branch | Tasks |
->   |---|---|---|
->   | A | `p8/p8.1-fleet-client` | P8.1 |
->   | B | `p8/p8.2-p8.3-scaffold-and-hardening` | P8.2, P8.3 |
->   | C | `p8/p8.4-p8.5-bridge` | P8.4, P8.5 |
->   | D | `p8/p8.6-p8.7-shell-and-auth-screens` | P8.6; P8.7's server setup, login with 2FA, register and enrollment |
->   | E | `p8/p8.7-p8.9-profile-admin-wrap-up` | P8.7's profile; P8.8; P8.9; the DoD, threat model B2/B7 and README |
->
->   - **P8.7 is spread over D and E** and ticked in E.
->   - **Hands-on checks:** where only the user can check something on Windows (the window, the keychain, the phone's authenticator, an installed dev build), the group's plan names the exact steps.
->   - Each later group asks its own implementation questions in its session.
-> - **Decisions.** The user answered group A's questions on 2026-10-12, one at a time, and amended its plan in review. [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md) records them; the notes below summarize what changes a task.
+> Note (P8): built in groups A–E, one PR each, with P8.7 spread over D and E and ticked in E; their decisions (group A's questions, answered by the user on 2026-10-12, then each group's) are in [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md).
 
 - [x] **P8.1** 🔴 `fleet-client`:
   - typed async methods for every endpoint (reqwest + rustls, timeouts)
@@ -2924,76 +1474,20 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - typed errors
   - integration tests against the in-process server
 
-  > Note (P8.1, from Phase 7, group B, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **A refresh replaces the access token at once.** A request sent with an access token that a refresh has since replaced gets a 401. fleet-client's single-flight refresh checks whether the token it used is still the current one: if a refresh already replaced it, it retries once with the current token instead of refreshing again (no needless second rotation). Only a 401 for the current token triggers a refresh.
-  > - **No grace window.** A refresh whose response got lost leaves the client with a replaced refresh token; sending it again is reuse, which revokes the session, so the user logs in again.
+  > Note (P8.1): a refresh replaces the access token at once, so a request with a replaced one gets 401; the single-flight refresh then retries once with the current token, and only a 401 `unauthorized` for the current token from an authenticated route refreshes (never a 401 `invalid_credentials` from login or login/mfa, nor step-up's 403 `forbidden`, a wrong password).
+  > No grace window: a lost refresh response, or a refused refresh, means logging in again. `expires_in` lets the app restart a timed-out mfa or setup step; refreshing never runs on a timer ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P8.1, from Phase 7, group D, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Which 401 refreshes:** the client refreshes only on a 401 with the code `unauthorized` from an authenticated route. A 401 `invalid_credentials` from login or login/mfa never triggers a refresh or a logout, and a 403 `forbidden` from step-up means a wrong password, not a lost session. A refused refresh (401 `unauthorized` from `/auth/refresh`) means logging in again.
-  > - **`expires_in`:** the app uses it on the mfa and setup tokens to restart a timed-out step itself (an expired token answers like a wrong code). Refreshing stays on a 401 only, never on a timer.
+  > Note (P8.1): fleet-client sets a maximum response body size, since fleet-api-types caps each text a client reads but not how many entries a response holds ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
-  > Note (P8.1, from Phase 6, group C, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **A maximum response body size.** fleet-api-types caps each text a client reads (`BoundedText`, `Open`), but not how many entries a response holds (a `fields` array with a million entries), so fleet-client sets a maximum body size on its HTTP client, which bounds every response, not only errors.
-
-  > Note (P8.1, group A, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **The API types:** request DTOs derive `Serialize` too, leaving an empty `Option` out (an amendment of ADR-0015's request rule), and fleet-api-types re-exports the IDs its DTOs carry, so §4's table holds.
-  > - **The tokens:**
-  >   - The refresh token lives only in a `SessionStore` port (`MemoryStore` here, the keychain in P8.4); a failed save clears it.
-  >   - The access token lives only in memory; a request without one refreshes first.
-  >   - The password step's and a 2FA replacement's tokens stay inside the client, whose methods take only codes.
-  >   - `login` with a session held is `AlreadyLoggedIn`.
-  > - **The session ends** on a refused refresh, a 401 after the retry, an empty store, and every logout, even an unreachable server's; never on a transient failure. **An end never races a save:** an epoch under a store gate drops, and revokes on the server, any save that started before an end. Logout ends locally first, then revokes with the tokens it took.
-  > - **The server and its certificates:**
-  >   - `ServerUrl` is an origin; plain http works only for a literal loopback address.
-  >   - No redirects, no proxies.
-  >   - `Trust::System`, or `Trust::CustomCa` alone (`tls_certs_only`), read strictly by `CustomCa::from_pem`.
-  > - **Bounds:**
-  >   - 5 s to connect, 20 s per request and 5 s per store call.
-  >   - A 1 MiB body cap.
-  >   - No automatic retries: the error carries `retry_after`.
-  >   - **The server's `[http] request_timeout_secs` is capped at 19 s** (Appendix A's note).
-  > - **Tests:**
-  >   - `serve::app_with` runs the production wiring over a `ManualClock` and `SeededRandom`.
-  >   - The interleavings run through a crate-private transport seam.
-  >   - A required `fleet-client` coverage gate at 90 %.
-
-  > Note (P8.1, as built, group A) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **The pieces:**
-  >   - The client: `fleet_client::{Client, ClientConfig, LoginStep, ServerUrl, Trust, CustomCa, SessionStore, MemoryStore, ClientError, ApiFailure}`, every `/api/v1` route plus `health_live` and `health_ready`.
-  >   - fleet-server: `serve::{ServerPorts, app_with}`.
-  >   - fleet-api-types: the request DTOs' `Serialize` and the ID re-exports.
-  > - **Tests,** red against compiling stubs first: fleet-api-types 2 of 3, the config's range case, fleet-client 101 of 132, the gates script's new check. Then all passed.
-  >   - The integration tests run the real server on 127.0.0.1:0: every route; the refresh rules (a transparent refresh, eight requests and one rotation, no grace window, the idle expiry); logout after a restart.
-  >   - The TLS tests use rcgen certificates and a rustls server on a thread.
-  > - **A dropped caller never stops a save** (the user's review of PR #34): once a refresh's or a code step's request may reach the server, the request, the save and the adoption run in a task of their own, which holds the refresh lock and the refresh-out mark until it ends. So a cancelled caller can't lose a rotated refresh token (whose next use would be reuse) or orphan a session. A task that ends without an answer is `ClientError::Interrupted`.
-  > - **Lockfile:** the build gains rcgen, pem and yasna. Cargo.lock also lists x509-parser and its parsing crates, the optional dependency behind rcgen's weak feature `x509-parser?/verify-aws`, which nothing enables or builds; `cargo deny check` passes.
+  > Note (P8.1): request DTOs derive `Serialize` too (amending ADR-0015's request rule); the refresh token lives only in a `SessionStore`, the access and step tokens only in the client's memory, and `login` with a session held is `AlreadyLoggedIn`. An end never races a save (an epoch under a store gate), and once a request may reach the server, its save runs in a task of its own (the user's review of PR #34).
+  > `ServerUrl` is an origin, plain http only for a literal loopback address; no redirects or proxies; `Trust::System`, or `Trust::CustomCa` alone. 5 s to connect, 20 s per request, a 1 MiB body cap, no automatic retries, the server's `[http] request_timeout_secs` capped at 19 s, and a required `fleet-client` coverage gate at 90 % ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 - [x] **P8.2** Scaffold:
   - `apps/desktop` (Tauri v2; `src-tauri` is a workspace member)
   - `packages/ui` (Vite + React + strict TypeScript + Tailwind + shadcn/ui)
   - pnpm scripts for both
 
-  > Note (P8.2, group B, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **Windows only.** `apps/desktop/src-tauri` (crate `afkfleet-desktop`) is a workspace member, but on Linux it would need WebKitGTK, so every workspace-wide Rust recipe adds `--exclude afkfleet-desktop` there. Windows covers it: clippy and test on windows-latest, and a new `tauri-build` job (docs, stable-check, `just app-build`). Coverage never measures it.
-  > - **Doctests leave the desktop crate out on every platform.** tauri-build's static VC++ runtime puts a stub `msvcrt.lib` on its link path, and cargo passes every build script's link paths to every doctest, so fleet-core's doctests failed to link. The desktop crate has no doctests.
-  > - **cargo deny in two passes**, same `deny.toml`, no ignores:
-  >   - the workspace without the desktop crate, on every target
-  >   - the desktop crate alone, on Windows
-  >
-  >   The real all-targets run failed only on the Linux GTK3 stack (glib 0.18's RUSTSEC-2024-0429, proc-macro-error's RUSTSEC-2024-0370, target-lexicon's `Apache-2.0 WITH LLVM-exception`). A new desktop target joins the second pass.
-  > - **Docker:** the agent's image copies `apps/desktop/src-tauri` too, because cargo can't load the workspace without it. Nothing there builds it.
-  > - **Identity:** identifier `io.github.noah-gabel.afkfleet`, productName `afkfleet`.
-  > - **The frontend:**
-  >   - TypeScript 7.0.2.
-  >   - shadcn/ui is only `components.json` (radix-nova, `#` subpath imports) plus its theme tokens; its packages arrive with the first component.
-  >   - Vitest with a smoke test.
-  >   - The Tauri CLI from npm.
-  >   - `apps/desktop` renders `<App />` from `@afkfleet/ui` on Vite's port 1420.
-  > - **The icon** is an original placeholder SVG; `just icons` renders `icon.ico` from it.
-  > - **Recipes:** `just dev-app`, `just app-build [--debug]`, `just icons` and `just ui-test` work; `just e2e` arrives in P8.9.
-  > - **Tests,** red first against stubs:
-  >   - `scripts/icons.test.mjs`: 4 of 4
-  >   - the UI's smoke test, which found no heading in an empty `App`
-  >
-  >   Then all passed.
+  > Note (P8.2): Windows only: `apps/desktop/src-tauri` (crate `afkfleet-desktop`) is a workspace member that the Linux recipes exclude, covered by clippy and tests on windows-latest and a `tauri-build` job; doctests leave it out everywhere (tauri-build's stub `msvcrt.lib`); cargo deny runs two passes over the same `deny.toml` with no ignores (the Linux GTK3 stack failed it); the agent's image copies it but never builds it.
+  > Identifier `io.github.noah-gabel.afkfleet`; TypeScript 7.0.2, shadcn/ui as only `components.json` and its theme tokens, Vitest, the Tauri CLI from npm; a placeholder icon that `just icons` renders ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 - [x] **P8.3** Tauri hardening:
   - CSP: `default-src 'self'; img-src 'self' data:; style-src 'self'; connect-src ipc: http://ipc.localhost`. Relax it only with an ADR.
   - Capabilities allow only our commands.
@@ -3001,134 +1495,41 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - Devtools only in debug builds.
   - The single-instance plugin.
 
-  > Note (P8.3, group B, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **The CSP, exactly,** with `dangerousDisableAssetCspModification: true`: Tauri appends no hashes or nonces, which makes the served header stricter, not looser. Tauri writes the header from a hash map, so its four directives come in an order that varies between runs.
-  > - **No `devCsp`:** `tauri dev` on desktop loads Vite's server directly, and Tauri sends no CSP there. The real CSP is checked in a `tauri build --debug` exe.
-  > - **`withGlobalTauri: false`** is written out.
-  > - **`freezePrototype: true`** (the user's addition); removing it needs an ADR.
-  > - **Capabilities:** one, `main`, granting nothing; no `core:default`.
-  >   - build.rs passes `const COMMANDS` (empty) to `AppManifest::commands`.
-  >   - An empty `[default]` permission in `permissions/default.toml` turns the ACL on for app commands. Without an app manifest Tauri lets every app command through, which the ACL test showed.
-  > - **Devtools:** no `devtools` feature or window setting. tauri has only `wry` and `compression`: `dynamic-acl` is out, and `common-controls-v6` is out too (the user's choice), since its TaskDialogIndirect import kept the ACL test's exe from starting.
-  > - **Single instance:** the plugin is registered first, and a second launch restores, shows and focuses the window.
-  > - **A navigation guard** (the user's addition): an internal plugin's `on_navigation` hook allows only `http://tauri.localhost`, and `devUrl`'s origin in dev builds.
-  > - **Pinned:**
-  >   - `just tauri-check` (`scripts/tauri-hardening.mjs`; in `check`, `ci` and CI's deny job) fails on any change to the security settings, the windows, the dev URL, the capability, the command list, the default permission or tauri's resolved features.
-  >   - `tests/acl.rs` shows on the mock runtime that ungranted app and core commands are refused.
-  > - **Tests,** red first against stubs: `navigation` 14 of 19, `focus` 2 of 2, the ACL's app-command case, and the hardening script 18 of 25. Then all passed.
-  > - **Checked live** in a debug build over WebView2's DevTools protocol: the page loads, no CSP violations, the guard keeps the window on the app, `window.open` opens nothing, and a second launch exits at once.
+  > Note (P8.3): the CSP exactly, with `dangerousDisableAssetCspModification: true`, which makes the served header stricter, and no `devCsp`, since `tauri dev` sends no CSP; `withGlobalTauri: false` written out; `freezePrototype: true` (the user's addition; removing it needs an ADR). One capability, `main`, granting nothing (no `core:default`), and an empty `[default]` permission that turns the ACL on for app commands.
+  > tauri has only `wry` and `compression` (no `devtools`, `dynamic-acl` or `common-controls-v6`); the single-instance plugin is registered first; a navigation guard allows only the app's own origin. `just tauri-check` and `tests/acl.rs` pin it, and a debug build checked it live ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 - [x] **P8.4** 🔴 Rust side:
   - `AppState` holds the server profile, the `fleet-client` and the session.
   - The **refresh token lives in the OS keychain**; the access token only in memory.
   - Typed commands are grouped per feature (`commands/auth.rs` …) and return `Result<T, CommandError { code, message }>`.
   - Server profile: a URL plus an optional custom CA PEM, validated. **Never accept invalid certificates.**
-  > Note (P8.4, from group A) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **The keychain implements fleet-client's `SessionStore`**, doing its blocking calls off the runtime.
-  > - **The server profile reuses `ServerUrl` and `CustomCa::from_pem`.**
-  > - **`main` installs the aws-lc-rs provider** before building the client.
-  > - **`CommandError` maps `ClientError`** with a default branch (`ApiFailure::code` is `Open`).
-  > - **No token reaches `AppState`:** fleet-client holds the access token and the step tokens itself.
 
-  > Note (P8.4, group C, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **Every endpoint now:** 20 commands in `commands/{server,auth,mfa,me,users,invites}.rs`, each a thin wrapper over an `AppState` method. The IPC types (`CommandError`, the login step, the logout outcome, the server profile's request, view and states) live in fleet-api-types' `app` module and are exported by `just gen`; the `OpenAPI` comparison leaves them out.
-  > - **`CommandError { code, message, api?, fields? }`:**
-  >   - a closed code
-  >   - its fixed message
-  >   - only for `api`: the server's status, open code, message, request ID, fields and `retry_after_secs`
-  >   - the rules a local check broke
-  >
-  >   Logout always answers Ok: `ended`, or `unconfirmed` with the error.
-  > - **The server profile:**
-  >   - It's validated by `ServerUrl` and `CustomCa::from_pem`, and stored as `server-profile.json` (version 1) in the local app-data folder. A CA is stored as canonical PEM re-encoded from DER (`CustomCa::to_pem`), and the file is written atomically and read with a 128 KiB cap.
-  >   - A file that can't be used starts the app without a profile, `unreadable` with its reason.
-  >   - The view is the origin plus each CA certificate's SHA-256 fingerprint.
-  >   - `set_server_profile` checks `health_live` before changing anything; `check_server` calls `health_ready`.
-  > - **Switching:**
-  >   - The keychain entry is keyed by origin, and a stored session resumes only under the identical profile.
-  >   - An identical profile is a no-op (`change: "none"`). Any other change logs out of the old server, then clears the new origin's entry unsent (`Client::discard_session`), saves and swaps (`change: "switched"`).
-  >   - One `RwLock`: every command holds it shared, and the switch exclusively, after its health check.
-  > - **The keychain:**
-  >   - keyring-core 1.0.0 over windows-native-keyring-store 1.1.0, `Local` persistence.
-  >   - Calls on one entry run in order: a tokio mutex per origin (shared by every store of that entry, after the user's review of PR #36) taken before `spawn_blocking`, its guard moved in, so a call that timed out waiting never runs. A call that outlives the 5 s timeout runs on in its thread: a new task exception in CLAUDE.md.
-  >   - keyring-core's errors become content-free `KeychainError`s.
-  > - **fleet-client:** `CustomCa::to_pem` and `fingerprints`; `from_pem` also refuses a CA whose canonical PEM would pass 64 KiB; `Client::discard_session`.
-  > - **Pinned:**
-  >   - Each command is in build.rs, `main.json` and `tauri-hardening.mjs`.
-  >   - `permissions/autogenerated/` is committed and pinned byte for byte.
-  >   - `tests/ipc-contract.json` lists every command's exact args and expected answer, checked by the ACL test on the mock runtime.
-  > - **Coverage:** `just cov-desktop` on Windows (CI's `tauri-build` job), with a required 90 % gate. It runs with `--no-rustc-wrapper`, since cargo-llvm-cov 0.9.1's wrapper leaves the lib's unit-test binary uninstrumented on Windows (found in the spike).
-  > - **Tests:**
-  >   - The commands run against the in-process server (`serve::app_with`).
-  >   - The keychain's ordering tests run on real time (a deviation like sqlx's).
-  >   - One test uses the real Credential Manager under a test-only service.
+  > Note (P8.4): the keychain implements fleet-client's `SessionStore`, its blocking calls off the runtime; the profile reuses `ServerUrl` and `CustomCa::from_pem`; `main` installs the aws-lc-rs provider; `CommandError` maps `ClientError` with a default branch; no token reaches `AppState` ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 
-  > Note (P8.4, as built, group C) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **Tests,** red first against compiling stubs:
-  >   - fleet-api-types' `app`: 1 of 14, on the stub's empty messages (a second failure was the test's own field-order mistake, fixed)
-  >   - fleet-client: 7 of 7 `CustomCa` and 4 of 4 `discard`
-  >   - the desktop crate: 94 of 129, the 35 that passed being the existing tests and checks a do-nothing stub also satisfies
-  >   - `tauri-hardening`: 10 of 34
-  >   - `coverage-gates`: 7 of 23
-  >
-  >   The keychain's ordering test also failed against a std mutex taken inside the blocking call, as the user predicted. Then all passed.
-  > - **Coverage:** 94.95 % of the desktop gate's lines on the dev machine, 95.17 % in CI. After the user's review of PR #36, a prefix gate also fails on a listed file with executable lines and none covered ("uninstrumented test binary?"), and the keychain's turn is per entry (one per origin, shared by every store of it).
-  > - **Lockfile:** it gains only keyring-core and windows-native-keyring-store.
+  > Note (P8.4): 20 commands in `commands/{server,auth,mfa,me,users,invites}.rs`, thin wrappers over `AppState`, their IPC types in fleet-api-types' `app` module; `CommandError { code, message, api?, fields? }` with a closed code; logout always answers Ok (`ended`, or `unconfirmed` with the error).
+  > The profile is `server-profile.json` (version 1, a CA stored as canonical PEM, read with a 128 KiB cap; an unusable file starts the app `unreadable`). The keychain entry is keyed by origin: an identical profile is a no-op, and any other change logs out, clears the new origin's entry (`Client::discard_session`) and swaps under one `RwLock`.
+  > keyring-core 1.0.0 over windows-native-keyring-store 1.1.0 (`Local`), calls on one entry in order through a tokio mutex per origin, a call outliving its 5 s timeout a new task exception; each command pinned in build.rs, `main.json`, `tauri-hardening.mjs` and `tests/ipc-contract.json`; `just cov-desktop` gates 90 % with `--no-rustc-wrapper` ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 - [x] **P8.5** 🔴 TypeScript side:
   - The `ApiClient` interface lives in `packages/ui/src/api/`.
   - `TauriApiClient` lives in `apps/desktop/src/` and is injected into `<App apiClient={…} />`.
   - `FakeApiClient` is for tests.
   - DTO types come only from `src/generated`.
 
-  > Note (P8.5, from Phase 6, group C, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **Error codes.** UI code that branches on an error code always has a default branch that shows the message and the request ID, never an exhaustive switch that assumes the union is complete: an older app can receive a code added later. The same applies to every `Open<…>` field.
-  > - **The generated folder** holds only ts-rs's files: `just gen` refuses to touch it if it holds anything else. Import each type from its own file (`../generated/ErrorResponse`); there's no index file.
+  > Note (P8.5): UI code that branches on an error code always has a default branch that shows the message and the request ID, never an exhaustive switch, since an older app can receive a code added later; the same applies to every `Open<…>` field. The generated folder holds only ts-rs's files (`just gen` refuses otherwise), each type imported from its own file ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
-  > Note (P8.5, group C, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **`ApiClient`:** 20 methods typed by the generated types. Failures are `ApiError { error: CommandError }`; a rejection that isn't a `CommandError` (Tauri's own refusals) becomes `ipc`. `describeError` switches exhaustively on `code` and keeps a default branch on `api.code`.
-  > - **zod in a `validated(client)` wrapper,** which `App` applies: every input is checked before `invoke`, and a failure is `invalid_input` with garde-style fields. `limits.ts` mirrors the Rust constants, and a fleet-api-types test keeps them equal.
-  > - **`FakeApiClient`** is scripted per method and records calls; `UnavailableApiClient` serves the web entry until P8.9.
-  > - **`TauriApiClient(invoke)`** has `invoke` injected and is tested with Vitest in apps/desktop against `ipc-contract.json`, the same fixture the Rust ACL test uses.
-  > - **Biome's `noRestrictedImports`:** no `@tauri-apps/*` in packages/ui, and only `@tauri-apps/api/core` in apps/desktop.
-  > - **Dependencies:** `@tauri-apps/api` 2.12.1, zod 4.6.5, vitest 5.0.3 (apps/desktop dev), all exact.
-
-  > Note (P8.5, as built, group C) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **Tests,** red first:
-  >   - the UI: 25 of 31 against stubs
-  >   - `TauriApiClient`: 4 of 24, against a renamed command, a dropped argument and no rejection mapping
-  >   - `tests/limits.rs`: on a missing constant
-  >
-  >   Then all passed. One test runs the validating wrapper with `Object.prototype` frozen, as the webview does.
-  > - **packages/ui** exports `./generated/*`, so apps/desktop imports each type from its own file.
+  > Note (P8.5): `ApiClient` has 20 methods typed by the generated types, failing with `ApiError { error: CommandError }` (`ipc` for Tauri's own refusals); `describeError` keeps a default branch on `api.code`. `validated(client)` checks every input with zod before `invoke`, and a fleet-api-types test keeps `limits.ts` equal to the Rust constants.
+  > `FakeApiClient` is scripted per method; `TauriApiClient(invoke)` is tested against `ipc-contract.json`, the Rust ACL test's fixture. Biome refuses `@tauri-apps/*` in packages/ui and all but `@tauri-apps/api/core` in apps/desktop; packages/ui exports `./generated/*` ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 - [x] **P8.6** 🔴 App shell:
   - TanStack Router with an auth guard
   - role-aware navigation
   - an error boundary
   - toasts
   - a banner when the server is unreachable
-  > Note (P8.6, P8.7, from group A) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - The banner shows on `Unreachable` and `TimedOut`.
-  > - Server setup explains `Certificate`.
-  > - A 429 or 503 shows its `retry_after`.
-  > - `expires_in` restarts a timed-out login or setup step.
-  > - Registering holds no session, so the login right after it never meets `AlreadyLoggedIn`.
 
-  > Note (P8.6, group D, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **Dependencies,** exact and at least 3 days old: TanStack Router 1.170.42 and Query 5.104.1, sonner 2.0.8, zustand 5.0.15, lucide-react 1.53.0, `cn` 0.4.0, class-variance-authority 0.7.1, `@radix-ui/react-slot` 1.4.0 and `@radix-ui/react-label` 2.1.16 (never the `radix-ui` umbrella), user-event 14.6.7 (dev). `pnpm-workspace.yaml` sets `minimumReleaseAge: 4320` for every install from now on.
-  > - **No runtime styles:** sonner is patched not to inject its `<style>` (the release CSP blocks it), and every Vitest test ends with a check that the document holds no `<style>` and no stylesheet at all.
-  > - **shadcn's six components** (Button, Input, Label, Textarea, Card, Alert) are copied from the registry's JSON, never through the CLI, each with its edits in its header.
-  > - **The router:** routes in code over a memory history. `/` is the launch: no profile or an unreadable one leads to server setup; `me()` then leads Home, to login on `no_session`, or to a start screen (waiting while unreachable; otherwise the error with Try again, Server settings and Log out).
-  > - **Every call is watched:** `unreachable`/`timed_out` raise the banner, `certificate` its own banner state, and `no_session` ends a signed-in session once (only for a call of the current sign-in, never at launch, inside the sign-in flow or during a logout): to login first, then the cache is emptied, then one toast. A success of a call that started after the banner went up takes it down and refetches.
-  > - **The banner** checks every 10 s, never two at once, and waits a busy server's `retry_after` (at least 10 s); "Retry now" checks at once.
-  > - **QueryClient:** no retries, no refetch on focus or reconnect; `me` is fresh for 60 s.
-  > - **Role-aware navigation:** Home and Server for everyone; Users and Invites (placeholders until group E) for Admins and the Owner, behind a role guard that answers "not found". An unknown role gets a Member's rights.
-  > - **The error boundary** shows a fixed text with Try again and Restart; an API error its text, any other error only its name.
-  > - **Logout** from the header: login first, then the cache; a warning when the server couldn't be told; a failed call stays signed in.
+  > Note (P8.6, P8.7): the banner shows on `Unreachable` and `TimedOut`; server setup explains `Certificate`; a 429 or 503 shows its `retry_after`; `expires_in` restarts a timed-out login or setup step; registering holds no session, so the login right after it never meets `AlreadyLoggedIn` ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 
-  > Note (P8.6, as built, group D) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **Tests,** red first against compiling stubs: the style guard 3 of 4, sonner's guard against the unpatched package, the stores and the watched client 23 of 32, the QueryClient's defaults 1 of 2, the shell (launch, session end, header, router, nav, banner, error screen) 64 of 67. Then all passed. The 3 that passed are what a stub also does (two privileges, the error component's wiring).
-  > - **A keychain entry the app can't read** (`tests/bridge/auth.rs`, the real `KeychainStore` on keyring-core's mock): `me()` answers `store`, `logout()` removes it, and the next login works. It pins existing behaviour, so it was shown red through a temporary change to fleet-client's logout (skipping the clear after a failed load), then reverted.
-  > - **Found while building:** a check that settled before React rendered flipped `checking` twice in one batch, so the banner's next wait never started; the wait now chains from the check itself.
-  > - **Found in the live check** (a `just app-build --debug` exe over WebView2's DevTools protocol): zod's JIT probe (`new Function`) caused a CSP violation at every start. zod is now jitless (`src/api/zod.ts`, the only module that may import zod), with a red-first guard test; after it, no violation and no `<style>` on any screen walked.
+  > Note (P8.6): routes in code over a memory history, `/` the launch (server setup, login, Home or a start screen). Every call is watched: `unreachable`/`timed_out` raise the banner, and `no_session` ends a signed-in session once (login first, then the cache, then one toast); the banner checks every 10 s and waits a busy server's `retry_after`; no retries, no refetch on focus or reconnect.
+  > Home and Server for everyone, Users and Invites for Admins and the Owner (an unknown role gets a Member's rights); an error boundary with a fixed text, Try again and Restart. No runtime styles: sonner is patched, and every Vitest test checks the document holds no `<style>` and no stylesheet; zod is jitless (`src/api/zod.ts`), since its JIT probe caused a CSP violation in the live check.
+  > Dependencies are exact and at least 3 days old (`minimumReleaseAge: 4320` in `pnpm-workspace.yaml`) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 - [x] **P8.7** 🔴 Screens:
   - server setup
   - login, including the 2FA step
@@ -3136,114 +1537,24 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - 2FA enrollment (QR code from the server), shown right after the first login, since 2FA is mandatory
   - profile: change password, list and revoke sessions
 
-  > Note (P8.7, from Phase 7, group D, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **The QR code is an SVG `data:` URI.** The app shows it only through `<img src="data:…">`, never by inserting the SVG as HTML, so nothing in it could ever run. P8.3's CSP already allows `img-src data:`.
-  > - **After setup, the app asks for the next code:** the code that confirmed the authenticator can't log in.
-  > - **Replacing the authenticator** goes from the profile through step-up and `POST /me/mfa/reset` straight into enroll and confirm with the setup token it answers, in the same session; until confirm, the old authenticator keeps working.
+  > Note (P8.7): from Phase 7: the QR code is an SVG `data:` URI, shown only through `<img src="data:…">`; after setup the app asks for the next code; replacing the authenticator goes from the profile through step-up and `POST /me/mfa/reset` into enroll and confirm. Registering trims a pasted invite code and logs in straight into the 2FA setup.
+  > The profile warns when `failed_code_attempts.count` is above 0 and when 3 or fewer recovery codes are left; the `current` session's row logs out through `POST /auth/logout` ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
 
-  > Note (P8.7, from Phase 7, group E, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-  > - **Registering:** the screen trims spaces and line breaks around a pasted invite code before sending it, since chat apps often add them; the server's shape check stays strict. After a successful registration the app logs in right away with the credentials just entered and goes straight into the 2FA setup, so a new account never sits without 2FA (the threat model's "an account without 2FA").
-  > - **The profile:** when `failed_code_attempts.count` is above 0, the app shows a warning that names `last_at` and suggests changing the password. When `recovery_codes_left` is 3 or fewer, it warns and points to the 2FA replacement, which issues 10 new codes.
-  > - **The session list:** the row marked `current` shows "Log out", which calls `POST /auth/logout`; `DELETE /me/sessions/{id}` answers 409 for it.
+  > Note (P8.7): D's part: one sign-in flow per `/login` and `/register`, a reducer whose state alone holds the password, the TOTP secret and the recovery codes; every call carrying a secret is a direct call, never a TanStack query or mutation. The code step allows 3 tries, then goes back to the password step, as its deadline does; recovery codes are shown once, behind a required "I've saved these codes"; server setup asks for a current custom CA again to keep it; a failed discard is `session_discard`.
+  > After the user's review of PR #37: a server switch while signed in runs as a deliberate logout, late answers count only for their step, a running call holds its step's other actions, and `styles.css` hides Edge's own reveal button ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 
-  > Note (P8.7, group D's part: server setup, login with 2FA, register, enrollment; the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **One sign-in flow** per `/login` and `/register`, a reducer inside one component, so the password, the TOTP secret and the recovery codes live only in its state. Every call that carries a secret in its request or its answer (here `login`, `register`, `loginMfa`, `mfaEnroll`, `mfaConfirm`; in E `stepUp`, `changePassword`, `createInvite`) is a direct call, never a TanStack query or mutation (CLAUDE.md).
-  > - **The code step:** whitespace removed; 3 tries ("Wrong code. 2 tries left.", "… 1 try left."), the third and the step's deadline back to the password step (username kept, password dropped); a code after the deadline is never sent; a last-minute warning. A 422 shows at the field and doesn't count.
-  > - **The setup step:** the QR code only through `<img>` and only as `data:image/svg+xml;base64,`; the key in groups of 4; "New QR code"; only the newest one works.
-  > - **Recovery codes:** shown once, "Copy all" (the clipboard may keep them), a required "I've saved these codes"; then the flow logs in again with the kept password and asks for the next code. A failed login there goes back to the password step.
-  > - **Registering:** the invite trimmed, the password typed twice with "show" toggles; then a login with the same credentials straight into the setup, or the login form with "Your account was created. Log in to set up 2FA."
-  > - **A session still held at login:** the same user (case-insensitive) opens Home; another offers "Continue as …" or "Log out"; one that can't be checked offers "Log out". Every way into the app starts a new signed-in generation.
-  > - **Server setup:** the address and an optional CA (pasted, or read from a file of at most 64 KiB); a current custom CA starts checked with its fingerprints and must be given again to keep it; signed in, a warning before a save logs out. `none` keeps the session; `switched`, `profile_save` and the new `session_discard` go to the login.
-  > - **`session_discard`:** after the old server's logout, a failed discard of the new origin's stored session no longer answers `store`, so `store` from `set_server_profile` always means nothing changed.
-
-  > Note (P8.7, as built, group D) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **Tests,** red first: the flow's reducer 9 of 11; the field components 3 of 4; the login, register and server screens 57 of 57 against the placeholders; the desktop crate 2 of 134 against a `session_discard()` stub; the UI failed to compile until it knew the new code, by design. A test that a store refused before the guard leaves a live session untouched pins existing behaviour and was shown red through a temporary change that logged out first; the frozen-prototype flow test, through a temporary shadowing `toString` assignment.
-  > - **E's part:** the profile (password change, sessions) and the admin screens replace group D's placeholders; P8.7 is ticked there.
-
-  > Note (P8.7, the user's review of PR #37) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **A server switch while signed in runs as a deliberate logout:** `logging_out` from before the call until its answer, so a call answering `no_session` meanwhile shows no "session ended"; `none` and an error that changed nothing go back to signed in.
-  > - **Late answers count only for their step:** every step has an id, each action names the step it was issued in, and the reducer drops the rest. A late answer never signs in or navigates once the flow left its step or route.
-  > - **While a call runs,** its step's Cancel, links, "Log out" and "Continue as" wait, and a second submit does nothing. "New QR code" waits too, and hides the old secret and QR code while the new one loads.
-  > - **Edge's own reveal button:** WebView2 adds Edge's password-reveal (and clear) button to inputs, so a password field showed two eye icons; `styles.css` hides `input::-ms-reveal` and `input::-ms-clear`, checked in the debug exe (two icons before, one after).
-  > - **Smaller:** the setup secret is requested once per step, also under StrictMode; a step's deadline counts from when its request was sent; a failed login after registering lands on a real `/login` (with its notice and username), whose Register link works.
-  > - **Tests,** red first: 13 flow tests and 2 switch tests against the old code, and the reducer's 11 of 13 against the old reducer. 8 more pin behaviour the old code had (double submits, "Continue as"'s guard, the generation rule, `me`'s invalidation at every way in, the setup step's deadline check), shown red through temporary mutations of those guards.
-
-  > Note (P8.7, group E's part: the profile; the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **The layout:** `/profile` holds the account, the warnings, "Change password", "Replace authenticator" with the recovery codes left, and the sessions. `/profile/password` and `/profile/2fa` are routes of their own beside it, so leaving a flow drops its password, secret and codes.
-  > - **Step-up first.** Both flows start with "Confirm it's you" (`stepUp`, a direct call; the password lives only in `StepUpForm` until it answers).
-  >   - **The password:** then the new password, typed twice, before the step-up's 5 minutes end, counted from when it was sent (`STEP_UP_WINDOW_SECS`, mirrored in `limits.ts` and checked by `tests/limits.rs`).
-  >   - **The authenticator:** `mfaReset` straight into the 2FA setup, then the new recovery codes and "Finish", without a new login.
-  >   - `step_up_required` or a deadline goes back to the password with "That step ended. Enter your password again."
-  > - **The warnings:** wrong 2FA codes since the previous login (naming the last), and 3 or fewer recovery codes left. They show on the profile and on Home, where every sign-in lands; on Home "Dismiss" hides one until the next sign-in.
-  > - **The wrong-code count leaves out the typos of the login that succeeded** (a server change). The password step mints a `LoginStepId`, which the code step's `auth.login` entries record as `login_step_id`, and `GET /me` leaves out the newest success's own step ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)'s amendment).
-  > - **Sessions:**
-  >   - "Show more".
-  >   - Another session's "Log out" runs at once; this session's is the header's logout.
-  >   - "Log out all other sessions" asks first, then fetches every page the server lists. It runs to the end even when the screen is left, and reports on the screen or in a toast.
-
-  > Note (P8.7, as built, group E) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **Shared with the sign-in flow:** `hooks/useStepGuard` (the step-id and pending guards), `useEnrollment`, `nextSetup`, `isStepGone`, and `SetupStep`'s and `RecoveryCodesStep`'s texts as props.
-  > - **Found while building:** `showFieldErrors` kept only a field's last message, so a weak password showed only zxcvbn's last hint. Every message now shows, one per line (red first).
-  > - **Tests,** red first:
-  >   - the UI against compiling stubs: 52 of the new and changed tests (the reducer 4 of 7, the notices store 2 of 3, navigation 2 of 10, the router 4 of 12, the overview 9 of 11, the sessions 9 of 9, the password flow 14 of 14, the 2FA flow 8 of 8); the rest are what a stub also does
-  >   - the server's wrong-code tests 3 of 3 against the old query
-  >   - `tests/limits.rs` on the missing constant
-  >   - `formErrors` 1 of 3
-  >
-  >   Tests that pin existing behaviour were shown red through temporary mutations: the login step's metadata and its error path, two `formErrors` cases, and the sessions' "every page" and "runs to the end" cases.
-
-  > Note (P8.7, the user's review of PR #38) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **A refusal's wait counts down.** A 429 (or a 503 busy) showed "Try again in N s." as static text, with the submit still enabled, so every click during the wait was refused again.
-  > - **The countdown:** every form that sends a request shows the wait counting down (`useRetryWait`, `RetryWaitMessage`). Those are login, the code step, the 2FA setup, registering, the step-up (the profile's and the admin prompt's), the new password and the server form. The form keeps its submit disabled until the wait reaches zero, then says once "You can try again now."
-  > - **Screen readers** hear the start (the refusal, with the whole wait in words) and the end (a status), never each second: the ticking number is hidden from them.
-  > - **A login that ran by itself** (after registering, or after the recovery codes) hands its wait to the login form's notice, which counts it down.
-  > - **After a reload** the countdown is gone, and the next try shows the server's remaining wait again; the server enforces it.
-  > - **Tests,** red first with fake timers against a stub hook: the hook 4 of 6, the message 2 of 3, and each form 10 of 10.
+  > Note (P8.7): E's part: `/profile`, with `/profile/password` and `/profile/2fa` beside it, both starting with "Confirm it's you" (`stepUp`); the warnings show on the profile and on Home; "Log out all other sessions" fetches every page and runs to the end. The wrong-code count leaves out the typos of the login that succeeded (a `LoginStepId`, [ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)'s amendment); every field message shows, one per line.
+  > After the user's review of PR #38, a refusal's wait counts down on every form that sends a request, its submit disabled until the end (`useRetryWait`, `RetryWaitMessage`), and screen readers hear only its start and end ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 - [x] **P8.8** 🔴 Admin screens:
   - users: change role, disable
   - invites: the code is shown **once**, with a copy button
 
-  > Note (P8.8, group E, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **Only what the server would allow.** `permissions.ts` mirrors `authorize()` (`userActions`, `inviteRoles`, `canRevoke`). Its test reads fleet-core's authorization-matrix snapshot itself and checks every cell of its Users, CreateInvite and RevokeInvite tables, so a rule change fails the UI's test.
-  > - **Step-up for the admin writes** (a server change). `PATCH /users/{id}`, `POST /invites` and `DELETE /invites/{id}` are `step_up_route`s, checked by the extractor only ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)'s amendment). The screens send the write; on 403 `step_up_required` they show "Confirm it's you" at the row or the form, step up and send it once more (`useStepUpAction`).
-  > - **Inline confirmations** (no dialog) for a role change, disabling and revoking an invite, each naming what it ends; enabling runs at once.
-  > - **The invite's code** is shown once, in the screen's state only, with the clipboard note on both copy buttons:
-  >   - "Copy invitation": the server, the code, its end with its time zone, and a custom CA's fingerprints with "Ask me for the CA file"
-  >   - "Copy code"
-  > - **Paging:** "Show more" on every list.
-
-  > Note (P8.8, as built, group E) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **tests,** red first:
-  > - the server's step-up tests 5 of 5 against the old registration
-  > - fleet-client's and the desktop's admin flows (4 and 3) until they stepped up
-  > - the 38 admin tests that fail without their stamps
-  > - the UI 33 of 38 against all-refusing mirrors and the placeholder screens; the other 5 read the snapshot's tables and check refusals
+  > Note (P8.8): `permissions.ts` mirrors `authorize()`, its test checking every cell of fleet-core's authorization-matrix snapshot. The admin writes became `step_up_route`s (a server change, [ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)'s amendment): on 403 `step_up_required` the screen shows "Confirm it's you", steps up and sends the write once more (`useStepUpAction`).
+  > Inline confirmations, no dialog; the invite's code shown once, with "Copy invitation" and "Copy code"; "Show more" on every list ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 - [x] **P8.9** Playwright against the Vite web build with MSW, for login, 2FA and invite registration.
 
-  > Note (P8.9, group E, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **The e2e build** (`apps/desktop/e2e`): the desktop app's UI with its real `TauriApiClient`, over `fetchInvoke`, which sends each command's args as JSON to `/e2e/ipc/<command>`. MSW's handlers answer in the Playwright process through `@msw/playwright`, from a fake of the Rust side and the server that answers exactly `ipc-contract.json`'s commands. There is no service worker, and no MSW code or token in any bundle.
-  > - **The browser and the CSP:**
-  >   - The installed Edge (`channel: "msedge"`): nothing is downloaded.
-  >   - `vite preview` serves the release CSP with only `connect-src 'self'`.
-  >   - Every browser spec freezes `Object.prototype`, and fails on a CSP violation, a console error or an injected style.
-  > - **Never shipped:** Biome refuses any `e2e` import in `apps/desktop/src`. `just e2e` builds both shipped bundles and runs `scripts/e2e-bundle-guard.mjs` before Playwright.
-  > - **The specs:**
-  >   - login with the code step
-  >   - the first login's 2FA setup
-  >   - registering with an invite
-  >   - the DoD's story: an Admin invites; the invitee registers, sets up 2FA and logs in; the Admin finds them in the user list
-  >
-  >   `just e2e` is in `check` and `ci`, and a new `e2e` CI job runs on windows-latest.
-  > - **Dependencies,** exact devDependencies of apps/desktop: `@playwright/test` 1.64.0, `msw` 3.0.3, `@msw/playwright` 0.7.0 and `@types/node` 24.19.2. None runs an install script. vitest's `@vitest/mocker` names msw ^2 as an optional peer, which pnpm reports as unmet; vitest runs only in Node here and never loads it.
-
-  > Note (P8.9, as built, group E) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
-  > - **17 specs:** 5 in Edge (two login specs, the first login, registering, the story) and 12 in Node (`fetchInvoke` through `TauriApiClient`, the CSP and its served header, the fake against the contract).
-  > - **Red first:** the bundle guard's script 3 of 4 against a stub. The specs were written with the code, so each was shown red through a temporary mutation:
-  >   - a `<style>`, a `console.error` and an `eval` in the e2e entry, each caught (the style count with a `style-src-elem` violation, the console, a `script-src` violation)
-  >   - the story, with the fake skipping the step-up
-  >   - `e2eCsp` returning its input: 1 of 2
-  >   - `fetchInvoke` resolving everything: 6 of 7
-  >   - the fake missing a command: 1 of 3
-  >   - the real guard, with the marker added to the shipped desktop bundle
-  > - **Every answer is a 200 with an envelope:** the browser logs a failed request as a console error, which the guards would count.
+  > Note (P8.9): the e2e build (`apps/desktop/e2e`) runs the real `TauriApiClient` over `fetchInvoke`, which posts each command to `/e2e/ipc/<command>`, answered by MSW in the Playwright process (`@msw/playwright`) from a fake that answers exactly `ipc-contract.json`'s commands; no service worker, and no MSW code or token in any bundle (`scripts/e2e-bundle-guard.mjs`). The installed Edge, under the release CSP with only `connect-src 'self'`.
+  > Every browser spec freezes `Object.prototype` and fails on a CSP violation, a console error or an injected style, so every answer is a 200 with an envelope. Specs: login with the code step, the first login's 2FA setup, registering with an invite and the DoD's story; `just e2e` is in `check` and `ci`, with an `e2e` CI job on windows-latest ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 
 **Security:**
 - Tokens never reach JavaScript.
@@ -3254,7 +1565,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - A friend can install a dev build, register with an invite and log in with 2FA, and an Admin can manage users.
 - Vitest and Playwright are green.
 
-> Note (Phase 8's DoD, group E, the user's decision) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **"A friend can install a dev build" moves to Phase 12's DoD.** A friend's PC can reach a server only over HTTPS, which Phase 12 brings (Caddy), and the app allows plain http only to a loopback address. Phase 8 proves the rest on the user's PC, by the PR's hands-on steps: the release exe against `just dev-server` over loopback, an invite created in the app, registering, setting up 2FA, logging in, and an Admin managing users. Playwright runs the same story on every push.
+> Note (Phase 8's DoD): "A friend can install a dev build" moved to Phase 12's DoD (the user's decision): a friend's PC can reach a server only over HTTPS, which Phase 12 brings (Caddy), and the app allows plain http only to a loopback address. Phase 8 proved the rest on the user's PC by the PR's hands-on steps (the release exe against `just dev-server` over loopback), and Playwright runs the same story on every push ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 
 ---
 
@@ -3262,94 +1573,38 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** Users link their Microsoft accounts securely. Tokens are encrypted at rest and refreshed safely.
 **Introduces:** `azalea-auth`, `moka`, `tauri-plugin-opener`.
 
-> Note (P9, Phase 9, group B, the user's decision) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **azalea-auth isn't introduced.** fleet-server's Microsoft adapter sends its own requests, and `deny.toml` keeps azalea-auth out of every member. Group B adds reqwest (`form`) and rustls to fleet-server, and rcgen to its dev-dependencies.
+> Note (P9): built in groups A–F, one PR each; their decisions are in [ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md).
 
-> Note (P9, Phase 9, group C, the user's decision) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **moka isn't introduced either.** The session-token service's single-flight is its own per-account lock, and group C adds no dependency: only tokio-util's `rt` feature on fleet-server, for a `TaskTracker`.
+> Note (P9): neither azalea-auth nor moka is introduced (the user's decisions in groups B and C): fleet-server's Microsoft adapter sends its own requests, and `deny.toml` keeps azalea-auth out of every member; the session-token service's single-flight is its own per-account lock ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)).
 
-> Note (P9):
-> - **Six group branches.** At the user's request, Phase 9 is built in group PRs like Phases 2–8. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
->
->   | Group | Branch | Tasks |
->   |---|---|---|
->   | A | `p9/p9.1-p9.2-accounts-table-and-vault` | P9.1's `mc_accounts`; P9.2 |
->   | B | `p9/p9.3-microsoft-auth-provider` | P9.3, alone, so the Microsoft token handling gets a focused review |
->   | C | `p9/p9.5-session-token-service` | P9.5 |
->   | D | `p9/p9.4-p9.7-link-flow-and-offline` | P9.4, P9.7 |
->   | E | `p9/p9.1-p9.6-grants-and-account-endpoints` | P9.1's `account_grants`; P9.6 |
->   | F | `p9/p9.8-app-screens-wrap-up` | P9.8; the DoD, the threat model and the README |
->
->   - **P9.1 is spread over A and E** and ticked in E: each table arrives with its first user.
->   - **New dependencies** arrive with their group, each approved with its version, license and release date: azalea-auth in B, moka in C, tauri-plugin-opener in F.
->   - **Hands-on checks** use the user's own Microsoft account; each group's PR names exactly what the user does and should see.
->   - Each later group asks its own implementation questions in its session.
-> - **Decisions.** The user answered group A's questions on 2026-10-14, one at a time. [ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md) records them; the notes below summarize what changes a task.
-
-> Note (P9, from Phase 8, group E, the user's request) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **Decide step-up per action, the same way as the admin writes.** Phase 8 put role changes, disabling users and invites behind step-up, so an unlocked PC with a live session can't do them without the password. Before building them, decide for each destructive or privilege-changing action of this phase whether it needs a step-up: unlinking or deleting a Microsoft account (already in §7.2's list), changing or revoking a grant, rotating keys through the API. The app reuses the admin screens' "send, and on `step_up_required` ask for the password and retry once".
+> Note (P9): **decide step-up per action**, the same way as the admin writes (the user's request): before building them, decide for each destructive or privilege-changing action of this phase whether it needs a step-up: unlinking or deleting a Microsoft account (already in §7.2's list), changing or revoking a grant, rotating keys through the API. The app reuses the admin screens' "send, and on `step_up_required` ask for the password and retry once" ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 
 - [x] **P9.1** 🔴 Migrations and repositories:
   - `mc_accounts`: owner, MC UUID and name, kind, encrypted refresh token, `key_id`, status
   - `account_grants`
 
-  > Note (P9.1, from the group A review): **Account identity.** `McUsername` keeps its case, but Minecraft names are case-insensitive. Identify accounts by MC UUID; any lookup or comparison by name ignores case.
+  > Note (P9.1): **account identity:** `McUsername` keeps its case, but Minecraft names are case-insensitive. Identify accounts by MC UUID; any lookup or comparison by name ignores case (the group A review).
 
-  > Note (P9.1, Phase 9, group A, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **`mc_accounts` is built in group A, `account_grants` in E**, which ticks P9.1.
-  > - **One table for both kinds** (`0008_mc_accounts.sql`). An offline account has no UUID and no envelope. A Microsoft account is unique by its profile's UUID, pending ones included; an offline account by its lowercased name.
-  > - **No `key_id` column:** the envelope's header names its key, as in `user_mfa`.
-  > - **No CHECK** on the status's values (`pending`, `active`, `reauth_required`, and `refused` since group C) or the name's shape; fleet-core's `AccountStatus` and `McUsername` check them when a row is read back. An offline account is always `active`.
-  > - **Core types:** `fleet_core::account::{AccountKind, AccountStatus}` and `fleet_core::value::McUuid`, a non-nil UUID in lowercase hyphenated form.
-  > - **The repository** has only what A uses: `insert` (`Taken` for a linked account) and `find`.
+  > Note (P9.1): `mc_accounts` came in group A, `account_grants` in E, which ticked P9.1. `0008_mc_accounts.sql` holds both kinds: a Microsoft account unique by its profile's UUID, pending ones included, an offline one (no UUID, no envelope, always `active`) by its lowercased name; fleet-core's `AccountStatus` and `McUsername` check the values when a row is read. Deviation: no `key_id` column, since the envelope's header names its key ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)).
 
-  > Note (P9.1, Phase 9, group E) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **`account_grants` as built** (`0010_account_grants.sql`) is `account_id, user_id, level, granted_by, granted_at`, as Appendix D has it.
-  > - **One grant per account and user** (`PRIMARY KEY (account_id, user_id)`), so changing a grant rewrites its row, and no cap is needed (S10 in ADR-0018's group E). The rows go with their account (`ON DELETE CASCADE`); users are never deleted.
-  > - **CHECKs:** the ID and time shapes, `level` in `view`/`control`/`manage` (a closed set, as `users.role`), and `user_id <> granted_by`, a belt behind `authorize()`'s ban on granting to oneself. The owner never has a row.
-  > - **The repository** (`ports::grants`, `infra::sqlite::grants`): `GrantReads::list` (a keyset page by grantee ID, with both names) and `GrantWrites::{find, insert, set_level, delete}`; a second grant is `InsertGrantError::Exists`. Statuses are the services' business, not the table's.
+  > Note (P9.1): `account_grants` as built (`0010_account_grants.sql`): one grant per account and user, so no cap (S10), deleted with its account; `level` in `view`/`control`/`manage`; the owner never has a row ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)).
 - [x] **P9.2** 🔴 Vault extensions:
   - purpose-bound AAD (`account_id|ms_refresh`)
   - `vault rotate-key` CLI that re-encrypts transactionally
   - lookup by `key_id`
   - a test that a ciphertext swapped between two accounts fails to decrypt
 
-  > Note (P9.2, Phase 9, group A, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)):
-  > - **"Lookup by `key_id`"** is P7.4's `open`, which already finds the key the header names, plus `key_id_of` (the header, read without a key) and **`vault status`**. That's a report of what each key ID seals, which reads no key file and exits 3 when an envelope names a key that isn't configured or is malformed.
-  > - **`vault rotate-key`** re-encrypts only the envelopes under other keys than the active one.
-  >   - The crypto runs before the transaction (ADR-0015's rule). The one transaction swaps each row only while it holds the envelope that was read, and rolls back if anything changed.
-  >   - An envelope that doesn't open stops it, with one `vault.rotate_key` Failure entry each.
-  >   - Neither vault command creates or migrates the database.
-  > - **The swap test** is `a_refresh_token_moved_to_another_account_is_rejected` (the vault) and `rotation_refuses_refresh_tokens_swapped_between_two_accounts_and_records_each` (the rotation).
-  > - **CLI only:** no API route for key rotation, so no step-up to decide.
+  > Note (P9.2): "lookup by `key_id`" is P7.4's `open`, plus `key_id_of` and `vault status`, a report of what each key ID seals; `vault rotate-key` re-encrypts only the envelopes under keys other than the active one, its crypto before the one transaction (ADR-0015's rule), and stops at an envelope that doesn't open; the swap tests are `a_refresh_token_moved_to_another_account_is_rejected` and `rotation_refuses_refresh_tokens_swapped_between_two_accounts_and_records_each`. CLI only: no API route for key rotation, so no step-up to decide ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)).
 - [x] **P9.3** 🔴 `MicrosoftAuthProvider` port (`start_device_flow`, `poll`, `refresh`, `minecraft_session`), with an `azalea-auth` adapter and a fake.
   - Use azalea-auth's default client ID; a custom Azure app ID would need approval from Mojang.
   - **Never** use azalea's file cache.
   - At `trace`, azalea-auth logs Microsoft access and refresh tokens. `fleet-server` caps the `azalea_auth` log level at `info`, whatever the configured filter says.
 
-  > Note (P9.3, from Phase 3, group C, the user's decisions): **The `azalea_auth` cap, in detail.**
-  > - **What it covers.** At `trace`, azalea-auth 0.16 logs the Microsoft access token, the whole token response (refresh token included), the Xbox Live and XSTS auth responses, the Minecraft auth, ownership and profile responses, and the account cache. At `debug` it logs nothing secret.
-  > - **One rule for both binaries.** fleet-server's filter caps `azalea_auth` at `info`, whatever the configured filter says. The agent has the same cap (P5.2), because azalea logs the chat-signing private key at `trace` in every online session.
-  > - **Tested.** P9's redaction test checks the cap: with the configured filter at `trace`, nothing from `azalea_auth` below `info` gets through (ADR-0011, threat model).
+  > Note (P9.3): **the `azalea_auth` cap:** at `trace`, azalea-auth 0.16 logs the Microsoft access token, the whole token response (refresh token included), the Xbox Live, XSTS and Minecraft responses and the account cache; at `debug` nothing secret. fleet-startup caps it at `info` for every binary since Phase 6, the agent too (P5.2), and P9's redaction test checks it on the server (ADR-0011, [ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
 
-  > Note (P9.3, from Phase 6, group A, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
-  > - **The cap already exists.** fleet-server's log layer comes from fleet-startup, which caps `azalea_auth` at `info` for every binary, outside the rules a binary can add, since Phase 6. P9.3 adds no second cap; P9's redaction test still checks this one on the server.
-  > - **stable-check.** fleet-server is in the justfile's `stable_crates` since Phase 6, because it didn't depend on azalea-auth yet. When azalea-auth arrives here, fleet-server leaves `stable_crates`, as the rule says (P0.11).
-  > Note (P9.3, from Phase 8, group A) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **fleet-client leaves `stable_crates` with fleet-server,** since fleet-server is its dev-dependency and `stable-check` builds `--all-targets`.
-  > Note (P9.3, from Phase 9, group A's planning) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **the desktop crate leaves `stable_crates` too.** `apps/desktop/src-tauri` also dev-depends on fleet-server, and `stable-check` includes it off Linux.
-  > Note (P9.3, Phase 9, group B, the user's decision) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **correction to the three notes above: fleet-server, fleet-client and the desktop crate stay in `stable_crates`.** They rested on fleet-server getting azalea-auth, which it doesn't; the justfile's rule (crates that don't depend on azalea or azalea-auth) still holds for all three.
-  > Note (P9.3, Phase 9, group B, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)):
-  > - **No azalea-auth adapter.** azalea-auth 0.16.0 checks no HTTP status, so `invalid_grant`, a 429, an Xbox refusal and a missing profile look alike. Its only poll is a loop that drops every refusal, it can panic on an unexpected answer, and its types print tokens in `Debug`. `infra::msauth::ReqwestMicrosoftAuth` sends its own requests with azalea-auth 0.16.0's protocol: the default client ID, scope, fields and headers. `deny.toml` keeps azalea-auth out of every member, and the `azalea_auth` cap stays as a guard.
-  > - **The port** (`ports::msauth`) has one error enum per method.
-  >   - `poll` makes one try and returns `Pending`, `SlowDown`, `Declined`, `Expired` or `Authorized`.
-  >   - `refresh` returns the token to store every time; a 200 without one keeps the token sent (RFC 6749 §6). Only `invalid_grant` is `RefreshError::InvalidGrant`.
-  >   - `minecraft_session` runs Xbox Live, XSTS, the Minecraft login, the entitlements (none at all is `NotOwned`) and the profile (`NOT_FOUND` is `NoProfile`), with named `XboxRefusal`s.
-  >   - Failures: `Unreachable`, `Certificate`, `TimedOut`, `RateLimited`, `Unavailable` and `Unexpected {endpoint, rule}`. An unknown OAuth code is named only when it matches `[a-z_]{1,64}`.
-  > - **Microsoft's answer is input.**
-  >   - Bounded numbers: interval 1–60 s (5 s when missing); device code 60 s–1 h; access token 60 s–1 day; Minecraft token 60 s–2 days.
-  >   - Every token is 1 B–16 KiB of visible ASCII, which is the stored refresh token's upper bound.
-  >   - Every body is at most 256 KiB.
-  >   - The verification link must be https to `www.microsoft.com` or `microsoft.com`.
-  >   - Expiries come from the `Clock`, read just before the request.
-  > - **The client:** 5 s connect, 15 s per request, 20 s per call (60 s for `minecraft_session`), no redirects, no proxy, https only, no retries. A failed call logs one `debug` line without any value.
-  > - **Tests without Microsoft:** a `#[cfg(test)]` constructor against an axum fake, raw TCP servers and an rcgen-certified TLS server. The fake for later groups lives in the `tests/accounts/` binary. Coverage has a new `msauth` gate at 90 %.
-  > - **The provider:** `serve` installs aws-lc-rs as the rustls provider in main.rs's `start()`, never in the library's `serve::run`.
-  > - **Hands-on:** `just test-ms-account` runs two `manual_` tests the user runs with their own account, the only tests with a real sleep.
+  > Note (P9.3): fleet-server, fleet-client and the desktop crate stay in `stable_crates`: the notes that they would leave it rested on fleet-server getting azalea-auth, which it doesn't (group B, the user's decision; [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md), [ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)).
+
+  > Note (P9.3): Deviation: no azalea-auth adapter (the user's decision, group B). azalea-auth 0.16.0 checks no HTTP status, can panic on an unexpected answer and prints tokens in `Debug`, so `infra::msauth::ReqwestMicrosoftAuth` sends its own requests with its protocol (the default client ID, scope, fields and headers), behind `ports::msauth` with one error enum per method, treating Microsoft's answers as bounded input; `just test-ms-account` runs the user's `manual_` checks ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)).
 - [x] **P9.4** 🔴 Device-code flow:
   - `POST /accounts/link` returns `{flow_id, user_code, verification_uri, expires_at}`.
   - A background poller runs bounded and cancellable, with per-user and total caps.
@@ -3357,45 +1612,18 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - On success, check the profile and game ownership, store the encrypted token, and give the creator Manage.
   - Member quota from `accounts.max_per_member`.
 
-  > Note (P9.4, from Phase 9, group C) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): a new link's status has no reason, and the link flow calls `minecraft_session` itself; the session-token service serves linked accounts only.
+  > Note (P9.4): starting a flow checks `LinkAccount` (every role); `GET /accounts/link/{flow_id}` checks `UsePersonal` on `ResourceContext::Personal{owner}` with the flow's creator, so other users get 404 (group D, ADR-0010).
 
-  > Note (P9.4, from group D): Starting a flow checks `LinkAccount` (every role). `GET /accounts/link/{flow_id}` checks `UsePersonal` on `ResourceContext::Personal{owner}` with the flow's creator, so other users get 404 (ADR-0010).
+  > Note (P9.4): against device-code phishing (the user's decisions): a Member's or an Admin's new link is `pending` until someone above them approves it (the Owner's own links are `active` at once), and no bot can use a pending account; a UUID already linked, pending ones included, can't be linked again by anyone (`InsertAccountError::Taken`), and the refusal names nobody; `account.link` records the creator, the Minecraft name and the UUID. A new link's status has no reason, and the link flow calls `minecraft_session` itself ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)).
 
-  > Note (P9.4, from Phase 9, group A, the user's decisions on device-code phishing) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)):
-  > - **New links wait for approval.** A Member's or an Admin's new account is `pending` until someone above them approves it (a Member's: an Admin or the Owner; an Admin's: the Owner). The Owner's own links are `active` at once. No bot can use a pending account.
-  > - **One link per Minecraft account.** A UUID that's already linked, pending ones included, can't be linked again by anyone (`InsertAccountError::Taken`); the refusal names nobody.
-  > - **`account.link`** records the creator, the Minecraft name and the UUID.
-
-  > Note (P9.4, Phase 9, group D, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)):
-  > - **Ownership is Manage.** The creator becomes the account's owner, which `authorize()` already treats as Manage. E adds no grant row for the owner.
-  > - **The quota,** `[accounts] max_per_member` (1–100, 3 by default), counts every account a Member owns, of any kind and status; Admins and the Owner have none. It's checked when a flow starts (409 `conflict`) and again in the commit's transaction (the flow ends `over_quota`).
-  > - **The caps:**
-  >   - One flow per user, a fixed rule: a new start replaces the user's waiting flow, whose code is then never polled again, but not one Microsoft already approved (429, `Retry-After: 5`).
-  >   - `[rate_limits] link_flows_total` (1–16, 3) users at once on the server: one more is 503 `busy` with `Retry-After: 30`.
-  >   - `[rate_limits] link_flows_per_user_per_day` (1–100, 10) starts in any 24 hours, counted from the `account.start_link` entries in the audit log, so a restart doesn't reset them: 429 until enough of them are a day old.
-  >   - The cheapest check comes first, and Microsoft is asked last. When Microsoft fails the start, it's 503 with 30 s for a passing failure and 500 for `Certificate` or `Unexpected`.
-  > - **`GET /accounts/link/{flow_id}`** answers `waiting` (with `expires_at`), `finishing`, `declined`, `expired`, `taken`, `over_quota`, `refused` (with `reason`), `failed` or `linked` (with `account_id`, `account_status` and `name`). An unknown or replaced flow, another user's, and a result 15 minutes after its end are all the same 404. The user code is only in the start's 201 answer.
-  > - **Failures:** a passing poll failure waits for the next poll, and a 429 also slows the polls by 5 s. After the approval, a passing failure of the Minecraft session or of the database is retried after 5 s doubling to a minute, for at most 5 minutes and never past the access token's expiry. `Certificate` and `Unexpected` end the flow at once.
-  > - **The commit** reads the creator and the session that started the flow again (`users::recheck`): a revoked session, a logout or a disabled creator stores nothing, while a refreshed session still links. The role read there decides `pending` or `active`. It records `account.link` Success, or a Failure for `taken` and `over_quota`; every accepted start records `account.start_link`.
-  > - **Shutdown** cancels every flow at once; only a commit that started finishes. A restart loses the flows. A Microsoft client that can't be built stops serve's start (`StartError::Microsoft`).
-  > - **Tests** wait through a pacing port (`ports::pace`), whose fake moves the manual clock by each wait; `app/link_flows/` joins the `msauth` coverage gate.
-  > - **Hands-on:** `just test-ms-account link_flow`.
+  > Note (P9.4): as built in group D: the creator becomes the owner, which is Manage, with no grant row; `[accounts] max_per_member` (1–100, 3) counts every account a Member owns, checked at the start (409) and in the commit (`over_quota`); one flow per user, `[rate_limits] link_flows_total` (503 `busy`) and `link_flows_per_user_per_day` (429, counted from the audit log); an unknown, replaced or another user's flow is one 404, and the user code is only in the start's 201; the commit re-reads the creator and the session (`users::recheck`) and records `account.link`, every start `account.start_link`; shutdown cancels every flow; hands-on: `just test-ms-account link_flow` ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)).
 - [x] **P9.5** 🔴 `SessionTokenService`:
   - single-flight refresh per account (moka)
   - stores rotated refresh tokens atomically
   - caches the MC session token until shortly before it expires
   - on `invalid_grant`, marks the account `ReauthRequired`
 
-  > Note (P9.5, Phase 9, group C, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)):
-  > - **No moka:** each account's slot has a tokio `Mutex`, whose owned guard a task on the service's `TaskTracker` holds until the rotated token is stored. A dropped or timed-out caller never loses a rotated token.
-  > - **Order:** a refresh, the rotated token's store (`account.refresh`), then `minecraft_session`; nothing is handed out unless the store succeeded. No Microsoft access token is kept.
-  > - **A failed store** keeps the token in the slot for the next request, which stores it first. It's discarded only when the row's envelope changed or the row is gone.
-  > - **Who gets a session:** an active Microsoft account whose owner isn't disabled (`OwnerDisabled`), read on every request.
-  > - **Statuses:** `invalid_grant` marks `reauth_required`. NotOwned, NoProfile and the Xbox refusals mark a new `refused` with its reason in a new `status_reason` column (`0009`). A profile with another UUID marks `refused`/`profile_mismatch` with `security.account_profile_mismatch`. A renamed profile's name is handed out and stored (`account.rename`). Every change is a compare-and-set and audited (`account.set_status`).
-  > - **Cache:** until 10 minutes before expiry (`REUSE_MARGIN`), from the `Clock`. A fresh request reuses only a session whose minting started after it arrived.
-  > - **Backoff:** an account backs off 5 s doubling to 5 min after a failure; a 429 pauses every account 30 s doubling to 10 min. Only calls to Microsoft wait; cached sessions are still handed out.
-  > - **Wait bound:** 2 minutes; `with_wait_bound` can only shorten it.
-  > - **Not wired yet:** P10.6 builds it in serve. No hands-on check in C.
+  > Note (P9.5): Deviation: no moka. Each account's slot has a tokio `Mutex` whose owned guard a task on the service's `TaskTracker` holds until the rotated token is stored, so a dropped caller never loses one. Order: a refresh, its store (`account.refresh`), then `minecraft_session`. `invalid_grant` marks `reauth_required`; NotOwned, NoProfile and the Xbox refusals mark a new `refused` with its `status_reason`. A session is cached until 10 minutes before it expires (`REUSE_MARGIN`). P10.6 wires it into serve ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)).
 - [x] **P9.6** 🔴 Account endpoints:
   - list (only what the user may View)
   - get
@@ -3403,37 +1631,12 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - grants CRUD (never above your own level)
   - re-link
 
-  > Note (P9.6, from Phase 9, group D) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)):
-  > - **The owner's Manage is ownership:** no grant row for the owner, and a grant to oneself stays refused.
-  > - **The quota counts every account** a Member owns, so deleting one frees its slot. Deleting must also work for offline accounts while `accounts.allow_offline` is off, so a Member with leftover offline accounts can free those slots (P9.7).
-  > - **A refused pending link** still fills the Member's quota: either refusing it deletes it, or the Member can delete it themselves. E decides which.
-  > - **Reuse D's DTO enums** (`AccountStatus`, `RefusalReason`) for the account list.
+  > Note (P9.6): permissions (group D, ADR-0010): `ViewBot` for list and get, `DeleteAccount`, `RelinkAccount`, `ManageGrants` (list, revoke) and `Grant{level, grantee}` (create, change), all on `ResourceContext::Account{owner, grant}` with the actor's own grant; only Manage edits grants, nobody grants to themselves, and the owner's Manage is ownership, with no grant row.
 
-  > Note (P9.6, from group D) (ADR-0010):
-  > - **Permissions.** `ViewBot` for list and get, `DeleteAccount`, `RelinkAccount`, `ManageGrants` (list, revoke) and `Grant{level, grantee}` (create, change), all on `ResourceContext::Account{owner, grant}` with the actor's own grant.
-  > - **Grants.** Only Manage edits grants, and nobody grants to themselves.
-  > - **Flagged, not decided:** how a Member picks a grantee. Members can't list users, so the dialog (P9.8) needs a lookup that doesn't let them enumerate usernames.
-
-  > Note (P9.6, from Phase 9, group C) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **re-link** must check that the profile's UUID is the account's, and sets `active` (clearing a `refused` reason) together with the new envelope, which makes a refresh in flight drop its rotated token. A `refused` or `reauth_required` account comes back through re-link; E decides whether approve or refuse may touch them.
-
-  > Note (P9.6, from Phase 9, group A, the user's decisions on device-code phishing) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **approving and refusing a pending link** get endpoints here, and this group decides whether each needs a step-up. Admins and the Owner see every account with who linked it and when.
-  > *(Group E, the user's reading: every account they can view under ADR-0010. Only the Owner sees all of them; the Owner's and other Admins' accounts stay 404 for Admins.)*
-
-  > Note (P9.6, Phase 9, group E) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **as built.** The user's choices (U1–U4) and the review agent's decisions the user approved at the plan review (S1–S14):
-  > - **Routes:** `GET /accounts` (what the caller may see), `GET /accounts/awaiting-approval` (the pending links the caller may review, for F's Home), `GET /accounts/{id}`, `DELETE /accounts/{id}`, `POST /accounts/{id}/approve`, `/refuse` and `/relink`, `GET` and `POST /accounts/{id}/grants`, `PUT` and `DELETE /accounts/{id}/grants/{user}`. Deleting, reviewing and every grant write need a step-up.
-  > - **What each viewer sees:** the account's own facts and their own `level`; `owner` and `linked_at` only for Admins, the Owner and Manage holders. A hidden account is 404 like an unknown one (U1).
-  > - **Reviewing:** someone above the owner by current role, only a pending account (409 otherwise). Approving makes it active (`account.approve`); refusing deletes it with its grants, freeing the quota slot and the UUID (`account.refuse`).
-  > - **Deleting:** Manage, any status and kind, offline ones too while `allow_offline` is off (`account.delete`).
-  > - **Grants:** created by exact username; an unknown name, a disabled user and anyone with implicit Manage on the account get one 422 on `username`, "can't be given a grant: unknown, disabled, or already has access; check the name" (U4), recorded as a `grant.create` Failure with its reason, never the name. A second grant or a pending account is 409. Changing and revoking go by user ID; a raise for someone who has implicit Manage by now is 409; no cap. `grant.create`, `grant.set_level`, `grant.revoke`.
-  > - **Re-link:** a second kind of P9.4's flow, sharing its slot, caps, daily count, retries and shutdown, without a quota and without a step-up. A pending or offline account is 409 (U2). The commit asks `authorize()` again, refuses another profile (`refused`/`profile_mismatch`, an `account.relink` Failure) and otherwise swaps the envelope, sets `active` and stores the profile's current name (`account.relink`).
-  > - **No hands-on check** (U3): re-link makes the same Microsoft calls P9.4's check covered.
+  > Note (P9.6): as built in group E (the user's U1–U4, the review agents' S1–S14): `GET /accounts`, `GET /accounts/awaiting-approval`, `GET` and `DELETE /accounts/{id}`, `POST /accounts/{id}/approve`, `/refuse` and `/relink`, and the grants under `/accounts/{id}/grants`; deleting, reviewing and every grant write need a step-up. Admins see every account they can view under ADR-0010, only the Owner all of them; a hidden account is 404 like an unknown one (U1). Reviewing is for someone above the owner: approving makes the account active, refusing deletes it with its grants and frees the quota slot. Deleting needs Manage, for any kind, including offline accounts while `allow_offline` is off. Grants are made by exact username, with one 422 (U4). Re-link is a second kind of P9.4's flow, without quota or step-up, refused for a pending or offline account (U2), and checks the profile's UUID. No hands-on check (U3) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)).
 - [x] **P9.7** Offline accounts only when `accounts.allow_offline = true`. It's off by default and meant for dev.
 
-  > Note (P9.7, Phase 9, group D, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)):
-  > - **`POST /accounts/offline {name}`,** an authed route for every role (`LinkAccount`), without a step-up. The name follows `McUsername` (3–16 of letters, digits and `_`); the answer is 201 `{id, name, kind, status}`, always `active`, with no approval. A name taken in any case is 409 and names nobody.
-  > - **It counts toward the Member quota** (409 when full), like every account, and is recorded as `account.link` with `kind` offline, or a Failure for `taken` and `over_quota`.
-  > - **With `allow_offline` off,** the route answers 404 like an unknown one, before the body is read; it stays registered and in the `OpenAPI` document. Turning the switch off again keeps the existing offline accounts untouched, and serve warns at startup with how many are kept. No bot may run on one while it's off (P10.5, P10.6).
-  > - **The dev config** (`deploy/dev/server.toml`) turns it on, for the offline-mode test server.
+  > Note (P9.7): as built in group D: `POST /accounts/offline {name}` for every role (`LinkAccount`), with no step-up and no approval, counted in the Member quota and recorded as `account.link`. With `allow_offline` off it answers 404 before reading the body, existing offline accounts are kept (serve warns at startup), and no bot may run on one (P10.5, P10.6). `deploy/dev/server.toml` turns it on ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)).
 - [x] **P9.8** 🔴 App screens:
   - accounts list
   - **"Link Microsoft account" dialog**:
@@ -3443,38 +1646,18 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - sharing dialog (grants)
   - re-auth prompt
 
-  > Note (P9.8, from Phase 9, group C) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): the account list and the re-auth prompt need a text per `RefusalReason` and per status; `xbox_other`'s code is in the audit log only.
+  > Note (P9.8): the link dialog says, in the user's words: "Only enter a code you started yourself here. Never enter a code someone sent you, it would hand them your Minecraft account." Home carries no warning, and shows Admins and the Owner how many links wait for their approval ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)).
 
-  > Note (P9.8, from Phase 9, group D) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)):
-  > - **Starting a flow is a direct call** (`POST /accounts/link` answers the user code, a secret); reading its status may be a query.
-  > - **A text per `LinkFlowState`,** and for each refusal of the start: 409 (quota), 429 (daily cap, or the user's flow finishing), 503 (every place taken, or Microsoft away).
-  > - **fleet-client's methods** for the two routes come with the dialog, with the Tauri commands and `ApiClient`.
+  > Note (P9.8): asked of the screens by groups C–E: a text per status, `RefusalReason`, `LinkFlowState` and refusal of a start; starting a flow and a re-link is a direct call, since its answer carries the code; the threat model records the step-ups and the residuals ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)).
 
-  > Note (P9.8, from Phase 9, group A, the user's decisions on device-code phishing) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)):
-  > - **The link dialog** says, in the user's words: "Only enter a code you started yourself here. Never enter a code someone sent you, it would hand them your Minecraft account." Home carries no warning.
-  > - **Home** shows Admins and the Owner how many links wait for their approval, so none is missed.
-
-  > Note (P9.8, from Phase 9, group E) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)):
-  > - **Home's count** reads `GET /accounts/awaiting-approval` (pages of 100 until `next` is gone); a Member gets an empty list. Approve and refuse, delete, and the grant writes go through `useStepUpAction`; starting a re-link is a direct call (its answer carries the code) and reuses the link dialog.
-  > - **Texts** for: the 409s (not pending; a pending or offline account linked again; a grant that exists; a pending account shared; a raise for someone with implicit Manage), the grant's 422 (the user's text, U4), the by-name limit's 429, and `profile_mismatch` when linking again. A View or Control grantee's list has no owner column.
-  > - **fleet-client's methods**, the Tauri commands and `ApiClient` for the eleven routes come with the screens.
-  > - **The threat model** gains: approving, refusing, deleting and the grant writes need a step-up; names a Manage holder can probe, bounded by the per-user limit (an accepted risk); someone at the Owner's unlocked PC can still start a link that's active at once; an Admin's linked row can be deleted only by the Owner.
-
-  > Note (P9.8, Phase 9, group F) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **as built.** The user's choices (U5–U15) and the review agents' decisions the user approved at the plan review (S1–S7):
-  > - **Where:** "Accounts" in the navigation for every role (`/accounts`): one card per account; above them, for Admins and the Owner, the links waiting for their approval as cards with Approve and Refuse. Each account has its own screen (`/accounts/<id>`) with its facts, the re-auth prompt, "Who has access" (grants by exact username, level picker, Revoke) and Delete. Cards show the re-auth prompt with "Link again" for Manage holders.
-  > - **The link screen** is its own route (`/accounts/link`, `/accounts/<id>/link-again`), in two steps: the warning and "Get a code", then the code with "Copy code", Microsoft's page (it opens by itself once), and the status, read every 2 s until it ends. The code lives only in the screen's state: starting is a direct call, and the code goes when the flow ends.
-  > - **The opener:** `open_verification_link`, a synchronous command without arguments (on the main thread; one approved `#[expect(clippy::needless_pass_by_value)]`), opens only the link the newest start answered with, checked when it arrived by `fleet_client::VerifiedLink`, a copy of group B's rule compared case by case with the server's. A bad link drops the whole answer (`invalid_verification_link`). tauri-plugin-opener 2.7.0 isn't registered. The capability grows by exactly 15 `allow-` entries (35).
-  > - **Home** shows Admins and the Owner how many links wait (an alert, and a badge on Accounts), read when Home or Accounts mounts, after the user's own writes, and when the window regains focus; no timer.
-  > - **Offline accounts** have a form behind its own button on Accounts.
-  > - **Texts:** the user's table at the plan review; a start's 429 and 503 have one text each. Long waits count down in minutes, or hours and minutes, in every form.
-  > - **Tests:** fleet-client and the bridge reach the routes without a Microsoft fake (refusals before Microsoft, offline accounts, pending rows written to the store); the 201s over fleet-client's scripted transport; the held link in-crate; two e2e stories.
+  > Note (P9.8): as built in group F (the user's U5–U15, the review agents' S1–S7): "Accounts" for every role, with the links waiting for approval as cards for Admins and the Owner, and a screen per account with its grants; the link screen has two steps, with the code held only in the screen's state. `open_verification_link`, a synchronous command without arguments, opens only the link the newest start answered with, checked by `fleet_client::VerifiedLink`; tauri-plugin-opener 2.7.0 isn't registered; the capability grows by exactly 15 `allow-` entries (35) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)).
 
 **Security:**
 - Refresh tokens never leave the server.
 - A test checks that logs are redacted.
 - fleet-server's log filter caps `azalea_auth` at `info`, the same cap as the agent's (P5.2), and the redaction test checks it. At `trace`, azalea-auth logs Microsoft and Minecraft tokens, the refresh token and the account cache (P9.3).
 
-  > Note (Phase 9's security, group B) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): fleet-server has no azalea-auth code, so the cap is a guard. `tests/telemetry.rs` checks it with the filter at `trace` from the config file or the environment, and `msauth::tests::no_secret_reaches_any_log_at_any_level` checks the adapter's own logs.
+  > Note (Phase 9's security): fleet-server has no azalea-auth code, so the cap is a guard: `tests/telemetry.rs` checks it with the filter at `trace` from the config file or the environment, and `msauth::tests::no_secret_reaches_any_log_at_any_level` checks the adapter's own logs ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)).
 - AAD-binding test.
 - Per-user caps on link flows.
 
@@ -3483,10 +1666,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - The DB contains only ciphertext.
 - `rotate-key` works on a copy of the DB.
 
-> Note (Phase 9's DoD, group F) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **how each is shown.**
-> - **A real account linked end to end:** the user's hands-on check in group F's PR, through the app against `just dev-server`, ending with the account deleted in the app and `target/dev-server` wiped.
-> - **Only ciphertext:** `at_rest::no_token_reaches_the_database_file_after_a_link_a_link_again_and_a_refresh` reads the database's files, open (with the WAL) and closed, after a link, a link again and a refresh with the fake, and finds no token or code.
-> - **`rotate-key` on a copy:** `at_rest::rotate_key_moves_a_linked_accounts_token_to_the_new_key_on_a_copy` runs the real binary's `vault rotate-key` and `vault status` on a copy with a linked account; the copy then works with the new key alone, and the original stays under the old one.
+> Note (Phase 9's DoD): how each is shown, in group F: the user's hands-on check in group F's PR linked a real account through the app against `just dev-server`; `at_rest::no_token_reaches_the_database_file_after_a_link_a_link_again_and_a_refresh` finds no token or code in the database's files; `at_rest::rotate_key_moves_a_linked_accounts_token_to_the_new_key_on_a_copy` runs the real binary's `vault rotate-key` on a copy ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)).
 
 ---
 
@@ -3494,84 +1674,30 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** Agents enroll securely, receive the desired state and report the actual state, and everything reconciles after any disconnect.
 **Introduces:** `tonic`, `tonic-prost`, `prost`, `tonic-prost-build`, `protox`, `rcgen`, `tokio-stream`, `backon` (IO retries).
 
-> Note (P10, Phase 10's planning, 2026-10-15) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
-> - **Eight group branches.** Phase 10 is built in group PRs like Phases 2–9: one branch and one commit per task, in this order, each after the previous PR is merged:
->
->   | Group | Branch | Tasks |
->   |---|---|---|
->   | A | `p10/p10.1-fleet-proto` | P10.1, alone: the wire contract and the trust boundary for agent input |
->   | B | `p10/p10.2-p10.3-pki-and-enrollment` | P10.2, P10.3: how an agent gets its identity |
->   | C | `p10/p10.4-p10.10-connect-and-agents` | P10.4, P10.5's `AgentRegistry`, P10.10: who may stay connected, and the switch that ends it; P10.9's rejections are tested here |
->   | D | `p10/p10.5-p11.1-bots-scheduler-reconciler` | P11.1's `bots` and `modes`; the rest of P10.5 (ticked here) |
->   | E | `p10/p11.2-bot-endpoints` | P11.2 |
->   | F | `p10/p10.6-session-grants` | P10.6, alone: the one place Minecraft tokens leave the server |
->   | G | `p10/p10.7-p10.8-agent-client-and-ingest` | P10.7, P10.8, P11.1's `chat_messages` (P11.1 ticked here) |
->   | H | `p10/p10.9-loopback-wrap-up` | P10.9, the DoD, the threat model and the README |
->
->   - **New dependencies** arrive with their group, each shown to the user with its version, license and release date: prost, tonic, tonic-prost, tonic-prost-build and protox in A; rcgen in production code and tonic's TLS features in B; tokio-stream in C; backon's tokio sleeper in G.
->   - **Hands-on checks:** none in A. B and C are local (`just dev-server`, `just dev-agent`). H's DoD check uses the user's real Microsoft account and needs Docker for a local online-mode Minecraft server (as in P1.8), unless the user points it at their own; one machine is enough. It follows Phase 9 group D's manual-test pattern: a vault key drawn for the run and kept in memory, a temporary folder deleted at every end, and only the new test's filter.
->   - **Approvals later groups ask for:** G, a new `commit_unaudited` exemption for the batched writes (`EventBatch`, which ADR-0015 anticipated); B, how the Owner gets an enrollment token while the agents screen is P11.9's.
-> - **The phase boundary** *(the user's choice, U1)*. P10.5, P10.6 and P10.8 need P11.1's tables, and the DoD needed P11.2 and P11.9. P11.1's `bots` and `modes` (with the built-in seeds) come with P10.5, their first reader; its `chat_messages` with P10.8, its first writer; all of P11.2, with fleet-client's bot methods, in group E. The DoD's app part moves to Phase 11 (see the DoD below).
-> - **protox 0.9.1** *(the user's choice, U2)*, §5's pin, over 0.10.0 (2026-10-07).
-> - **Decided by the review agents** *(approved by the user at the plan review)*, S1–S9 in ADR-0019: renewal stays in P13.6 (S1); the validated messages live in fleet-proto (S2); `ChatRequestId` and the agent's session request numbers (S3); the mode as structured messages (S4); times as Unix milliseconds and IDs as 16 bytes (S5); Minecraft text cleaned again, validated values strict (S6); secrets out of `Debug` (S7); no agent labels, `AgentCapacity` 1–1000 (S8); the wire-schema snapshot as P0's "proto codegen check" (S9).
+> Note (P10): built in groups A–H, one PR each; their decisions are in [ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md). At the planning (2026-10-15), the user chose the phase boundary (U1): P11.1's `bots` and `modes` came with P10.5, its `chat_messages` with P10.8, all of P11.2 in group E, and the DoD's app part moved to Phase 11. The user also chose protox 0.9.1 over 0.10.0 (U2) and approved the review agents' S1–S9.
 
 - [x] **P10.1** 🔴 `fleet-proto`:
   - `proto/fleet/v1/*.proto` (Appendix C)
   - `build.rs` using protox and `tonic-prost-build`
   - core ⇄ proto conversions with round-trip proptests that reject invalid proto values
 
-  > Note (P10.1, Phase 10, group A) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **as built.**
-  > - **The protocol** is `crates/fleet-proto/proto/fleet/v1/` (`agent`, `bot`, `chat`, `mode`, `common`), package `fleet.v1`: the `AgentControl` service with its `Connect` stream. `RenewCertificate` waits for P13.6 (S1); the enrollment service and its messages come with P10.3, their first user. Appendix C's note lists the refinements.
-  > - **The build** compiles the files with protox and generates the client and the server with tonic-prost-build into `OUT_DIR`, without transport helpers. Nothing generated is committed. The build script also renders the compiled wire schema, which `tests/protocol/schema.rs` pins with insta under `PROTOCOL_VERSION` (1): P0's "proto codegen check" (S9).
-  > - **`fleet_proto::generated`** carries only `#[allow(clippy::pedantic)]`, the one group of lints the generated code trips.
-  > - **`fleet_proto::control`** holds the validated messages (S2): `AgentMessage` (`Hello`, the heartbeat, a snapshot, `BotEvent`, `SessionRequest`) and `ServerMessage` (`Welcome`, a full reconcile, `Assignment`, unassign, update, `SendChat`, `SessionGrant`, `SessionDenied`, `RejectReason`), each read with `TryFrom` from its generated envelope and written back with `TryFrom`. The leaf conversions cover `BotSpec`, `ModeDefinition`, `BotState`, `BotSnapshot`, `StickyState`, `BotNotification`, `DisconnectReason`, `IncomingChat` and `SessionCredentials`.
-  > - **Reading refuses** what fleet-core's constructors refuse, a missing field, an enum value or oneof this version doesn't know, an ID that isn't 16 bytes or not v7, a nil profile UUID, a time outside years 0–9999, a count of 0, more than 1000 bots or a bot twice in a hello or a full reconcile, a heartbeat interval outside 1 s–5 min, and a token that isn't 1 B–16 KiB of visible ASCII. A validated text must arrive exactly as its type keeps it: a server address in its written form, a chat message trimmed. Minecraft's text is cleaned again instead (S6). `ConvertError { field, index, problem }` never holds a value.
-  > - **Secrets** (S7): `OnlineSession` has no derived `Debug`; its own prints the expiry only, its `Drop` wipes the token, and the conversion moves the token into a `SecretString`. A test fails on any field named like a secret outside a redacted message.
-  > - **fleet-core** gains `id::ChatRequestId` and `value::{AgentCapacity, AgentVersion}`.
-  > - **Tests,** each red first against compiling stubs with the real signatures (`tests/protocol/`, 164 tests, then the exhaustive enum tables); the cases a stub happened to satisfy were shown red by temporary mutations, each reverted and checked by checksum (ADR-0019).
+  > Note (P10.1): as built in group A: package `fleet.v1` in `crates/fleet-proto/proto/fleet/v1/`, with the `AgentControl` service and its `Connect` stream (`RenewCertificate` waits for P13.6, S1). Nothing generated is committed; `tests/protocol/schema.rs` pins the compiled wire schema under `PROTOCOL_VERSION`, which is P0's "proto codegen check" (S9). `fleet_proto::generated` carries only `#[allow(clippy::pedantic)]`. `fleet_proto::control` holds the validated messages (S2): reading refuses what fleet-core's constructors refuse, and Minecraft's text is cleaned again (S6). Secrets stay out of `Debug` (S7) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 - [x] **P10.2** 🔴 PKI:
   - `afkfleet-server pki init` creates the CA and the server certificate. The CA key is its own secret.
   - CSR signing with a fixed lifetime (default 60 days), with the agent ID in the SAN.
   - Fingerprints are stored in `agent_certs`.
 
-  > Note (P10.2, from Phase 10's planning, S1) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **room for P13.6's renewal.** `agent_certs` is keyed by fingerprint, and `agent_id` is indexed but not unique: a renewing agent holds two certificates. The agent ID in the SAN comes from the server's record, never from the CSR.
-
-  > Note (P10.2, Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **as built.**
-  > - **`[grpc]` is optional** (S13): `bind` (`127.0.0.1:7443` by default; not port 0 nor `[http] bind`'s port), the four files `ca_cert_file`, `ca_key_file`, `server_cert_file` and `server_key_file` (required once the section is there, absolute, all different), and `agent_cert_lifetime_days` (1–365, 60). Without the section the control plane is off.
-  > - **Every key is Ed25519** (S10): 32 bytes from the `SecureRandom` port, wrapped as PKCS#8 v1 by `fleet_core::pki::ed25519_pkcs8` (RFC 8410's fixed prefix), never drawn by rcgen or aws-lc. A CSR carries only an Ed25519 key.
-  > - **The profiles** (S11, `infra::pki::profiles`): the CA (CN `afkfleet CA`, ten years, CA with path length 0, keyCertSign), the server (CN `afkfleet server`, one year, serverAuth, the names given as `--dns` and `--ip`) and agents (CN `afkfleet agent`, `agent_cert_lifetime_days` read when signing, clientAuth, the one SAN `urn:uuid:<agent ID>`). Serials are 16 bytes from `SecureRandom`; a certificate is valid from an hour before the clock's time, in whole seconds, and never outside 1970–9999.
-  > - **`afkfleet-server pki init`** writes exactly the four `[grpc]` files and never overwrites one (S12): every target and its temp file are checked first, then each file is written to a `create_new` temp file (0600 on Unix) and published with `hard_link`, keys first and the CA certificate last; a failure removes only this run's files. It prints the CA's fingerprint as openssl does, the server certificate's names and expiry, never a key. **`pki server-cert`** issues a new server pair from the existing CA for the yearly renewal, under the same rule: move the old pair away first.
-  > - **Signing** (`infra::pki`): a CSR's self-signature is checked (rcgen, x509-parser with aws-lc) and only its public key is used; a request asking for any extension, or carrying any attribute, is refused, and its subject is ignored. Attributes are refused since the PR #49 review: rcgen reads extensions through x509-parser's `requested_extensions()`, which sees only the first extension request, so a second one could ask for what the check never sees (`CsrRefusal::Attributes`). `AgentIssuer` is the CA behind `ports::pki::AgentCertificates`, which P10.3's service calls in `spawn_blocking`.
-  > - **Serve's startup check** (`infra::pki::load`, wired in with P10.3): the four files through `secret_file`, exactly one certificate or key each, the CA certificate a CA's, the CA key signing a probe certificate rustls's client verifier accepts, the server key the server certificate's, and the server certificate one the CA signed for a server. An expired server certificate doesn't stop serve.
-  > - **`agents` and `agent_certs`** (`0011_agents.sql`): `agent_certs` keyed by the certificate's SHA-256 (32 bytes), `agent_id` indexed and not unique; an enabled agent's name is unique ignoring case. Nothing writes them before P10.3.
-  > - **x509-parser** is a direct dependency of fleet-server (the user's choice, U5): rcgen 0.14 no longer reads certificates, and the startup check reads the CA flag and the server certificate's names and validity.
-  > - **Tests,** red first against compiling stubs: fleet-core's fingerprint and PKCS#8 (RFC 8410's example key), the config, the repository, `infra::pki` (RFC 8032's test key, every profile field read back with x509-parser, the validity edges with rustls's verifiers, CSR refusals, the startup check's refusals, the no-clobber writer with a file appearing midway) and the `pki` commands, in-process and through the binary. Tests that passed against a stub were shown red by a temporary mutation, each reverted and checked by checksum.
+  > Note (P10.2): `agent_certs` is keyed by fingerprint, with `agent_id` indexed but not unique, so P13.6's renewal can hold two certificates; the SAN's agent ID comes from the server's record, never the CSR (S1). As built in group B: `[grpc]` is optional (S13); every key is Ed25519 from `SecureRandom` (S10); the CA, server and agent profiles (S11); `pki init` writes exactly the four files and never overwrites one, and `pki server-cert` renews the server pair (S12); a CSR that asks for any extension or carries any attribute is refused; x509-parser is a direct dependency (U5) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 - [x] **P10.3** 🔴 Enrollment:
   1. An Admin calls `POST /agents/enrollment-tokens` and gets a single-use token, valid 15 min, stored hashed. *Since Phase 11's group J only the server's host creates tokens, and the route is gone ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U76).*
   2. `afkfleet-agent enroll` creates a key and a CSR (rcgen).
   3. It calls `AgentEnrollment.Enroll`. This RPC uses TLS without a client certificate and is rate-limited; the agent pins the CA fingerprint from the enrollment bundle.
   4. The agent stores its cert and key, readable only by itself.
 
-  > Note (P10.3, from group D): **Only the Owner** creates enrollment tokens (`EnrollAgent`), not an Admin as step 1 says. An agent receives session tokens for the bots assigned to it, and P10.5 assigns bots to any agent with free capacity, so an Admin's own agent could otherwise get the Owner's. Viewing and disabling agents stays Admin+ (ADR-0010).
+  > Note (P10.3): **only the Owner** creates enrollment tokens (`EnrollAgent`), not an Admin as step 1 says: P10.5 assigns bots to any agent with free capacity, so an Admin's own agent could otherwise get the Owner's session tokens. Viewing and disabling agents stays Admin+ (group D, ADR-0010).
 
-  > Note (P10.3, from Phase 10, group A) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
-  > - **The enrollment service and its messages** join the proto here, their first user, with the wire schema's snapshot. `EnrollRequest` holds the enrollment token, so it follows S7: listed in the build script's `REDACTED`, a `Debug` in `fleet_proto::redact` that never prints it, a `Drop` that wipes it, and a `SecretString` at the conversion.
-  > - **The agent's key and certificate** go on its writable volume (`/data`, Appendix A), never a Docker secret, owner-only and written atomically (S1).
-  > - **To ask the user:** how the Owner gets a token while the agents screen is P11.9's.
-
-  > Note (P10.3, Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **as built.**
-  > - **Tokens** (S16, S17): `POST /api/v1/agents/enrollment-tokens` is the Owner's, a step-up route (class Standard, plus the per-user limit) without a body. It answers 201 `{id, bundle, ca_fingerprint, expires_at}`; 404 while `[grpc]` is off (after the step-up check, as `POST /accounts/offline` does); 409 when 20 tokens are pending. A token (`afk_et_` and 43 characters) lives 15 minutes, is stored only as its SHA-256 (`enrollment_tokens`, `0012`), and is used at most once, by a conditional update inside the enrollment's transaction. `enrollment_token.create` is audited with the Owner and the IP, `via` = `http`.
-  > - **From the server's host** (the user's choice, U3): `afkfleet-server agent create-enrollment-token --config …` creates the same token without the API. It never creates or migrates the database, and reads only the CA certificate, never its key. Its audit entry has no actor and no IP, `via` = `cli`. The bundle alone goes to stdout and its log lines to stderr (fleet-startup's new `init_on`), so `$bundle = …` takes the bundle whole.
-  > - **The bundle** (S15) is one line of 146 characters, `<token>.<CA fingerprint>`, the fingerprint SHA-256 over the CA certificate's DER in openssl's form.
-  > - **`AgentEnrollment.Enroll`** on the gRPC port (S13, S14, S21): TLS with the server certificate; a client certificate is optional, but one that's presented must chain to the CA. A gate spends `[rate_limits] enroll_per_ip_per_min` (1–60, 5) before the body is read. Requests decode at most 8 KiB and answers encode at most 16 KiB. The call's 15 s deadline covers the token, the name, the CSR's check and the signing, which write nothing (`DEADLINE_EXCEEDED`); a refusal's record and the enrollment's transaction then run to their end, bounded by the write pool's acquire timeout and SQLite's busy timeout, and the answer is sent (the PR #49 review: sqlx finishes a COMMIT already sent when its future is dropped). The checks run in S21's order: the conversion, the token (one `UNAUTHENTICATED` for every problem), the name (`ALREADY_EXISTS`), the CSR (`INVALID_ARGUMENT`), then one transaction (the token again, the agent, its certificate's fingerprint, the token used, `enrollment_token.use` and `agent.enroll`). A real token that can't enroll is audited as an `agent.enroll` Failure, at most 10 per token. Every answer carries `x-request-id`, every refusal a fixed message.
-  > - **The certificate goes back as PEM** (`EnrollResponse.certificate_pem`, R10, decided by a review agent during the build): the agent can't PEM-encode DER without a new dependency, and the server holds rcgen's PEM of the DER it fingerprints.
-  > - **`afkfleet-agent enroll --config …`** (S18, S19, S20): it reads the bundle from stdin only (a terminal is refused, at most 1 KiB, through a duplicate of stdin's handle, never std's buffered `Stdin`) and checks the CA file against the pin before anything is sent. An existing identity or a `.tmp` lock is refused. The Ed25519 key comes from getrandom and is written owner-only before the call, through the handle that created its `.tmp` file, never its path. `Enroll` runs over TLS that trusts only the pinned CA (5 s to connect, 5 s for the handshake, 20 s for the call, 30 s in all). The certificate is checked (one PEM section and nothing around it, a client certificate the pinned CA signed, the agent's key) before both files are linked, never replacing anything. Exit 3 means the server enrolled the agent but the host stored nothing, or may have: once the channel is up, running out of time, a status without the server's `x-request-id` (a broken connection's `UNAVAILABLE`, tonic's `CANCELLED` at the agent's deadline) and the server's `INTERNAL` can't tell (`client::Unclear`, the PR #49 review). `client::call` itself refuses any scheme but `https`. `[control_plane] url` must be `https://host:port`, and its three files absolute and distinct. `run` still refuses `[control_plane]` until P10.7, pointing to `enroll`.
-  > - **serve** reads the PKI before the runtime, like the vault's keys, binds `[grpc] bind` next to `[http] bind`, and stops both servers within the one shutdown deadline. Without `[grpc]`, it logs that the control plane is off. An expired server certificate is an `error`, and the API keeps running.
-  > - **Windows** (S20): the agent's files, like `pki init`'s, get no owner-only mode there; they inherit their folder's permissions, and both commands say so on Windows.
-  > - **Dev:** `just dev-server` creates `target/dev-server/pki/` once (`scripts/dev-pki.mjs`, never overwriting) and turns `[grpc]` on; `just dev-enrollment-token` and `just dev-enroll [dir]` (`deploy/dev/agent.managed.toml`) enroll a dev agent. `dev-enroll` is one line, `scripts/dev-enroll.mjs`, which creates the folder and starts the agent on its own stdin: every recipe line gets just's stdin, so an earlier line could take the piped bundle.
-  > - **The PR #49 review** (the user's) also gave `infra::pki::files::NewFile` a `Debug` that shows the path and the length, never the bytes, and corrected the listener's docs: with the grace set, tonic 0.14.6 cuts a connection at 80 s with no GOAWAY at 60 s (R9's note under P10.4). Each fix has a test that was red first, or, for the docs, none (ADR-0019).
-  > - **Deviations:** the route takes no body, so rule 3's 422 has nothing to refuse; `PkiLoadError::File` no longer repeats its cause in its own message, and `pki server-cert` prints the whole cause chain.
-  > - **Tests,** red first against compiling stubs; those a stub happened to satisfy, and those written after their code, were shown red by a temporary mutation, each reverted and checked by checksum (ADR-0019).
+  > Note (P10.3): the enrollment service joined the proto here, and `EnrollRequest`, which holds the token, follows S7; the agent's key and certificate go on its writable `/data` volume, owner-only and written atomically (S1). As built in group B: `POST /api/v1/agents/enrollment-tokens`, the Owner's step-up route without a body (S16, S17); a token (`afk_et_`) lives 15 minutes, stored only as its SHA-256 and used at most once; from the host, `afkfleet-server agent create-enrollment-token` (the user's choice, U3); the bundle is `<token>.<CA fingerprint>` (S15).
+  > `AgentEnrollment.Enroll` is rate-limited per IP before the body is read and checks in S21's order (S13, S14, S21), and the certificate goes back as PEM (R10). `afkfleet-agent enroll` reads the bundle from stdin only and checks the CA against the pin before sending anything (S18, S19, S20); on Windows the files inherit their folder's permissions (S20). PR #49's review: see R9 under P10.4. Deviation: the route takes no body, so rule 3's 422 has nothing to refuse ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 - [x] **P10.4** 🔴 `AgentControl.Connect` bidi stream. It requires:
   - a verified client certificate
   - an allowlisted fingerprint and an enabled agent
@@ -3579,178 +1705,54 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - heartbeats with a timeout
   - message size limits
 
-  > Note (P10.4, from Phase 10, group A) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
-  > - **A hello that doesn't convert** (S8: a capacity outside 1–1000, among the rest) gets `Reject`; P10.4 decides the rule for `protocol_version`, which fleet-proto sends as `PROTOCOL_VERSION`, and may refine `Welcome` and `RejectReason`.
-  > - **A connection needs** a fingerprint that's neither revoked nor expired, and an enabled agent (S1). P10.9's rejections (revoked, another CA, never enrolled, expired) are tested in this group.
-  > - **The agent notices a dead server too** *(the user's note at the plan review)*. Over a half-open connection (a server crash, a NAT timeout) the stream can hang without an error, so the agent would never reconnect. C decides between HTTP/2 keepalive with a timeout, on the agent's channel and on the server for its own check, and a server heartbeat the agent times out on. The loopback suite tests it: a connection that goes silent without closing (e.g. through a test proxy) ends within the bound. C tests the server's side, G the agent's reconnect and resync.
+  > Note (P10.4): **the agent notices a dead server too** (the user's note at the plan review): over a half-open connection (a server crash, a NAT timeout) the stream can hang without an error, so a connection that goes silent without closing must end within a bound. Decided as HTTP/2 keepalive with a timeout plus heartbeats (S23): group C tests the server's side, G the agent's reconnect and resync, and P10.9's loopback suite runs it end to end through a stalling proxy ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 
-  > Note (P10.4, from Phase 10, group B, the user's note at the plan review) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **an agent's identity comes only from its certificate:** the agent ID in its SAN, looked up by the certificate's fingerprint in `agent_certs`, never `Hello`'s name. A `Hello` whose name differs from the agent's record is refused, so an agent can't appear under another agent's name in logs or `GET /agents`.
+  > Note (P10.4): an agent's identity comes only from its certificate: the agent ID in its SAN, looked up by fingerprint in `agent_certs`, never `Hello`'s name. A `Hello` whose name differs from the agent's record is refused (the user's note at group B's plan review). A hello that doesn't convert gets `Reject` (S8). A connection needs a fingerprint that's neither revoked nor expired and an enabled agent (S1). `AgentControl` sits behind its own gate on the gRPC port (S13) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 
-  > Note (P10.4, from Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
-  > - **The gRPC port** (`grpc::listener`) serves `AgentEnrollment` alone, behind its gate (`grpc::enrollment`). `AgentControl` joins it behind a gate of its own that refuses a call without a verified client certificate (`peer_certs()`): the listener only verifies a certificate that's presented (S13).
-  > - **`max_connection_age`** (60 s plus 20 s of grace) bounds every connection while `Enroll` is the port's only service. With the grace set, tonic 0.14.6 sends no GOAWAY at 60 s: it sleeps for the age plus the grace and then closes the connection forcefully, a hard cut at 80 s, calls in flight included. C replaces it with a bound for connections without a client certificate, or records the residual risk (R9). Removing the grace isn't a fix either, since tonic then polls the finished timeout future again *(the user's note at the PR #49 review)*.
-  > - **`agents.enabled`** and the rule that an enabled agent's name is unique, ignoring case, come from `0011`; disabling an agent frees its name for a new enrollment.
-
-  > Note (P10.4, Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **as built.**
-  > - **The gate** (S24, S30): a call without a client certificate is `UNAUTHENTICATED` before anything else, with no request ID minted. Then the ID, then `[rate_limits] connect_per_cert_per_min` (1–60, 10), keyed by the presented certificate's fingerprint (`RESOURCE_EXHAUSTED` with `retry-after`), before anything is looked up. The certificates come from the listener's own `TlsConnectInfo<Connection>` (R18).
-  > - **Admission** (`app::agents::AgentConnectionService`, behind `ports::agent_connections`, R22): the fingerprint's row in `agent_certs`, then revoked, expired by the server's clock (`now >= not_after`), disabled, and only then the SAN, which must be one `urn:uuid:` naming the row's agent. Every failure is one `UNAUTHENTICATED` "certificate refused". A refusal of a certificate the server knows is an `agent.connect` Failure with its reason and fingerprint, at most 10 per agent in a rolling 24 hours; a certificate no agent holds is an `error` line, never audited and never parsed (R23).
-  > - **The handshake:** the first message within 10 s (`HELLO_TIMEOUT`), read by `fleet_proto::control::read_hello` (a hello, then `protocol_version` equal to `PROTOCOL_VERSION`, then the conversion), then the name byte for byte (`Reject(NameMismatch)`, audited like the identity refusals). The hello's transaction checks the certificate and the agent again, records the capacity, the version and `last_seen_at` (never backwards) and commits `agent.connect`; then `Welcome {heartbeat_interval, agent_id}`. `RejectReason` gains 3 to 7 (R14). Every answer is in `grpc::control`'s table, one fixed message each, with the call's request ID.
-  > - **Liveness** (S23): `[grpc] heartbeat_interval_secs` (1–60, 10) and `heartbeat_timeout_secs` (2–300, 30, at least twice the interval). The port's HTTP/2 keepalive pings a connection it read nothing from for an interval and closes it when the ping isn't answered by the timeout. A stream ends `DEADLINE_EXCEEDED` when no message that converts arrives within the timeout; a message that decodes but doesn't convert is dropped and keeps nothing alive.
-  > - **Sizes** (S25): 8 MiB from an agent, 128 MiB from the server. `fleet_proto::codec::BoundedCodec` counts a hello's bots before prost builds them (more than 1000 is `OUT_OF_RANGE`), and answers a message it can't decode with `INVALID_ARGUMENT`, never prost's `INTERNAL`, so a session tells a malformed message from a failed transport.
-  > - **The connections' age** (S22, R9): every accepted socket is a `grpc::listener::Bounded`, cut at 80 s unless a welcomed stream holds its `Lift`; the age starts again when that stream ends. tonic's own age and per-call timeout are gone, and fleet-server's clippy config bans them (U7).
-  > - **A stream's end:** its certificate's `not_after` (`Reject(CertificateExpired)`), the heartbeat timeout, a second hello (`FAILED_PRECONDITION`), a message over the limit (`OUT_OF_RANGE`), the agent's close or reset, or the shutdown (`UNAVAILABLE`). At its end the stream's switch is thrown, so nothing queued goes out any more, the slot is freed and the last answer sent at once; then the end is recorded (`last_seen_at` and `agent.disconnect` with its reason, R19) and the lift dropped. A close or a failed transport within one heartbeat interval of the deadline is recorded `heartbeat_timeout`: keepalive closes a silent connection then, and tonic may read that as the agent's own end. After an accept error that isn't one connection's (`EMFILE`, `ENFILE`), the port waits 1 s (`ACCEPT_PAUSE`) before it accepts again, as axum does; tonic would try again at once. serve ends every session at the signal and waits for them before the database closes, so no stream holds tonic's drain.
-  > - **Deviations:** the lift is taken before the slot is activated and `Welcome` queued, so the age can't cut the connection between them (S22 and R13 had Welcome, then the lift). A message on a welcomed stream that can't be decoded ends it `INVALID_ARGUMENT` "a message couldn't be read" (`protocol_error`), a row S24's table didn't have. A reset is recorded as `closed`: tonic reads a request's `CANCEL` as the stream's end.
-  > - **Tests:** `tests/grpc_control/` over real TLS on `127.0.0.1` (P10.9's four rejections, every row of the answers table, a silent stream, a silent connection with and without a call through a proxy that stops forwarding, the age), U6's test on paused time (an agent's stream lives a virtual hour through the real router over in-memory pipes while a connection without a certificate is cut at 80 s), and a serve test in which one signal ends an agent's stream and the server, with no drain warning.
+  > Note (P10.4): as built in group C: a call without a client certificate is refused first, then `[rate_limits] connect_per_cert_per_min` is spent before any lookup (S24, S30, R18); every admission failure is one `UNAUTHENTICATED`, and a known certificate's refusal is audited (R22, R23); the hello within 10 s, `protocol_version` equal to `PROTOCOL_VERSION`, then `Welcome` (R14); `[grpc] heartbeat_interval_secs` and `heartbeat_timeout_secs` with HTTP/2 keepalive (S23); 8 MiB from an agent, 128 MiB from the server (S25).
+  > Every socket is cut at 80 s unless a welcomed stream holds it, replacing tonic's age and per-call timeout, which clippy now bans (S22, R9, U7); a stream's end is recorded as `agent.disconnect` (R19); U6's test runs on paused time. Deviation: the lift is taken before the slot is activated and `Welcome` queued (S22, R13) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 - [x] **P10.5** 🔴 Server components:
   - `AgentRegistry`
   - `Scheduler`: in v1, the first agent with free capacity, labels optional
   - `Reconciler`: compares desired with reported state and sends `Assign`, `Unassign` or `UpdateSpec`
   - stale agent detection, which marks its bots `Unknown`
 
-  > Note (P10.5, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Sticky state.** The server stores `bots.last_state` from `BotStatus` and sends a Paused or Failed state with `AssignBot`/`ReconcileFull`, so the agent's `Fleet::apply(spec, restore)` starts the bot there instead of kicking a human (§6 row 3).
-  > - **Moving a bot** to another agent waits for the old agent's `Removed` event (or a timeout), so two agents never run the same account at once.
+  > Note (P10.5): from Phase 4: the server stores `bots.last_state` and sends a Paused or Failed state with `AssignBot`/`ReconcileFull`, so the agent never kicks a human (§6 row 3); a sticky bot gets only `Removed`, never a `Stopped` first (P4.7, the user's decision); a bot that moves to another agent waits for the old agent's `Removed` (the "or a timeout" was dropped in group D) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)).
 
-  > Note (P10.5, from P4.7, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **No `Stopped` before `Removed` for a sticky bot.** A removed bot publishes `StateChanged(Stopped)` only if its actor stopped it through `transition()`. A Paused, Failed or crash-looped bot gets only `Removed`, so `bots.last_state` keeps the Paused or Failed the server sends with `AssignBot` on the next agent. Otherwise the new agent would connect and kick the human who's playing (§6 row 3), or retry a failed account.
-  > Note (P10.5, from Phase 9, group D, the user's decision) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **no bot runs on an offline account while `[accounts] allow_offline` is off.** The offline accounts kept from before stay untouched (serve warns at startup), and the scheduler refuses to assign their bots until the switch is on again.
+  > Note (P10.5): no bot runs on an offline account while `[accounts] allow_offline` is off (Phase 9, group D, the user's decision; [ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)). From the planning: `bots` and `modes` arrive here (U1); every account gets its bot (the user's note at the plan review); capacity is the hello's `AgentCapacity`, with no labels (S8); an agent's reports are untrusted (S6), and a session request names no account (S3) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 
-  > Note (P10.5, from Phase 10's planning) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
-  > - **The tables** *(the user's choice, U1)*: P11.1's `bots` and `modes` (with the built-in seeds) arrive in this group, their columns designed with the scheduler and the reconciler (`agent_id`, `last_state`, `last_state_at`, and how `Unknown` is shown).
-  > - **Every account gets its bot** *(the user's note at the plan review)*. Bots are 1:1 with accounts, but nothing creates a bot row yet, and there's no `POST /bots`. D decides how: created together with the account, on each path that creates one (a Microsoft link's commit, an offline account, and the review if that matters), plus a backfill for the accounts that already exist. The DoD check then needs only the moved P11.2 routes: `PATCH` sets the server address on the existing row, and `start` starts it. Deleting an account deletes its bot (P9.6's note), and the reconciler unassigns it.
-  > - **Capacity** (S8): the hello's `AgentCapacity`, with no labels in v1. Free capacity also counts the bots unassigned whose `Removed` hasn't arrived, since the runtime counts a bot until then. An agent that comes back with a lower capacity has bots moved off it.
-  > - **What an agent reports** is untrusted (S6): an event or a status for a bot that isn't assigned to that agent is refused. A session request names no account; the server takes it from its own assignment (S3).
+  > Note (P10.5): the `AgentRegistry` (`grpc::registry`), as built in group C: one stream per agent, a second claim gets `Reject(AlreadyConnected)` (S26, R12); `end` and a 5 s sweep end the streams whose permission ended (S27, R13); `send` never waits, and a full queue (2048) ends the stream (S25); `admit` passes only the reports of bots held Assigned (S28, R21) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 
-  > Note (P10.5, Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the `AgentRegistry` as built** (`grpc::registry`); the task is ticked in D with the rest.
-  > - **One stream per agent** (S26): a session claims its agent's slot after its hello's checks and before the hello's transaction; a second claim while the slot is taken gets `Reject(AlreadyConnected)`, the live stream untouched, and isn't audited (R12). The slot frees when the session drops its lease, before its last answer and before its end is recorded, so an agent that saw its stream end can connect again at once. A message on the live stream after a refused claim is an identity conflict: an `error` line and `security.agent_identity_conflict` (the refused connection's IP and fingerprint, `live_ip`, `connected_at`, `refused_at`), at most once an hour per agent.
-  > - **Ending** (S27, R13): `end` throws a live stream's switch, so nothing queued goes out any more and `send` answers `NotConnected`, and its session sends `Reject(AgentDisabled | CertificateRevoked | CertificateExpired)` at once; or it makes a claim fail its activation, so a stream whose permission ended during its hello is never welcomed. A sweep every 5 s (`SWEEP_INTERVAL`) reads every admissible certificate once and ends the streams whose certificate stopped admitting them; it's skipped with no stream, a failed read keeps every stream, one stream whose rows can't be read is a `warn` line while the others are judged, a disabled agent's stream ends `AgentDisabled` whatever its certificates' state, and it never ends a newer stream of the same agent. The registry implements `ports::live_agents::LiveAgents` for the app.
-  > - **Sending** (S25): `send` never waits; over `MAX_SERVER_MESSAGE_BYTES` (`fleet_proto::control::server_message_len`) is `TooLarge` and the stream stays; a full queue (2048) is `QueueFull` and ends the stream `RESOURCE_EXHAUSTED`.
-  > - **Reports** (S28): `admit` passes every converted message after `Welcome`. A status or an event for a bot not `Assigned` is dropped and counted (housekeeping logs one line per agent, R21); a `Releasing` bot passes only its `Removed`, which ends the hold; a session request gets `SessionDenied { retryable: true }`. The holds (`hold`, `release`) stay empty until this task's reconciler fills them; a hello's running bots aren't held either, and are the reconciler's to read.
-  > - **For D:** fill the holds from the server's own assignments, never from what an agent says; treat `QueueFull` and `NotConnected` as "resync on the next connect"; an agent goes stale when its stream ends, and its bots then follow the stale path (a disabled agent never sends their `Removed`); compute `Unknown` when reading, from `last_seen_at` and the registry.
-  > - **For E:** the lifecycle messages go through `send`; any new message from an agent goes through `admit`.
-  > - **For H:** a restart while the old connection is still open: the new process is refused `AlreadyConnected` until the old stream ends, then welcomed, with no conflict recorded.
-
-  > Note (P10.5, Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the scheduler, the reconciler and stale agents as built.** Decided by the review agents and approved at the plan review: S32–S45; reconciliations R24–R30.
-  > - **No `Scheduler` type:** the choice is fleet-core's pure `placement::plan` (S42): live agents in enrollment order (the server-minted agent ID), first fit, never rebalanced; which bots run is `placement::placeable` (S33), offline accounts' bots only while `[accounts] allow_offline` is on.
-  > - **The reconciler** (`grpc::reconciler`, S37) is one task on serve's `JoinSet`: a pass at startup, every 30 s, on a hint (the registry's welcomes, `Settled` reports and ends; the accounts' and users' services after their commits; a bounded queue, one `warn` when full) and at the nearest bound. A pass commits each change of a bot's agent in its own audited transaction (`bot.assign`, `bot.unassign`, `bot.detach`, `bot.stray`, S36) before any message: a welcome gets one `ReconcileFull`, always, and other streams one message per bot.
-  > - **Stale agents** (S32, S41): nothing is written when an agent goes quiet; its bots keep their agent and read `Unknown` (`fleet_core::bot::shown`, computed when read by `app::bots::BotService`). No time ever moves a bot: it leaves its agent only by that agent's `Removed` of a bot the server released (a `Removed` of one it never released frees nothing, S44), a hello of its that doesn't list it, or `afkfleet-server agent release --id` of a disabled agent. The "(or a timeout)" of the Phase 4 note above is dropped.
-  > - **Two agents never run one account:** a bot is placed only when no live stream holds it or a bot of the same Minecraft account and no release record names either (S39: a deleted account's bot an agent may still run; S43: a hello's bot it wasn't given, `bot.stray`). Right after a start, nothing new is placed until every enabled agent is back or 90 s pass (S45).
-  > - **Capacity and moves** (S42): free capacity counts Assigned, Releasing and open records; an agent back with less keeps the bots it runs first, then those not paused or failed, then the lowest IDs, and the rest move after their resting report; a bot that stops qualifying is sent desired Stopped and unassigned after it rests or 60 s (S33).
-  > - **Sticky state** (S40): the last report a stream sent of each bot is kept in memory and written only in transactions D commits anyway (the hello, the stream's end, `bot.unassign`, `bot.detach`), never backwards; `AssignBot` and `ReconcileFull` carry the newer of memory and the row.
-  > - **Deviations:** the registry sends the hints (the session's `control_service` would need an eighth parameter, which clippy refuses); `ReconcileFull` may carry a spec with desired Stopped (a bot being stopped before it's unassigned).
-  > - **PR #52's review** (ADR-0019): a `Removed` note carries its stream's generation and is dropped once a newer stream of its agent is welcomed; a hello's strays are fenced in the hello's own transaction; serve watches the reconciler and stops (exit 4) if it ends unasked; `account.delete` records the bot's agent; a bot that doesn't read back is left alone, and every other bot reconciled; an assignment its agent never got is sent again.
+  > Note (P10.5): as built in group D (S32–S45, R24–R30): no `Scheduler` type. Placement is fleet-core's pure `placement::plan`, first fit in enrollment order, never rebalanced (S42), over `placement::placeable` (S33). The reconciler (`grpc::reconciler`, S37) passes at startup, every 30 s and on hints, and audits each change before any message (S36). A quiet agent's bots read `Unknown`, and no time moves a bot (S32, S41, S44). Two agents never run one account (S39, S43), and after a start nothing new is placed until every enabled agent is back or 90 s pass (S45). Sticky state stays in memory, written only in D's transactions (S40). PR #52's review added stream generations, fenced strays and the reconciler's watch (exit 4) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 - [x] **P10.6** 🔴 Session grants: `SessionRequest{bot_id}` returns `SessionGrant`, but only if the bot is assigned to *this* agent; otherwise `SessionDenied`. On the agent this backs `SessionCredentialProvider`.
 
-  > Note (P10.6, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The port is `fleet_core::mc`'s credentials provider, and the runtime doesn't check `expires_at`. The managed provider never hands out a token that expires within the connect timeout.
+  > Note (P10.6): the managed provider never hands out a token that expires within the connect timeout ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)). Serve builds `SessionTokenService` here: `SessionRequest.fresh` maps to `session(account, fresh)`, a cached session is handed out only while more than 10 minutes are left, an offline account's grant carries its name, and a re-link during a refresh answers `ChangedMeanwhile`, retryable ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)). One exception to the mapping: an owner disabled while a grant waits comes back `OwnerDisabled`, retryable (U14).
 
-  > Note (P10.6, from Phase 9, group C, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **serve builds `SessionTokenService` here**, over D's `ReqwestMicrosoftAuth`, with a child of serve's shutdown token, and calls its `shutdown()` within serve's shutdown deadline (it waits for refreshes in flight).
-  > - `SessionRequest.fresh` maps to `session(account, fresh)`; `SessionTokenError::retryable()` maps to `CredentialError::retryable`.
-  > - A cached session is handed out only while more than 10 minutes are left, so it never expires within the agent's connect timeout.
-  > - An offline account is `SessionTokenError::Offline`: the grant carries its name instead.
-  >
-  > Note (P10.6, Phase 10, group F, the user's choice, U14) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **one exception to the mapping.** The session-token service's flight reads the owner again once it holds the account's lock, so an owner disabled while a grant waits for an earlier refresh comes back as `OwnerDisabled`, which the grants answer retryable, as they do the same owner found by their own check. `SessionTokenError::retryable()` stays as it is, and every other error keeps the mapping. An offline account never reaches the service: the grants build its grant themselves.
+  > Note (P10.6): a grant and a denial repeat the request's `SessionRequestId` and `bot_id`, and the agent drops a late answer (S3); the token reaches the wire only inside `OnlineSession` (S7); a grant goes only after `Welcome`, on the asking stream, to a bot it holds Assigned (`LiveAgents::held`), and fresh requests are bounded per bot (S28) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 
-  > Note (P10.6, from Phase 9, group E) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): an account linked again (P9.6) during a refresh answers `ChangedMeanwhile`, which is retryable, and the retry uses the new token; a test here should show it end to end.
-
-  > Note (P10.6, from Phase 10, group A) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
-  > - **Correlation** (S3): a grant and a denial repeat the request's `SessionRequestId`, the agent's own number from 1, and its `bot_id`. The agent's managed provider drops an answer to a request it no longer waits for (the actor dropped it, or its 30 s passed), so a late grant can't answer a later `fresh` request.
-  > - **The grant** is `fleet_proto::control::SessionGrant` over core's `SessionCredentials`; the token reaches the wire only inside `OnlineSession`, whose `Debug` never prints it (S7). This group's `log_capture` test covers a grant and a denial at every level of every target (tonic, h2, hyper and rustls included).
-
-  > Note (P10.6, from Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the registry's `DenySession` arm is F's to replace** (S28). A grant goes only after `Welcome`, to the identity the certificate gave, and only on the stream that asked: a request's answer must not reach a later stream of the same agent, whose `SessionRequestId`s start at 1 again, so F answers on the asking session's own queue (its lease's generation) rather than `send` by agent. The token is checked once it's in hand, and queued grants die with their stream. A compromised agent could send `fresh: true` requests in a loop to force Microsoft refreshes, and Microsoft's 429 pauses every refresh (ADR-0018): F bounds them per bot and answers `SessionDenied { retryable: true }` when its own queue is full.
-  > Note (P10.6, from Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **a grant goes only to a bot the asking stream holds Assigned** (`LiveAgents::held`), never one held Releasing or listed in an unreconciled hello; offline bots get their (offline) session from the server too.
-
-  > Note (P10.6, Phase 10, group F) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **as built.** Decided by the review agents and approved at the plan review: S57–S64; reconciliations R39–R46; the user's choice U14, and the user's change at the plan review that each grant is logged at `info`.
-  > - **The registry filters first** (S57): a `SessionRequest` passes (`Verdict::Session`) only while the stream is reconciled, not ended and holds the bot Assigned; any other is denied at once, retryable, and counted in housekeeping's per-agent line (`RefusedReports::sessions_denied`). A fresh one then spends `[rate_limits] fresh_sessions_per_bot_per_hour` (1–60, 6; S58), and past it is denied retryable without reaching the token service.
-  > - **The stream's grant queue** (`grpc/control/grants.rs`, S57, R40): one waiting request per bot, a newer one replacing it (and aborting its bot's running one, whose token flight goes on, on the service's own tracker); at most `GRANT_WORKERS` (4) at once, on the session's `JoinSet`, which its loop polls beside the reads; at most 1000 held (`GrantBounds`), one more bot's request denied retryable. The stream's end drops what waits and aborts what runs.
-  > - **The grant** (`app::agents::SessionGrantService` behind `ports::session_grants::SessionGrants`, S59): the stream's own certificate by its fingerprint (fleet-core's `admit`), the bot's row naming the agent, fleet-core's `placeable`; the account from that row (S3); the session from `app::session_tokens::MinecraftSessions` (R46; `SessionTokenService` implements it) with the request's `fresh`, or an offline account's name; then the same check inside a write transaction that writes nothing, the account unchanged, and the answer queued by `LiveAgents::answer_session` (the asking stream's generation, not ended, holding the bot Assigned, in one critical section) before the transaction is dropped. `control_service` takes `ControlPorts { connections, grants, clock }`.
-  > - **Denials** (S60, U14): every one the grants make themselves is retryable; the service's errors keep `retryable()` except `OwnerDisabled`. The wire is unchanged. Each denial is one line at its level with a fixed `reason`; each grant one `info` line (request, agent, bot, number, kind, fresh, expiry); never a token, a name or a UUID. No audit entry (S61).
-  > - **serve** (S64): `app_with` creates the shutdown token (`App::shutdown`); the service is built over the one Microsoft adapter with a child of it, while `[grpc]` is on, and stopped by `stop_session_tokens` within the drain, refreshes still running then left with one `warn` (`SESSION_TOKENS_LEFT`).
-  > - **The agent** (S62, S63): `fleet_agent::managed::credentials::ManagedCredentials` over a `SessionLink` (G implements it, calls `answer`, `link_ended`, `forget` and `forget_all`): numbers from 1, answers matched by number and bot, late ones dropped, a link without a stream or a stream's end failing at once, a token within the connect timeout of its expiry refused, kept grants used only without a stream. Not wired into `run` yet: G's.
-  > - **Deviations:** the service is `app/agents/session_grants.rs` (the plan's `grants.rs`; `app::grants` is the accounts' sharing) and the token seam `MinecraftSessions` lives beside `SessionTokenService` in `app/session_tokens` rather than in `ports/` (its error is that service's); the grant is converted for the wire inside `answer_session`, before the registry's lock, while the fence is open (CPU only); the service-level checks live in `tests/grpc_control/grant_checks.rs` (over the loopback harness's scripted token service) instead of a binary of their own; no NoServer case among the checks, since no route clears a server.
+  > Note (P10.6): as built in group F (S57–S64, R39–R46, U14; each grant logged at `info`, the user's change at the plan review): the registry filters first (S57); `[rate_limits] fresh_sessions_per_bot_per_hour` (S58); the stream's grant queue runs at most 4 at once (R40); `app::agents::SessionGrantService` checks again in a write transaction that writes nothing (S59), over `MinecraftSessions` (R46); every denial is retryable but the service's own errors (S60); no audit entry (S61); the agent's `ManagedCredentials` (S62, S63); serve wires the service (S64) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 - [x] **P10.7** 🔴 Agent client:
   - reconnects with backon
   - keeps bots running during outages
   - sends its full state on reconnect
   - forwards events through a bounded buffer that drops the oldest chat when full and **never blocks the bots**
 
-  > Note (P10.7, from Phase 4, group B) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The agent maps the runtime's `FleetEvent`s to `BotEvent`. `ChatSent` and `ChatFailed` carry the runtime's `ChatTicket`, which the agent maps back to `SendChat`'s request id. `ModeChatSent{message}` is outgoing mode chat, with no request id.
+  > Note (P10.7): from Phase 4: the agent maps the runtime's `FleetEvent`s to `BotEvent`: `ChatSent`/`ChatFailed`'s `ChatTicket` back to `SendChat`'s request ID, `ModeChatSent` to outgoing mode chat, and `Removed` and `Alert` too. A ticket's event can come before the `send_chat` reply (the PR #15 review) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)).
 
-  > Note (P10.7, from P4.7) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The agent maps `FleetEventKind::Removed` too, since P10.5's move to another agent waits for it.
+  > Note (P10.7): from groups A–F: `ChatSent`/`ChatFailed` carry the `ChatRequestId` (S3); the hello's capacity is `[runtime] max_bots` (S8); the identity `enroll` leaves goes straight into tonic's `Identity::from_pem`; the channel's keepalive and limits (S23, S25) and three kinds of end: stop, retry slowly, backoff (S22, S24, S26, S28); what the reconciler counts on (S33, S42, S44, S45); the SSRF check right before the dial, with `[control_plane] private_targets` empty by default, and the dev and compose configs listing what they need (S46, security); the lifecycle message applied in stream order (S49); the managed credentials (S62, S63, R44) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 
-  > Note (P10.7, from the PR #15 review): **An event can come before its ticket.** `ChatQueue::send` returns the ticket while the queue's delivery task may already be publishing `ChatSent` or `ChatFailed` for it, so on the agent the event can arrive before the `send_chat` reply. The agent must handle a ticket it hasn't mapped to a request id yet, for example by handling replies and events in one task, or by holding unknown tickets briefly.
-
-  > Note (P10.7, from Phase 4, group C) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): `FleetEventKind::Alert(BotNotification)` comes right after the `StateChanged` to Paused or Failed it belongs to: an alert for a human. The agent maps it too.
-
-  > Note (P10.7, from Phase 10, group A) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
-  > - **The mapping:** a `FleetEvent` becomes `fleet_proto::control::BotEvent`, a `StateChanged` an `AgentMessage::Status`. `ChatSent` and `ChatFailed` carry the `ChatRequestId` the server's `SendChat` named (S3), and `ChatFailedReason` covers both the runtime's `ChatFailure` and the refusals of `send_chat` (`NotOnline`, `QueueFull`, `RateLimited`, and the fleet's `UnknownBot`, `Busy`/`TimedOut` as `AgentBusy`, `ShuttingDown`), mapped with exhaustive matches.
-  > - **Capacity** (S8): the hello's capacity is `[runtime] max_bots`, and a test keeps the agent config's range equal to `AgentCapacity::MIN` and `MAX`.
-  > - **A dead server** *(the user's note at the plan review)*: the agent notices a stream that hangs without an error (P10.4's note) and reconnects and resyncs; the loopback suite tests it.
-
-  > Note (P10.7, from Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the identity `enroll` leaves:** `cert_file` holds exactly the PEM the agent checked (one certificate the pinned CA signed for client authentication), and `key_file` the PKCS#8 PEM of its Ed25519 key, both owner-only on Unix. They go straight into tonic's `Identity::from_pem`; the client checks at start that they match each other and the pinned CA, as `enroll` did. `run`'s refusal of `[control_plane]` ("managed mode runs from P10.7") goes away here.
-
-  > Note (P10.7, from Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
-  > - **The channel** (S23, S25): HTTP/2 keepalive every 10 s with a 20 s timeout, while idle too; heartbeats on `Welcome`'s interval; decoding up to `MAX_SERVER_MESSAGE_BYTES`, encoding up to `MAX_AGENT_MESSAGE_BYTES`; `Welcome` or `Reject` awaited for `WELCOME_TIMEOUT` (30 s) from the call's start. `Welcome.agent_id` is the ID the agent logs.
-  > - **Three kinds of end** (S24): *stop* on `UNAUTHENTICATED`, `Reject(NameMismatch)` and the permission Rejects (`AgentDisabled`, `CertificateRevoked`, `CertificateExpired`), with an exit code of its own that `run`'s help lists, stopping every bot on `AgentDisabled` so two agents never run one account; *retry slowly* on `Reject(IncompatibleProtocol)` and `Reject(InvalidHello)`; *retry with backoff* on everything else, `AlreadyConnected` and `RESOURCE_EXHAUSTED`'s `retry-after` included.
-  > - **An idle channel's `UNAVAILABLE`** is routine: the port cuts a connection 80 s after its last stream ended (S22).
-  > - **`Reject(AlreadyConnected)`** means its own old stream still lives, after a restart for instance: retry with backoff; the old one ends within the heartbeat timeout (S26). The reports the server passes (statuses and events of assigned bots) are the ingest's to read (S28).
-  > Note (P10.7, from Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **what the reconciler counts on** (S33, S42, S44, S45): the agent removes a bot only on `Unassign` or its omission from a `ReconcileFull`; a spec with desired Stopped stops the bot and keeps it; a bot starts in its `restore`; a `Busy` apply is retried after the bot's `Removed`, and a `Removed` is never dropped; the hello's snapshot is sent only after the previous stream's instructions are applied; an `Unassign` of a bot it doesn't run is answered with `Removed`; the reconnect backoff stays within `fleet_proto::control::RECONNECT_DELAY_MAX` (30 s).
-
-  > Note (P10.7, from Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
-  > - **The SSRF check** (S46, security): right before it dials the address of a server-sent spec, the agent classifies the socket fleet-mc resolved (`ResolvedAddr.socket`, SRV included), the one azalea dials. *Never:* unspecified, link-local (169.254.169.254 included), multicast, broadcast, reserved, benchmarking and documentation addresses, also inside IPv4-mapped, NAT64, 6to4 and IPv4-compatible forms. *Private:* loopback, RFC 1918, carrier-grade NAT and unique local, allowed only inside `[control_plane] private_targets`, a CIDR list, empty by default (`IpNet` moves to fleet-core for it). *Public:* allowed. A refusal is the new `ConnectFailure::Blocked`, transient and never dialled. Standalone mode is never checked. fleet-mc changes, so `just test-slow` runs.
-  > - **The dev and compose configs** *(the user's note at the plan review)*: `private_targets` is empty by default, so a managed agent refuses loopback and LAN servers. `deploy/dev/agent.managed.toml` (loopback) and the compose agent, whose `minecraft:25565` resolves to a Docker bridge address in `172.16.0.0/12`, list the networks they need, each with a comment saying why, so the hands-on checks don't fail on the SSRF check.
-  > - **The lifecycle message** (S49): match `ServerMessage::Lifecycle` exhaustively and apply it in stream order. For a bot the fleet runs, call exactly one `Fleet::{restart, reset, resume}`, without filtering by state; drop one for any other bot at `debug`. A command never applies, removes or respecs a bot, and is never answered: its effect comes back as the bot's `Status`. Drop the fleet's refusals; commands die with their stream.
-
-  > Note (P10.7, from Phase 10, group F) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the managed credentials** (S62, S63, R44): build one `fleet_agent::managed::credentials::ManagedCredentials` per process, with `RuntimeClock::new(anchor)`, the runtime's `connect_timeout` and its `session_request_timeout`, as the fleet's `FleetParts.credentials`. Implement `SessionLink::send` on a lane that refuses when full (never the event buffer that drops chat), answering `NoStream` whenever no welcomed stream exists, and raise `LinkGeneration` for each welcomed stream. The stream's reader hands every `SessionGrant` and `SessionDenied` to `answer`, and every stream end calls `link_ended(generation)`. Call `forget(bot)` on an `Unassign`, a bot left out of a `ReconcileFull`, its `Removed` and a spec with desired Stopped, and `forget_all()` on `UNAUTHENTICATED` or a permission `Reject`, before stopping the bots. A replaced request gets no answer and times out retryable; every retry is a new number.
-
-  > Note (P10.7, Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **as built** (S65–S69, R47–R58; the user's choices U15, U18–U20).
-  > - **`run` in managed mode:** main.rs loads and checks the identity (`managed::identity`, S68) after logging and the TLS provider, before the recorder, the runtime and the signals: any problem is exit 1, its text naming the files and the fix; one `info` line shows both fingerprints. `StartupError::ManagedMode` is gone. The run builds one `RuntimeClock`, the `Outbox`, `ManagedCredentials<Outbox>` as the fleet's credentials, subscribes to the fleet's events before its supervisor runs, and starts the conductor and the link beside the supervisor, the chat logger and the heartbeat (which starts at once).
-  > - **The conductor** (`managed::conductor`, S65): one task owns every Fleet call; the reader's six instructions go through its FIFO (`INBOUND_QUEUE`, 2048), the session answers straight to the credentials. The hello barrier (R48), the instructions' table, the exhaustive answers (`mapping`), the ticket map (`ChatRequests`, `max_bots × chat_queue`), the retry tick (`RETRY_TICK`, 1 s) and the lag resync as S65 and R47 say.
-  > - **The outbox** (`managed::outbound`, S66): one `std` mutex; the `Connect` request body `Outbound` is a `tokio_stream::Stream` (U18) with the idle heartbeat (R50); the classes, their caps (`Caps::of`; chat 64 per bot and 1024 in all), the send order, `prepare`, `open`, `welcomed`, `reconciled` (R49) and `ended` (R51). `Outbox` is the credentials' `SessionLink`.
-  > - **The link** (`managed::link`, S67): `endpoint` with the keepalive, `Link::run` with the attempt (R52's check, the dial, the barrier, the hello, `Connect`, `Welcome`), the reader, `ends` (stop, slow, backoff; `retry-after`) and `backoff` (fleet-core's `RetryPolicy::seeded_delay`, a splitmix64 seed sequence from the OS's seed). `LinkTimings` carries the welcome timeout and the keepalive: the protocol's constants in the agent, shorter in `tests/control`. A refusal forgets every kept grant before the stream's end is noted; the run stops every bot and exits 5 (`Exit::Refused`); an unasked end of the conductor or the link is exit 4.
-  > - **S46's check** (S69): fleet-core's `net` (`IpNet` moved there; `classify`, `TargetPolicy`, `PrivateTargets`), fleet-mc's `AzaleaConnector::with_targets` (strictest by default) and the check in `Driver::drive` right after `resolve`; `ConnectFailure::Blocked` (wire 6, `"blocked"`). `[control_plane] private_targets` is read into `AgentMode::target_policy`; main.rs passes it to the connector. One check is enough today: azalea 0.16 ignores `ClientboundTransfer` (the configuration state's handler only logs it at `debug`, the game state's has an empty body) and never downloads resource packs (both states only emit a `ResourcePackEvent`, whose one consumer, `accept_resource_packs`, answers `Accepted` and `SuccessfullyLoaded` without fetching), checked on docs.rs's source of azalea-client 0.16.0 and azalea 0.16.0.
-  > - **U20's gate** `agent-control-plane` measured 93.8 % of lines over `managed/` and `enroll/` (Windows, `--no-rustc-wrapper`, nothing excluded), so it's required at 90 % (`scripts/coverage-gates.mjs`, its pin, §8, CLAUDE.md).
-  > - **The dev tooling** (S71): `just dev-managed-agent` and `just dev-bots`, the console in `crates/fleet-client/examples/dev-bots/` (tested from fleet-client's `client` binary through `#[path]`). `deploy/dev/agent.managed.toml` lists exactly `127.0.0.1/32` (R58); the compose agent stays standalone with U15's comment, which resolves E's note on its Docker network.
-  > - **Deviations:**
-  >   - *No backon sleeper* (S67's option C): the reconnect waits come from fleet-core's `RetryPolicy`, backon inside, and the link sleeps with tokio; Phase 10's dependency note expected backon's tokio sleeper in G.
-  >   - *The agent's property tests are deterministic sweeps* (seeds, orders and subsets), since fleet-agent has no `proptest` dev-dependency, and adding one wasn't in the plan.
-  >   - *`LinkTimings`*, a small seam the plan didn't name, so `tests/control` sees a missing welcome and a silent connection within seconds; the agent always runs the protocol's constants.
-  >   - *`certificate::validity`*, enroll's chain check without the key, for R52's check before each attempt; `enroll::chain` stayed private (nothing outside needed it).
-  >   - *One planned mutation doesn't apply:* `prepare` after the snapshot (the conductor pushes no event while it awaits the snapshot, so both orders are one). `forget_all` after `link_ended`, listed here as untestable at first, became testable in the review below.
-  > - **Tests,** red first against compiling stubs where the code came after them, the rest through mutations, each reverted and checked by checksum (the PR lists them): fleet-core's `net` and `seeded_delay`; fleet-proto's wire value and the timing pin; fleet-mc's driver unit, `connector.rs` and the slow offline scenario's target step; fleet-agent's config, identity, outbox, conductor, link (`ends`, `backoff`), run (`watch`, `finish`), the CLI, `tests/managed` (paused time, a real fleet on the fake connector) and the new real-time `tests/control` (U19: the managed run against a fake `AgentControl` server over mTLS on loopback, with a stalling proxy); fleet-client's console.
-
-  > Note (P10.7, the review of PR #56) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md), "The review of PR #56"):
-  > - **Fixed:** an overflowing outbox no longer turns the server's refusal into a reconnect (a stop stays a stop, so the grants are wiped and every bot stops); a busy removal no longer stops a bot the next hello's reconcile gives again (the barrier, a reconcile and an assignment clear it; the tick removes before it applies); the run's end closes the stream the aborted link left open (`Outbox::close`), so no heartbeat follows a signal.
-  > - **Observable now:** `forget_all` and `link_ended` each log at `debug`, so the refusal tests prove the wipe comes first; a certificate expired by the agent's own clock reads as that, never as the server's refusal (the link's line, the shutdown's, exit 5's help); `private_targets` refuses a metadata or other never-dialled entry as `NeverDialled`; `link::endpoint` refuses a URL that isn't `https`.
-  > - **Tests added:** the end kinds end to end, R52 on the run's clock, the conductor at capacity, a lag's synthesized `Removed`, a timed-out apply ending the batch, and the console's paging, lost session, arguments and tokens. `tests/control` runs the protocol's timings but in the two tests that measure them.
+  > Note (P10.7): as built in group G (S65–S69, S71, R47–R58, U15, U18–U20): `managed::{identity, outbound, conductor, link}`, the rest of the names in ADR-0019's "As built (group G)"; `run` in managed mode loads the identity first (S68), exits 5 on a refusal and 4 on an unasked end; the outbound `Connect` body is a `tokio_stream::Stream` (U18); S46's check is in fleet-core's `net` and fleet-mc's `AzaleaConnector::with_targets` (S69), which is enough since azalea 0.16 ignores `ClientboundTransfer` and downloads no resource pack; `just dev-managed-agent` and `just dev-bots` (S71); U20's `agent-control-plane` gate at 90 %.
+  > Deviations: no backon sleeper (the reconnect waits come from fleet-core's `RetryPolicy`, and the link sleeps with tokio); deterministic sweeps instead of proptest; `LinkTimings`, a seam for `tests/control`; `certificate::validity` for R52; one planned mutation that doesn't apply. The review of PR #56 fixed an overflow that turned a refusal into a reconnect, a busy removal that stopped a bot given again, and a heartbeat after a signal ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md), "The review of PR #56").
 
 - [x] **P10.8** 🔴 Server ingest:
   - status and chat are written in batches, in transactions roughly every 500 ms
   - **no per-tick writes**
   - events are published on the internal bus (`broadcast`)
 
-  > Note (P10.8, from Phase 10's planning) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
-  > - **P11.1's `chat_messages`** arrives in this group, its first writer *(the user's choice, U1)*, with a `truncated` column: the agent's flag OR the server's own cut (S6). The rebuilt text is what's stored.
-  > - **The batched writes** need a new `commit_unaudited` exemption (`EventBatch`, which ADR-0015 anticipated): the user's approval, and its own ADR note.
-  > - **A heartbeat** carries no time: the server stamps `last_seen_at` with its own `Clock` (S5).
+  > Note (P10.8): from the planning: `chat_messages` arrives here (U1), with `truncated` set to the agent's flag OR the server's own cut (S6); the batch needs a `commit_unaudited` exemption; a heartbeat carries no time (S5). An agent's presence is the session's, not the ingest's (S29). A bot's `last_state` is written in the hello's, the stream end's and the reconciler's transactions (S40), and since group G also in a batch's sticky crossings (U16) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 
-  > Note (P10.8, from Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **an agent's presence isn't the ingest's** (S29): the session writes `agents.capacity`, `version` and `last_seen_at` at the hello and `last_seen_at` at the stream's end, and nothing per message; `EventBatch` never carries these columns.
-
-  > Note (P10.8, from Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **nor is a bot's `last_state`** (S40): it's written only in the hello's, the stream end's and the reconciler's transactions. *Amended in group G (U16):* the batch also writes a bot's sticky crossings; see the next note.
-
-  > Note (P10.8, Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **as built** (S70, U16, U17).
-  > - **What "status" the batch writes** *(the user's choice, U16; S40 revised)*: only sticky crossings. A bot's `last_state`, `last_state_reason` and `last_state_at` are written in the batch when its reported state entered or left Paused or Failed, or changed its reason; every other status stays in the registry's memory, as S40 has it, and S40's three transactions stay. Group D's note above ("nor is a bot's `last_state`") is amended to this.
-  > - **The tap** (S28): the registry's `Verdict::Held` covers a status of a bot a reconciled, unended stream holds assigned, or an event of such a bot other than `Removed`. The session hands a held report to `ports::ingest::Ingest::take`, which never waits; a refusal is counted per agent, and housekeeping's line gains `chat_dropped`. `ControlPorts` gains `ingest`.
-  > - **`app::agents::ingest`:** `ingest(store, marks, bus, timings, bounds)` gives the session's `IngestService` and serve's `IngestWriter`. Statuses, deaths, alerts and chat answers are published on the bus at once; chat rows wait in a bounded queue (`INGEST_QUEUE` 4096, `STREAM_ROWS` 1024 per stream through a semaphore share). The writer ticks every `INGEST_INTERVAL` (500 ms): a bounded wait for the write connection (`INGEST_WAIT`, 250 ms), at most `BATCH_ROWS` (1000) guarded inserts, U16's fenced updates, `commit_unaudited(EventBatch)`, then each stored row published with its ID. An idle tick writes nothing. A busy store keeps the batch, first at the next tick; any other failure drops it, with one `error` per run of failures and a `warn` with the rows lost on recovery.
-  > - **The bus** (`app::events`): `EventBus`, a `broadcast` of `Arc<LiveEvent>` (`EVENT_BUS_CAPACITY` 1024), created in `app_with` (`App.events`) for P11.5.
-  > - **serve:** the ingest is built in `control_plane_services` and carried in `GrpcRoutes` and `GrpcPort`. At the stop, `end_streams_then_ingest` ends the streams first and only then stops the writer, whose final flush (each batch's wait bounded, a busy one dropped with one `warn`) runs before the database closes. The writer is watched like the reconciler: `spawn_reconciler` became `spawn_watched` with `task_watch` and `Watched::{Reconciler, Ingest}`; an unasked end is exit 4 (`INGEST_ENDED`).
-  > - **`UnauditedWrite::EventBatch`** *(the user's approval, U17)*: its doc in `ports/store.rs` gives the scope; CLAUDE.md's exemption list names it.
-  > - **Deviations:**
-  >   - *R54's baseline:* a bot is marked when an admitted status's sticky part differs from its previous admitted report's, not from a copy of the row the reconciler read. At the settle, the previous one is the hello's report, which the hello's transaction stored (S40); a resume's or reset's clear takes the report out in its own transaction (S48), so the next one is compared with nothing, as the cleared row is; a crossing is written or marked again. So it is the row's stored part in every path, without a read. The marks are `ports::ingest::StickyMarks` (`any`, `take`, `remark`), which `AgentRegistry` implements, rather than `LiveAgents::take_sticky`.
-  >   - *The in-memory test* that a full ingest never holds up a stream's reads is the loopback test `chat_past_the_streams_share_is_dropped_counted_and_the_stream_goes_on`: `Ingest::take` is synchronous and never waits, and the barrier after the dropped row is still answered.
-  >   - *The final flush's order* is pinned on paused time through `end_streams_then_ingest`, red first against a stub that stopped the writer first, since a real-socket test can't time a report between the signal and the streams' end.
-  > - **Tests,** red first against compiling stubs where a stub fails; the rest through mutations, each reverted and checked by checksum (the PR lists them): the registry's verdicts and marks (`grpc/registry.rs`), `tests/ingest_service.rs`, `tests/event_batch_scope.rs` (U17's scope pin: every table and column around a batch; the writer also updating `agent_id`, `server_address`, `mode_id` or `desired_state` turned it red, one run each), `tests/grpc_control/ingest.rs` over loopback (U19), the log check, serve's watch, stop order and flush.
-  > Note (P10.8, the review of PR #56) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md), "The review of PR #56"): the writer commits only what it wrote: a tick whose marks the fence refused, with no chat, is `Idle`, and a batch that stored nothing rolls back (U17). The stop's last batch, busy with no chat waiting, no longer says chat was lost. Two tests pin U16's order (the marks taken only inside the open write transaction; a resume's clear landing while a tick waits is never undone, with the real registry), and the scope pin compares all three `last_state*` columns of every bot; its table list stays fixed, as the test's header says why.
-
-  > Note (P10.8, from Phase 10, group H) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md), S74): **4096 rows in all.** One row budget covers the rows queued, kept by a busy database or being written, so a kept or in-flight batch no longer lets the queue refill past S70's 4096, and the stop's flush commits at most U17's 6 batches; a `const` assertion ties `INGEST_QUEUE` to that 6. Before, up to 5096 rows could be held.
+  > Note (P10.8): as built in group G (S70, U16, U17): the batch writes only sticky crossings (U16); the registry's `Verdict::Held` hands a held report to `ports::ingest::Ingest::take`, which never waits (S28); `app::agents::ingest`'s `IngestService` and `IngestWriter` publish statuses at once and write chat every 500 ms, at most 1000 rows a batch, through `commit_unaudited(EventBatch)` (U17); the bus is `app::events::EventBus` (1024); serve's `end_streams_then_ingest` and `spawn_watched`; the full list of names is in ADR-0019's "As built (group G)".
+  > Deviations: R54's baseline is the bot's previous admitted report, which equals the row's stored part in every path (S40, S48), and the marks are `ports::ingest::StickyMarks`, implemented by `AgentRegistry`, rather than `LiveAgents::take_sticky`; the in-memory test is a loopback one; the final flush's order is pinned on paused time. Since PR #56's review, a tick with no write is `Idle`, and a batch that stored nothing rolls back (U17); since group H, one budget of 4096 rows covers the queue, a kept batch and one in flight (S74) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 
 - [x] **P10.9** 🔴 Loopback tests with a test PKI. Each of these is rejected:
   - a revoked certificate
@@ -3762,49 +1764,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - **Agent restart:** no duplicate bots.
   - **Server restart:** agents resync.
 
-  > Note (P10.9, from Phase 10's planning) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **an expired certificate** joins the rejections (S1), and **a connection that goes silent without closing** joins the cases that must hold *(the user's note at the plan review, P10.4's note)*. The rejections are tested in group C, which builds `Connect`; the rest of the suite in H.
+  > Note (P10.9): **an expired certificate** joins the rejections (S1), and **a connection that goes silent without closing** joins the cases that must hold (the user's note at the plan review, P10.4's note). Group C did the four rejections in `tests/grpc_control/identity.rs`; groups C–G tested each side over real mTLS on loopback; H's check against a local Minecraft container lists its network in `private_targets` (S46); G's residuals are in ADR-0019 and the threat model (U19) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 
-  > Note (P10.9, Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the four rejections are done,** in `tests/grpc_control/identity.rs`: a revoked certificate gets the answer of one no agent holds (`a_revoked_certificate_is_refused_like_an_unknown_one`); a certificate from another CA and an expired one fail TLS's handshake, before any call (`a_client_certificate_from_another_ca_fails_the_handshake`, `an_expired_certificate_fails_the_handshake`); an agent that never enrolled is refused (`an_agent_that_never_enrolled_is_refused`). The server's side of a connection that goes silent is in `liveness.rs`. For H: the silent connection runs end to end through the suite's stalling proxy (`tests/grpc_control/proxy.rs`): the server frees the agent within `heartbeat_timeout`, and the agent reconnects within 30 s and resyncs.
-  > Note (P10.9, from Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the reconciler's loopback tests** are in `tests/grpc_control/reconcile.rs`; H adds a server restart with agents coming back in either order, and checks the threat model's B3 rows that cite D's tests.
-  > Note (P10.9, from Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the bots' loopback tests** are in `tests/grpc_control/reconcile.rs` too: a bot started through its service is placed and, stopped, taken off its agent; a paused bot's stop frees its slot and keeps it paused; a command reaches the stream that holds its bot once and never a later one; a start of a fenced bot places it nowhere. H checks the threat model's B1, B3, B4 and B7 rows that cite E's tests. **H's check against a local Minecraft container** lists that container's network in the agent's `[control_plane] private_targets`, with a comment saying why *(the user's note at the plan review)*, or the SSRF check refuses the connect (S46).
-  > Note (P10.9, from Phase 10, group F) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the grants' loopback tests** are in `tests/grpc_control/grants.rs` and `grant_checks.rs`, the log test in `logs.rs`, the real service's in `tests/accounts/session_tokens/grants.rs`, serve's in `tests/serve/control_plane.rs` and `shutdown.rs`. H adds, with G's managed agent: a server down while a bot is kicked (it rejoins with its kept grant, and a fresh request waits), and a server restart whose agents' bots get their sessions once reconciled; and checks the threat model's B3 rows that cite F's tests.
-
-  > Note (P10.9, from Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **for H** (U19). G tests each side against a scripted peer over real mTLS on loopback: fleet-server's `tests/grpc_control/ingest.rs`, fleet-agent's `tests/control/`. A real agent against a real server stays H's question to the user (fleet-agent dev-depending on fleet-server, or a new test crate), for H's cases, the DoD check and P11.7. The threat model gained G's agent and ingest rows; H reviews them with its own. G's residuals are in ADR-0019 and the threat model: tonic's buffers hold the identity's key PEM unwiped; a notice handed to tonic is lost when its connection breaks (no acknowledgement); a power loss can undo the last batch (U16).
-
-  > Note (P10.9, Phase 10, group H) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **as built** (the user's choices U19, U21 and U22; S72–S74, decided by the review agents and approved at the plan review).
-  > - **Where:** `crates/fleet-integration`, a test-only crate (U19), one test binary, `tests/integration/`.
-  >   - `harness/`: serve's wiring over a `ManualClock` and `SeededRandom` (`app_with`, then serve's `open` and `grpc_port`, made public, then `serve`); agents enrolled for real and run in-process over a `Ledger` connector, one fake per run, which fails a case that ever runs one account twice; one stalling proxy per agent; the Owner through fleet-client with 2FA; one log that wakes the waits.
-  >   - `loopback/`: the cases.
-  >   - `managed_check/`: Phase 10's DoD check (below).
-  > - **The cases**, in nextest's default profile, each shown red by a mutation:
-  >   - `killed_mid_stream::a_connection_cut_mid_stream_reconciles_what_changed_meanwhile`: the kept bot runs on untouched, the bot stopped meanwhile stops and is unassigned after its `Removed`, the one started meanwhile is placed.
-  >   - `agent_restart::a_restarted_agent_runs_its_bots_once`: no move, no other agent.
-  >   - `agent_restart::a_restart_while_the_old_connection_lives_is_refused_until_it_ends_and_records_no_conflict`: C's note for H.
-  >   - `server_restart::agents_resync_after_a_server_restart_in_either_order`: D's note; S45's gate holds a new bot until both are back.
-  >   - `silent_connection::a_silent_connection_frees_the_agent_and_it_reconnects_and_resyncs`: C's note, the one case on short timings.
-  >   - `outage::a_bot_kicked_while_the_server_is_down_rejoins_with_its_kept_grant_and_a_fresh_request_waits` and `outage::bots_get_their_sessions_once_reconciled_after_a_server_restart`: F's note.
-  > - **Deviations:**
-  >   - The limiters measure real intervals.
-  >   - A wait wakes on every log line and re-checks in-process state at most every 100 ms, always within `PATIENCE`, never a fixed delay before an assertion: the user's choice at PR #58's review (U23), now in CLAUDE.md's time rule.
-  >   - Case 2b's old stream ends by the server's heartbeat timeout, not by a cut.
-  >   - Case 5 records how the code behaves: after a refused login, the request after the backoff isn't fresh; with no stream nothing is kept, so it waits for the server. Accepted for now (U24); Phase 11's first group changes it (P11's note).
-  > - **The review of PR #58** (the user's choices U23 and U24):
-  >   - *The managed check:* the account's name and UUID pass only in the two received-chat lines at `debug` (fleet-mc's bridge and the agent's event log), and every token of the server's is found by its shape (prefix and random part), seen or not; the enrollment token and the refresh token are recorded right away; a setup step that fails is a FAIL line with a fixed text, never a panic carrying a command's output; teardown never panics; the steps stop at 520 s, and the whole check ends within 580 s (a `const` assertion keeps 20 s of the profile's 600 s).
-  >   - *The harness:* each start binds the gRPC port afresh and the proxies dial wherever it listens now, and the API's listener is bound once with each serve on a clone, so a restart never frees a port another process could take; the proxy pauses after an accept error and forgets ended connections; `RECONNECT_MAX` is fleet-proto's constant (a dev-dependency, the user's request).
-  >   - *The cases:* every case ends by checking the assignment trail (no second `bot.assign` of a bot without an unassignment or a detach in between); case 3 asserts each first reconcile's bots exactly (when the high agent is back first, the low one's first reconcile also carries the new bot: its welcome opens the gate, and fleet-core's `plan` places waiting bots on a welcomed agent in the same pass); case 4 times from the stream end after the silence; case 5 caps its bot's retries at 10 s; case 6 counts every denial line.
-  > - **Follow-ups from G's review** are commit 1: dev-bots labels its IDs; a tick that wrote nothing is `Idle`; the rig's `Gate` keeps one lock; the busy-removal test asserts the hello and the deferral; the conductor warns once per wait; `AgentKey::from_pem` and `certificate::check` take exactly one PEM section; the ingest holds 4096 rows in all (S74).
+  > Note (P10.9): as built in group H (U19, U21, U22, S72–S74): `crates/fleet-integration`, a test-only crate (U19), with `harness/`, `loopback/` and `managed_check/`; the cases `killed_mid_stream`, `agent_restart` (two), `server_restart` (either order), `silent_connection::a_silent_connection_frees_the_agent_and_it_reconnects_and_resyncs` and `outage` (two), each shown red by a mutation. A wait wakes on every log line and re-checks at most every 100 ms, always within `PATIENCE` (U23). Case 5 recorded a non-fresh request after a refused login, accepted then (U24) and changed in Phase 11's group A ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 - [x] **P10.10** Admin endpoints: `GET /agents`, and `POST /agents/{id}/disable`, which revokes the fingerprint and drops the stream.
 
-  > Note (P10.10, from Phase 6, group C) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a response value that a later version may extend, such as an agent's status, is an `Open<…>` in its DTO, and a 64-bit number is a `SafeInt`.
+  > Note (P10.10): an agent's status is an `Open<…>` in its DTO, and a 64-bit number a `SafeInt` ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)). Disable revokes every fingerprint the agent holds, not one (S1), and `GET /agents` shows the current certificate's `not_after` and the capacity as a plain number, with no labels (S8) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 
-  > Note (P10.10, from Phase 10's planning) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **disable revokes every fingerprint** the agent holds, not one (S1). `GET /agents` shows the current certificate's `not_after`, so an expiry is visible before P13.6's renewal, and the capacity as a plain number; there are no labels (S8).
-
-  > Note (P10.10, Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **as built** (S31).
-  > - **`GET /api/v1/agents`** (Admin+, `ViewAgents`; class Standard): Appendix B's keyset pages of every agent, newest first: `AgentPage {items, next}` of `AgentResponse {id, name, enabled, status, capacity?, version?, connected_since?, last_seen_at?, not_after?, created_at}`. `status` is an `Open<AgentStatus>` (`online`, `offline`, `expired`, `disabled`) from fleet-core's rule (`agent::status`): disabled, else expired when no unrevoked certificate is valid, else online while its stream lives; `not_after` is the latest of its unrevoked certificates; `last_seen_at` the later of the stored time and the live stream's. The capacity is a plain number (1–1000).
-  > - **`POST /api/v1/agents/{id}/disable`** (Admin+, `DisableAgent`, step-up; class Standard): authorized before anything is read, then one transaction (the acting user re-read and authorized again, `enabled` off, every unrevoked certificate revoked, `agent.disable` with `name`, `certificates_revoked` and `via`), then the live stream ended through `LiveAgents::end` before the answer: 200 with the agent. Disabled already: 200 as it is, no entry. It works with `[grpc]` off. Unknown or malformed IDs are 404.
-  > - **From the host** (U3, U8): `afkfleet-server agent list --config …` (tab-separated after a header, `-` for nothing, the state `enabled`, `expired` or `disabled`: the host sees no stream) and `agent disable --config … --id …` (`via` = `cli`, no actor; exit 0 disabled now or before, 1 unknown or a failure, 2 usage). Neither creates or migrates the database; both work while serve runs, whose sweep ends a disabled agent's stream within one 5 s sweep, or two (up to 10 s) when the disable lands between a stream's hello transaction and its activation. `just dev-agents` and `just dev-disable-agent id` run them on dev-server's database.
-  > - **Deviation:** no 422 test for the disable route: it has no body or query, and a malformed path ID is 404, as P10.3's token route has no 422 test either. fleet-client's agents methods come with P11.9.
-  > - **For P11.9:** the agents view pages through `GET /agents` with a text for each status and a default branch (it's an `Open<…>`), disables through `useStepUpAction` with a text saying it's final, and shows `expired` apart from `disabled`; the token stays a direct call. The audit viewer shows `agent.connect` Failures with their reason and IP; how each reason reads on screen is the user's to decide. **For D:** a bots count may join `AgentResponse` (additive), and a new status goes in through `Open`; a disabled agent's bots never get a `Removed` from it, so they follow the stale path.
+  > Note (P10.10): as built in group C (S31, U3, U8): `GET /api/v1/agents` (Admin+, `ViewAgents`) gives keyset pages with each agent's `status` (`online`, `offline`, `expired`, `disabled`); `POST /api/v1/agents/{id}/disable` (Admin+, `DisableAgent`, step-up) revokes every unrevoked certificate and ends the live stream before it answers; from the host, `afkfleet-server agent list` and `agent disable` (`via` = `cli`). Deviation: no 422 test for the disable route, which has no body or query ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 
 **Security:**
 - A client certificate is required for `Connect`.
@@ -3814,11 +1781,9 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
 **DoD:** In managed mode, a bot with a real Microsoft account, started through `POST /bots/{id}/start`, goes Online on a real server and goes offline through `stop`.
 
-> Note (Phase 10's DoD, from Phase 10's planning, the user's choice, U1) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the app's part moved to Phase 11.** The DoD read "pressing Start in the app brings a bot with a real Microsoft account Online on a real server", which needs P11.9's screens. The user does this check by hand in group H, with their own account; it needs Docker for a local online-mode Minecraft server (as in P1.8), unless they point it at their own. P10.9's loopback suite is the rest of the proof.
+> Note (Phase 10's DoD): the app's part moved to Phase 11 (the user's choice, U1). The check's agent lists the local Minecraft container's network in `[control_plane] private_targets` (S46) and calls `PATCH /bots/{id}`, `start` and `stop` through fleet-client ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 
-> Note (Phase 10's DoD, from group E, the user's note at the plan review) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): the check's agent lists the local Minecraft container's network in `[control_plane] private_targets` (S46), with a comment saying why, or its SSRF check refuses the connect. The check calls `PATCH /bots/{id}` (after a step-up), `POST /bots/{id}/start` and `stop` through fleet-client (`patch_bot`, `start_bot`, `stop_bot`).
-
-> Note (Phase 10's DoD, group H) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md), S73, U21, U22): **the check is written; the user runs it** with `just test-managed-account`: `managed_check::manual_managed_bot_goes_online_and_offline` in fleet-integration, Phase 9 group D's pattern (a vault key drawn for the run and kept in memory, a temporary folder deleted at every end, only this test's filter, nothing secret on a command line, in a variable or in a log). Its agent lists exactly `127.0.0.1/32`, the container's published port, with a comment saying why. Its steps stop at 520 s, and the whole check ends within 580 s (PR #58's review). Its outcome is recorded here once the user has run it. **The user's first run (2026-10-18)** failed at setup, before anything reached Microsoft: the check's `agent.toml` put `heartbeat_file` at the top level, where the agent's loader refuses it as an unknown key (it belongs under `[runtime]`), and the log check counted two migration comments naming a token's format (`afk_iv_…`, `afk_et_…`), which sqlx logs at `debug`, as server tokens. Fixed, red first: the TOML's `[runtime]`; the token check now looks for a token's shape, its prefix and the 43 characters of its random part; and two default-profile tests now run the check's own config, setup, login, teardown and log check on the real path but for Microsoft and Docker (`managed_check::tests::the_agents_config_loads_as_the_check_writes_it`, `managed_check::tests::the_checks_setup_login_and_teardown_pass_without_an_account`). **The user's second run (2026-10-18) passed every line**, in 55 s: started and enrolled, logged in with 2FA, the link started, linked and active, the bot listed (`unplaced`, `no_server`), the Minecraft server started, the server set after a step-up, started, Online, stopped, offline (`unplaced`, `stopped`), the agent, the server and the container stopped or removed, the folder deleted, and no secret in any log. The bot's states, for information: its first read already showed a backoff after a kick, then connecting, then Online (the check shows a kick's kind, never its key or text). **Phase 10's DoD is met.**
+> Note (Phase 10's DoD): the check is `managed_check::manual_managed_bot_goes_online_and_offline`, which the user runs with `just test-managed-account` (S73, U21, U22). **The user's first run (2026-10-18)** failed at setup, before anything reached Microsoft, and was fixed red first; **the second run (2026-10-18) passed every line**, in 55 s. **Phase 10's DoD is met** ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md), "As built (group H)").
 
 ---
 
@@ -3826,74 +1791,24 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** Full day-to-day management from the app: start and stop, modes, live chat and history.
 **Introduces:** `tokio-tungstenite`, `futures-util` (WebSocket client).
 
-> Note (P11, Phase 11's planning, 2026-10-19) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)):
-> - **Twenty-five group branches** (eighteen groups since H's planning added H4, H3's added H5, H4's added H6 and H7, and H7's added H8; groups B, D and G in two PRs, C in three and H in eight since their planning). Phase 11 is built in group PRs like Phases 2–10: one branch and one commit per task, in this order, each after the previous PR is merged. Backend first; each screen comes after the endpoints it needs.
->
->   | Group | Branch | Tasks |
->   |---|---|---|
->   | A | `p11/u24-p11.3-fresh-requests-and-agent-chat` | U24 (ADR-0019), then P11.3's agent side: commands that need a signature, and the chat rate in each bot's spec |
->   | B1 | `p11/p11.3-chat-send` | P11.3's API, sending: `POST /bots/{id}/chat` and `/command`, the limits, the wait, the audit, the stored line with its sender |
->   | B2 | `p11/p11.3-chat-history` | P11.3's API, reading: `GET /bots/{id}/chat` and its field rules (ticked here) |
->   | C1 | `p11/p11.4-modes` | P11.4: mode names, the API's mode types, reading and creating modes |
->   | C2 | `p11/p11.4-mode-edits` | P11.4: editing and deleting modes |
->   | C3 | `p11/p11.4-on-respawn-steps` | P11.4: "on respawn" steps (ticked here) |
->   | D1 | `p11/p11.5-live-events` | P11.5: the socket and its security: tickets, `POST /events/ticket`, `GET /events`, its limits, liveness and shutdown |
->   | D2 | `p11/p11.5-events-per-viewer` | P11.5: the bot, chat and mode events, filtered per viewer (ticked here) |
->   | E | `p11/p11.6-retention` | P11.6 (P11.7 moved to G at its planning, U18) |
->   | F | `p11/p11.9-admin-endpoints` | P11.9's backend: `GET /audit`, `agent release` over the API, the grants review at a role change, leaving a shared account (U23) |
->   | G1 | `p11/p11.8-client-socket` | P11.8's socket in fleet-client: the live events with reconnects, the console over it, the log caps; and P11.7 over it (U18, ticked here) |
->   | G2 | `p11/p11.8-events-in-the-app` | P11.8: the Tauri `Channel` and the UI's cache, with a hint while a reconnect waits (ticked here) |
->   | H1 | `p11/p11.9-bot-screens` | P11.9's dashboard and a read-only bot detail |
->   | H2 | `p11/p11.9-bot-controls` | P11.9's controls, Settings, notices and timeline |
->   | H3 | `p11/p11.9-bot-chat` | P11.9's chat console and send box |
->   | H5 | `p11/p11-dod-kit` | The DoD's kit and its first check, with the agent's `public_targets` (U50; split from H3 at its plan review) |
->   | H4 | `p11/p11.9-server-settings` | P11.9's per-server conflict texts, their server side (added at H's planning, S66; split at its plan review) |
->   | H6 | `p11/p11.9-server-settings-screen` | P11.9's Minecraft-servers screens for the conflict texts (split from H4 at its plan review) |
->   | H7 | `p11/p11.9-chat-format` | P11.9's per-server chat format as a server setting, its preview (split from H4 at its plan review) |
->   | H8 | `p11/p11.9-parsed-senders` | P11.9's parsed senders end to end and the editor's formats (split from H7 at its plan review) |
->   | I | `p11/p11.9-mode-editor` | P11.9's mode editor and first its `networkMode` fix (one group, about 6,200 lines, the user's at its plan review, U75) |
->   | J | `p11/p11.9-admin-screens` | P11.9's admin screens, the audit's filter by target and the enrollment route's removal (ticked here; one group, about 5,100 to 5,900 lines, the user's at its plan review, U82) |
->   | K | `p11/p11.10-dark-mode` | P11.10, with PR #86's follow-ups and U83 first |
->   | L1 | `p11/p11.11-design-pass` | PR #87's follow-ups, the brief, the design direction and the plan of the rest of L (U86–U97) |
->   | L2 | `p11/p11.11-design-foundation` | P11.11: tokens, fonts, the frame, shared parts, branding, AA enforced, the sign-in screens and Profile |
->   | L3 | `p11/p11.11-design-screens` | P11.11: Home with its card's button, a bot's detail, Accounts, the universal Back, "Share with" suggestions |
->   | L4 | `p11/p11.11-design-admin` | P11.11: Modes, Minecraft servers, the admin screens, the screenshot baselines (ticked here) |
->   | M | `p11/p11-wrap-up` | The threat model, the README, the DoD's 24-hour run |
->
->   - **P11.3 is spread over A, B1 and B2** (B was split at its plan review: about 8,000–9,000 lines in one; ADR-0020, group B), **P11.4 over C1, C2 and C3** (C was split at its plan review: about 11,500 lines in one; ADR-0020, group C), **P11.5 over D1 and D2** (D was split at its plan review: about 11,600 lines in one; ADR-0020, group D), **P11.8 over G1 and G2** (G was split at its plan review: about 10,300 lines in one; ADR-0020, group G), and **P11.9 over F, H1–H4, H6–H8, I and J** (H was split at its plan review: about 13,300 lines in one; H4 was added there; ADR-0020, group H; H4's plan review split it into H4, H6 and H7, about 15,000 lines in one; H7's split it into H7 and H8, about 7,700 lines in one; H3's plan review moved the DoD's kit to H5, about 5,550 lines in one), each ticked in its last group, as P10.5 was over C and D. Each group aims at Phase 10's F or H in size (about 5,300 lines); one that grows past it is split at its plan review.
->   - **New dependencies** arrive with their group, each shown to the user with its version, license and release date: axum's `ws` feature (tokio-tungstenite and tungstenite 0.29.0, which axum 0.8.9 pins), tokio-tungstenite as fleet-server's dev-dependency, and futures-util and moka only if D needs them (*approved at D's planning, U11:* axum's `ws`, tokio-tungstenite and futures-util as dev-dependencies of fleet-server and fleet-client; no moka, S29); tokio-tungstenite as fleet-integration's dev-dependency in E (*moved to G with P11.7 at E's planning, U18*); tokio-tungstenite and futures-util in fleet-client in G, its TLS features G's question (*answered at G's planning, U25:* `handshake` only and `sink`, the socket an upgrade on reqwest's own connection, nothing new in Cargo.lock); single Radix packages in H, I and J; bundled fonts in L (*approved at L1, U93:* `@fontsource-variable/geist` and `@fontsource/ibm-plex-mono`, both 5.3.0, in L2).
->   - **Who decides what:** the review agents decide each group's open questions (CLAUDE.md's step 10); the user decides P11.6's size bound (E), P11.11's stable screenshots and visual direction (L), every text friends read (one table per group plan), the looks and UX questions, and whether the chat console names who sent each line (B).
-> - **The DoD's two checks** are the user's, with their own accounts. The first ("pressing Start in the app …") in H, once the bot screens exist; the second (24 h) in M, after the design pass. Each manual check gets default-profile tests that run its own setup, config and log check without the account (Phase 10's lesson).
-> - **The DoD checks' own data folder** *(the user's addition at the plan review, U1)*. Linking a real account stores its Microsoft refresh token in the server's database, sealed by a vault key file beside it. So both checks use one folder of their own, `target/dod-run/` (the database, the vault key, the PKI, the agent's identity, the logs), through recipes of their own that H adds, never the everyday `target/dev-server/`, so the account linked in H stays for M. They log at the default `info`, so no chat text reaches the disk. A cleanup recipe deletes the whole folder when the user is done, with a default-profile test that it removes everything inside, touches nothing outside, follows no link and refuses any other path. The steps say: unlink the accounts in the app first, then run the cleanup, then optionally end the app's consent in the Microsoft account. This mirrors production, where the key file lives on the server's host; `target/` is never committed.
-> - **Decided by the review agents** *(approved by the user at the plan review)*, S1–S6 in ADR-0020: U24 in fleet-core's state (S1); commands that need a signature refused where chat must be signed (S2); one chat rate per bot, the server's, sent in its spec (S3); a step-up route for commands off the allowlist (S4); the send's bounded answer (S5); a user's message stored as a chat row, audited without its text (S6). The chat limits' ranges (S3) are the user's approval at the plan review (rule 10).
+> Note (P11): built in groups A–M, one PR each, some split at their plan reviews (B1–B2, C1–C3, D1–D2, G1–G2, H1–H8, L1–L4), K taking PR #86's follow-ups and U83 first; their decisions are in [ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md). At the planning (2026-10-19) the user approved the review agents' S1–S6 and added U1: the DoD checks with real accounts use a folder of their own, `target/dod-run/`, through recipes of their own, and a cleanup recipe deletes it when the user is done.
 
-> Note (P11, from Phase 8, group E, the user's request) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **Decide step-up per action, the same way as the admin writes.** Before building them, decide for each destructive or privilege-changing action of this phase whether it needs a step-up: deleting a bot, changing grants, deleting a shared mode, and anything else that loses data or widens access. The app reuses the admin screens' "send, and on `step_up_required` ask for the password and retry once".
+> Note (P11): **decide step-up per action**, the same way as the admin writes (the user's request): before building them, decide for each destructive or privilege-changing action of this phase whether it needs a step-up: deleting a bot, changing grants, deleting a shared mode, and anything else that loses data or widens access. The app reuses the admin screens' "send, and on `step_up_required` ask for the password and retry once" ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 
-> Note (P11, from Phase 10, group H, the user's choice at PR #58's review, U24) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **Phase 11's first group, first:** after a refused login, a bot's next session request stays fresh until a fresh grant arrives, so a backoff never asks without `fresh` and the server never hands out the cached session that was just refused. It gets its own test, and P10.9's case 5 (`outage::a_bot_kicked_while_the_server_is_down_rejoins_with_its_kept_grant_and_a_fresh_request_waits`) is then tightened to expect it.
->
-> *Done in group A ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S1):* fleet-core's `BotState::Backoff { attempt, fresh }` carries a fresh request through each backoff until a session arrives, and `restore` keeps it; the proto's `Backoff` gains `fresh = 2`. A fresh session that's refused again fails the bot `Failed(Auth)`. The agent's "a session request couldn't be sent" line names `fresh`. Tests: fleet-core's `transition::a_refused_logins_requests_stay_fresh_through_its_backoffs_until_a_session_arrives` and the properties beside it, the runtime's `bot_actor::a_refused_logins_requests_stay_fresh_through_its_backoffs_until_a_grant_arrives` and `supervisor::a_crash_during_a_fresh_backoff_keeps_the_next_request_fresh`, the chaos test's stricter rule and its target "fresh retry after a backoff", and case 5, which now asserts every state and unsent request after the refusal fresh, the server's one grant after the outage fresh, the next `Connecting` with `auth_retried: true` and no fresh-limit refusal. *Residual:* a deliberate restart, a server change or an agent restart after a refusal asks once without `fresh`.
+> Note (P11): Phase 11's first group, as the user chose at PR #58's review (U24, [ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): after a refused login, a bot's next session request stays fresh through each backoff until a session arrives. Done in group A with fleet-core's `BotState::Backoff { attempt, fresh }` and the proto's `Backoff.fresh`, and P10.9's case 5 tightened. Residual: a deliberate restart, a server change or an agent restart after a refusal asks once without `fresh` ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S1).
 
 - [x] **P11.1** 🔴 Migrations and repositories:
   - `bots`: 1:1 with an account; server address, mode, desired state, assigned agent
   - `modes`: owner, visibility, definition JSON (validated by core), version
   - `chat_messages`
 
-  > Note (P11.1, from Phase 10's planning, the user's choice, U1) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **built in Phase 10.** `bots` and `modes` come in Phase 10's group D, with P10.5's scheduler and reconciler, their first readers; `chat_messages` in group G, with P10.8's ingest, its first writer, which ticks P11.1. Each table keeps the notes below. The per-server conflict texts stay in Phase 11: Phase 10's specs carry an empty list, and the per-server storage arrives later in a table of its own.
+  > Note (P11.1): built in Phase 10 (the user's choice, U1): `bots` and `modes` in group D (`0013_modes.sql`, `0014_bots.sql`; the columns in Appendix D), `chat_messages` in group G, which ticked P11.1. Every account has its bot, minted right after the account's ID (S35) and backfilled by the migration; `last_state_reason` (S40). The built-in modes `afk` and `farm` are seeded with fixed v7 IDs (ADR-0010), `01a14202-2800-7000-8000-000000000001` and `…0002` (`ModePreset::id()`, S38), no owner, and the JSON of `ModeDefinition::afk()` and `farm()` ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 
-  > Note (P11.1, from group C): The `modes` migration seeds the built-in modes `afk` and `farm`: fixed v7 IDs (ADR-0010), no owner, and the JSON of `ModeDefinition::afk()` and `farm()`.
+  > Note (P11.1): **no `auto_start`, ever** (the user's choice, U12; S33, S34): `desired_state` stays the only "should run" flag. `0014_bots.sql`'s comment ("Auto-start arrives with its first writer") stays as merged, since `migrations-check` forbids editing a merged migration ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 
-  > Note (P11.1, Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`bots` and `modes` as built** (`0013_modes.sql`, `0014_bots.sql`; the columns in Appendix D). Every account has its bot: created with it on both paths that create one, minted right after the account's ID (S35), and the migration gives every existing account one (its ID is the account's with the last hex digit's high bit flipped; no server, `afk`, stopped). No `auto_start` yet: it arrives with its first writer, P11.2's `PATCH` (S34). `last_state_reason` holds a paused or failed state's reason (S40). The seeds' IDs are `01a14202-2800-7000-8000-000000000001` (`afk`) and `…0002` (`farm`), `ModePreset::id()` (S38). Ticked in G, with `chat_messages`.
+  > Note (P11.1): `chat_messages` records what a mode said (`ModeChatSent{message}`, P4.5) with direction out. Conflict texts are stored per server and sent in each bot's spec as its resolved `ConflictTexts` ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)); built in group H4 (S66, S74–S78), in the table `server_settings`, keyed by `ServerKey` ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
-  > Note (P11.1, Phase 10, group E, the user's choice, U12) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **no `auto_start`, ever.** `desired_state` stays the only "should run" flag: a bot runs whenever it should and can (S33), and `start` and `stop` set it. The column never arrives and `PATCH` carries none. `0014_bots.sql`'s comment ("Auto-start arrives with its first writer") stays as merged: `migrations-check` forbids editing a merged migration.
-
-  > Note (P11.1, from Phase 4, group B, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **Outgoing mode chat** arrives as `ModeChatSent{message}` (P4.5), so `chat_messages` can record what a mode said, with direction out, next to user chat.
-
-  > Note (P11.1, from Phase 4, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **Conflict texts are stored per server** in managed mode: set once in the app for all bots on that server, and sent to agents as each bot's resolved `ConflictTexts` in its spec. *Scheduled at Phase 11's group H planning ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S66): group H4, which no group had listed. Planned at H4's planning (S74–S78): the table `server_settings`, keyed by a server's host and always-written port (`ServerKey`), read with the fleet so each spec carries its server's texts.*
-
-  > Note (P11.1, Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`chat_messages` as built** (`0016_chat_messages.sql`), which ticks P11.1; its writer is P10.8's ingest (S70).
-  > - **Columns:** `id INTEGER PRIMARY KEY AUTOINCREMENT` (a bot's chat is ordered and paged by ID, which is receipt order; *since P11.3 commit order, which a user's line can lead by one ingest batch: Appendix D's note, U5*); `bot_id`, `ON DELETE CASCADE` from `bots`, so a bot's chat goes with its account; `direction`, `in` or `out`; `kind`, fleet-core's `ChatKind` name for what a bot received and `mode` for what its mode sent, with no CHECK (P11.3 adds kinds, and reading refuses one it doesn't know); `sender_name` and `sender_uuid`, a player message's sender as the Minecraft server claims it (Appendix D's `sender`, in two columns); `text`, fleet-core's rebuilt, cleaned text (S6); `truncated`, the agent's flag or the server's own cut; `at`, the server's time of receipt, never the agent's (S5). CHECKs: a UUID only with a name, and an outgoing row has no sender and no cut. Indexed by `(bot_id, id)` for P11.3's pages and by `at` for P11.6's retention.
-  > - **`ports::chat`:** `ChatWrites::append` stores a row only while the bot's row names the agent that reported it (`INSERT … SELECT … WHERE EXISTS` in the batch's write transaction), and answers `None` otherwise without failing the transaction, so a bot deleted or moved since its message arrived never fails a batch; `ChatReads::page` is newest first, `before` exclusive, one row more than the page. Reading rebuilds each entry through fleet-core's constructors, and a row they refuse is `StoreError::Corrupt` naming its column.
-  > - **Tests,** red first against a stub that stored nothing and found nothing (11 of 12; the CHECK test, which the migration satisfies, was shown red by dropping the `direction` CHECK, reverted and checked by checksum). The migrations' checksum snapshot gains `16 chat messages`.
+  > Note (P11.1): **`chat_messages` as built** (`0016_chat_messages.sql`, `ports::chat`; S70): `id INTEGER PRIMARY KEY AUTOINCREMENT` (a bot's chat is ordered and paged by ID, which is receipt order; *since P11.3 commit order, which a user's line can lead by one ingest batch: Appendix D's note, U5*); `bot_id` (`ON DELETE CASCADE`), `direction`, `kind` (no CHECK), `sender_name`, `sender_uuid`, `text` (cleaned, S6), `truncated`, and `at`, the server's time of receipt (S5); indexed by `(bot_id, id)` and by `at`. `ChatWrites::append` stores a row only while the bot's row names the agent that reported it ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 - [x] **P11.2** 🔴 Bot endpoints:
   - `GET /bots`, `GET /bots/{id}`
   - `PATCH /bots/{id}` (server, mode)
@@ -3901,37 +1816,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   Every call is authorized, audited and reconciled.
 
-  > Note (P11.2, from Phase 10's planning, the user's choice, U1) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **built in Phase 10's group E,** right after the reconciler, so "reconciled" is the real one, with fleet-client's bot methods for P10.9's tests and the DoD check. Its open notes (SSRF, the answer for a Paused or Failed bot, and P11's step-up decision for `PATCH` and the five lifecycle calls) are decided there. Restart, reset and resume need a message the protocol doesn't have yet: group E adds it to `fleet.v1` as a new oneof case (S3). The Tauri commands, `ApiClient` and the bot screens stay in Phase 11.
+  > Note (P11.2): built in Phase 10's group E (U1), with fleet-client's bot methods; restart, reset and resume got a new `fleet.v1` oneof case (S3); the Tauri commands and the screens stayed in Phase 11 ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 
-  > Note (P11.2, from Phase 6, group C) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): the bot's state, mode and disconnect reason in a response are values a later version may extend, so their DTO fields are `Open<…>`.
+  > Note (P11.2): from earlier phases: a response's state, mode and disconnect reason are `Open<…>` ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)); a bot's DTO follows its account's field rule, and deleting an account deletes its bot ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)). From Phase 2 (ADR-0010): switching a mode takes `ViewMode` on the mode and `SetBotMode(allowlist.check_mode(&mode))` on the bot; the server address needs Manage (`ConfigureBot`) and the lifecycle calls `ControlBot`; `start`, `stop` and `restart` change nothing for a Paused or Failed bot; `ServerAddress` allows loopback and private addresses, so an SSRF policy must check the resolved IPs (the group A review).
 
-  > Note (P11.2, from the group A review): **SSRF.** `ServerAddress` allows loopback and private addresses (ADR-0010). An SSRF policy for the server address must check the resolved IP addresses, not the host string.
+  > Note (P11.2): from Phase 10's group D: reads go through `app::bots::BotService` after `authorize()`, and a bot's state reads `Reported`, `AwaitingReport`, `Unknown` or `Unplaced` with why (S41); every write that changes where a bot may run hints the reconciler (`Change::Store`); Resume and Reset of a sticky bot that isn't placed clear its stored `last_state`; `auto_start` never arrived (S34, U12); `link_flows/commit.rs`'s two clock reads became one first (U11) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 
-  > Note (P11.2, from group B): `start`, `stop` and `restart` change nothing for a Paused or Failed bot: the state machine ignores `Start` and `Stop` there (ADR-0010). Decide here what the API answers in that case.
-
-  > Note (P11.2, from group D) (ADR-0010):
-  > - **Switching a bot's mode** takes two checks: `ViewMode` on the mode, and `SetBotMode(allowlist.check_mode(&mode))` on the bot.
-  > - **Server address and auto-start** need Manage (`ConfigureBot`).
-  > - **Lifecycle calls** need `ControlBot`.
-
-  > Note (P11.2, from Phase 9, group E) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): a bot's DTO follows its account's field rule: who owns it, and since when, only for Admins, the Owner and Manage holders. Deleting an account (P9.6) deletes its bot with it.
-
-  > Note (P11.2, from Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
-  > - **Reads** go through `app::bots::BotService` (`view`, `list`), after `authorize()`; a bot's state reads `Reported`, `AwaitingReport`, `Unknown` (its agent has no live stream) or `Unplaced` with why (S41).
-  > - **Every write that changes where a bot may run** (`PATCH`, start, stop, Resume, Reset, a mode's change) hints the reconciler (`Change::Store`) after its commit; the 30 s pass catches a lost hint.
-  > - **`auto_start`** arrives with `PATCH` by `ALTER TABLE … ADD COLUMN` (S34); what auto-start does for users is asked at E's planning.
-  > - **Resume and Reset of a sticky bot that isn't placed** clear its stored `last_state` in the same transaction: the reconciler restores the stored one.
-  > - **Before E:** `link_flows/commit.rs`'s two clock reads become one, in its own PR (U11).
-
-  > Note (P11.2, Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **as built.** The user's choices: no auto-start (U12; P11.1's note) and the four 409 texts (U13). Decided by the review agents and approved at the plan review: S46–S56; reconciliations R31–R38.
-  > - **Routes** (class Standard; Appendix B): `GET /bots` (keyset pages, newest first: the bots of the accounts the caller may View, filtered in SQL and each checked again with `authorize(ViewBot)`), `GET /bots/{id}`, `PATCH /bots/{id} {server_address}` (Manage, step-up), `PUT /bots/{id}/mode {mode_id}` (`ViewMode` on the mode, `SetBotMode(check_mode)` on the bot) and `POST /bots/{id}/start|stop|restart|reset|resume` (Control). Each answers `BotResponse {id, account, server_address?, mode_id, desired_state, status, agent?}`: the account under its field rule, `agent` for Admins and the Owner only, and `status` flat, with `kind` (`reported`, `awaiting_report`, `unknown`, `unplaced`) and the fields of its kind; every enum is an `Open<…>` (S54).
-  > - **Deviation (S47):** the mode left `PATCH` for `PUT /bots/{id}/mode`, since a step-up is per route and only the server address needs one. `PATCH` takes only a required `server_address`, and nothing clears it (R33, S55).
-  > - **The lifecycle** (S48, S50, S51): start and stop store `desired_state` and answer 200 whatever the bot reports; a bot that can't run yet reads unplaced, with why. Stopping a Paused or Failed bot frees its slot and keeps its state. Restart, and resume or reset of a bot on an agent, are one-shot commands (`ServerMessage::Lifecycle`), recorded and then sent only to the stream that holds the bot Assigned: 202 with the bot. Resume or reset of a bot that runs nowhere clears its stored state and the server's kept report in one transaction: 200. Anything else is 409 `bot_not_running`, `bot_not_paused`, `bot_not_failed` or `bot_unreachable` (fleet-core's `bot::judge_command`). A command whose send fails after its commit is 409 `bot_unreachable`, and its entry stays.
-  > - **Writes** re-read the actor, the bot, its account's grant and the mode in their transaction and authorize again, write only the changed column (never `agent_id`), commit with their entry (`bot.set_server`, `bot.set_mode`, `bot.start`, `bot.stop`, `bot.restart`, `bot.reset`, `bot.resume`; S53) and hint `Change::Store` after the commit. A write that changes nothing answers 200 with no entry and no hint. An unknown or hidden mode is one 422 on `mode_id`; a mode with a command off the allowlist needs Manage (403).
-  > - **Also:** the per-bot limit (§7.4's note, S52); `[chat] command_allowlist`, read by the mode switch (R37); `Assignments::assign` returns the row's stored state, from which a new placement's restore comes; fleet-client's `bots`, `bot`, `patch_bot`, `set_bot_mode`, `start_bot`, `stop_bot`, `restart_bot`, `reset_bot` and `resume_bot` (S56).
-  > - **SSRF** (S46): the server doesn't check where an address points; the agent will, right before it dials (P10.7's note). The `PATCH`'s OpenAPI description says so.
-  > - **Hands-on:** none before G. Without the managed agent no bot runs through the server, the app has no bot screens until P11.9, and calling the API by hand would need curl or a password on a command line (ADR-0016, ADR-0017). H's DoD check calls these routes for real.
-  > - **PR #54's review** (ADR-0019): a command goes only to the stream of the generation found holding its bot, checked and queued in one critical section; a bot whose agent isn't online (disabled, its certificates revoked or expired, before its stream ends) is 409 `bot_unreachable`; a resume or reset puts the kept report back unless its commit lands (a caller dropped mid-commit included), and refuses when its clear changes nothing; a write's answer asks `authorize()` again (404 once the caller may no longer see the bot); `server_address` shows only to Control holders and above.
+  > Note (P11.2): as built in group E (U12, U13, S46–S56, R31–R38): `PATCH /bots/{id} {server_address}` (Manage, step-up), `PUT /bots/{id}/mode {mode_id}` and the five lifecycle calls (Control), each answering `BotResponse` with `Open<…>` enums (S54); start and stop store `desired_state` and answer 200 (S48, S50, S51); restart, and a resume or reset on an agent, are one-shot commands (202); anything else is a 409 with one of the four codes (U13); writes re-read, authorize again and commit with their entry (S53). SSRF: the server doesn't check where an address points; the agent does (S46).
+  > Deviation (S47): the mode left `PATCH` for `PUT /bots/{id}/mode`, since only the server address needs a step-up; `PATCH` takes only a required `server_address`, and nothing clears it (R33, S55). No hands-on before G (ADR-0016, ADR-0017); PR #54's review tightened commands, unreachable agents and a write's answer ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 - [x] **P11.3** 🔴 Chat:
   - `POST /bots/{id}/chat`:
     - takes a `ChatMessage`
@@ -3940,119 +1832,24 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
     - audited
   - `GET /bots/{id}/chat?before=&limit=` with cursor pagination.
 
-  > Note (P11.3, from Phase 6, group C, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): the cursors (chat's `before`, and `GET /audit`'s) are `INTEGER` row IDs, so they cross the API as `SafeInt`, never a plain `i64`.
+  > Note (P11.3): the cursors are `INTEGER` row IDs and cross the API as `SafeInt` ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)); the handler checks `SendChat(allowlist.check(&message))` and sends that same message, an allowlisted command passing with any arguments, and reading the history needs `ViewBot` (group D, ADR-0010); the bot routes' answer order (R38), and `[chat] command_allowlist` exists ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 
-  > Note (P11.3, from group D): The handler checks `SendChat(allowlist.check(&message))` and then sends that same message. An allowlisted command passes with any arguments (threat model). Reading the history needs `ViewBot` (ADR-0010).
+  > Note (P11.3): **a `SendChat` dies with its stream:** its `ChatSent` or `ChatFailed` may come on a later stream or never, so P11.3's wait for an answer is bounded, and one that never comes reads as unknown; `chat_messages` holds what bots received and what their modes sent, and a user's message is P11.3's to store (Phase 10, group G; [ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 
-  > Note (P11.3, Phase 11, group A) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S2, S3): **P11.3's agent side as built** (P11.3 is ticked in group B, with the API).
-  > - **Secure chat (S2):** wherever fleet-mc's `needs_signing` holds, a command whose name can reach a `message` argument in the server's command tree is refused before sending, with `ChatUnavailable`, even once chat is signed: azalea signs no command. The tree is read by `command_tree::MessageCommands`, one backward pass, each node at most once, a redirect to the root not followed, indexes out of range ignored; until a tree arrives commands go out as before. User chat gets `ChatFailed{ChatUnavailable}`; mode chat is skipped at `debug`; fleet-mc warns once per session, never naming the command. No wire change.
-  > - **The chat rate (S3):** `fleet_core::chat::ChatRate` (interval 1–60 s, burst 1–8 since PR #59's review, U2, 3 s and 3 by default), the server's `[rate_limits] chat_per_bot_interval_secs` and `chat_per_bot_burst`, sent in each bot's spec (`BotSpec.chat_rate`, wire field 7) by the reconciler. The agent's runtime builds each bot's bucket from its spec and swaps it for every clone when a spec brings another rate, keeping what it held up to the new burst (never a refill, PR #59's review); the same rate keeps it. The runtime's fleet-wide `chat_interval` and `chat_burst` and `FleetSetupError::ChatQuota` are gone; their zero-interval check is `ChatRate`'s. A standalone agent uses the default. The HTTP limits that spend it come with the API (B).
+  > Note (P11.3): the agent's side, as built in group A: wherever chat must be signed, a command that can reach a `message` argument is refused with `ChatUnavailable` (S2). This settles the secure-chat limit Phase 3's real-account check found (ADR-0011), and it applies to mode chat too ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)). Phase 4 asked to "decide where that setting lives (server settings, sent to agents)": one chat rate per bot, `[rate_limits] chat_per_bot_interval_secs` and `chat_per_bot_burst` (burst 1–8, U2), is sent in each bot's spec (S3) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
-  > Note (P11.3, Phase 11, group B's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U3, S7–S9): **the API in two PRs**: B1 (`p11/p11.3-chat-send`) sends, B2 (`p11/p11.3-chat-history`) reads and ticks P11.3.
-  > - **Who sent a line** *(the user's answer, U3)*: a user's line stores its sender (`chat_messages.sent_by`, `ON DELETE SET NULL`, B1). The history shows the sender's username only to the viewers who see the account's owner (Admins, the Owner, the account's Manage holders); every viewer sees their own lines marked `mine`; a deleted user's lines show no name. S6's rule for command arguments stays.
-  > - **A stored line never changes after the send** (S7): whether it went out is told only in the send's answer and in D's live `ChatSent`/`ChatFailed`; no delivery column.
-  > - **`/command`** (S8) takes commands only (a plain line is 422 on `message`, checked with the body) and authorizes them exactly as `/chat` does, `SendChat(allowlist.check(&message))`: Control for an allowlisted command, Manage for an unlisted one, behind the route's step-up.
-  > - **Hidden arguments** (S9, B2): below Manage, a command line's `text` is `/` and its name, and `arguments_hidden` says something was left out; `mine` doesn't lift it.
+  > Note (P11.3): sending, in group B1 (U3, S7–S9): `POST /bots/{id}/chat` (Control) and `POST /bots/{id}/command` (step-up, commands only, S8) answer 200 `sent` or 202 `pending` after waiting up to 6 s (S5). A user's line is stored with its sender (`chat_messages.sent_by`, U3), never changed after the send (S7), and audited without its text. The forbidden-character text names formatting codes (U4). Since PR #60's review, the wait counts from the request's arrival (U6), and the service checks the route itself (S10) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
-  > Note (P11.3, Phase 11, group B1) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)): **sending, as built** (P11.3 is ticked in B2, with the history).
-  > - **Routes:** `POST /bots/{id}/chat` (Control) and `POST /bots/{id}/command` (step-up), as Appendix B's note lists them, answering `ChatSendResponse` (200 `sent`, 202 `pending`) or 409/429 through one match over the agent's reasons without a wildcard (S5). The forbidden-character field text names formatting codes (U4).
-  > - **The send:** `BotService::send_chat` judges the bot (fleet-core's `judge_chat`), mints the `ChatRequestId`, stores the line with its sender (`chat_messages.sent_by`, Appendix D) and records `bot.send_chat` or `bot.send_command` without its text in one transaction, then subscribes to the bus, sends through `LiveAgents::send_chat` and waits up to 6 s (`ChatWait`). A refusal before the commit writes nothing; one after it keeps the row and the entry (S7).
-  > - **Limits:** `[rate_limits] chat_per_user_per_min` and the bot's chat rate (§7.4's note).
-  > - **Clients:** fleet-client's `send_chat` and `send_command`; `just dev-bots`' `chat <id> <text>` and `command <id> <text>`.
-  > - **Tests:** fleet-core's table, the DTO rules (and that each message survives the cleaning of what clients read), the registry, the wait on paused time over the bus, the service over the fake streams, 15 HTTP tests (`bots::chat`), fleet-client's scripted and in-process tests, the console, and fleet-integration's `loopback::chat` case through the real ingest. ADR-0020's "As built (B1)" lists the red runs and mutations.
-
-  > Note (P11.3, PR #60's review, B2's first commit) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U5, U6, S10): **follow-ups to sending.**
-  > - **The wait counts from the request's arrival** (U6): a middleware layer right outside the request timeout sets each request's `Arrival`, and both chat handlers take it, so the timeout's 408 can't fire after a line was sent, however long the session's lookup and the body took.
-  > - **The service checks the route itself** (S10): `/chat` with a command off the allowlist, or `/command` with plain chat, is refused before anything is read, as an internal error, since only a missing handler check gets there.
-  > - **Also:** a committed line its stream no longer took is logged at `debug` with its IDs and why; `just dev-bots` treats `chat <id>` and `command <id>` without text as invalid input; the 422 descriptions name control characters; tests pin a grant revoked before the transaction (404, nothing written or sent) and serve's wiring of the wait.
-
-  > Note (P11.3, Phase 11, group B2's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S11, U7): **the history's text, and the kick message.**
-  > - **A line's text crosses as a `BoundedText`** (S11): a received line break becomes ` | `, so a server can't make one message look like two; its cap, 3072 characters, holds a stored 1024-character text with line breaks uncut.
-  > - **The kick message's cap** *(the user's addition at the plan review, U7)*: `LastDisconnect.message` gets the same treatment (3 × `Kick::MAX_MESSAGE_LEN`), since a long kick message with line breaks was cut on its way out.
-
-  > Note (P11.3, Phase 11, group B2) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S6, S9, S11, U3, U5, U7): **reading, as built** (P11.3 ticked here).
-  > - **The route:** `GET /bots/{id}/chat?before=&limit=` (View, class Standard) answers `ChatPage {items, next}`, newest first by ID, which is commit order (U5), with ADR-0016's list rules and a `SafeInt` cursor: 400 for a query that doesn't parse, 422 for a `limit` outside 1 to 100 or a `before` below 1, 404 for an unseen bot.
-  > - **Each line for its viewer** (`chat_line`, beside `account_response`, for D's live events too): a command's arguments only for Manage holders, below that `/name` and `arguments_hidden` (fleet-core's `ChatMessage::without_arguments`, S9); who had a user's line sent only for viewers who see the account's owner, and only while that user exists; `mine` on the viewer's own lines (U3); the text a `BoundedText<3072>`, a received line break as ` | ` (S11).
-  > - **Also:** `ChatReads::page` joins the sender's username; `BotService::chat`; fleet-client's `chat`; `just dev-bots`' `history <id> [before]`; the kick message's cap (U7, P11.2's `LastDisconnect`).
-  > - **Tests:** fleet-core's table and property, the DTO rules and the uncut cases, the repository's join, the service, 10 HTTP tests (`bots::history`, one snapshot of a page as each viewer sees it, the canary), the uncut properties, fleet-client's scripted and in-process tests, the console, and fleet-integration's `loopback::chat` reading back a sent line. ADR-0020's "As built (B2)" lists the red runs and mutations.
-
-  > Note (P11.3, from Phase 3, group E, found by the user's real-account check): **flagged, not decided.** *Decided in Phase 11, group A: see the note above (S2).*
-  > - **The limit.** On a server that enforces secure chat, azalea's unsigned commands with message arguments (`/me`, `/msg`, `/tell`, `/w`, `/say`, `/teammsg`) are rejected.
-  >   - The bot gets one system message and stays up.
-  >   - The server logs an ERROR each time.
-  >   - `send_chat` returns `Ok` anyway.
-  > - **The options:**
-  >   - sign commands, which needs the server's command tree to know which arguments are signable
-  >   - refuse such commands on enforcing servers, with an error
-  >
-  > P4.5 decides the same for mode chat (ADR-0011).
-
-  > Note (P11.3, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Mode chat follows this task's rule.** P4.5 does nothing special for commands with message arguments; whatever is decided here applies to mode chat too, through `ChatUnavailable`.
-  > - **The per-bot chat limit.** §7.4 says it's configurable, and the agent's queue uses one message per 3 s, burst 3 as a default. Decide here where that setting lives (server settings, sent to agents). *Decided in Phase 11, group A ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S3): the server's `[rate_limits]`, sent in each bot's spec.*
-
-  > Note (P11.3, from Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`[chat] command_allowlist` exists** (`ServerConfig.chat`, P2.9's rules; the mode switch reads it), and `BotService` has it; `retention_days` stays P11.6's. The bot routes answer in extractor order (R38): 401, the per-user 429, a malformed path's 404, the body's 400/422, an unseen bot's 404, then 403; the chat route follows it, and re-reads the actor and the grant in its transaction as the bot writes do.
-
-  > Note (P11.3, from Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **a `SendChat` dies with its stream.** The agent applies one only while the stream that carried it lives, and its `ChatSent` or `ChatFailed` may come on a later stream or never: the outbox keeps answers across an outage, bounded, and drops those of bots the next reconcile doesn't give. P11.3's wait for an answer is bounded, and one that never comes reads as unknown. `chat_messages` holds what bots received and what their modes sent; a user's message is P11.3's to store.
+  > Note (P11.3): reading, as built in B2, which ticked P11.3 (S6, S9, S11, U3, U5, U7): `GET /bots/{id}/chat?before=&limit=` answers `ChatPage`, newest first by ID, which is commit order (U5). Below Manage, a command shows as `/name` with `arguments_hidden` (S9). The sender's username shows only to viewers who see the account's owner, with `mine` on the viewer's own lines (U3). The text is a `BoundedText<3072>`, with a received line break shown as ` | ` (S11), and the kick message gets the same cap (U7) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 - [x] **P11.4** 🔴 Modes CRUD: `GET`, `POST`, `PUT`, `DELETE` on `/modes`. Core validation errors become field errors. Built-in modes are read-only.
 
-  > Note (P11.4, from Phase 2): Editing a mode that's assigned to bots must re-run the command check for every one of them. A mode with a command outside the allowlist needs Manage on each bot (ADR-0010).
+  > Note (P11.4): the rules it started from (ADR-0010): editing a mode re-runs the command check for every bot that uses it, and a command outside the allowlist needs Manage on each; `ModeDraft::validate` stops at the first error, and each `ModeError` is a field error at `steps[step]`; built-in modes are read-only; private ones are seen and edited by their owner, the Owner, and Admins for Members' modes; shared ones are seen by everyone and created by Admin+; a visibility change needs the rights before and after; serde_json's errors can quote chat text.
+  > A bot's mode is switched by `PUT /bots/{id}/mode` (S47, S55; [ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)); "on respawn" steps were requested after Phase 4 ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)); a command off the allowlist in a mode needs a step-up (S4), and arguments are hidden below Manage (S9).
 
-  > Note (P11.4, from group E): open question, flagged and not yet decided. `fleet-core`'s own errors never quote their input, but serde_json's do: an unknown action type or a bad field value in mode JSON comes back as e.g. ``unknown variant `…` `` or `invalid type: string "…"`, which can hold chat text. The existing rules already say: internal errors never reach clients, and chat is logged only at debug. How the server maps and logs these errors is decided here (ADR-0010).
+  > Note (P11.4): C's planning, in three PRs: C1 reading and creating, C2 editing and deleting, C3 "on respawn" steps (U8, S12–S20, R1–R5). Serde refuses only a shape (a bare 400), and every value rule is one 422 at the field's own path (S12); `GET /modes` gives keyset pages, and there's no `GET /modes/{id}` (R1); `fleet_core::mode::ModeName` is 1–32 characters, unique without ASCII case (S13, U8); what a viewer sees and may do comes from `authorize()`'s flags, and a command's arguments show only to those who could edit the mode (S14, S15).
+  > `/with-commands` step-up twins and a step-up `DELETE` (S16); an edit checks every bot that uses the mode (S17); `PUT` carries the `version` (S18); 50 modes an owner (S19); an opt-in `on_respawn` schedule after a confirmed respawn (S20) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
-  > Note (P11.4, from Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **a bot's mode is switched by `PUT /bots/{id}/mode {mode_id}`** (S47, S55): `ViewMode` on the mode (an unknown or hidden one is one 422 on `mode_id`, so modes can't be probed), then `SetBotMode(check_mode)` on the bot (a command off the allowlist needs Manage, 403), both again in the transaction (`ModeWrites::find`). Editing a mode bots use re-runs that check for each (the Phase 2 note above); whether a mode's edit or deletion needs a step-up is decided here, under P11's step-up note.
-
-  > Note (P11.4, from group C): `ModeDraft::validate` stops at the first error. Each `ModeError` becomes a field error at `steps[step]`: `AngleOutOfRange` names its field, and `DuplicateStep` its `LimitedStep` kind (ADR-0010).
-
-  > Note (P11.4, from group D): Modes follow `authorize()` (ADR-0010):
-  > - **Built-in** modes are read-only for everyone.
-  > - **Private** modes are seen and edited by their owner, the Owner, and Admins for Members' modes. Everyone else gets 404, also in `GET /modes`.
-  > - **Shared** modes are seen by everyone, and edited by their creator while they're an Admin, and by the Owner. Creating one needs Admin+.
-  > - **Changing the visibility** needs the rights before and after the change, so an Admin can't share a Member's private mode.
-
-  > Note (P11.4, from Phase 4, the user's request) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **After a respawn none of the at-start setup runs again** (look, slot, sneak, hold); only a repeating step comes back. Decide here whether modes get "on respawn" steps (e.g. `/home`, then the setup). That needs a `SessionEvent::Respawned` port event, with which the actor's respawn retry can also confirm that the bot is alive again instead of trusting an `Ok`.
-  > Note (P11.4, from Phase 11, group B) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S4, S9): writing the text of a command off the allowlist into a mode needs a step-up, as sending one does (S4). And weigh here whether `GET /modes` shows a shared mode's command arguments to viewers below Manage, which a bot's chat history hides (S9).
-  > Note (P11.4, Phase 11, group C's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U8, S12–S20, R1–R5): **three PRs**: C1 (`p11/p11.4-modes`) mode names, the API's mode types, `GET /modes` and `POST /modes`; C2 (`p11/p11.4-mode-edits`) `PUT` and `DELETE`; C3 (`p11/p11.4-on-respawn-steps`) "on respawn" steps, ticking P11.4. The notes above are decided there:
-  > - **Field errors** (S12): flat mode types whose JSON is ADR-0010's; serde refuses only a shape (the extractor's bare 400, never its message, in an answer or a log); every value rule, each `ModeError` included, is one 422 at the field's own path (`steps[3].action.message`). `GET /modes` is keyset pages filtered in SQL and checked row by row; there's no `GET /modes/{id}` (R1).
-  > - **Names** (S13, U8): `fleet_core::mode::ModeName`, 1–32 letters, digits, plain spaces and punctuation, unique without ASCII case per owner and among shared modes, the built-in names reserved (migration 0018).
-  > - **What a viewer sees** (S14, S15): `built_in`, `mine`, the owner for Admins and the Owner only, the flags `editable`, `deletable` and `visibility_editable` from `authorize()`; a command's arguments only for a viewer who could edit the mode, below that `/name` and `arguments_hidden`.
-  > - **Step-up** (S16): `POST` and `PUT` are authed and point a definition with a command off the allowlist to their `/with-commands` twins (403 `mode_needs_step_up`); `DELETE` is a step-up route.
-  > - **Bots that use a mode** (S17): an edit needs `SetBotMode(check_mode)` on every one of them, else 409 `mode_in_use_by_others`, naming none; a mode in use isn't deleted (409 `mode_in_use`). An edit reaches them through `Change::Store`.
-  > - **Concurrent edits** (S18): `PUT` carries the `version` it read (409 `mode_changed`). **The cap** (S19): 50 modes an owner (409 `conflict`). **On respawn** (S20): an opt-in `on_respawn` schedule after a respawn the server confirmed.
-
-  > Note (P11.4, Phase 11, group C1) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)): **reading and creating, as built** (P11.4 is ticked in C3).
-  > - **Names and types:** fleet-core's `ModeName` and `MAX_MODES_PER_OWNER`; migration `0018_mode_names.sql` (the two unique indexes, `modes_owner_user_id` dropped); fleet-api-types' `modes` (the flat request and response types, `ModeSteps::definition`'s one exhaustive mapping, `mode_needs_step_up`); the equality test's renderer reads `number`.
-  > - **Routes:** `GET /modes` (keyset pages, `ModeReads::visible` checked row by row), `POST /modes` and `POST /modes/with-commands` (step-up), `mode.create`; each mode built for its viewer by `mode_response`, which shares `shown(whole)` with `chat_line`.
-  > - **Deviation (R6):** whose a mode is crosses as one open `ownership` (`built_in`, `mine`, `someone_else`) instead of S14's two flags `built_in` and `mine`: the same facts without an impossible pair, and clippy's limit of three bools a struct holds without an `#[expect]`.
-  > - **Clients:** fleet-client's `modes`, `create_mode` and `create_mode_with_commands`; `just dev-bots`' `modes`, `new-mode <json>` and `mode <id> <mode>`.
-  > - **PR #62's review:** `ModeName` also refuses what Unicode counts as a letter or digit but U8 doesn't: the letters with the Emoji property (`ℹ`, `Ⓜ`, `🅰`, `🅱`, `🅾`, `🅿`), both enclosed-alphanumerics blocks, the Egyptian full and half blank, and the five combining-diacritics blocks; the marks of Arabic, Hebrew and Indic scripts stay allowed, an accepted residual. Every action kind's interval text is pinned; migration 0018's comment names the request's check, not the service, for reserved names.
-  > - **Deviation:** the new mode's ID and `created_at` are drawn before the create's write transaction, not inside it as planned, as the offline-account and invite services do: minting reads `SecureRandom`, which stays out of an open write (ADR-0015). A refused create drops its ID unused, and `created_at` is when the service took the request.
-  > - **For C2:** an answer's `message` is a `BoundedText`, which strips the invisible characters `ChatMessage` allows (a zero-width space), so an untouched mode holding one, sent back, reads as changed. C2's no-op check handles it, so such a save is no change, no entry and no version (ADR-0020's note for C2).
-
-  > Note (P11.4, Phase 11, group C2's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S21, R7): **editing and deleting.**
-  > - **The no-op** (S21): fleet-core's `ModeDefinition::same_as_shown` compares two definitions as an answer shows them (each chat message cleaned as `BoundedText` cleans it, then trimmed); an edit with the same name, visibility and shown steps writes nothing and answers 200. A real edit writes the request's steps exactly as sent, and every check judges them.
-  > - **A lost update** *(the user's addition at the plan review)*: a guarded `UPDATE` that matches no row after the transaction's own re-read matched is the internal error, never a 200.
-
-  > Note (P11.4, Phase 11, group C2) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)): **editing and deleting, as built** (P11.4 is ticked in C3).
-  > - **Routes:** `PUT /modes/{id}`, its step-up twin `/with-commands` and `DELETE /modes/{id}` (step-up), in Appendix B's order; `mode.update` and `mode.delete`; the codes `mode_changed`, `mode_in_use_by_others` and `mode_in_use` (409). A real edit hints the reconciler, whose next pass sends each agent holding a bot that runs the mode an `Update` (fleet-integration's loopback case).
-  > - **The no-op** (S21): fleet-core's `ModeDefinition::same_as_shown` and `ChatMessage::shown_text`; a real edit writes and judges the request's steps exactly as sent.
-  > - **Ports:** `ModeReads`/`ModeWrites::listed`, `name_taken` without the mode itself, `ModeWrites::update` (guarded by the version) and `delete` (never a built-in mode), `BotWrites::accounts_with_mode` (the index `bots_mode_id`). No migration.
-  > - **Clients:** fleet-client's `update_mode`, `update_mode_with_commands` and `delete_mode`; `just dev-bots`' `edit-mode <id> <json>` and `delete-mode <id>`, the mode line with its version.
-  > - **Deviations:** a delete that matches no row it had just read is the internal error too, as the user's note asks of an update; the commits are seven, the clients before the loopback case, which drives the server through fleet-client.
-
-  > Note (P11.4, Phase 11, group C3's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S22–S26): **"on respawn" steps.**
-  > - **fleet-mc** (S22): `Respawned` only for a `Died` the actor took and a `respawn()` since, once the bot is loaded and not dead (azalea's `HasClientLoaded` without `Dead`; corrected at PR #65's review, S27: once a Respawn removed `Dead` and the next load followed); never for a dimension change; the next `Died` only after it, so at most three lifecycle events are pending and the drain of 67 holds.
-  > - **The actor** (S23): an `Ok` not confirmed within 5 s is a failure, and the twelfth ends the session `RespawnFailed`, 60 s after the death at most; `Respawned` drops the retry and signals the runner through a `watch`; it stays inside the agent.
-  > - **The runner** (S24): fleet-core's plan keeps the on-respawn steps aside and hands them out on a respawn, a chat skipped within 30 s of the last one, a memory kept for the session; the runner lets go only for a mode that has such steps.
-  > - **Older agents and servers** (S25) refuse the whole message or row, as before; the agent's "couldn't be read" line goes to `error`. **The slow test** (S26): fleet-mc's scenario and a whole-path `slow_` case in fleet-integration.
-
-  > Note (P11.4, Phase 11, group C3) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)): **"on respawn" steps, as built**; P11.4 is ticked.
-  > - **The tag:** `{"type":"on_respawn"}` through fleet-core, the API (`ModeScheduleKind::OnRespawn`, no interval or jitter), the stored JSON and the proto (`on_respawn = 3`); four limited kinds, one each per mode. An agent or server that doesn't know it refuses the whole message or row.
-  > - **The confirmed respawn:** fleet-mc's `SessionEvent::Respawned` (`RespawnWatchPlugin` and the bridge's `Taken` death); the fake confirms by itself unless withheld; the actor's retry counts an unconfirmed `Ok` as a failure.
-  > - **The runner:** lets go of the use button and stops sneaking, then runs the on-respawn steps in order, an on-respawn chat skipped within 30 s of the last; a mode without such steps behaves as before.
-  > - **Tests:** fleet-integration's `loopback::on_respawn` on the fake and `slow_on_respawn` against a real offline-mode container, killed through RCON.
-  > - **Deviations:** no `calls` field on the confirmation's line; `ModeRunner::new` takes the respawn signal; the slow case checks an on-respawn look (a jump right after the load doesn't register) and reads the history after each ingest batch; the azalea bump check is in ADR-0003, as `docs/runbook.md` comes with P12.6.
-  > - **PR #65's review** ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S27, U9, U10): azalea's `add_dead` can put `Dead` back in the Respawn's frame, so fleet-mc confirms a respawn from the Respawn's removal of `Dead` and the next load, and reads deaths from azalea's `DeathEvent` inside the frame (S27); `respawn_failed()` leaves a death read in its drain to its own retry; the slow case counts every retry line, fits its budget with both stops, always removes its container first, reads RCON through `Logs::within` (U9) and the history while the bot runs (U10).
+  > Note (P11.4): as built in C1–C3 (S21–S27, R6, R7, U9, U10): an edit that changes nothing writes nothing, and a guarded `UPDATE` or delete that matches no row is the internal error (S21, R7); the `on_respawn` tag runs through fleet-core, the API, the stored JSON and the proto, and fleet-mc's `SessionEvent::Respawned` is confirmed from the Respawn's removal of `Dead` and the next load (S22, S27). Deviations: whose a mode is crosses as one open `ownership` instead of S14's two flags (R6); a new mode's ID and `created_at` are drawn before the write transaction (ADR-0015); the azalea bump check went into ADR-0003 ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
 - [x] **P11.5** 🔴 Live events:
   1. `POST /events/ticket` returns a single-use ticket valid for 30 s (moka).
@@ -4060,82 +1857,17 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   3. Events are **filtered per user at send time**.
   4. Limits: per-user connection cap, `Resync` on `Lagged`, ping/pong with an idle timeout, maximum frame size.
 
-  > Note (P11.5, from the group A review): The ticket comes from `getrandom`, never from a v7 ID, which reveals its creation time.
+  > Note (P11.5): the ticket comes from `getrandom`, never from a v7 ID, which reveals its creation time (the group A review). A WebSocket closes itself with a close frame on shutdown ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)). The bus is `app::events::EventBus`, which carries what agents reported, and P11.5 publishes the server's own changes ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)). Every live `Chat` and mode event is built per subscriber through the history's `chat_line` and `GET /modes`' `mode_response` (S6, S7, S9, S11, S14, S15, U3).
 
-  > Note (P11.5, from Phase 6, group E, the user's addition) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **a WebSocket must close itself on shutdown.** Once upgraded, it isn't bound by the request timeout, and the graceful shutdown waits for every open connection, so each WebSocket handler watches the shutdown `CancellationToken` and closes its connection with a close frame when it fires. Otherwise one open app makes every shutdown wait the full deadline.
+  > Note (P11.5): D's planning, in two PRs: D1 the socket and D2 the events (U11–U14, S28–S37, R8–R21). Deviation from item 1: tickets live in memory on the server's `Clock` (`afk_wt_`, 32 bytes, 30 s, single use), not in moka (S29). `GET /events` takes the session's bearer and the ticket, and every bad ticket is one 404 (S28, R10). A socket re-checks its session after every commit and ends with its access token (S31, R8). The limits: `[rate_limits] ws_connections_per_user`, ping 15 s, idle 45 s, client frames of at most 125 bytes, and `resync` at most every 5 s (S35, U12, U13). One flat `EventMessage` (S36); `just dev-bots`' `events` (S37) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
-  > Note (P11.5, from Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the bus** is `app::events::EventBus` (`App.events`, made in `app_with`): a `broadcast` of `Arc<LiveEvent>` (1024) with statuses, deaths, alerts and chat answers at once, and chat after its commit with its row ID. A subscriber that lags gets `Lagged` and resyncs from the bots' views. It carries what an agent reported, not what the server decided: P11.5 publishes the shown-state changes it needs itself (assignments, a bot's desired state).
-  > Note (P11.5, from Phase 11, group B) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S6, S7, S9, U3): a user's line is a `Chat` event too, published after its commit and before its send, with the request ID from the send path (never stored on the row, S7), so live viewers pair `ChatSent` and `ChatFailed` with it. Every live `Chat` event follows the history's field rules per subscriber: a command's arguments only for Manage holders, through fleet-core's function and B2's `arguments_hidden` (S9); the sender's name only for the viewers who see the account's owner, and `mine` for each viewer's own lines (U3). Who sees a `ChatFailed`'s reason is this task's question.
-
-  > Note (P11.5, from Phase 11, group B2) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S11): **build each live `Chat` event through `chat_line`** (`http::handlers`), the history's helper, with the subscriber's level read when the event is sent: the same field rules, and the same `BoundedText<3072>` text, a line break as ` | `.
-
-  > Note (P11.5, from Phase 11, group C1) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S14, S15): **build each live mode event through `mode_response`** (`http::handlers`), `GET /modes`' helper, with the subscriber's role and rights read when the event is sent: S14's owner rule (who made the mode only for Admins and the Owner) and S15's cut (a command's arguments only for a viewer who may edit the mode) hold for live viewers too.
-
-  > Note (P11.5, Phase 11, group D's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U11–U14, S28–S37, R8–R21): **two PRs**: D1 (`p11/p11.5-live-events`) the socket and its security, D2 (`p11/p11.5-events-per-viewer`) the events, filtered per viewer, ticking P11.5. The notes above are decided there:
-  > - **The ticket** (S29): in memory like the login's challenges, on the server's `Clock` (`afk_wt_`, 32 bytes from getrandom, 30 s, single use, at most 3 a user), **not moka** (item 1 above); `POST /events/ticket` answers 200 `{ticket, expires_in}`, checks `UsePersonal` and spends the per-user limit.
-  > - **The connect** (S28, R10): `GET /events` takes the session's bearer token and the ticket, which must be this session's; every bad ticket is the same 404.
-  > - **An open socket** (S31, R8): re-checks its session after every commit and lives at most until the access token it connected with expires (4001).
-  > - **Rights at send time** (S30): one shared snapshot rebuilt after any commit; a hidden bot's event is dropped by a lookup. **Bots** (S32): the whole `BotResponse` per subscriber, fact-free hints for the server's own changes, `bot_removed`. **Modes** (S33): re-read when sent, `mode_removed` judged on the context before. **Chat** (S34): the user's line after its commit, a failure's reason only for Control and above.
-  > - **Limits** (S35, U12, U13): `[rate_limits] ws_connections_per_user` 1–10 (3), 429 `too_many_connections`; ping 15 s, idle 45 s, client frames of at most 125 bytes, one frame in flight and a 10 s send, `resync` at most every 5 s; a 1001 at shutdown before the database closes.
-  > - **The wire** (S36): one flat `EventMessage` with an `Open` kind, `ready` first, documented as `OpenAPI` components and in the module's docs. **Hands-on** (S37): `just dev-bots`' `events`.
-
-  > Note (P11.5, Phase 11, group D1) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)): **the socket and its security, as built** (P11.5 is ticked in D2).
-  > - **Tickets** (S29): `app::event_tickets::EventTickets`, a map of SHA-256 hashes on the server's `Clock`, not moka; `TokenKind::EventTicket` (`afk_wt_`); housekeeping purges the expired ones.
-  > - **Routes** (S28, R10): `POST /events/ticket` and `GET /events` in `http/handlers/events.rs`, both `authed_route`s of class Standard. Every bad ticket is one 404, with a `debug` line naming why, never the ticket.
-  > - **The socket** (S31, S35, R18–R21): `http::ws::run`, one task per socket on `LiveSockets`' tracker, one biased `select!`: 1001 at shutdown; 4001 when the access token it opened with expires, or when its session no longer counts, checked again after every commit (`Store::commits()`); 1013 when that check fails; 1008 for any frame but a pong answering a ping and a close; 4000 without a pong for 45 s; 4002 for a send not out in 10 s; `resync` at most every 5 s after a lag. One `info` line at open and one at close. serve waits for the sockets within the drain, before the database closes.
-  > - **Clients:** fleet-client's `Client::events_handshake` (the URL and the bearer, both secret, R16) and `events::read`; `just dev-bots`' `events`.
-  > - **Deviations:** no 422 tests (R17: neither route has a body, and `GET /events`' query is 400 unless it's one `ticket`, any other value the 404); the reading rules' parse is fleet-client's `events::read`, since in fleet-api-types it would need serde_json as a normal dependency (fleet-api-types gives `EventMessage::received`, and a frame that doesn't read is `Received::Unreadable`, which a client takes for a resync). D1 sends only `ready` and `resync`; the bot, chat and mode events are D2's.
-
-  > Note (P11.5, Phase 11, PR #66's review) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U15, R22–R27): **fixed on the branch.**
-  > - **The shutdown** (R20, R25): every send and every session check races the stop, so a socket ends within 2 s of it (a stuck send gets 1 s, then the 1001 gets 1 s); a connect is counted by the sockets' owner from its start, and is 503 `busy` once the shutdown began.
-  > - **The session check** (R23, R24): the commit count moves for every commit asked for, a dropped one too, and once more after it landed; a socket checks at most once per 250 ms, its pings and idle close first, so no stream of commits holds them up.
-  > - **Smaller:** a FIN without a close frame is a lost connection, not a 1008 (R22); a user holds as many tickets as sockets (R26); one pong answers every ping that waits; the query is refused after the upgrade (R10).
-  > - **U15 (the user's decision):** `Client::events_handshake` exists only with fleet-client's `dev-console` feature, which only `just dev-bots` and fleet-client's tests have; `just tauri-check` fails if the desktop app's build has it. P11.8 opens the socket inside the client and removes the feature.
-
-  > Note (P11.5, Phase 11, group D2's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U16, U17, S38–S42, R28–R39): **one PR of about 8,400 lines** (U17, the user's), its first commit PR #66's follow-ups.
-  > - **The commit count** (S38, S39): its mark is the generation of the commit that set it, so a late return never clears the next commit's; the write pool has no lifetime, since sqlx closes a connection past it without the hook that settles the count.
-  > - **Rights** (S30, S41, R30–R32): one shared snapshot, rebuilt before any event frame once the count moved, at most one rebuild at a time; a viewer whose own role or flag changed is sent nothing until their 4001; `bot_removed` when a bot leaves what they see. Each socket reads its hinted bots in one query, through `GET /bots/{id}`'s own `read()` and `bot_response`.
-  > - **The server's hints** (S42, R36, R37): S32's list plus enabling and disabling a user, an account's rename, a relink, an agent's disable, release, hello and end, and the reconciler once per pass with a diff of the agents' shown status; each after its commit, its bots read inside the transaction, through one narrow port.
-  > - **Chat** (S34, R35, R39): the user's line on the bus after its commit and before its send; a refusal after the commit is `chat_failed`, with `bot_unreachable` for Control and above, or with no reason for an unsendable line.
-  > - **The residual** (S40): a flood on a hidden bot can show as a `resync`, at most one bit per 5 s: an accepted risk in the threat model, tested.
-  > - **Coverage** (U16): `app/events.rs` joins the auth gate.
-
-  > Note (P11.5, Phase 11, group D2) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S38–S43, R28–R42): **the events, filtered per viewer, as built; P11.5 ticked here.**
-  > - **The frames** (R28): `bot`, `bot_removed`, `bot_died`, `bot_alert`, `chat`, `chat_sent`, `chat_failed`, `mode` and `mode_removed`, each built for its viewer right before it's sent, through REST's own helpers (`http/handlers/events.rs`' `Viewer`, behind `ws::Project`); `just dev-bots`' `events` prints each kind.
-  > - **Rights** (S30, S41, S43): `app::events::LiveRights`, one snapshot for every socket, read again once the commit count moved. *Found while building, decided by a review agent (S43, for the user's review):* a step whose read a commit outran (the rights, a bot read or a mode read) sends nothing and reads again on the next turn, so a revoke landing during a read never lets a frame built on the older rights out.
-  > - **The server's hints** (S42): every write that changes what a bot reads as tells the sockets after its commit; the reconciler once per pass, with its diff of the agents' shown status.
-  > - **Two bugs found and fixed:** a bot shared again before its `bot_removed` went out got `bot` and then `bot_removed` (R41); D1's loop let work ready at every turn hold up the session check and the `resync` for good (R40), which S43's re-reads under a commit storm would have made a logout's 4001 wait on.
-  > - **Measured** (S41, a debug build on Windows): with 200 bots, 20 users and 400 grants, a rights rebuild takes 2.3 ms (median; 2.8 ms at most) and one viewer's read of 200 hinted bots 5.5 ms (11 ms at most).
-  > - **Deviations:** the console's lines came with the wire; `CHECK_GAP` is `SocketTimings::check_gap`; one frame per loop turn; a `resync` lands where its turn comes, frames already waiting before or after it; 8,753 lines added and 389 removed as the PR opened, inside U17's range.
-  > - **PR #67's review** ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), R43–R46): on rights a commit outran, a socket keeps every hint and agent event for the gate to judge, so a newly visible bot reaches an idle socket; a resync drops a waiting removal of a bot it shows; a bus wake takes at most 64 events; a user's line without its request doesn't read; the reconciler tells a write once; a mode's waiting events are read once; serve's wiring of every service's hints is tested.
-  > - **Its follow-ups, in group E's first commit** ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), R47–R49): events taken on rights a commit outran wait, unjudged, until the gate read the rights again, so a hidden bot's event never moves a visible one's frame; only events that make or join something to send count toward the 64, at most 1024 in all, so hidden events never split a merge; a viewer saw a mode when any of its waiting events' `was` showed it to them.
+  > Note (P11.5): as built in D1 and D2, which ticked P11.5 (S38–S43, R22–R49, U15–U17): `http::ws::run` closes with 1001 at shutdown, 4001 when the session ends, 4000 without a pong and 4002 for a stuck send. `Client::events_handshake` lived behind fleet-client's `dev-console` feature until P11.8 (U15). The frames `bot`, `bot_removed`, `bot_died`, `bot_alert`, `chat`, `chat_sent`, `chat_failed`, `mode` and `mode_removed` are each built for their viewer from one rights snapshot, read again once the commit count moved (S41, S43). The server's hints follow every commit (S42). A flood on a hidden bot can show as a `resync`, an accepted risk (S40). `app/events.rs` joins the auth gate (U16), and D2 is one PR (U17) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
 - [x] **P11.6** 🔴 Retention job: chat older than `chat.retention_days` is deleted. The audit log is kept longer (configurable).
 
-  > Note (P11.6, from Phase 7, group B, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **sessions are cleaned up here too.** A session, with its `rotated_refresh_tokens` rows (ON DELETE CASCADE), is deleted once `created_at` + the current `refresh_token_absolute_days` has passed, whether it was revoked or not. A revoked session is unusable anyway, and keeping its rotation history until then lets an investigation after a reuse see the family's timeline. `sessions(created_at)` is indexed for it. *Done in group E ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S45): their replaced tokens go first, in batches, so no cascade makes a batch long.*
+  > Note (P11.6): what earlier phases asked of it: delete a session, revoked or not, once `created_at` + `refresh_token_absolute_days` has passed ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)); decide `secure_delete` ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)); bound chat by size too, not only by age, with the limit the user's ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)); delete in short batches, since a long delete holds up the ingest's ticks (S74); delete users' lines like any other chat (S6, S7).
 
-  > Note (P11.6, from Phase 6, group B) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): decide `secure_delete` here, so deleted chat and old audit entries are overwritten instead of lingering in free pages. *Decided in Phase 11, group E ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S44): `secure_delete = ON` on every connection, freed pages included.*
-
-  > Note (P11.6, from Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)) *(the user's note at G's plan review)*: **retention must also bound size,** for example the newest N rows per bot, not only `retention_days`: up to about 2000 rows a second of up to 1024 characters can reach the ingest, and every bot on one Minecraft server stores its own copy. The limit itself is the user's decision here. `chat_messages` has the `(at)` and `(bot_id, id)` indexes both need. *Decided in group E ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U19): each bot keeps its newest 50,000 lines by default (`[chat] max_lines_per_bot`, 100 to 200,000).*
-
-  > Note (P11.6, from Phase 10, group H) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md), S74): a retention delete holds the write connection; meanwhile the ingest's ticks find it busy and keep their batch, which now holds up to 1000 of the 4096 places, so more chat drops while a long delete runs. Delete in short batches, as the lockout purge does (1000). *Done in group E ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S45): batches of 1000, each followed by a 100 ms pause.*
-  > Note (P11.6, from Phase 11, group B) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S6, S7): users' lines (`kind = 'user'`) are deleted by age and size like any other chat; the audit log holds none of their text, so nothing there needs scrubbing. Deleting a user leaves their lines with no sender (`ON DELETE SET NULL`), and the partial index `chat_messages_sent_by` finds them. *Done in group E.*
-
-  > Note (P11.6, Phase 11, group E's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U18–U22, S44–S46, R47–R56): **group E is P11.6 alone** (P11.7 moved to G, U18), on `p11/p11.6-retention`, its first commit PR #67's follow-ups. The notes above are decided there:
-  > - **The keys** (the user's): `[chat] max_lines_per_bot` 100–200,000, 50,000 by default (U19); `[chat] retention_days` 1–30, 14 by default (U21); `[audit] retention_days` 90–730, 365 by default, a new section, since every entry holds a user's IP address (U22).
-  > - **Recording** (the user's, U20): each batch commits through a new exemption, `UnauditedWrite::RetentionPurge` (since R57: `Store::retention_batch`) (deletes only, five tables, only the retention task); one `retention.purge` entry, counts and cut-offs and never text, after every 60th run that deleted anything and at stop.
-  > - **`secure_delete = ON`** on every connection (S44): deleted rows are overwritten, freed pages included.
-  > - **The task** (S45): its own, unwatched, every 60 s, the first run one interval in, batches of 1000 with a 100 ms pause after each commit; sessions (their rotated tokens first), chat by age, chat by size bot by bot, the audit log as an ID prefix, then invites and enrollment tokens; a phase with nothing due commits nothing.
-  > - **Invites and enrollment tokens** (S46): unused ones whose `expires_at` is past the audit retention go; used ones never.
-  > - **Mine** (R50–R56): the deletes in their own port, `ports::retention`; an item goes once `now >= its time + its retention`, cut from one clock read per run in fleet-core; logs carry counts only; the stop's summary waits at most 1 s; `RetentionTimings`; the socket table's label.
-
-  > Note (P11.6, Phase 11, group E) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U18–U22, S44–S46, R47–R56): **the retention job, as built; P11.6 ticked here.**
-  > - **The task:** `cli::retention` runs `app::retention::RetentionService::run_once` every 60 s on serve's `JoinSet`, with or without `[grpc]`; each run cuts once (fleet-core's `retention`), deletes phase by phase in batches of 1000 through `ports::retention`, each committed with `UnauditedWrite::RetentionPurge` (since R57: `Store::retention_batch`) and followed by a 100 ms pause, and a quiet run commits nothing. A failed phase is one `warn`; the next run tries again.
-  > - **The summary:** one `retention.purge` entry after every 60th run that deleted anything and at the stop (within 1 s), its 14 keys the counts and cut-offs; a failed one keeps its counts.
-  > - **`secure_delete = ON`** on every connection; three tests scan the files after a close for deleted text, red with OFF and with FAST.
-  > - **Tests:** the `retention` binary (the store's deletes and cuts at their boundaries, a seeded model of both bounds, a run racing the ingest, failing midway and stopped, the summary, the task, the at-rest scans) and serve's retention without `[grpc]`.
-  > - **Deviations:** the repository tests share one binary with the service's, so their tables are loops (rstest's cases can't take `sqlx::test`'s database); the runner's timing is housekeeping's `every`, whose paused-time tests cover the first run one interval in; `LoginService`'s wiring moved into a helper and the socket table's labels into a `const`, to stay under clippy's 100 lines.
-  > - **PR #70's review, fixed in group F's first commit** ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), R57–R63): the batches commit in a transaction of their own, `Store::retention_batch()`, which only the retention opens (a test reads the sources) and which deletes only from its own table (a whole-table test); the hourly summary gives up its wait for the connection at the stop, whose own summary waits at most 1 s; `audit_through` is the highest ID a committed batch deleted; counts clamp to 2^53 − 1; an audit entry dated more than an hour ahead, which blocks the prefix purge until then, gets one `warn`; a socket's replay waits until the slots of the last one went out; `app_with` is split and the pause has one source.
+  > Note (P11.6): as built in group E (U18–U22, S44–S46, R47–R56): `cli::retention` runs `RetentionService::run_once` every 60 s, in batches of 1000 with a 100 ms pause (S45). In order: sessions with their rotated tokens, chat by age (`[chat] retention_days` 1–30, 14 by default, U21), chat by size (`[chat] max_lines_per_bot` 100–200,000, 50,000, U19), the audit log (`[audit] retention_days` 90–730, 365, U22), then unused invites and enrollment tokens past the audit retention (S46). `secure_delete = ON` on every connection (S44); one `retention.purge` entry with counts and cut-offs (U20); since PR #70's review, the batches commit through `Store::retention_batch` (R57–R63). P11.7 moved to group G (U18) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
 - [x] **P11.7** 🔴 Full-flow integration test: in-process server + in-process agent with `FakeConnector`.
   1. Start a bot via `fleet-client`.
@@ -4143,79 +1875,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   3. Chat flows in and out.
   4. Stop the bot.
 
-  > Note (P11.7, from Phase 10, group H) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md), U19): **it lives in `crates/fleet-integration`**, a module of its one test binary beside `loopback/`, over the same harness: `World` (the server through serve's wiring, the Owner through fleet-client with 2FA), agents enrolled for real and run over the `Ledger` connector, and the log the waits wake on. The WebSocket client it needs arrives with P11.5 (`tokio-tungstenite`), a new dev-dependency of the crate then.
-
-  > Note (P11.7, Phase 11, group E's planning, the user's choice, U18) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)): **built in group G, not E,** over fleet-client's own reconnecting socket once it exists, so no bearer exception reaches fleet-integration (U15 stays as it is). ADR-0020's notes for E (the frames compared with `GET /bots/{id}` at that moment, a repeated `bot` frame tolerated, a line before its `chat_sent`, every wait through `Logs::until` or `within`) move to G's; fleet-integration's dependencies are G's question.
-
-  > Note (P11.7, Phase 11, group G's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S58, R78): **built in G1, one case, the four steps,** in `tests/integration/full_flow.rs`, over fleet-client's own socket (`LiveEvents::recv`). A reader task logs one line per update, which wakes `Logs::until`; each step ends when the newest `bot` frame meets its condition and equals one GET `/bots/{id}` made for that frame, so repeats are tolerated, nothing is a literal and nothing polls the API. Chat in, from the fake session, equals the history's line by ID; chat out arrives as the user's `chat` before its `chat_sent`. No new dependency for fleet-integration.
-
-  > Note (P11.7, as built in G1) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S58): **built as planned,** `full_flow::a_started_bot_is_seen_online_chatting_both_ways_and_stopped_as_get_shows_it` over `harness/live.rs` (the reader in a `JoinSet` the `Live` owns, closed before `World::end`), `Owner::live`, `Owner::shown` and `World::live_settles`. It runs in under a second. A stopped bot keeps its agent in its `GET` and its frame, so the stop step waits for the `Stopped` frame equal to `GET` with the bot's session torn down. Red against a `recv` that never answers, and by mutations: a `bot` frame without its agent, no end-of-pass hint from the reconciler (the stopped bot's last frame is that hint's), a chat line's `truncated` flipped, the user's line published after its answer, `ChatSent` without a send; every `bot` frame kept twice stays green.
+  > Note (P11.7): it lives in `crates/fleet-integration` beside `loopback/`, over the same harness (U19, [ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)). It was built in group G1, not E, over fleet-client's own reconnecting socket (U18; U15 unchanged), as `full_flow::a_started_bot_is_seen_online_chatting_both_ways_and_stopped_as_get_shows_it`, each step ending when the newest `bot` frame equals a `GET /bots/{id}` made for that frame (S58, R78) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 - [x] **P11.8** 🔴 Tauri: the WebSocket lives in Rust (`fleet-client` + reconnect) and is forwarded to the UI over a Tauri `Channel`. The UI patches the TanStack Query cache from the events.
 
-  > Note (P11.8, Phase 11, group G's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U25–U30, S53–S60, R73–R80): **two PRs**: G1 (`p11/p11.8-client-socket`) the socket in fleet-client, G2 (`p11/p11.8-events-in-the-app`) the Tauri side and the UI's cache, ticking P11.8. The notes above are decided there:
-  > - **The socket** (U25, S53, S54): an HTTP/1.1 upgrade on fleet-client's own reqwest client, so its TLS is reqwest's; `Client::live_events()` gives a `LiveEvents` its consumer drives with `recv` (a refetch at every `ready`, `resync` or unreadable frame, the events, and each disconnect with its wait), ending only when stopped or when the session ends; a new ticket per connect; jittered backoff of 1 to 30 s, one prompt reconnect for the expected 4001, `Retry-After` honoured up to 60 s, 30 s of silence a dead server; the consumer refetches and holds.
-  > - **The logs** (S56, U27): fleet-startup's fixed filter caps `tungstenite` and `tokio_tungstenite` at `info`, beside `azalea_auth`; a log test records every level of every target and finds neither the ticket nor the bearer.
-  > - **U15's removal** (R80, S57): no `dev-console`, no `events_handshake`; the console's `events` runs over the socket, https too; tauri-check pins fleet-client's features in the app to none.
-  > - **The app** (U29, S59, S60, U30; G2): one long-running command, `watch_events`, over a `Channel`; the UI patches the account caches and defines the bot, chat and mode keys H fills, holding events per query while it fetches; a hint in the Header while a reconnect waits.
+  > Note (P11.8): G's planning, in two PRs: G1 the socket in fleet-client, G2 the app's side, which ticked P11.8 (U25–U30, S53–S60, R73–R80). The socket is an HTTP/1.1 upgrade on fleet-client's own reqwest client (U25). `Client::live_events()` reconnects with a new ticket each time and 1–30 s of jittered backoff (S53, S54). fleet-startup caps `tungstenite` and `tokio_tungstenite` at `info` (S56, U27). No `dev-console` (R80, S57). One long-running `watch_events` command over a `Channel`; the UI patches the caches and shows a hint while a reconnect waits (U29, S59, S60, U30) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
-  > Note (P11.8, as built in G1) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U25–U28, S52–S58, R70–R80): **the socket in fleet-client, as planned,** with P11.7 (ticked) and PR #71's follow-ups. `LiveEvents` carries its rules in its own docs; `ServerUrl::events` is the upgrade's URL. R75's premise doesn't hold today (no build enables reqwest's `http2`), so `http1_only()` stays a guard with no test that could go red; S54's "a zero base refused" has nothing to refuse (the constants have no override), and the policy's property runs over 200 seeds, without proptest. Commits 4 and 5 fail `just clippy` on dead code until commit 6 wires their pieces. P11.8 stays unticked until G2.
-
-  > Note (P11.8, Phase 11, group G2's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U31, S61–S65, R81–R86): **the app's side, on `p11/p11.8-events-in-the-app`,** its first commit PR #72's follow-ups. An open, signed-in app keeps its session until the 30-day end, since the socket's expected 4001 refreshes it (U31, the user's choice). A stopped watch never restarts by itself: a watch starts at sign-in, after the certificate's recovery and after a profile save that changed nothing (S61); updates of a watch that isn't current are dropped (S62); a failed fetch applies its held events to the data it keeps (S63); a failed channel send stops the watch (S64); a `bot` frame patches the waiting list by status, reading it again when only the server can decide (S65).
-
-  > Note (P11.8, as built in G2) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group G2)"): **built as planned,** with PR #72's follow-ups first. `watch_events` holds the read guard for its life and forwards fleet-client's updates over a `Channel` as `LiveUpdateMessage`s; the live layer (`packages/ui/src/app/live.ts`) patches the account caches and the bot, chat and mode keys H fills, holds changes per query while it fetches, and sets the Header's hint. *Deviations:* the test of a `recv` dropped during its own close drives it with an event before `ready` rather than silence, since a re-derived silence would pass against the old code too; the account screen's 404 is tested through a `bot_removed` that reads the account again.
+  > Note (P11.8): as built in G1 and G2 (U25–U28, U31, S52–S65, R70–R86): `LiveEvents` documents its own rules; an open, signed-in app keeps its session until the 30-day end (U31); a stopped watch never restarts by itself (S61); `packages/ui/src/app/live.ts` patches the account caches and the bot, chat and mode keys (S62–S65). Deviation: `http1_only()` stays a guard with no test that could go red, since R75's premise doesn't hold today ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 - [x] **P11.9** 🔴 UI:
-
-  > Note (P11.9, as built in J) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group J)"): **the admin screens, which tick P11.9.** Admin, then "Audit log" and "Agents"; "Review grants" on a user's row, the Owner's; "Leave" on an account held at View or Control; on seven commands (66 grants). `GET /audit` takes `target_kind` and `target_id`, over a new index (migration 0021). `POST /agents/enrollment-tokens` is gone, with `EnrollAgent` and the token's `Creator`: only the server's host creates a token. fleet-client gains `disable_agent`. *Deviations:* the audit's screen lives in `features/audit`, the agents' and the review's in `features/admin`; the queries came with the commands' commit; the audit route checks its search itself, since the router keeps keys `validateSearch` left out; the index test reads `EXPLAIN QUERY PLAN` through `query!`, so it needed no raw SQL. About 5,700 lines added and 1,150 removed, in one PR (U82).
-
-  > Note (P11.9, Phase 11, group J's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U76–U82, S85–S89, R172–R181): **the admin screens, in one PR.** An audit viewer with a filter by target, an agents screen, the Owner's grants review on its own screen, and Leave.
-  > - **The user's:** enrollment tokens are CLI only, and the HTTP route is removed (U76); seven commands, 66 grants (U77); the filter on the server (U78), reached from an entry and from "Audit" on Agents' and Users' rows (U81); the review at `/admin/users/$id/grants`, offered by a line after a role change (U79); a name with the whole ID on hover (U80); one group (U82). The texts are ADR-0020's table.
-  > - **Decided by the review agents** (approved at the plan review): names from the users list, in the app (S85); Leave at `view` and `control`, a Manage grantee using Revoke (S86); the default cache time, with the session's end clearing it (S87); what the removal takes with it (S88); the filter's route, port and new index, correcting S48 (S89). Reconciliations: R172–R181.
-
-  > Note (P11.9, from Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): the agents view shows each agent's bots count (`AgentResponse.bots`: its bots and open release records); releasing a disabled agent's bots becomes an API action (Admin or Owner, step-up, `agent.release` with `via` = `api`), with a text saying the operator vouches the agent's host is stopped. The texts for it and for the shown states are the user's. *Corrected at group F's planning (the user's choice, [ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U24): `via` = `http`, as every entry the HTTP API writes; the route is S49's.*
-
-  > Note (P11.9, Phase 11, group I) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U62–U75, S82–S84, R157–R171, "As built (group I)"): **the mode editor,** in one PR. "Modes" in the nav for everyone: a list, then one screen per mode, in three sections with cards, a chance on each and a wait in seconds, minutes or hours on a repeating one. Drag and drop within a section (`@dnd-kit`), keyboard on the handle, and Move up and Move down. It binds to S12's types and opens anything else locked; shows edit, delete and the switch only from the server's flags; builds each request from the form; sends only when the form changed; resends to the twin through `useStepUpAction`; shows the three 409s, with "Save as copy" where edits can't be saved; "Make a copy" on every mode it can hold. **Before it:** the TanStack client's default `networkMode` is `"always"`.
-
-  > Note (P11.9, Phase 11, group F's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U23, U24, S47–S51, R57–R69): **the admin endpoints, on `p11/p11.9-admin-endpoints`,** its first commit PR #70's follow-ups (R57–R63). P11.9 is ticked in J.
-  > - **`GET /audit`** (S47, S48, R64–R66): an authed route of class Standard, no step-up, no filters *(a filter by target came with group J, U78, S89)*; newest-first pages with a `SafeInt` cursor; each entry as stored (actor, IP, action, target, outcome, metadata), the names `Open<…>`, the server's own entries without actor, IP or target.
-  > - **The release** (S49, U24): `POST /agents/{id}/release`, step-up, a new `ReleaseAgent` (Admin+), 200 with the agent, 409 `agent_not_disabled`, `agent.release` with the actor, the IP and `via` = `http`, the bots placed at once.
-  > - **The grants review** (S50): `GET /users/{id}/grants` (held, with `dormant`) and `GET /users/{id}/shared-accounts`, the Owner's only (`ReviewUserGrants`); revoking through the existing route.
-  > - **Leaving** (U23, S51): `DELETE /accounts/{id}/grants/me`, step-up, a new `LeaveAccount` for any grantee without implicit Manage, audited as `grant.revoke` with `via` = `leave`.
-  > - **Clients** (R67): fleet-client's methods for each, and `just dev-bots`' verbs. **The text** friends read: `agent_not_disabled`, approved as drafted.
-
-  > Note (P11.9, Phase 11, group F as built) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group F)"): **built as planned, one PR,** the four parts with fleet-client's methods and the console's verbs (`users`, `audit`, `agents`, `release`, `held`, `shared`, `leave`). *Deviations:* no 422 test for the release or leaving, which take no body or query (a malformed ID is 404), as for the disable route; `AuditActionName`'s OpenAPI schema is written by hand from fleet-core's list, since utoipa's derive doesn't read the names a macro gives serde; the admin screens' permission mirror (`packages/ui`) gains `reviewGrants`, since its test reads the matrix. About 8,000 lines added, above the planned 6,000 to 7,500 (about 1,700 of them generated).
-
-  > Note (P11.9, PR #71's review, fixed in group G1's first commit) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U28, S52, R70–R72, R79): **`GET /audit` lists a row that doesn't read back by its ID alone** (`unreadable`, in its place, the pages going on past it, one `warn` per entry), so one changed row no longer hides the log around it (S52); the docs say what the audit's metadata really holds (names, IDs, times, counts, and values users typed or servers reported, never a secret or a chat line); `agent release` says the bots went when its read after the commit fails; and the server takes a pong naming any ping that waits (U28, R79).
-
-  > Note (P11.9, Phase 11, group H's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U32–U52, S66–S72, R87–R97): **the bot screens, in three PRs, and a new group H4.** H measured about 13,300 lines, so it was split at its plan review: **H1** (`p11/p11.9-bot-screens`) PR #74's follow-ups (R87–R92, R97), `bots`, `bot` and `modes`, Home as the dashboard, a read-only bot detail, and the e2e build's push hook with the first live spec; **H2** (`p11/p11.9-bot-controls`) `ModeResponse.unlisted_command` (S68), the seven write commands, the controls (U38, U48), Settings (U40, U41, S69), the live record with its notices (U42) and the timeline (U46, S71); **H3** (`p11/p11.9-bot-chat`) the chat commands, the outcome key (S70), the console (U43, U44, U49) and the send box (U45), and the DoD kit (S72, U50–U52), on whose branch the user runs the check. **H4** (`p11/p11.9-server-settings`, S66) takes the per-server conflict texts and the chat format.
-  > - **The user's:** the capability's 13 grants (U32); `target/dod-run/` never read (U33); chat sends direct, the history cached (U34); Home as the dashboard, the hint in the Header, a roomy labelled grid (U35–U37); Stop beside Resume and Reset, other controls hidden, a View holder's muted line instead (U38); two columns, chat right (U39); a native mode select that switches at once (U40); the address's Change inline (U41); a toast and a Home line (U42); the console's order, columns and styling (U43, U44); the send box (U45); the timeline (U46); Reconnect (U47); refusals inline (U48); no time mark (U49); at the plan review, `[control_plane] public_targets` (U50), the DoD steps in two parts (U51), and the cleanup's messages (U52). The texts are ADR-0020's table.
-  > - **Decided by the review agents** (approved at the plan review): S66–S72. Reconciliations: R87–R97.
-
-  > Note (P11.9, as built in H1) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group H1)"): **Home is the bots' dashboard and each bot has a read-only screen,** on `bots`, `bot` and `modes` (U32), with PR #74's follow-ups first and the e2e build's push hook with its first live spec. *Deviations:* the detail came before Home (the card's typed link needs its route); a `bot_removed` resets the bot's query rather than removing it, so an open screen shows its 404 (R98); the uptime ticks each second in its first minute; R97's frame test lives in fleet-client, beside the limit it checks.
-
-  > Note (P11.9, Phase 11, group H2's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S73, R99–R111): **the controls, Settings, notices and timeline, on `p11/p11.9-bot-controls`,** its first commit PR #75's follow-ups (R99–R101; PR #75's hands-on corrected: a stop records no Last disconnect). *Decided by a review agent:* restart, reset and resume answer the bot with the call's effect, sent or cleared, so the app shows "Sent…" only after a 202 (S73). *Reconciliations:* a write's answer is read again rather than written over the cache (R102); `controlsFor`'s remaining cases (R103); a 429 spares Stop (R104); each value once on the screen (R105); the note's life (R106); a gap's length (R107); first sight (R108); notices for an open screen (R109); toasts from the shell (R110); a status entry with its new last disconnect (R111). The user's changes at the plan review: no edit of the merged PR's description, the paging error's text, and the hands-on's note on the per-bot limit.
-
-  > Note (P11.9, as built in H2) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group H2)"): **a bot's screen drives it:** the controls its state offers and the viewer's level allows (a View holder reads that they can't control it), Settings (the mode by S68's `unlisted_command`; the server after a step-up), and a timeline from the in-memory live record, whose notices toast and wait on Home; on the seven write commands (46 grants) and S73's effect. *Deviations:* U53, the user's approval of an `#[expect(clippy::struct_excessive_bools)]` on `ModeResponse`; four snapshots gained the flag, not one; R105 changed two H1 screen tests.
-
-  > Note (P11.9, Phase 11, group H3's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), R112–R126): **the chat, on `p11/p11.9-bot-chat`,** its first commit PR #76's follow-ups (R112–R114). H3 measured about 5,550 lines with the DoD's kit, so its plan review moved the kit, with U50's `public_targets`, to a new group **H5** (`p11/p11-dod-kit`, R122–R126), on whose branch the user runs the DoD's first check. *Reconciliations:* the loss counter and the connected flag (R115); marks, pending from the send's start and from frames for every viewer (R116); the send box leaves judgements to the server (R117), locks during its password prompt (R118) and is a `chat` holder's (R119); older chat pages must move on (R120); the outcome key lives as long as the session (R121). *The user's changes at the plan review:* chat times as HH:MM, the seconds in the time's tooltip, since U49 was decided on HH:MM; and the DoD check's `rcon-cli list`, with compose.dod's RCON pinned to the dev service's.
-
-  > Note (P11.9, as built in H3) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group H3)"): **a bot's screen has its chat:** the history with live lines, newest at the bottom, and a send box that sends a line, or a command after the password, each line someone sent marked pending, sent or not sent from the chat's own outcome key; on the three chat commands (49 grants). *Deviations:* an older page that couldn't be read keeps "Show older" to try again; ADR-0017 holds no command count to change.
-
-  > Note (P11.9, group H5) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group H5)"): nothing of P11.9's: H5 built the DoD's kit and the agent's `public_targets` (U50), recorded under Phase 11's DoD.
-
-  > Note (P11.9, as built in H4) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group H4)"): **Admins and the Owner give a Minecraft server conflict texts,** through `GET` and `POST /api/v1/server-settings`, `PUT` and `DELETE /api/v1/server-settings/{id}` (every write after a step-up), fleet-client's four methods and `just dev-bots`' `servers`, `new-server`, `edit-server` and `delete-server`; the reconciler sends every bot on that server its texts in its spec, at once. PR #78's two nits came first. *Deviations:* the requests are named verb first (`CreateServerSettingsRequest`), as the modes'; the loopback case came with fleet-client; `servers` reads every page. P11.9 is still ticked in J.
-
-  > Note (P11.9, as built in H6) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "Group H6's planning", "As built (group H6)"): **the app's Minecraft servers screens.** Admin, then "Minecraft servers", lists every server's settings with "Add a server"; a server's screen edits its address and its conflict texts, a textarea each, every write after "Confirm it's you" through four new commands (53 grants, U56). PR #79's review came first: the route's pages hold at most 10 rows, so a page at the caps fits a client's answer cap. *The user's:* after Add the app opens the new entry, after Save it stays (U61). *Deviation:* the editor reads its row from the every-page list, since no route reads one. P11.9 is still ticked in J.
-
-  > Note (P11.9, as built in H7) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group H7)"): **a Minecraft server's settings hold its chat formats,** through the same four routes, every request naming `chat_formats` (R135), and `POST /api/v1/server-settings/chat-format-preview` tries unsaved formats on a line; fleet-client's `preview_chat_formats` and `just dev-bots`' `preview-formats`. The app's editor keeps a row's formats unseen, and its list shows only the parts a row has. PR #80's review came first. *Deviations:* `ConflictTextsProblem` renamed `ListProblem`; the largest request is about 50 KiB, not 51; the desktop bridge's `ServerPorts` came with the API's commit. P11.9 is still ticked in J.
-
-  > Note (P11.9, as built in H8) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group H8)"): **parsed senders end to end.** A received system line one of the bot's current server's chat formats fits carries `ChatLine.parsed_sender`, read at each history read and live frame, the same for every viewer, never `sender`, `sent_by` or `mine` (S79, R146); formats, a key or a bot address that don't read back give those bots none, logged (S81). The console prints it as ` (format: {name})` after the kind (R143); the app shows it after a mark, never in the players' color, the line in the normal style (U55, R149). The editor gains the formats section with "Try a line" (R148), through the 54th command, `preview_chat_formats` (U58). *The user's at the plan review:* the paused "Load again" text, and group I's first commit makes the TanStack client's default `networkMode` `"always"`. P11.9 is still ticked in J.
-
-  > Note (P11.9, Phase 11, group H7's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S81, R137–R149): **the chat format, in two PRs.** With PR #80's review it measured about 7,700 lines, so the plan review split it: **H7** (`p11/p11.9-chat-format`) PR #80's review and the formats as a server setting (fleet-core's `ChatFormats`, migration 0020, the DTOs' required `chat_formats`, the cross-field rule, the audit's counts, `POST /server-settings/chat-format-preview`, fleet-client and the console's `preview-formats`, the app keeping a row's formats unseen); **H8** (`p11/p11.9-parsed-senders`) parsed senders end to end (S79; S81: formats that don't read back count as none), U55's look, the 54th command and the editor's formats with "Try a line". *The user's change at the plan review:* the servers list shows only the parts a row has ("2 chat formats", "1 conflict text · 2 chat formats").
-
-  > Note (P11.9, Phase 11, group H4's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U54–U60, S74–S80, R131–R136): **per-server settings, in three PRs.** The conflict texts end to end measured about 9,100 lines and the chat format about 5,900, so the plan review split them: **H4** (`p11/p11.9-server-settings`) PR #78's two nits and the conflict texts' server side; **H6** (`p11/p11.9-server-settings-screen`) their screens; **H7** (`p11/p11.9-chat-format`) the chat format.
-  > - **The user's:** writes Admin+ with a step-up (U54); a parsed sender after a small icon, never in the primary color, its line's text in the normal style (U55); four commands, 53 grants (U56); a list, then a screen each (U57); a preview by the server, one more command (U58); braces reserved in formats (U59); later ideas noted for H7 (U60); the conflict texts' hint.
-  > - **Decided by the review agents** (approved at the plan review): the key is the host and an always-written port (S74); reading is Admin+ (S75); the table and the fleet read (S76); routes by ID with a version (S77); the row's life, the cap of 100 and three audit actions (S78); the format parsed when a line is read (S79); templates with `{sender}` and bounded `{any}` (S80). Reconciliations: R131–R136.
-
   - **Dashboard:** a card per bot with a state badge, uptime, server, mode and last disconnect reason.
   - **Bot detail:**
     - controls and a mode selector
@@ -4225,48 +1891,34 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - **Mode editor:** an action list with validation.
   - **Admin:** an audit-log viewer and an agents view.
 
-  > Note (P11.9, from Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the bot screens.**
-  > - **Texts:** the four 409 codes' messages are fixed on the server (U13); the controls' labels and the shown states' texts are the user's, asked here.
-  > - **Stop on a Paused or Failed bot** is allowed: it frees the bot's slot and keeps its state (S51). Whether the controls offer it beside Resume or Reset is this task's UX.
-  > - **A 409** (`bot_unreachable`, `bot_not_running`, `bot_not_paused`, `bot_not_failed`) shows its message and refetches the bot. A 202 means sent, not done: the result arrives as the bot's status.
-  > - **Every `Open<…>`** (`desired_state`, `status.kind`, `state`, `reason`, `why`, the last disconnect's kinds) has a default branch. `server_address` is there only for Control holders and above, `agent` only for Admins and the Owner.
-  > - **Step-up:** `PATCH /bots/{id}` goes through `useStepUpAction`; the mode switch, the lifecycle calls and the reads don't need one. A per-bot 429 shows its `Retry-After`.
+  > Note (P11.9): the chat console renders each message as its own block, with the sender outside the text, so a `\n[Server] …` inside a message can't pass as a separate line, and clips stacked combining marks (Zalgo text) with CSS overflow (the group A review). A paused or failed bot shows Resume or Reset instead of Start and Stop (ADR-0010). At a Member's promotion (P8.8), the Owner sees and can revoke the grants on their accounts, and at a demotion the dormant grants they hold ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)); the server's side is F's S50.
 
-  > Note (P11.9, from Phase 10, group B, the user's choice, U3) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **enrollment tokens in the agents view.** *Superseded at group J's planning (the user's choice, [ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U76): no token in the app, and the route is removed.* `POST /agents/enrollment-tokens` exists (the Owner's, step-up, no body); the view shows the bundle once, for the Owner to pipe into `afkfleet-agent enroll`. The bundle is a secret for 15 minutes, so the call is a direct one through `useApiClient()`, never a TanStack query or mutation (CLAUDE.md). `afkfleet-server agent create-enrollment-token` stays for the server's host.
+  > Note (P11.9): the agents view was to show the enrollment bundle once, a direct call, for the Owner to pipe into `afkfleet-agent enroll` (Phase 10, group B, U3; [ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)). *Superseded at group J's planning (the user's choice, U76): no token in the app, and the route is removed* ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
-  > Note (P11.9, from the group A review): **Chat console.** Render each message as its own block, with the sender outside the text, so a `\n[Server] …` inside a message can't pass as a separate line. The sanitizer keeps combining marks, so clip stacked ones (Zalgo text) with CSS overflow.
+  > Note (P11.9): the agents view shows each agent's bots count (`AgentResponse.bots`), and releasing a disabled agent's bots becomes an API action (Admin or Owner, step-up, `agent.release` with `via` = `api`), with a text saying the operator vouches that the agent's host is stopped (Phase 10, group D; [ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)). *Corrected at group F's planning (the user's choice, U24): `via` = `http`; the route is S49's* ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
-  > Note (P11.9, from group B): **Controls.** For paused or failed bots, the app shows Resume or Reset instead of Start and Stop (ADR-0010).
+  > Note (P11.9): from Phase 10's group E: the four 409 codes' messages are fixed on the server (U13); Stop on a Paused or Failed bot frees its slot and keeps its state (S51); a 202 means sent, not done; every `Open<…>` has a default branch; `PATCH /bots/{id}` goes through `useStepUpAction`. From group G: `blocked` is a connect failure the UI explains, with a hint for the agent's operator (S46) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)).
 
-  > Note (P11.9, from group D, the user's request): **Promotions.** When a Member is promoted to Admin (P8.8), the app shows the existing grants on their accounts, and the server provides them, so the Owner can review and revoke them. Grants made before the promotion survive it, including one an Admin gave an alt account (ADR-0010, threat model). *The server's side is group F's S50 ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)): `GET /users/{id}/shared-accounts` and `GET /users/{id}/grants`, the Owner's.*
+  > Note (P11.9): from Phase 11's groups B and C: the send box sends to `/chat`, and on 403 `command_needs_step_up` it resends to `/command` through `useStepUpAction` (S8); it waits at most 6 s (S5) and shows the server's 422 texts (U4). The console shows a user's line as what the user asked (S7), a hidden command's mark outside its text (S9), the sender's name where the API gives one and `mine` (U3); it keeps the API's commit order (U5) and renders a line break as ` | `, as plain text (S11).
+  > The mode editor binds to S12's types, takes its rights from the mode's flags (S14, S15), resends to the `/with-commands` twin (S16), sends `version` and handles the 409s and the cap (S17–S19), builds requests from the form (R5) and shows hotbar slots as 1 to 9 ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
-  > Note (P11.9, from Phase 9, group F, the user's request) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **leaving a shared account.** A View or Control grantee can't remove themselves from a shared account; only a Manage holder revokes a grant. A "leave" action could come here. *Answered at group F's planning (the user's choice, [ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U23): built in F, `DELETE /accounts/{id}/grants/me` (S51).*
+  > Note (P11.9): parsed senders and the chat format: a sender parsed from the text is shown differently from one a player packet named, and neither is verified (Phase 3, ADR-0011); the chat format is parsed on the server, outside the bot's spec (Phase 4, [ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)). Both went to H4 (S66) and then H7 and H8: `ChatLine.parsed_sender`, parsed when a line is read (S79, S80), shown after a small icon, never in the primary color (U55) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
-  > Note (P11.9, from Phase 9, group E) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **demotions too.** A grant can't be made to someone with implicit Manage, but one made before a promotion stays dormant, and comes back when that Admin is demoted, so the review at a role change shows the grants the user holds as well as those on their accounts. *The held grants come with `dormant`, computed on the server (S50).*
+  > Note (P11.9): leaving a shared account: a View or Control grantee couldn't remove themselves (Phase 9, group F, the user's request; [ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)). Built in F as `DELETE /accounts/{id}/grants/me` (U23, S51; [ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
-  > Note (P11.9, from Phase 3, the user's request): **Parsed senders.** If P4.1's per-server chat format is built, the chat console shows a sender parsed from the text visibly differently from one a player packet named. Neither is verified: azalea 0.16 doesn't verify chat signatures, so every chat sender is only what the server claims, and none drives a permission or trigger decision (ADR-0011, threat model). *Deferred at group H's planning ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S66) to H4, with the per-server conflict texts: H's console shows only the sender a player packet named, and a parsed sender, once built, goes in its own optional field, never in `sender`. Planned at H4's planning for group H7: `ChatLine.parsed_sender`, parsed when a line is read (S79), shown after a small icon, never in the primary color (U55).*
+  > Note (P11.9): the backend, built in group F (U23, U24, S47–S51, R57–R69): `GET /audit` (S47, S48, R64–R66; a filter by target since J), `POST /agents/{id}/release` (step-up, `via` = `http`; S49, U24), the Owner's grants review through `GET /users/{id}/grants` and `GET /users/{id}/shared-accounts` (S50), leaving through `DELETE /accounts/{id}/grants/me` (U23, S51), and fleet-client's methods with `just dev-bots`' verbs (R67). Since PR #71's review, an audit row that doesn't read back is listed by its ID alone as `unreadable` (S52, U28, R70–R72, R79) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
-  > Note (P11.9, from Phase 4, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **The chat format is parsed on the server.** It stays out of the bot's spec and the agent: the server already has each system message's whole sanitized text, so a per-server format can extract the sender for display here. *In group H4 (S66); moved to H7 at H4's planning (S79, S80).*
+  > Note (P11.9): the bot screens, planned as H1–H3 and a new H4 (U32–U52, S66–S72, R87–R97): Home as the dashboard (U35–U37), the controls (U38, U48), Settings (U40, U41), notices (U42), the timeline (U46), the console (U43, U44, U49), the send box (U45) and `[control_plane] public_targets` (U50). H1 built a read-only detail (R97, R98). H2 built the controls and Settings on S68's `unlisted_command` and S73's effect (R99–R111), with an `#[expect(clippy::struct_excessive_bools)]` on `ModeResponse` the user approved (U53). H3 built the chat, with HH:MM times (R112–R126). H5 built only the DoD's kit ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
+  > Note (P11.9): per-server settings, planned as H4, H6 and H7 (U54–U60, S74–S80, R131–R136), with H7 split into H7 and H8 (S81, R137–R149). H4: conflict texts through `GET` and `POST /api/v1/server-settings` and `PUT` and `DELETE /api/v1/server-settings/{id}`, writes Admin+ with a step-up (U54), the reconciler sending each bot its server's texts. H6: the Minecraft servers screens, which open a new entry after Add and stay after Save (U56, U57, U61). H7: chat formats in the same routes (R135) and `POST /api/v1/server-settings/chat-format-preview` (U58). H8: `ChatLine.parsed_sender`, the same for every viewer, never `sender`, `sent_by` or `mine` (S79, R146, S81, R143, U55, R148, R149) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
-  > Note (P11.9, from Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`blocked`** is a new connect failure: the agent refused the server's address before dialling it, a never-dialled address or a private one its config doesn't list (S46); the UI says so, with a hint for the agent's operator. The console merges chat by its row ID (the bus's `Chat { id }`).
-  > Note (P11.9, from Phase 11, group B) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S5, S7, S8, S9, U3, U4): **the send box.** It sends to `POST /bots/{id}/chat`; on 403 `command_needs_step_up` it resends the same line to `/command` through `useStepUpAction`, its zod schema requiring the leading `/` (S8). It waits at most the server's 6 s; a 202 reads as sent with a pending mark; `chat_unavailable` offers no "try again". The 422 texts come from the server (U4's wording for a forbidden character). **The console** shows a user's line as what the user asked, never as what the bot said (S7), a hidden command's mark outside its text (S9), the sender's name where the API gives one and the viewer's own lines marked (U3); those wordings are the user's then.
+  > Note (P11.9): the mode editor, built in group I (U62–U75, S82–S84, R157–R171): "Modes" in the nav and a screen per mode in three sections; drag and drop (`@dnd-kit`) with the keyboard and Move up and Move down; edit and delete only from the server's flags; the step-up twin through `useStepUpAction`; the three 409s with "Save as copy"; and "Make a copy". Before it, the TanStack client's default `networkMode` became `"always"` ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
-  > Note (P11.9, from Phase 11, group B2) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S11, U5): **the chat console reads the history** (`GET /bots/{id}/chat`, newest first, `next` for older pages). It keeps the API's order, which is commit order (U5), and never sorts by `at`. A line's text arrives with each line break as ` | ` (S11): render it as plain text, one block per message, without `white-space: pre*`. The Minecraft sender (`sender`) is the server's claim; `sent_by` and `mine` are afkfleet users.
-
-  > Note (P11.9, from Phase 11, group C's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S12–S18, R5): **the mode editor** (group I).
-  > - **Its types** are S12's flat mode types; a mode with an action or schedule `type` the app doesn't know opens read-only. Server field paths (`steps[3].action.message`) map to the form's fields.
-  > - **What the user may do** comes from each mode's `editable`, `deletable` and `visibility_editable` (S14), never from a copy of `authorize()`; creating a shared mode is Admin+, a role-only rule like the admin screens'.
-  > - **Requests are built from the form's state,** never by echoing an answer: a cut command (`arguments_hidden`, S15) is marked outside its text, and an answer sent back as it is gets a 400 (R5).
-  > - **Saving:** to the plain route; on `mode_needs_step_up` the same body again to the `/with-commands` twin through `useStepUpAction` (S16); `DELETE` through it directly. The loaded `version` goes back with each edit, and `mode_changed`, `mode_in_use_by_others`, `mode_in_use` and the cap's `conflict` each get their handling (S17–S19).
-  > - **Hotbar slots** *(the user's note at group C's plan review)*: the editor shows them as 1 to 9, the keys players know, and maps them to the API's 0 to 8.
-  > - **The user's then:** the wordings of the marks (built-in, shared, private, yours, a cut command), what each 409 offers (reload, keep the draft, "save as copy"), and whether a save warns before it asks for the password.
+  > Note (P11.9): the admin screens, built in group J, which ticked P11.9 (U76–U82, S85–S89, R172–R181): "Audit log" with a filter by target (`target_kind`, `target_id`, migration 0021; U78, U81, S89, correcting S48), "Agents", the Owner's grants review at `/admin/users/$id/grants` (U79), and "Leave" at View or Control (S86). Enrollment tokens are CLI only: `POST /agents/enrollment-tokens` and `EnrollAgent` are removed (U76). Seven commands, 66 grants (U77); one PR (U82) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
 - [x] **P11.10** Dark mode: the app follows Windows' light or dark setting (`prefers-color-scheme` and its change event; the `.dark` class on `<html>`, set by the bundled script so the CSP allows it), and every screen is checked in both themes.
 
-  > Note (P11.10, group K) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U84, U85, S92–S97): beyond the task, the user added a Light / Dark / Windows setting on the Profile screen, and one new command, `set_window_theme`, so the title bar follows it (67 grants). `scripts/theme-guard.mjs` refuses a hard-coded colour, and a Playwright sweep holds 36 rows of screens and states at 3:1 in both themes. WCAG AA stays with P11.11, which gets today's figures.
-
-  > Note (P11.10, from Phase 8, group D, the user's decision) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): Phase 8 ships the light theme only (sonner's `theme="light"`). `packages/ui/src/styles.css` already holds shadcn's dark tokens under `.dark`.
+  > Note (P11.10): Phase 8 shipped the light theme only, with shadcn's dark tokens already under `.dark` ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)). Beyond the task, group K added the user's Light / Dark / Windows setting on Profile and `set_window_theme`, so the title bar follows it (67 grants); `scripts/theme-guard.mjs` refuses a hard-coded colour, and a Playwright sweep holds 36 rows at 3:1 in both themes (U84, U85, S92–S97; [ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 - [x] **P11.11** UI design pass, before Phase 12 and once every screen exists:
   - **Direction first.** A short design brief, then 2–3 visual directions, each shown as screenshots of two or three real screens in light and dark. The user picks one before any implementation starts.
   - **Branding:**
@@ -4282,35 +1934,25 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
     - before-and-after screenshots of every screen in both themes (P11.10) in the PR
     - Playwright screenshot tests in P8.9's suite, so a later change can't drift from the design
 
-  > Note (P11.11, from Phase 8, group D, the user's request): Phase 8's screens are functional first: shadcn's radix-nova components with the light theme, no design of their own yet.
+  > Note (P11.11): Phase 8's screens were functional first: shadcn's radix-nova with the light theme. How to keep screenshots stable was left to this task ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)). After H3, the user found the app looks poor throughout, and L's brief starts from that ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
-  > Note (P11.11, from Phase 8, group E, the user's addition) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **Stable screenshots.** The screenshot tests need a stable rendering, but P8.9's suite drives the installed Edge, whose version moves with Windows and the runner image. P11.11 decides then how to keep screenshots stable, for example one fixed OS with a pixel tolerance, or a pinned browser whose download is verified.
+  > Note (P11.11): L1 chose the direction (U86–U97, S98, R186–R191; [the brief](docs/design-brief.md)): Bridge with sidebar (U91); cool graphite and blue (U92); Geist and IBM Plex Mono (U93); the wordmark `afkfleet` (U94); the Orbit logo (U95); terse texts (U96); baselines from a pinned container (U97). Beyond the task: a Start or Stop button on each bot card, changing U35 for that one control (U88), and six code boxes (U86) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
-  > Note (P11.11, after H3, the user's note) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), notes for L): the app looks poor throughout. Button placement, spacing and general styling need rework on every screen, and L's brief starts from it.
+  > Note (P11.11): L2 built the foundation (U98–U104, S99–S122, R192–R203): the palette, the fonts, the sidebar with no header, the shared parts, Orbit at 14 Windows sizes, the sign-in screens and Profile. The sweep enforces WCAG AA (text at 4.5:1, focus outlines at 3:1). The check exe is `target/app-check/afkfleet-check.exe`, the only file the AI launches (S99). The fonts' licence is in `THIRD-PARTY-NOTICES.md` (S110) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
-  > Note (P11.11, group L1) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U86–U97, S98, R186–R191; [the brief](docs/design-brief.md)): **the direction is chosen, and nothing of it is built yet.** Bridge with sidebar (U91); cool graphite and blue, with a lighter chat in light mode (U92); Geist and IBM Plex Mono (U93); the wordmark `afkfleet` in two weights (U94); the Orbit logo (U95); terse texts (U96); baselines from a pinned container, which answers the note on stable screenshots above (U97). Beyond the task: a Start or Stop button on each bot card, changing U35 for that one control (U88), and the code step's six boxes (U86). L2, L3 and L4 build it, and L4 ticks this task.
+  > Note (P11.11): L3 built Home, a bot's detail and Accounts (U105–U113, S123–S127, R204–R219). Beyond the task: a universal Back control (U111, U112), and suggestions behind "Share with" through `GET /accounts/{id}/grant-candidates`, a new limit and a 68th grant. This replaces ADR-0018's S6 for the picking, so any Member with an account can list enabled users' names, as `docs/threat-model.md` says (U110, S127) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
-  > Note (P11.11, group L2) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U98–U104, S99–S122, R192–R203): **the foundation is built.** U92's palette, Geist and IBM Plex Mono bundled, the sidebar with no header, the shared parts, Orbit at 14 Windows sizes, the sign-in screens with six boxes that send when full, in setup too (U99), and Profile. **WCAG AA is enforced:** the sweep holds text at 4.5:1 (3:1 for large) and tabs through each row, holding each focus outline at 3:1, with no list of known failures. Every corner comes from `--radius` (U101). The check exe has its own path, `target/app-check/afkfleet-check.exe`, the only file the AI launches (S99). Beyond the task: `THIRD-PARTY-NOTICES.md` for the fonts' licence (S110). L3 and L4 restyle the rest, and L4 ticks this task. *From PR #89's hands-on (the user's):* a tooltip only on an icon-only control, taking no pointer and closing on leaving it (U102); the code boxes show their focus in their cells, which the sweep reads (U103); the app's logo has no tile, drawn from tokens, and the Windows icon keeps it (U104).
-
-  > Note (P11.11, group L3) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U105–U113, S123–S127, R204–R219): **Home, a bot's detail and Accounts are built.** Home's cards hold U88's Start or Stop button above their stretched link; a bot's screen has its two columns, stacking under about 800 px of content, and the console in its own tokens; a bot tied to an agent that can't be reached says why it waits, on the card and the screen; Accounts is a grid of cards that open the account, with choice tiles when empty, and an account's screen has two columns, its access list on `ui/table`. The root is the window's height and the content column the one scroller (S123), and the sidebar collapses under 1056 px (U113). Beyond the task, the user's additions at the plan review: **a universal Back control** in the frame, with the side-button and Alt+Left (U111, U112), and **suggestions behind "Share with"** (U110, S127): a new route, `GET /accounts/{id}/grant-candidates`, a new limit, `grant_candidates_per_user_per_hour`, a new value, `UsernamePrefix`, and a 68th grant, replacing ADR-0018's S6 for the picking. Any Member with an account can now list enabled users' names, as `docs/threat-model.md` says. About 7,000 lines, past L1's 5,300, as the user chose. L4 ticks this task.
-
-  > Note (P11.11, group L4) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U118–U125, S128–S132, R226–R242): **the design pass is done, and every screen and state has a screenshot baseline.** Modes and Minecraft servers are card grids, and a mode's and a server's screen have two columns, each scrolling by itself, stacking with Save and Cancel in a bar at the column's foot (U119–U121). The admin tables are on `ui/table` and leave out their less needed columns at widths checked across the sidebar's jump, so dragging the window never shows a column, hides it and shows it again (U122, R228); the audit log keeps its seven columns and stacks each entry into a labelled block instead, one table for screen readers in both forms (S132). Invites' "New invite" sits top right (U123), the grants review's two sections side by side (U124), and every screen shows its loading, empty and error states. **The stable screenshots** asked above: Playwright's Linux image pinned by digest, built from an allowlisted context and run with no network (S130), compares every theme-sweep row in both themes to the pixel, 240 PNGs in `apps/desktop/e2e/baselines/` (`just shots`, `just shots-update`); the Screenshots workflow runs it on frontend PRs and isn't a required check (U118); the rules for them are U125's. *Deviations:* the before-and-after shots are in `target/design-l4/` on the user's PC, not in the PR, which lists the baselines instead (R231, R242); 240 baselines and 16 MB, not the planned 213 and 9 MB; three fixes found by reading the baselines (R241). M's notes in the ADR say what L leaves.
-
-  > Note (P11.11, PR #92's review) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U126, R243–R252): nothing the screenshots' container writes can run on this PC (the Edge suite ignores the baselines, and `just shots` refuses any stray the moment a run ends), a compare fails on a baseline no row shoots, and the run takes its build's image by ID. Stacked, an editor's Save focuses its password prompt and brings its notices into view. An enabled agent warns 14 days before its certificate ends, in the user's words (U126). The grants review goes side by side from an 830 px box.
+  > Note (P11.11): L4 finished the pass and ticked P11.11 (U118–U126, S128–S132, R226–R252): Modes, Minecraft servers and the admin screens are restyled. **The stable screenshots:** Playwright's Linux image, pinned by digest and run with no network (S130), compares every theme-sweep row in both themes to the pixel: 240 PNGs in `apps/desktop/e2e/baselines/` (`just shots`, `just shots-update`), in a workflow that isn't a required check (U118, U125). Deviation: the before-and-after shots are in `target/design-l4/` on the user's PC, not in the PR, which lists the baselines instead (R231, R242). PR #92's review hardened the container's run and added the certificate warning (U126) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)).
 
 **DoD:**
 - Pressing Start in the app brings a bot with a real Microsoft account Online on a real server (moved from Phase 10, the user's choice, U1 in ADR-0019).
 - The user's real fleet runs for 24 h, managed from the app. Every event shows up live, and the logs contain no unhandled errors.
 
-> Note (Phase 11's DoD, group H3's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U1, U50–U52, S72): **the first check runs on group H5's branch** (`p11/p11-dod-kit`), with its own folder `target/dod-run/`, its `dod-*` recipes (the user's alone) and an agent that dials no public address. After the user presses Start, the Minecraft server's own `rcon-cli list` confirms the bot (the user's addition at H3's plan review). Its outcome is recorded there.
+> Note (Phase 11's DoD): the first check runs on group H5's branch (`p11/p11-dod-kit`), with its own folder `target/dod-run/`, the `dod-*` recipes (the user's alone) and an agent that dials no public address (`public_targets = false`, U50). After the user presses Start, the Minecraft server's own `rcon-cli list` confirms the bot. The steps, in two parts (U51), are `docs/development.md`'s "The DoD's first check" (U1, U33, U52, S72, R122–R130) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group H5)").
 
-> Note (Phase 11's DoD, as built in H5) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group H5)", U1, U33, U50–U52, S72, R122–R130): **the kit is built,** on `p11/p11-dod-kit`: `deploy/dod/server.toml` and `agent.toml`, `deploy/compose.dod.yaml` (online mode, published only on `127.0.0.1:25566`, the dev service's RCON and pins), and the recipes `dod-mc-up`, `dod-mc-down`, `dod-build` (added at PR #78's review, so no build runs while an enrollment token waits), `dod-server`, `dod-owner`, `dod-enrollment-token`, `dod-enroll`, `dod-agent`, `dod-app` and `dod-clean`, the user's alone: their own ports, release builds at `info`, everything in `target/dod-run/`, nothing secret on a command line. The agent dials no public address (U50, `public_targets = false`). Default-profile tests load both configs with exactly each recipe's exports, read through fleet-testkit's justfile reader and `scripts/justfile.mjs`, and the cleanup's refusals run on a temporary repository. The steps, in two parts (U51), and what to do and what's safe to share for each likely failure are the README's "The DoD's first check" and the PR's. *The user's change at the plan review:* after the check, log out while `dod-server` still runs, then close the app and stop the rest. *PR #78's review* (fixed on the branch): `dod-agent` exports `public_targets = false` itself, and the managed check sets it too; `dod-clean` compares real paths and stops at an error with one line; the repository stays under the user's own folder (an accepted risk in the threat model).
+> Note (Phase 11's DoD): **the user's first check (2026-10-28) passed every step as expected:** with the user's own Microsoft account linked and its bot set to `127.0.0.1:25566`, Start pressed in the app brought the bot Online, the Minecraft server's own `rcon-cli list` showed the player, and the bot then stopped. **The first DoD item is met** ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "The DoD's first check").
 
-> Note (Phase 11's DoD, the first check) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "The DoD's first check"): **the user's first check (2026-10-28) passed every step as expected,** on `p11/p11-dod-kit`: the stack from the `dod-*` recipes, the Owner's login with 2FA, the user's own Microsoft account linked, its bot set to `127.0.0.1:25566` after a step-up, Start pressed in the app and the bot Online, the Minecraft server's own `rcon-cli list` showing the player, then the bot stopped, the logout, and the container removed. **The first DoD item is met.** `target/dod-run/` keeps the linked account for M's 24-hour run, the second item.
-
-> Note (Phase 11's DoD, group M's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U127–U133, S133–S135): **the 24-hour run is the user's, on M's branch (`p11/p11-wrap-up`),** with one bot on the local container (U128), `public_targets = false` kept (U127). A bot asks for a Minecraft session only when it connects, so the run proves a renewal by restarting the container at least 24 h after Start: the bot reconnects by itself with a new session (U129). `dod-server` and `dod-agent` log JSON at `info` into `target/dod-run/logs/` through `scripts/dod-log.mjs` (S134, U132), and after the stop the user's `just dod-log-check` prints only counts, afkfleet's own fixed messages, bot numbers and relative times, ending in PASS or FAIL (S135, U133). The outcome is recorded there. *Built in M ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group M)", R257–R259), with the threat model and the README brought up to Phase 11's end (R256); S133's step for a Minecraft-version bump went into ADR-0003, as `docs/runbook.md` comes with P12.6.*
-
-> Note (Phase 11's DoD, the 24-hour run) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "The DoD's 24-hour run"): **the user's 24-hour run passed** (reported on 2026-11-05), on `p11/p11-wrap-up` at PR #93's review commit: `just dod-log-check` printed PASS, and the user reported each point as PASS: the fleet ran 24 h, managed from the app; every event showed up live; the logs hold no unhandled errors. **The second DoD item is met, and with the first, Phase 11 is done.** U51's part two, which ends the DoD's folder, is the user's.
+> Note (Phase 11's DoD): the 24-hour run (U127–U133, S133–S135, R256–R259): one bot on the local container, `public_targets = false` kept (U127, U128); a container restart at least 24 h after Start proves a renewed session (U129); JSON logs go through `scripts/dod-log.mjs` (S134, U132); `just dod-log-check` prints only counts and fixed messages (S135, U133); S133's step for a Minecraft-version bump went into ADR-0003. **The user's 24-hour run passed** (reported on 2026-11-05): `just dod-log-check` printed PASS, and the user reported each point as PASS. **The second DoD item is met, and with the first, Phase 11 is done.** U51's part two, which ends the DoD's folder, is the user's ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group M)", "The DoD's 24-hour run").
 
 ---
 
@@ -4473,7 +2115,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The server:** `crate::metrics`'s `ServerMetrics` records into each server's own recorder through typed methods with fixed labels, every series at 0 from the start. `GET /metrics` is a route of its own router (`metrics_routes`) behind the API's middleware, on a second listener that `serve` stops with the API's; the API's port answers 404 there.
   > - **The agent:** `metrics_endpoint`, a responder of its own (4 connections, 5 s each, a 2 KiB head, nothing from a request logged), and the outbox's three counters, sampled with the diagnostics every 5 s.
   > - **Totals only:** no label is per user, per bot or per agent. The ingest note's "per agent" stays in housekeeping's minute line, which names the agent (S11).
-  > - **The docs:** README's Metrics lists every key metric with its labels; the runbook's Metrics says how to read them from the host and what to watch.
+  > - **The docs:** the runbook's Metrics lists every key metric with its labels, how to read them from the host and what to watch.
 - [x] **P12.5** Tauri release:
   - NSIS installer.
   - Updater key pair; the private key is kept **offline**.
@@ -4573,11 +2215,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P12.7, Phase 12's group C) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S19, U5, U20, U21): **as built.** fleet-integration's `slow_smoke_with_caddy`, `slow_smoke_behind_a_container_proxy` and `slow_smoke_behind_a_host_proxy` bring the production project up from a copy of `deploy/`, with a `.env` and an override of their own (offline accounts allowed there alone, U20), under project names of their own. Beyond the five steps (the Owner created with `--password-stdin`, the login through fleet-client with the full 2FA flow), they check the client's real address and a forged `X-Forwarded-For`; no `ticket`, `q`, password, TOTP secret or recovery code in any log after forced 502s; both metrics ports from inside and neither through any path; `.env`'s settings in the server's environment; the database and a backup across a recreate; memory and pids under 75 % of the limits (U21); Caddy's one capability; the image alone refusing to start; and every exit clean. The Stack workflow runs them nightly on arm64 and amd64, with `deploy/setup.sh init` doing the setup there; `just test-stack` and `just test-slow` run them elsewhere, the test doing the same steps itself.
 
-- [ ] **P12.8** Tidy-up (group E, `p12/tidy-up`, after D2's merge; [ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U35): the repository tidied for readability, with no behaviour change. Its plan first lists what it would move, merge, shorten or delete, each with why, for the user's approval. Candidates:
+- [x] **P12.8** Tidy-up (group E, `p12/tidy-up`, after D2's merge; [ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U35): the repository tidied for readability, with no behaviour change. Its plan first lists what it would move, merge, shorten or delete, each with why, for the user's approval. Candidates:
   - README's length and order;
   - an index for `docs/`;
   - stale notes, dead scripts or recipes, and outdated comments;
   - Plan.md's finished phases condensed, as long as every note an ADR or a comment points to stays findable.
+
+  > Note (P12.8, as built) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), "Group E (P12.8)", U42–U52, S52–S58): one pull request (U42). README is a short intro with a quickstart and a status line (U44, U45, S52); its developer material is `docs/development.md` (U46), and `docs/README.md` indexes `docs/` (S53). The runbook gained what the DoD's run found and lost its repeats (S56); `docs/releasing.md` gained what the first release found (U52). Phases 0–11 above are summarised in place (U43, S55), every citation of Plan.md pinned by `scripts/plan-citations.test.mjs` (S54). `spikes/tls-provider/` is deleted (U47), and tasks keep `docs/development.md` current, README only its intro, quickstart and status (U48).
+  > Deviation: the runbook lost about 5 % of its words, not the planned ~35 %: what S56 keeps word for word makes up most of its lines. U49's subagent write guard, built during the planning, was dropped with the merge guard when [ADR-0025](docs/adr/0025-a-simpler-workflow.md) replaced the pipeline, so this group is the tidy-up alone.
 
 **DoD:**
 - A clean afkfleet install (no earlier afkfleet state) on an existing Linux host that keeps its other services, following only the runbook.
@@ -4587,11 +2232,15 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
 > Note (Phase 12's DoD, group D2) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S49): **the user's kit is `docs/dod/phase-12.md`:** part (a), the clean install by the runbook alone, and part (b), the friend's login by the friends' guide alone, each step with what success looks like and a place for its outcome. It's opened at the first release's tag; the AI never runs any of it.
 
+> Note (Phase 12's DoD, passed) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), "The DoD's run"): **both parts passed on 2026-11-07 with v0.1.0,** run by the user. The gaps the run found in the guides went into P12.8.
+
 ---
 
 ### Phase 13: Hardening
 **Goal:** Prove the security and resilience claims.
 **Introduces:** cargo-fuzz (`libfuzzer-sys`, `arbitrary`), cargo-mutants.
+
+> Note (P13, from Phase 12's DoD, the user's finding) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), "The DoD's run"): **the update download's URL scheme.** The app's own update download accepts any URL scheme `latest.json` names; release builds should require https, as defence in depth (the installer is still verified against the committed key).
 
 - [ ] **P13.1** 🔴 **Authorization matrix test:** every endpoint × {anonymous, Member without grant, View, Control, Manage, Admin, Owner} → the expected status. The table is generated and snapshotted.
 

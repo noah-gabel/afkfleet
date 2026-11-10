@@ -23,7 +23,7 @@
 - [ ] Public items are documented (`missing_docs` and `cargo doc` are clean).
 - [ ] Generated artifacts are refreshed if their inputs changed (`just gen`, `just db-prepare`).
 - [ ] New or changed snapshots were read before accepting, and are listed in the PR description.
-- [ ] `README.md` reflects the change (setup, commands, config, behavior, phase status).
+- [ ] `docs/development.md` reflects the change (setup, commands, config, behavior), and `README.md` its intro, quickstart or status line if they changed.
 - [ ] The `Plan.md` checkbox is ticked, with a note for any deviation, and an ADR exists for any decision.
 - [ ] The PR description lists **Decided myself** and **Weakened** (or "none").
 - [ ] The work is on its task branch, pushed, with a PR open, and nothing was pushed to `main`.
