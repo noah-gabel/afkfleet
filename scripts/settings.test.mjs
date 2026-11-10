@@ -51,10 +51,21 @@ const SHELL = {
     "*-P manual*",
   ],
   "paid services": ["gh codespace*"],
+  "irreversible cleanups": ["cargo clean*", "docker system prune*", "docker volume prune*"],
 };
 
 /** The secret files, denied for reading and editing. */
-const FILES = ["/secrets/**", "**/.env*", "**/*.key", "**/vault-key-*", "/target/dod-run/**"];
+const FILES = [
+  "/secrets/**",
+  "**/.env*",
+  "**/*.key",
+  "**/*.pem",
+  "**/vault-key-*",
+  "/target/dod-run/**",
+];
+
+/** Claude Code's own settings, the user's: denied for editing (an Edit rule covers Write too). */
+const SETTINGS = ["/.claude/settings*.json", "~/.claude/settings*.json"];
 
 describe("the settings' hard limits (ADR-0025)", () => {
   for (const [limit, patterns] of Object.entries(SHELL)) {
@@ -77,12 +88,21 @@ describe("the settings' hard limits (ADR-0025)", () => {
     }
   });
 
+  it("deny editing Claude Code's own settings, the project's and the user's", () => {
+    const { deny } = settings().permissions;
+
+    for (const pattern of SETTINGS) {
+      assert.ok(deny.includes(`Edit(${pattern})`), `Edit(${pattern})`);
+    }
+  });
+
   it("deny nothing else: every deny rule is one of the hard limits'", () => {
     const expected = new Set([
       ...Object.values(SHELL)
         .flat()
         .flatMap((pattern) => [`Bash(${pattern})`, `PowerShell(${pattern})`]),
       ...FILES.flatMap((pattern) => [`Read(${pattern})`, `Edit(${pattern})`]),
+      ...SETTINGS.map((pattern) => `Edit(${pattern})`),
     ]);
 
     assert.deepEqual(

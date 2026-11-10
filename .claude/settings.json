@@ -91,16 +91,26 @@
       "PowerShell(*-P manual*)",
       "Bash(gh codespace*)",
       "PowerShell(gh codespace*)",
+      "Bash(cargo clean*)",
+      "PowerShell(cargo clean*)",
+      "Bash(docker system prune*)",
+      "PowerShell(docker system prune*)",
+      "Bash(docker volume prune*)",
+      "PowerShell(docker volume prune*)",
       "Read(/secrets/**)",
       "Edit(/secrets/**)",
       "Read(**/.env*)",
       "Edit(**/.env*)",
       "Read(**/*.key)",
       "Edit(**/*.key)",
+      "Read(**/*.pem)",
+      "Edit(**/*.pem)",
       "Read(**/vault-key-*)",
       "Edit(**/vault-key-*)",
       "Read(/target/dod-run/**)",
-      "Edit(/target/dod-run/**)"
+      "Edit(/target/dod-run/**)",
+      "Edit(/.claude/settings*.json)",
+      "Edit(~/.claude/settings*.json)"
     ]
   }
 }
