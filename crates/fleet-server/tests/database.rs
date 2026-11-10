@@ -445,7 +445,14 @@ async fn a_closed_open_migrated_database_leaves_no_wal_or_shm() {
         .unwrap();
     db.close().await;
 
-    assert_eq!(on_disk(&path), before);
+    // The part that differs, by name: the file's bytes are too long for CI's
+    // log, which cut a failed comparison of them before its values.
+    let after = on_disk(&path);
+    assert_eq!(
+        (after.0 == before.0, after.1, after.2),
+        (true, false, false),
+        "(the file unchanged, a -wal left, a -shm left)"
+    );
 }
 
 #[tokio::test]
