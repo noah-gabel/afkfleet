@@ -29,5 +29,7 @@ mod offline;
 mod online;
 mod pins;
 mod real_account;
+#[cfg(feature = "fault-injection")]
+mod riding;
 mod teardown;
 mod threads;
