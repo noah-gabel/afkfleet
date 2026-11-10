@@ -16,6 +16,9 @@
 //!   its minecart onto what's behind it.
 //! - The nearer of block and entity wins, and one beyond its own range (a
 //!   block's or an entity's) is a miss.
+//!
+//! Adapted from azalea-client 0.16.0's plugins/interact/pick.rs (MIT).
+//! azalea's notice is in the repository's `THIRD-PARTY-NOTICES.md`.
 
 use azalea::core::aabb::Aabb;
 use azalea::core::direction::Direction;
