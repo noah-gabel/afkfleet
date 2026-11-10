@@ -153,6 +153,10 @@ message fleet.v1.ReconcileFull
   1 bots: repeated fleet.v1.AssignBot
 message fleet.v1.Reject
   1 reason: fleet.v1.RejectReason
+message fleet.v1.RenewRequest
+message fleet.v1.RenewResponse
+  1 certificate_pem: string
+  2 not_after_unix_ms: optional int64
 message fleet.v1.Schedule
   1 at_start: fleet.v1.Unit (oneof schedule)
   2 every: fleet.v1.Schedule.Every (oneof schedule)
@@ -274,6 +278,7 @@ enum fleet.v1.SessionServerFailure
   4 SESSION_SERVER_FAILURE_UNEXPECTED
 service fleet.v1.AgentControl
   rpc Connect(stream fleet.v1.AgentMessage) returns (stream fleet.v1.ServerMessage)
+  rpc RenewCertificate(fleet.v1.RenewRequest) returns (fleet.v1.RenewResponse)
 service fleet.v1.AgentEnrollment
   rpc Enroll(fleet.v1.EnrollRequest) returns (fleet.v1.EnrollResponse)
 redacted fleet.v1.EnrollRequest

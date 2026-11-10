@@ -122,7 +122,7 @@ fn bytes_from_wire(
 }
 
 /// Takes text that must be 1 to `max` bytes long.
-fn text_from_wire(
+pub(crate) fn text_from_wire(
     field: &'static str,
     raw: &mut String,
     max: usize,

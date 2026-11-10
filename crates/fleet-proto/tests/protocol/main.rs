@@ -5,6 +5,8 @@
 //! - `decode`: random and mutated bytes, received chat and modes in any form
 //!   are refused or read as a valid value that reads back the same.
 //! - `rejects`: one case per rule that refuses a message, with its error.
+//! - `renewal`: a certificate renewal's messages: the wire, the answer's
+//!   refusals and the shared limits.
 //! - `enrollment`: the enrollment's messages: the wire, their refusals, the
 //!   token's redaction and the shared limits.
 //! - `hello`: a stream's first message, read with its protocol version first.
@@ -24,6 +26,7 @@ mod hello;
 mod limits;
 mod redaction;
 mod rejects;
+mod renewal;
 mod round_trip;
 mod schema;
 mod strategies;
