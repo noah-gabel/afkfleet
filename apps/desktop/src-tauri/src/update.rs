@@ -14,6 +14,12 @@
 //!   address. A check keeps the release it found, replacing an earlier one,
 //!   and `install_update` takes no argument: it installs exactly that kept
 //!   release, taken out first, so a failure leaves nothing kept.
+//! - **Https alone in a release build:** the manifest comes from GitHub
+//!   over https, and the download it names must be https too, with every
+//!   redirect it leads to (ADR-0027). The signature is what makes an
+//!   installer trusted; this keeps a manifest from sending the download in
+//!   clear text or to another scheme. The rehearsal's debug build downloads
+//!   from loopback over plain http.
 //! - **Bounded:** a check 20 s (5 s to connect), a download 5 minutes and at
 //!   most 64 MiB plus the one chunk that passes it (the app reads the body
 //!   itself and stops there, then the plugin checks the signature; PR #99's
@@ -131,7 +137,7 @@ pub enum UpdateFailure {
     #[error("the update's manifest can't be read")]
     Manifest,
     /// The download failed its checks: its signature, the version it was
-    /// signed for, or its size.
+    /// signed for, its size, or, in a release build, a URL that isn't https.
     #[error("the download failed its checks")]
     Invalid,
     /// The install failed after the live watch stopped: the installer
@@ -338,6 +344,9 @@ pub struct PluginUpdates<R: Runtime> {
     app: AppHandle<R>,
     /// The largest download.
     cap: u64,
+    /// Whether a download must be https, redirects included: a release
+    /// build's.
+    https_only: bool,
     /// Told the length of each chunk of a download's body as it's read.
     on_chunk: Option<ChunkObserver>,
 }
@@ -360,7 +369,20 @@ impl<R: Runtime> PluginUpdates<R> {
         Self {
             app,
             cap,
+            https_only: false,
             on_chunk: None,
+        }
+    }
+
+    /// The same, downloading over https alone when `required`, as a release
+    /// build does (ADR-0027): the manifest's URL and every redirect it
+    /// leads to. A debug build's rehearsal downloads from loopback over
+    /// plain http.
+    #[must_use]
+    pub fn requiring_https(self, required: bool) -> Self {
+        Self {
+            https_only: required,
+            ..self
         }
     }
 
@@ -385,8 +407,15 @@ impl<R: Runtime> PluginUpdates<R> {
     /// body, and the chunk that passes it is the last one read, whatever the
     /// machine's load, with everything so far dropped (PR #99's review). The
     /// plugin's own download reads on while chunks are ready, so its callback
-    /// could only signal.
+    /// could only signal. A release build's download must be https, the
+    /// manifest's URL and each redirect (ADR-0027): another scheme is
+    /// refused as a failed check before anything is sent.
     async fn fetch(&self, release: &Update) -> Result<Vec<u8>, UpdateFailure> {
+        // Before anything is sent: a release build's download is https, as
+        // defence in depth beside the signature (ADR-0027).
+        if !download_allowed(&release.download_url, self.https_only) {
+            return Err(UpdateFailure::Invalid);
+        }
         let mut headers = release.headers.clone();
         if !headers.contains_key(ACCEPT) {
             headers.insert(ACCEPT, HeaderValue::from_static("application/octet-stream"));
@@ -394,7 +423,9 @@ impl<R: Runtime> PluginUpdates<R> {
         let mut client = reqwest::Client::builder()
             .user_agent(PLUGIN_USER_AGENT)
             .timeout(DOWNLOAD_TIMEOUT)
-            .connect_timeout(CONNECT_TIMEOUT);
+            .connect_timeout(CONNECT_TIMEOUT)
+            // A redirect to anything but https fails the request too.
+            .https_only(self.https_only);
         if release.no_proxy {
             client = client.no_proxy();
         } else if let Some(proxy) = &release.proxy {
@@ -438,6 +469,13 @@ impl<R: Runtime> PluginUpdates<R> {
         }
         Ok(bytes)
     }
+}
+
+/// Whether a download from `url` may start: any URL without `https_only`,
+/// and with it only an `https` one.
+#[must_use]
+pub fn download_allowed(url: &tauri::Url, https_only: bool) -> bool {
+    !https_only || url.scheme() == "https"
 }
 
 /// The user agent tauri-plugin-updater 2.14.1 sends with its own download
@@ -739,6 +777,33 @@ mod tests {
                 "{release_build}"
             );
         }
+    }
+
+    #[rstest]
+    #[case::https_in_a_release(
+        "https://github.com/owner/repo/releases/download/v1/setup.exe",
+        true,
+        true
+    )]
+    #[case::http_in_a_release(
+        "http://github.com/owner/repo/releases/download/v1/setup.exe",
+        true,
+        false
+    )]
+    #[case::loopback_http_in_a_release("http://127.0.0.1:47123/setup.exe", true, false)]
+    #[case::another_scheme_in_a_release("ftp://example.com/setup.exe", true, false)]
+    #[case::a_file_in_a_release("file:///C:/setup.exe", true, false)]
+    #[case::uppercase_https_in_a_release("HTTPS://example.com/setup.exe", true, true)]
+    #[case::loopback_http_in_the_rehearsal("http://127.0.0.1:47123/setup.exe", false, true)]
+    #[case::https_in_the_rehearsal("https://example.com/setup.exe", false, true)]
+    fn a_release_build_downloads_over_https_alone(
+        #[case] url: &str,
+        #[case] https_only: bool,
+        #[case] allowed: bool,
+    ) {
+        let url = tauri::Url::parse(url).unwrap();
+
+        assert_eq!(download_allowed(&url, https_only), allowed);
     }
 
     /// The committed configuration, so the constant can't drift from it: on in

@@ -47,6 +47,7 @@ use fleet_server::ports::agent_connections::{
 };
 use fleet_server::ports::ingest::NoIngest;
 use fleet_server::ports::live_agents::PermissionEnd;
+use fleet_server::ports::renewals::{CertificateRenewals, RenewError, Renewed};
 use fleet_server::ports::session_grants::{GrantRequest, GrantStream, SessionGrants};
 use fleet_testkit::system::{ManualClock, SeededRandom};
 use hyper_util::rt::TokioIo;
@@ -60,6 +61,22 @@ use tokio_util::sync::CancellationToken;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity, Uri};
 
 use super::support::{BOUND, Call, heartbeat, hello, identity, pki};
+
+/// Renews nothing: no agent here asks for a certificate.
+#[derive(Debug)]
+struct NoRenewals;
+
+#[async_trait]
+impl CertificateRenewals for NoRenewals {
+    async fn renew(
+        &self,
+        _admitted: &Admitted,
+        _presented: Vec<u8>,
+        _deadline: Duration,
+    ) -> Result<Renewed, RenewError> {
+        Err(RenewError::Refused)
+    }
+}
 
 /// Grants nothing: no stream here asks for a session.
 #[derive(Debug)]
@@ -312,6 +329,7 @@ impl Port {
         let control = control_service(
             ControlPorts {
                 connections: connections.clone(),
+                renewals: Arc::new(NoRenewals),
                 grants: Arc::new(NoGrants),
                 ingest: Arc::new(NoIngest),
                 clock: Arc::new(clock.clone()),

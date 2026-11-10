@@ -16,6 +16,7 @@
 
 mod agent;
 mod hello;
+mod renew;
 mod server;
 
 use core::num::NonZeroU64;
@@ -30,6 +31,7 @@ pub use agent::{
     AgentMessage, BotEvent, BotEventKind, ChatFailedReason, Hello, SessionRequest, SessionRequestId,
 };
 pub use hello::{HelloRefusal, read_hello};
+pub use renew::{RENEW_CLIENT_DEADLINE, RENEW_SERVER_DEADLINE, RenewResponse};
 pub use server::{
     Assignment, LifecycleCommand, RejectReason, SendChat, ServerMessage, SessionDenied,
     SessionGrant, Welcome,

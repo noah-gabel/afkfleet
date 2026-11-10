@@ -248,6 +248,7 @@ sh setup.sh update
 ```
 
 - **The server goes first:** [agents on other hosts](#agents-on-other-hosts) update after it, with the same two commands.
+- **Agents older than 0.1.2 never renew their certificate.** Update each before its certificate ends, 60 days after it enrolled ([Agents' certificates](#agents-certificates)): it renews at its first connection. An agent on 0.1.2 beside a server that's still older keeps running, logs "the server doesn't renew certificates yet" and renews within an hour of the server's update.
 - **An agent older than its server's modes** can't read a schedule it doesn't know (`on_respawn`, say): its stream ends as `unreadable` and reconnects in a loop, logging "a message from the server couldn't be read" with the field, while its bots keep their old modes. Update the agent.
 - **Going back** is a restore, never an older `fetch`. A server rolled back past a mode feature reads such modes as corrupt: switch the bots off them, or delete them, before you restore an older backup.
 - **When `fetch` stops halfway** it leaves `.afkfleet-fetch` for a look and says why; `RELEASE` still names the old release. Fix what it named, then remove the folder and fetch again. Success: as above.
@@ -521,6 +522,8 @@ Each port serves only `/metrics` (another path is 404, another method 405), and 
 - **Any refresh-token reuse** (`afkfleet_refresh_token_reuses_total` above 0): a refresh token came back after its rotation, and its session was revoked. It may have been stolen: the audit log's `security.refresh_token_reuse` entry shows whose ([Incident response](#incident-response)).
 - **The last backup older than `backup_interval_hours` plus an hour** (`time() - afkfleet_backup_last_success_timestamp_seconds`): backups fail, and the logs say why ([Backups](#backups)).
 - **The retention's last success older than 10 minutes** (`afkfleet_retention_last_success_timestamp_seconds`): it runs every minute, so it fails every run or has stopped; `afkfleet_retention_phase_failures_total` names the phase.
+- **Any agent's certificate ending soon** (`afkfleet_agent_certificates{state="expiring"}` above 0): it didn't renew, and has at most 14 days left ([Agents' certificates](#agents-certificates)). `state="expired"` above 0: an agent can't connect any more.
+- **The server's certificate within 30 days of its end** (`afkfleet_server_certificate_not_after_timestamp_seconds - time()` below 2592000): [Renewing the server certificate](#renewing-the-server-certificate).
 - **Agent connect refusals rising** (`afkfleet_agent_connects_refused_total`): an agent with a revoked, expired or unknown certificate keeps trying, or something probes the gRPC port; the `reason` label says which.
 - **Logins refused rising** (`afkfleet_rate_limit_refusals_total{limit="login"}`, `afkfleet_login_lockout_refusals_total`): someone is guessing passwords.
 - **On an agent,** `afkfleet_outbox_refused_total` rising: its stream to the server keeps ending on a full outbox.
@@ -535,6 +538,9 @@ The key metrics (all counters end in `_total`; times are Unix seconds, 0 until t
 | `afkfleet_login_lockout_refusals_total` | `reason`: `locked`, `in_flight` | Logins the per-username lockout refused |
 | `afkfleet_agent_connects_refused_total` | `reason`: `revoked`, `expired`, `disabled`, `san_mismatch`, `name_mismatch`, `unknown_certificate`, `no_certificate`, `already_connected` | Agent connections refused, past the audit log's daily cap too |
 | `afkfleet_agent_identity_conflicts_total` | | Two processes found holding one agent's identity, every time |
+| `afkfleet_agent_certificate_renewals_total` | | Agents' certificates the server renewed |
+| `afkfleet_agent_certificates` | `state`: `expiring`, `expired` | Enabled agents whose latest certificate ends within 14 days, or has ended; read every minute |
+| `afkfleet_server_certificate_not_after_timestamp_seconds` | | When the server's own certificate ends |
 | `afkfleet_agent_reports_dropped_total` | | Agent reports about bots the agent doesn't hold |
 | `afkfleet_session_grants_total` | `kind`: `online`, `offline`; `fresh`: `true`, `false` | Minecraft sessions granted to agents |
 | `afkfleet_session_denials_total` | `reason`: why, one of 22 fixed values | Session requests denied (the fresh-session limit counts as `limit="fresh_sessions"` above) |
@@ -552,6 +558,7 @@ The key metrics (all counters end in `_total`; times are Unix seconds, 0 until t
 | `afkfleet_bot_reconnects_total`, `afkfleet_watchdog_trips_total` (`kind`: `tick`, `packet`), `afkfleet_actor_restarts_total` | | The bots' own reconnects, the watchdog's trips, the supervisor's restarts |
 | `afkfleet_mc_abandoned_threads_total`, `afkfleet_mc_host_threads`, `afkfleet_mc_worlds`, `afkfleet_mc_dropped_chat_total`, `afkfleet_mc_ignored_action_bar_total` | | The Minecraft adapter's numbers, sampled every 5 s |
 | `afkfleet_outbox_chat_dropped_total`, `afkfleet_outbox_refused_total`, `afkfleet_outbox_session_requests_dropped_total` | | A managed agent's outbox: chat dropped for newer chat, items refused full (each ends the stream), session requests replaced or dropped unsent; sampled every 5 s |
+| `afkfleet_identity_not_after_timestamp_seconds`, `afkfleet_identity_renewals_total` (`outcome`: `renewed`, `failed`) | | When the agent's certificate ends, and its attempts to renew it |
 
 ## Agents on other hosts
 
@@ -634,9 +641,25 @@ The agent's bots dial public addresses, never a private network the agent doesn'
    docker compose up --detach --wait agent
    ```
 
+## Agents' certificates
+
+An agent's certificate lasts 60 days, and the agent renews it by itself: once 40 days have passed, it asks the server for the next one over its open connection, stores it in place of the old one on its data volume, and connects again with it. Its bots stay online; the server's log says "an agent's certificate was renewed", the agent's "the agent's certificate was renewed", and the audit log holds an `agent.cert_renew` entry. An agent that was off at that moment renews at its next connection, as long as its certificate is still valid. Nothing is needed from you.
+
+**When one doesn't renew,** it shows before it ends:
+- **In the app,** under **Admin › Agents**: "Expires in N days. It renews once connected on 0.1.2 or later." in the last 14 days.
+- **In the server's log,** once a day in those 14 days: "an agent's certificate expires soon and wasn't renewed", with the agent's name and the days left.
+- **In the agent's log,** once a day: "this agent's certificate ends soon and isn't renewed yet". "the server doesn't renew certificates yet" means the server is older than 0.1.2: update it. "the certificate's renewal failed" names a `cause`: `store` means the agent can't write its data volume.
+- **In the metrics:** [Metrics](#metrics).
+
+It didn't renew because the agent is older than 0.1.2, the server is, or the agent hasn't been connected since day 40. Update both ([Updating](#updating)) and start the agent: it renews at its first connection.
+
+**Once it has ended,** the agent can't connect and exits; the app shows it as Expired, and the server's log says "an agent's certificate has expired" once a day. Disable it, release its bots and enroll its host again ([When a service won't start or keeps restarting](#when-a-service-wont-start-or-keeps-restarting)).
+
+**After restoring a backup,** an agent that renewed its certificate since that backup was taken is unknown to the restored server: the server logs "a certificate the CA signed but the server doesn't know was refused", and the agent stops. Disable it and enroll it again.
+
 ## Renewing the server certificate
 
-The server's certificate, which agents check, lasts 365 days; after that every agent fails to connect. Renew it before (once a year, or after changing `AFKFLEET_GRPC_NAMES`): it stops the server, moves the old pair aside, issues a new one from the same CA for `server` and `AFKFLEET_GRPC_NAMES`' names, and starts afkfleet; if the new one fails, it puts the old one back. The CA stays, so no agent enrolls again; their streams end at the stop and come back. Success: `ok: the server's certificate is new, from the same CA`, then the `forget-aside` command for the old pair, once the agents are back online.
+The server's certificate, which agents check, lasts 365 days; after that every agent fails to connect. It isn't renewed by itself. In its last 30 days the server's log says "the server certificate expires soon" at every start and once a day ([Metrics](#metrics) has its end too). Renew it before (once a year, or after changing `AFKFLEET_GRPC_NAMES`): it stops the server, moves the old pair aside, issues a new one from the same CA for `server` and `AFKFLEET_GRPC_NAMES`' names, and starts afkfleet; if the new one fails, it puts the old one back. The CA stays, so no agent enrolls again; their streams end at the stop and come back. Success: `ok: the server's certificate is new, from the same CA`, then the `forget-aside` command for the old pair, once the agents are back online.
 
 ```sh
 sh setup.sh renew-cert
@@ -694,7 +717,7 @@ docker compose logs --tail 50 agent
   docker compose stop agent
   ```
 - **The agent exits 1 at the start:** its config or its identity's files (its key, its certificate, the CA): the log line names the file and what's wrong.
-- **An agent whose certificate expired** enrolls again: disable it first, which frees its name.
+- **An agent whose certificate expired** enrolls again: disable it first, which frees its name, and release its bots ([Incident response](#incident-response) has both commands). It expires only if it never renewed ([Agents' certificates](#agents-certificates)).
 - **The server exits 1 at the start:** its config, the vault's keys, the PKI, an address or the database, named in the log. Exit 4: it, or the reconciler placing the bots, ended unasked; the log before it says why.
 - **The server's certificate expired** (after 365 days, every agent fails to connect): [Renewing the server certificate](#renewing-the-server-certificate).
 

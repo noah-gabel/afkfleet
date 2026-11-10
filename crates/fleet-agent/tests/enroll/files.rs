@@ -189,3 +189,84 @@ fn a_certificate_temp_swapped_after_the_claim_never_receives_the_certificate() {
 
     assert_eq!(fs::read(&moved).unwrap(), b"the certificate");
 }
+
+// --- A renewal's replacement (P13.6; ADR-0027) ---
+
+use fleet_agent::enroll::files::{ReplaceError, renew_temp_path, replace_certificate};
+
+#[test]
+fn a_renewal_replaces_the_certificate_alone_and_leaves_no_temp() {
+    let dir = test_dir("replace_certificate");
+    let (key, cert) = paths(&dir);
+    fs::write(&key, "the key").unwrap();
+    fs::write(&cert, "the old certificate").unwrap();
+
+    replace_certificate(&cert, b"the new certificate").unwrap();
+
+    assert_eq!(fs::read_to_string(&cert).unwrap(), "the new certificate");
+    assert_eq!(fs::read_to_string(&key).unwrap(), "the key");
+    assert_eq!(names(&dir), ["agent.crt", "agent.key"], "no temp is left");
+    assert_owner_only(&cert);
+}
+
+#[test]
+fn a_temp_left_by_a_renewal_that_was_cut_off_is_replaced_never_published() {
+    let dir = test_dir("replace_stale_temp");
+    let (_, cert) = paths(&dir);
+    fs::write(&cert, "the old certificate").unwrap();
+    fs::write(renew_temp_path(&cert), "half a certifi").unwrap();
+
+    replace_certificate(&cert, b"the new certificate").unwrap();
+
+    assert_eq!(fs::read_to_string(&cert).unwrap(), "the new certificate");
+    assert_eq!(names(&dir), ["agent.crt"]);
+}
+
+#[test]
+fn a_renewal_never_touches_an_enrollments_lock() {
+    let dir = test_dir("replace_keeps_lock");
+    let (_, cert) = paths(&dir);
+    fs::write(&cert, "the old certificate").unwrap();
+    fs::write(temp_path(&cert), "another run's lock").unwrap();
+
+    replace_certificate(&cert, b"the new certificate").unwrap();
+
+    assert_eq!(
+        fs::read_to_string(temp_path(&cert)).unwrap(),
+        "another run's lock"
+    );
+    assert_ne!(renew_temp_path(&cert), temp_path(&cert));
+}
+
+#[test]
+fn a_certificate_whose_folder_is_gone_is_an_error_naming_the_temp() {
+    let dir = test_dir("replace_no_folder");
+    let cert = dir.join("gone").join("agent.crt");
+
+    let failed = replace_certificate(&cert, b"the new certificate").unwrap_err();
+
+    assert!(
+        matches!(&failed, ReplaceError::Write { path, .. } if *path == renew_temp_path(&cert)),
+        "{failed:?}"
+    );
+    assert!(!dir.join("gone").exists());
+}
+
+#[test]
+fn a_certificate_that_cant_be_replaced_is_left_as_it_was_with_no_temp() {
+    let dir = test_dir("replace_blocked");
+    let (_, cert) = paths(&dir);
+    // A folder with something in it can't be renamed over, on any platform.
+    fs::create_dir(&cert).unwrap();
+    fs::write(cert.join("kept"), "kept").unwrap();
+
+    let failed = replace_certificate(&cert, b"the new certificate").unwrap_err();
+
+    assert!(
+        matches!(&failed, ReplaceError::Rename { path, .. } if *path == cert),
+        "{failed:?}"
+    );
+    assert!(failed.to_string().contains("left as it was"), "{failed}");
+    assert_eq!(fs::read_to_string(cert.join("kept")).unwrap(), "kept");
+    assert_eq!(names(&dir), ["agent.crt"], "the temp is removed");
+}

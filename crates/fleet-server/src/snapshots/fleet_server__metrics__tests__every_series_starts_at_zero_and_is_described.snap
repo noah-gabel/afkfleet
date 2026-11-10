@@ -2,6 +2,15 @@
 source: crates/fleet-server/src/metrics.rs
 expression: sorted(&render)
 ---
+# HELP afkfleet_agent_certificate_renewals_total Agents' certificates the server renewed.
+# TYPE afkfleet_agent_certificate_renewals_total counter
+afkfleet_agent_certificate_renewals_total 0
+
+# HELP afkfleet_agent_certificates Enabled agents whose latest certificate ends soon (expiring: its last 14 days, though an agent renews with a third of its lifetime left) or has ended (expired: it must enroll again).
+# TYPE afkfleet_agent_certificates gauge
+afkfleet_agent_certificates{state="expired"} 0
+afkfleet_agent_certificates{state="expiring"} 0
+
 # HELP afkfleet_agent_connects_refused_total Agent connections refused for their certificate, by reason, past the audit log's daily cap too.
 # TYPE afkfleet_agent_connects_refused_total counter
 afkfleet_agent_connects_refused_total{reason="already_connected"} 0
@@ -115,6 +124,10 @@ afkfleet_retention_rows_deleted_total{kind="sessions"} 0
 afkfleet_retention_runs_total{outcome="failed"} 0
 afkfleet_retention_runs_total{outcome="stopped"} 0
 afkfleet_retention_runs_total{outcome="success"} 0
+
+# HELP afkfleet_server_certificate_not_after_timestamp_seconds When the gRPC port's server certificate ends, in Unix seconds; 0 without [grpc]. After it no agent can connect: renew it with pki server-cert before.
+# TYPE afkfleet_server_certificate_not_after_timestamp_seconds gauge
+afkfleet_server_certificate_not_after_timestamp_seconds 0
 
 # HELP afkfleet_session_denials_total Session requests denied, by reason; the fresh-session limit's refusals are rate_limit_refusals with limit="fresh_sessions".
 # TYPE afkfleet_session_denials_total counter

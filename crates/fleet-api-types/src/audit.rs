@@ -150,6 +150,8 @@ audit_action_names! {
     SecurityAgentIdentityConflict = "security.agent_identity_conflict";
     /// An agent was disabled.
     AgentDisable = "agent.disable";
+    /// An agent renewed its certificate.
+    AgentCertRenew = "agent.cert_renew";
     /// A bot was placed on an agent.
     BotAssign = "bot.assign";
     /// A bot was taken off an agent.

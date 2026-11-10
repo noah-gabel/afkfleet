@@ -15,7 +15,8 @@
 //!   line, never an entry.
 //! - **An accepted hello** is one transaction: the certificate and the
 //!   agent are read again, the hello's capacity and version and the time are
-//!   recorded, each bot it lists that's assigned to the agent gets its
+//!   recorded, the agent's older certificates are revoked (the one a renewal
+//!   replaced; P13.6, ADR-0027), each bot it lists that's assigned to the agent gets its
 //!   reported state as its last (S40), each other bot it lists that the
 //!   server knows gets a release record naming the agent and `bot.stray`
 //!   (S43), and `agent.connect` commits, before `Welcome` is sent.
@@ -79,12 +80,12 @@ pub struct AgentConnectionService {
 
 /// A refusal of a certificate the server knows, as it's recorded.
 #[derive(Debug, Clone, Copy)]
-struct Refusal {
-    request: RequestId,
-    agent: AgentId,
-    fingerprint: CertFingerprint,
-    peer: Option<IpAddr>,
-    reason: ConnectRefusal,
+pub(super) struct Refusal {
+    pub(super) request: RequestId,
+    pub(super) agent: AgentId,
+    pub(super) fingerprint: CertFingerprint,
+    pub(super) peer: Option<IpAddr>,
+    pub(super) reason: ConnectRefusal,
 }
 
 impl AgentConnectionService {
@@ -122,7 +123,11 @@ impl AgentConnectionService {
 
     /// Whether `cert`, of an agent enabled or not as `enabled` says, admits
     /// it at `now`.
-    fn judge(cert: &AgentCert, enabled: bool, now: DateTime<Utc>) -> Result<(), ConnectRefusal> {
+    pub(super) fn judge(
+        cert: &AgentCert,
+        enabled: bool,
+        now: DateTime<Utc>,
+    ) -> Result<(), ConnectRefusal> {
         admit(
             CertificateFacts {
                 revoked: cert.revoked_at.is_some(),
@@ -137,8 +142,9 @@ impl AgentConnectionService {
     /// fewer than [`MAX_AUDITED_CONNECT_REFUSALS`] in the last
     /// [`CONNECT_REFUSAL_WINDOW`], counted on the read pool first and again
     /// in the transaction, and logs it. A failure to record is logged too:
-    /// the refusal stands either way.
-    async fn refuse(&self, refusal: Refusal) {
+    /// the refusal stands either way. A renewal's refusal is recorded here
+    /// too (P13.6; ADR-0027).
+    pub(super) async fn refuse(&self, refusal: Refusal) {
         let Refusal {
             request,
             agent,
@@ -245,6 +251,14 @@ impl AgentConnectionService {
         if !tx.agents().record_hello(&hello).await? {
             return Ok(Err(ConnectRefusal::Disabled));
         }
+        // The agent uses this certificate now, so the ones it replaced
+        // end here, and a process that still holds one is refused as
+        // revoked. A newer one stays: the agent may have stored a renewal's
+        // answer already and start with it next (P13.6; ADR-0027).
+        let revoked = tx
+            .agents()
+            .revoke_older_certs(admitted.agent, admitted.fingerprint, now)
+            .await?;
         // A hello never speaks for a bot it wasn't given: its report counts
         // only where the row names this agent, and any other bot it runs is
         // fenced here, before the stream goes live, so the fence outlives
@@ -267,10 +281,16 @@ impl AgentConnectionService {
                 }
             }
         }
-        let metadata = AuditMetadata::new()
+        let mut metadata = AuditMetadata::new()
             .text("fingerprint", &admitted.fingerprint.to_string())?
             .text("version", version.as_str())?
             .int("capacity", i64::from(u32::from(capacity)))?;
+        if revoked > 0 {
+            metadata = metadata.int(
+                "certificates_revoked",
+                i64::try_from(revoked).unwrap_or(i64::MAX),
+            )?;
+        }
         let mut entry = self
             .audit
             .entry(AuditAction::AGENT_CONNECT, AuditOutcome::Success)
@@ -281,6 +301,15 @@ impl AgentConnectionService {
         }
         let bots = tx.bots().assigned_to(admitted.agent).await?;
         tx.commit(entry).await?;
+        if revoked > 0 {
+            info!(
+                request_id = %admitted.request,
+                agent_id = %admitted.agent,
+                fingerprint = %admitted.fingerprint,
+                revoked,
+                "an agent connected with a renewed certificate; its earlier ones are revoked"
+            );
+        }
         self.live_hints.bots(&bots);
         Ok(Ok(()))
     }

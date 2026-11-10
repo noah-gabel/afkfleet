@@ -49,7 +49,7 @@ Moved from `CLAUDE.md` word for word; it points here. CLAUDE.md keeps the rule: 
 | | gRPC | `tonic`, `tonic-prost`, `prost`, `tonic-prost-build`, `protox` |
 | | TLS | `rustls` (**aws-lc-rs provider only**) |
 | | PKI | `rcgen` (Ed25519 keys from getrandom bytes only, never `KeyPair::generate`; ADR-0019) |
-| | Certificate parsing | `x509-parser` (fleet-server; rcgen 0.14 no longer reads certificates; ADR-0019) |
+| | Certificate parsing | `x509-parser` (fleet-server; rcgen 0.14 no longer reads certificates; ADR-0019; fleet-agent, for its certificate's two dates; ADR-0027) |
 | | HTTP client | `reqwest` (rustls) |
 | | WS client | `tokio-tungstenite` |
 | | TS types | `ts-rs` |

@@ -13,6 +13,23 @@ service AgentControl {
   // The agent's one stream: it says hello, reports its bots, and receives
   // what it should run.
   rpc Connect(stream AgentMessage) returns (stream ServerMessage);
+  // Renews the certificate the call presents: the server signs a new one for
+  // the same key and the same agent. It passes the checks a Connect call
+  // passes before its stream opens (Plan.md P13.6; ADR-0027).
+  rpc RenewCertificate(RenewRequest) returns (RenewResponse);
+}
+
+// What an agent sends to renew its certificate: nothing. The certificate it
+// presents says who it is and which key the new one is for.
+message RenewRequest {}
+
+// What the server answers an agent whose certificate it renewed.
+message RenewResponse {
+  // The new certificate, as one PEM CERTIFICATE section: what the agent
+  // checks and stores as it is.
+  string certificate_pem = 1;
+  // When the new certificate stops being valid.
+  optional int64 not_after_unix_ms = 2;
 }
 
 // A message from an agent to the server.

@@ -81,6 +81,7 @@ const ACTIONS: Record<AuditActionName, string> = {
   "agent.disconnect": "Agent disconnected",
   "security.agent_identity_conflict": "Two processes using one agent's identity",
   "agent.disable": "Agent disabled",
+  "agent.cert_renew": "Agent's certificate renewed",
   "bot.assign": "Bot placed on an agent",
   "bot.unassign": "Bot taken off an agent",
   "bot.detach": "Agent no longer runs a bot",

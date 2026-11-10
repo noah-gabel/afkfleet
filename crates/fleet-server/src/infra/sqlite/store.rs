@@ -33,8 +33,8 @@ use crate::ports::accounts::{
     AccountReads, AccountWrites, DeletedAccount, InsertAccountError, ListedAccount, McAccount,
 };
 use crate::ports::agents::{
-    Agent, AgentCert, AgentHello, AgentReads, AgentWrites, InsertAgentError, ListedAgent, NewAgent,
-    NewAgentCert,
+    Agent, AgentCert, AgentHello, AgentReads, AgentWrites, InsertAgentError, LatestCert,
+    ListedAgent, NewAgent, NewAgentCert,
 };
 use crate::ports::audit::{
     AuditEntryId, AuditPage, AuditReads, AuditRecord, AuditTargetFilter, AuditWrites,
@@ -261,6 +261,10 @@ impl AgentReads for Reads {
 
     async fn admissible(&self, now: DateTime<Utc>) -> Result<Vec<CertFingerprint>, StoreError> {
         agents::admissible(&self.pool, now).await
+    }
+
+    async fn latest_certs(&self) -> Result<Vec<LatestCert>, StoreError> {
+        agents::latest_certs(&self.pool).await
     }
 
     async fn list(&self, page: Page<AgentId>) -> Result<Vec<ListedAgent>, StoreError> {
@@ -767,6 +771,24 @@ impl AgentWrites for SqliteWriteTx {
 
     async fn revoke_certs(&mut self, id: AgentId, at: DateTime<Utc>) -> Result<u64, StoreError> {
         agents::revoke_certs(&mut self.tx, id, at).await
+    }
+
+    async fn revoke_other_certs(
+        &mut self,
+        id: AgentId,
+        keep: CertFingerprint,
+        at: DateTime<Utc>,
+    ) -> Result<u64, StoreError> {
+        agents::revoke_other_certs(&mut self.tx, id, keep, at).await
+    }
+
+    async fn revoke_older_certs(
+        &mut self,
+        id: AgentId,
+        keep: CertFingerprint,
+        at: DateTime<Utc>,
+    ) -> Result<u64, StoreError> {
+        agents::revoke_older_certs(&mut self.tx, id, keep, at).await
     }
 }
 

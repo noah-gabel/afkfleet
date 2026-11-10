@@ -21,6 +21,7 @@ use rustls::CertificateError;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, UnixTime};
 use rustls::server::WebPkiClientVerifier;
 use rustls::sign::CertifiedKey;
+use x509_parser::prelude::{FromDer as _, X509Certificate};
 
 use super::key::AgentKey;
 use super::pem::framed;
@@ -90,6 +91,34 @@ pub fn check(
 /// [`CertificateProblem::NotFromTheCa`], then `Expired` or `NotYetValid`.
 pub fn validity(cert_der: &[u8], ca_der: &[u8], now: UnixTime) -> Result<(), CertificateProblem> {
     chain_at(cert_der, ca_der, now)?.map_or(Ok(()), Err)
+}
+
+/// When a certificate is valid: its `notBefore` and its `notAfter`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Lifetime {
+    /// The first second it's valid.
+    pub not_before: DateTime<Utc>,
+    /// The last second it's valid.
+    pub not_after: DateTime<Utc>,
+}
+
+/// When `cert_der` is valid, read with x509-parser, for the renewal's
+/// timing and the warning before its end (Plan.md P13.6; ADR-0027). The
+/// caller has checked the certificate with [`check`] or [`validity`]: this
+/// reads two dates and judges nothing. None for bytes that aren't exactly
+/// one certificate; x509-parser's error is never passed on, since it can
+/// quote its input.
+#[must_use]
+pub fn lifetime(cert_der: &[u8]) -> Option<Lifetime> {
+    let (rest, certificate) = X509Certificate::from_der(cert_der).ok()?;
+    if !rest.is_empty() {
+        return None;
+    }
+    let validity = certificate.validity();
+    Some(Lifetime {
+        not_before: DateTime::from_timestamp(validity.not_before.timestamp(), 0)?,
+        not_after: DateTime::from_timestamp(validity.not_after.timestamp(), 0)?,
+    })
 }
 
 /// rustls's client verifier, `ca_der` its one root: the check the server's
@@ -337,6 +366,31 @@ mod tests {
             ),
             Err(expired)
         );
+    }
+
+    #[test]
+    fn a_certificates_lifetime_is_its_two_dates() {
+        let (_, issuer) = ca(1);
+        let der = one_certificate(dated(&agent_key(1), &issuer).as_bytes()).unwrap();
+
+        assert_eq!(
+            lifetime(&der),
+            Some(Lifetime {
+                not_before: date(START),
+                not_after: date(END),
+            })
+        );
+    }
+
+    #[test]
+    fn bytes_that_arent_one_certificate_have_no_lifetime() {
+        let (_, issuer) = ca(1);
+        let mut trailing = one_certificate(dated(&agent_key(1), &issuer).as_bytes()).unwrap();
+        trailing.push(0);
+
+        assert_eq!(lifetime(&[]), None);
+        assert_eq!(lifetime(b"-----BEGIN CERTIFICATE-----"), None);
+        assert_eq!(lifetime(&trailing), None);
     }
 
     #[test]

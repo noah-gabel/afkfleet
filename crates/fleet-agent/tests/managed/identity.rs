@@ -303,7 +303,7 @@ fn the_kept_certificate_expires_on_the_runs_clock() {
     );
     let identity = ManagedIdentity::load(&plane, at(MARCH)).unwrap();
 
-    let (_tls, kept) = identity.into_tls("localhost".to_owned());
+    let (_tls, kept, _renewal) = identity.into_link("localhost".to_owned());
 
     assert_eq!(kept.validity(at(MARCH)), Ok(()));
     assert!(

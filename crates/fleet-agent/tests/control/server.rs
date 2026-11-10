@@ -2,10 +2,13 @@
 //! fleet-proto's `BoundedCodec`, TLS that requires a client certificate the
 //! test CA signed, and every `Connect` handed to the test after its hello,
 //! which the test accepts or refuses and then plays the server's side of.
+//! `RenewCertificate` answers what the test scripted, and `UNIMPLEMENTED`
+//! without a script, as a server older than the renewal does (P13.6).
 
 use core::time::Duration;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 
 use fleet_core::bot::BotAccount;
 use fleet_core::id::{AgentId, BotId};
@@ -18,7 +21,7 @@ use fleet_proto::control::{
 use fleet_proto::generated as wire;
 use fleet_proto::generated::agent_control_server::{AgentControl, AgentControlServer};
 use tokio::net::TcpListener;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
@@ -170,18 +173,69 @@ impl Call {
     }
 }
 
+/// What the fake answers to `RenewCertificate`: the scripted answers in
+/// order, then `UNIMPLEMENTED`, which is what a server older than the
+/// renewal answers (P13.6). It counts the calls and keeps the certificate
+/// each presented.
+#[derive(Debug, Clone)]
+pub(crate) struct Renewals {
+    script: Arc<Mutex<VecDeque<Result<String, Status>>>>,
+    presented: Arc<Mutex<Vec<Vec<u8>>>>,
+    calls: watch::Sender<usize>,
+}
+
+impl Default for Renewals {
+    fn default() -> Self {
+        Self {
+            script: Arc::default(),
+            presented: Arc::default(),
+            calls: watch::Sender::new(0),
+        }
+    }
+}
+
+impl Renewals {
+    /// Scripts the next call's answer: a certificate's PEM, or a refusal.
+    pub(crate) fn answer(&self, answer: Result<String, Status>) {
+        self.script.lock().unwrap().push_back(answer);
+    }
+
+    /// Waits, at most [`PATIENCE`], until `count` calls arrived.
+    pub(crate) async fn called(&self, count: usize) {
+        let mut seen = self.calls.subscribe();
+        tokio::time::timeout(PATIENCE, seen.wait_for(|calls| *calls >= count))
+            .await
+            .expect("the agent should ask for its renewal")
+            .unwrap();
+    }
+
+    /// How many calls arrived.
+    pub(crate) fn calls(&self) -> usize {
+        *self.calls.borrow()
+    }
+
+    /// The certificate each call presented, as DER.
+    pub(crate) fn presented(&self) -> Vec<Vec<u8>> {
+        self.presented.lock().unwrap().clone()
+    }
+}
+
 /// The fake server; see the [module docs](self).
 pub(crate) struct FakeServer {
     /// Where it listens.
     pub(crate) address: SocketAddr,
+    /// Its answers to `RenewCertificate`.
+    pub(crate) renewals: Renewals,
     pending: mpsc::Receiver<Pending>,
     stop: CancellationToken,
     task: JoinHandle<()>,
 }
 
-/// The service: every `Connect` goes to the test.
+/// The service: every `Connect` goes to the test, every
+/// `RenewCertificate` to the script.
 struct Service {
     pending: mpsc::Sender<Pending>,
+    renewals: Renewals,
 }
 
 #[tonic::async_trait]
@@ -218,6 +272,28 @@ impl AgentControl for Service {
             Err(_) => Err(Status::unavailable("the test is gone")),
         }
     }
+
+    async fn renew_certificate(
+        &self,
+        request: Request<wire::RenewRequest>,
+    ) -> Result<Response<wire::RenewResponse>, Status> {
+        let presented = request
+            .peer_certs()
+            .and_then(|certificates| certificates.first().map(|der| der.to_vec()))
+            .unwrap_or_default();
+        self.renewals.presented.lock().unwrap().push(presented);
+        let scripted = self.renewals.script.lock().unwrap().pop_front();
+        self.renewals.calls.send_modify(|calls| *calls += 1);
+        match scripted {
+            Some(Ok(certificate_pem)) => Ok(Response::new(wire::RenewResponse {
+                certificate_pem,
+                // 2090: only the certificate itself is believed.
+                not_after_unix_ms: Some(3_786_912_000_000),
+            })),
+            Some(Err(status)) => Err(status),
+            None => Err(Status::unimplemented("")),
+        }
+    }
 }
 
 impl FakeServer {
@@ -234,9 +310,13 @@ impl FakeServer {
             .identity(Identity::from_pem(certificate, key))
             .client_ca_root(Certificate::from_pem(&ca.pem));
         let (sender, pending) = mpsc::channel(8);
-        let service = AgentControlServer::new(Service { pending: sender })
-            .max_decoding_message_size(MAX_AGENT_MESSAGE_BYTES)
-            .max_encoding_message_size(MAX_SERVER_MESSAGE_BYTES);
+        let renewals = Renewals::default();
+        let service = AgentControlServer::new(Service {
+            pending: sender,
+            renewals: renewals.clone(),
+        })
+        .max_decoding_message_size(MAX_AGENT_MESSAGE_BYTES)
+        .max_encoding_message_size(MAX_SERVER_MESSAGE_BYTES);
         let stop = CancellationToken::new();
         let stopped = stop.clone();
         let task = tokio::spawn(async move {
@@ -252,6 +332,7 @@ impl FakeServer {
         });
         Self {
             address,
+            renewals,
             pending,
             stop,
             task,

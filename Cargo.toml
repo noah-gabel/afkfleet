@@ -7,7 +7,7 @@ members = ["crates/*", "apps/desktop/src-tauri"]
 exclude = ["spikes"]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 license = "GPL-3.0-or-later"
 publish = false
@@ -283,6 +283,8 @@ windows-native-keyring-store = { version = "1.1.0", default-features = false }
 # certificate's names and validity at serve's startup, and its tests read every field of
 # the certificates it issues (the user's choice in Phase 10's group B, ADR-0019; rcgen 0.14
 # no longer parses certificates). Already built through rcgen's `x509-parser` feature.
+# fleet-agent reads its own certificate's two dates with it, after rustls checked the
+# certificate, for the renewal's timing (ADR-0027).
 # Without default features (it has none); rcgen's `aws_lc_rs` turns on its `verify-aws`,
 # never its ring `verify`. Its errors are never passed on: they can quote their input.
 x509-parser = { version = "0.18.1", default-features = false }

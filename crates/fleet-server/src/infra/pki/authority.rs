@@ -1,7 +1,9 @@
 //! [`CertificateAuthority`]: the CA's key and certificate, signing the
 //! server's certificate and agents' certificates (P10.2); and
-//! [`AgentIssuer`], the CA behind the enrollment service's
-//! [`AgentCertificates`] port.
+//! [`AgentIssuer`], the CA behind the enrollment service's and the
+//! renewal's [`AgentCertificates`] port: an agent's first certificate from
+//! its CSR, and each later one for the key of the certificate it presents
+//! (P13.6; ADR-0027).
 
 use core::fmt;
 use std::sync::Arc;
@@ -10,9 +12,11 @@ use chrono::{DateTime, TimeDelta, Utc};
 use fleet_core::id::AgentId;
 use fleet_core::pki::CertFingerprint;
 use fleet_core::system::SecureRandom;
-use rcgen::{Certificate, Issuer, PublicKeyData, SerialNumber};
+use rcgen::{Certificate, Issuer, PKCS_ED25519, PublicKeyData, SerialNumber, SignatureAlgorithm};
 use rustls::pki_types::CertificateDer;
 use sha2::{Digest as _, Sha256};
+use x509_parser::oid_registry::OID_SIG_ED25519;
+use x509_parser::prelude::{FromDer as _, X509Certificate};
 
 pub use super::profiles::PkiError;
 
@@ -197,9 +201,10 @@ impl fmt::Debug for CertificateAuthority {
     }
 }
 
-/// The CA behind the enrollment service's [`AgentCertificates`]: it checks
-/// an agent's CSR and signs its certificate with `[grpc]
-/// agent_cert_lifetime_days`, serials from the [`SecureRandom`] port.
+/// The CA behind [`AgentCertificates`]: it checks an agent's CSR, or reads
+/// the key of the certificate a renewal presents, and signs its certificate
+/// with `[grpc] agent_cert_lifetime_days`, serials from the
+/// [`SecureRandom`] port.
 pub struct AgentIssuer {
     ca: CertificateAuthority,
     random: Arc<dyn SecureRandom>,
@@ -222,6 +227,69 @@ impl AgentIssuer {
     }
 }
 
+impl AgentIssuer {
+    /// An agent's certificate for `public_key`, naming `agent`, valid from
+    /// about `now` for the configured lifetime, as the port answers it.
+    fn sign(
+        &self,
+        public_key: &impl PublicKeyData,
+        agent: AgentId,
+        now: DateTime<Utc>,
+    ) -> Result<IssuedCertificate, IssueError> {
+        let issued = self
+            .ca
+            .issue_agent(public_key, agent, self.lifetime, self.random.as_ref(), now)
+            .map_err(|error| match error {
+                PkiError::Random(error) => IssueError::Random(error),
+                PkiError::OutOfRange(_) => IssueError::OutOfRange,
+                other => IssueError::Signing(Box::new(other)),
+            })?;
+        Ok(IssuedCertificate {
+            der: issued.der.to_vec(),
+            pem: issued.pem,
+            fingerprint: issued.fingerprint,
+            not_before: issued.validity.not_before,
+            not_after: issued.validity.not_after,
+        })
+    }
+}
+
+/// The length of an Ed25519 public key.
+const ED25519_KEY_LEN: usize = 32;
+
+/// The Ed25519 public key of a certificate a connection presented: what a
+/// renewal certifies again (P13.6; ADR-0027). The handshake proved the
+/// caller holds its private key, so no CSR proves it a second time.
+struct PresentedKey(Vec<u8>);
+
+impl PresentedKey {
+    /// The key of `der`, when it's exactly one certificate whose key is
+    /// Ed25519, as every certificate the CA signs is; none otherwise.
+    /// x509-parser's error is never passed on, since it can quote its input.
+    fn of(der: &[u8]) -> Option<Self> {
+        let (rest, certificate) = X509Certificate::from_der(der).ok()?;
+        if !rest.is_empty() {
+            return None;
+        }
+        let key = certificate.public_key();
+        let raw = key.subject_public_key.data.as_ref();
+        (key.algorithm.algorithm == OID_SIG_ED25519
+            && key.algorithm.parameters.is_none()
+            && raw.len() == ED25519_KEY_LEN)
+            .then(|| Self(raw.to_vec()))
+    }
+}
+
+impl PublicKeyData for PresentedKey {
+    fn der_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    fn algorithm(&self) -> &'static SignatureAlgorithm {
+        &PKCS_ED25519
+    }
+}
+
 impl fmt::Debug for AgentIssuer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AgentIssuer")
@@ -239,21 +307,17 @@ impl AgentCertificates for AgentIssuer {
         now: DateTime<Utc>,
     ) -> Result<IssuedCertificate, IssueError> {
         let csr = check_csr(csr_der)?;
-        let issued = self
-            .ca
-            .issue_agent(&csr, agent, self.lifetime, self.random.as_ref(), now)
-            .map_err(|error| match error {
-                PkiError::Random(error) => IssueError::Random(error),
-                PkiError::OutOfRange(_) => IssueError::OutOfRange,
-                other => IssueError::Signing(Box::new(other)),
-            })?;
-        Ok(IssuedCertificate {
-            der: issued.der.to_vec(),
-            pem: issued.pem,
-            fingerprint: issued.fingerprint,
-            not_before: issued.validity.not_before,
-            not_after: issued.validity.not_after,
-        })
+        self.sign(&csr, agent, now)
+    }
+
+    fn renew(
+        &self,
+        presented_der: &[u8],
+        agent: AgentId,
+        now: DateTime<Utc>,
+    ) -> Result<IssuedCertificate, IssueError> {
+        let key = PresentedKey::of(presented_der).ok_or(IssueError::Presented)?;
+        self.sign(&key, agent, now)
     }
 
     fn ca_fingerprint(&self) -> CertFingerprint {
@@ -275,7 +339,7 @@ mod tests {
     use rustls::pki_types::{PrivatePkcs8KeyDer, ServerName, UnixTime};
     use rustls::server::WebPkiClientVerifier;
     use secrecy::ExposeSecret as _;
-    use x509_parser::prelude::{FromDer as _, GeneralName, X509Certificate};
+    use x509_parser::prelude::GeneralName;
 
     use super::*;
     use crate::ports::pki::CsrRefusal;
@@ -608,5 +672,168 @@ sOxjMINkK3TAT0v8m1sHV5Hfe1lu1oXJy5/5etF6cgIgGftIj7GG54P6yY5ZM933
             Err(IssueError::Csr(CsrRefusal::Unparsable))
         ));
         assert_eq!(issuer.ca_fingerprint(), ca_fingerprint);
+    }
+
+    // --- Renewal (P13.6; ADR-0027) ---
+
+    const LATER: &str = "2027-02-24T08:00:00.123Z";
+
+    fn issuer() -> AgentIssuer {
+        AgentIssuer::new(ca(), Arc::new(SeededRandom::new(2)), TimeDelta::days(60))
+    }
+
+    /// The certificate `issuer` signs for `key`'s CSR at `NOW`.
+    fn enrolled(issuer: &AgentIssuer, key: &KeyPair) -> IssuedCertificate {
+        let csr = CertificateParams::default()
+            .serialize_request(key)
+            .unwrap()
+            .der()
+            .to_vec();
+        issuer.issue(&csr, agent(), at(NOW)).unwrap()
+    }
+
+    #[test]
+    fn a_renewal_certifies_the_presented_key_again_for_the_agent_from_now() {
+        let issuer = issuer();
+        let key = agent_key(7);
+        let first = enrolled(&issuer, &key);
+
+        let renewed = issuer.renew(&first.der, agent(), at(LATER)).unwrap();
+
+        assert_eq!(renewed.not_before, at("2027-02-24T07:00:00Z"));
+        assert_eq!(renewed.not_after, at("2027-04-25T08:00:00Z"));
+        assert_eq!(renewed.fingerprint, fingerprint(&renewed.der));
+        assert_ne!(renewed.fingerprint, first.fingerprint);
+        let cert = parsed(&renewed.der);
+        assert_eq!(
+            cert.public_key().subject_public_key.data.as_ref(),
+            key.public_key_raw()
+        );
+        assert_eq!(
+            cert.subject_alternative_name()
+                .unwrap()
+                .unwrap()
+                .value
+                .general_names,
+            [GeneralName::URI(
+                "urn:uuid:018bcfe5-6800-7bab-abab-abababababab"
+            )]
+        );
+        let usage = cert.extended_key_usage().unwrap().unwrap().value;
+        assert!(usage.client_auth && !usage.server_auth && !usage.any);
+        assert!(!cert.is_ca());
+        assert_ne!(cert.raw_serial(), parsed(&first.der).raw_serial());
+        assert!(renewed.pem.starts_with("-----BEGIN CERTIFICATE-----"));
+    }
+
+    #[test]
+    fn a_renewed_certificate_is_one_rustls_accepts_from_a_client() {
+        let ca = ca();
+        let key = agent_key(7);
+        let first = issue_agent(&ca, &key);
+        let issuer = AgentIssuer::new(
+            CertificateAuthority::from_parts(
+                ca.cert_der().clone(),
+                Ed25519Key::from_pem(ca.key().to_pem().as_bytes()).unwrap(),
+            )
+            .unwrap(),
+            Arc::new(SeededRandom::new(3)),
+            TimeDelta::days(60),
+        );
+
+        let renewed = issuer.renew(&first.der, agent(), at(LATER)).unwrap();
+
+        let der = CertificateDer::from(renewed.der);
+        let accepted = |when: DateTime<Utc>| {
+            WebPkiClientVerifier::builder_with_provider(
+                roots(&ca),
+                Arc::new(aws_lc_rs::default_provider()),
+            )
+            .build()
+            .unwrap()
+            .verify_client_cert(&der, &[], unix(when))
+            .is_ok()
+        };
+        assert!(accepted(at(LATER)));
+        assert!(accepted(renewed.not_after));
+        assert!(!accepted(renewed.not_after + TimeDelta::seconds(1)));
+    }
+
+    #[test]
+    fn a_renewal_names_the_agent_it_is_given_never_the_presented_certificates() {
+        let issuer = issuer();
+        let first = enrolled(&issuer, &agent_key(7));
+        let other: AgentId = "018bcfe5-6800-7cdc-9cdc-dcdcdcdcdcdc".parse().unwrap();
+
+        let renewed = issuer.renew(&first.der, other, at(LATER)).unwrap();
+
+        assert_eq!(
+            parsed(&renewed.der)
+                .subject_alternative_name()
+                .unwrap()
+                .unwrap()
+                .value
+                .general_names,
+            [GeneralName::URI(
+                "urn:uuid:018bcfe5-6800-7cdc-9cdc-dcdcdcdcdcdc"
+            )]
+        );
+    }
+
+    #[test]
+    fn a_renewal_refuses_what_isnt_one_certificate_with_an_ed25519_key() {
+        let issuer = issuer();
+        let first = enrolled(&issuer, &agent_key(7));
+        let mut trailing = first.der.clone();
+        trailing.push(0);
+        let p256 = CertificateDer::from_pem_slice(FIXED_CA.as_bytes())
+            .unwrap()
+            .to_vec();
+        let csr = CertificateParams::default()
+            .serialize_request(&agent_key(7))
+            .unwrap()
+            .der()
+            .to_vec();
+
+        for (what, presented) in [
+            ("nothing", Vec::new()),
+            ("not DER", b"not a certificate".to_vec()),
+            ("bytes after it", trailing),
+            ("a P-256 key", p256),
+            ("a CSR", csr),
+        ] {
+            assert!(
+                matches!(
+                    issuer.renew(&presented, agent(), at(LATER)),
+                    Err(IssueError::Presented)
+                ),
+                "{what}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_renewal_with_a_failing_random_source_signs_nothing() {
+        let random = Arc::new(SeededRandom::new(2));
+        let issuer = AgentIssuer::new(ca(), random.clone(), TimeDelta::days(60));
+        let first = enrolled(&issuer, &agent_key(7));
+        random.fail_next(RandomError::Unavailable);
+
+        let refused = issuer.renew(&first.der, agent(), at(LATER));
+
+        assert!(matches!(
+            refused,
+            Err(IssueError::Random(RandomError::Unavailable))
+        ));
+    }
+
+    #[test]
+    fn a_renewal_out_of_the_certificates_range_signs_nothing() {
+        let issuer = issuer();
+        let first = enrolled(&issuer, &agent_key(7));
+
+        let refused = issuer.renew(&first.der, agent(), DateTime::<Utc>::MAX_UTC);
+
+        assert!(matches!(refused, Err(IssueError::OutOfRange)));
     }
 }

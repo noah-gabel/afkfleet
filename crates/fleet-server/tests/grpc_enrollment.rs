@@ -53,10 +53,12 @@ use fleet_server::infra::pki::{
 };
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::infra::system::SystemClock;
+use fleet_server::ports::agent_connections::Admitted;
 use fleet_server::ports::agents::NewAgent;
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
 use fleet_server::ports::ingest::NoIngest;
 use fleet_server::ports::pki::{AgentCertificates, IssueError, IssuedCertificate};
+use fleet_server::ports::renewals::{CertificateRenewals, RenewError, Renewed};
 use fleet_server::ports::session_grants::{GrantRequest, GrantStream, SessionGrants};
 use fleet_server::ports::store::Store as _;
 use fleet_server::ports::tokens::{TokenKind, Tokens as _};
@@ -112,8 +114,33 @@ impl AgentCertificates for Signer {
         self.issuer.issue(csr_der, agent, now)
     }
 
+    fn renew(
+        &self,
+        presented_der: &[u8],
+        agent: AgentId,
+        now: DateTime<Utc>,
+    ) -> Result<IssuedCertificate, IssueError> {
+        self.issuer.renew(presented_der, agent, now)
+    }
+
     fn ca_fingerprint(&self) -> fleet_core::pki::CertFingerprint {
         self.issuer.ca_fingerprint()
+    }
+}
+
+/// Renews nothing: no agent here asks for a certificate.
+#[derive(Debug)]
+struct NoRenewals;
+
+#[async_trait::async_trait]
+impl CertificateRenewals for NoRenewals {
+    async fn renew(
+        &self,
+        _admitted: &Admitted,
+        _presented: Vec<u8>,
+        _deadline: Duration,
+    ) -> Result<Renewed, RenewError> {
+        Err(RenewError::Refused)
     }
 }
 
@@ -213,6 +240,7 @@ async fn start(options: SqliteConnectOptions, settings: Settings) -> Port {
                 Arc::new(db.clone()),
                 Arc::new(X509AgentNames),
             )),
+            renewals: Arc::new(NoRenewals),
             grants: Arc::new(NoGrants),
             ingest: Arc::new(NoIngest),
             clock: Arc::new(clock.clone()),

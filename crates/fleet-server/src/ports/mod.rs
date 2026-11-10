@@ -24,6 +24,8 @@
 //! - [`agent_connections`]: what an agent's `Connect` stream asks the app:
 //!   admitting its certificate, recording its hello, its end and a conflict
 //!   over its identity, and checking the live streams again (P10.4, P10.5).
+//! - [`renewals`]: what `RenewCertificate` asks the app: an agent's next
+//!   certificate (P13.6).
 //! - [`live_agents`]: what the app asks of the live streams: ending one
 //!   whose permission ended, what's known of one and its bots (P10.5), and
 //!   a session request's answer for the stream that asked (P10.6).
@@ -55,8 +57,9 @@
 //! - [`tokens`]: the tokens' hashes, the only form of a token the database
 //!   holds (P7.3).
 //! - [`passwords`]: hashing and checking passwords (P7.2).
-//! - [`pki`]: issuing agents' certificates from their CSRs (P10.2), and
-//!   reading which agent a certificate names (P10.4).
+//! - [`pki`]: issuing agents' certificates from their CSRs (P10.2) and,
+//!   for a renewal, from the certificate they present (P13.6), and reading
+//!   which agent a certificate names (P10.4).
 //! - [`totp`]: TOTP's crypto, a time step's code and the otpauth URI (P7.7).
 //! - [`qr`]: drawing the enrollment's QR code (P7.7).
 //! - [`vault`]: encrypting stored secrets (P7.4), and reading an envelope's
@@ -95,6 +98,7 @@ pub mod pki;
 pub mod qr;
 pub mod reconcile;
 pub mod recovery_codes;
+pub mod renewals;
 pub mod retention;
 pub mod server_settings;
 pub mod session_grants;

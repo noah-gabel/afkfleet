@@ -84,6 +84,10 @@ impl Bounded for wire::AgentMessage {
 impl Bounded for wire::ServerMessage {}
 impl Bounded for wire::EnrollRequest {}
 impl Bounded for wire::EnrollResponse {}
+// A renewal's request has no field, so prost builds nothing from it,
+// whatever a sender puts there.
+impl Bounded for wire::RenewRequest {}
+impl Bounded for wire::RenewResponse {}
 
 /// prost's codec with [`Bounded`]'s check before decoding.
 pub struct BoundedCodec<T, U> {
@@ -250,6 +254,20 @@ mod tests {
         assert!(<wire::ServerMessage as Bounded>::check(&[0xFF; 3]).is_ok());
         assert!(<wire::EnrollRequest as Bounded>::check(&[0xFF; 3]).is_ok());
         assert!(<wire::EnrollResponse as Bounded>::check(&[0xFF; 3]).is_ok());
+        assert!(<wire::RenewRequest as Bounded>::check(&[0xFF; 3]).is_ok());
+        assert!(<wire::RenewResponse as Bounded>::check(&[0xFF; 3]).is_ok());
+    }
+
+    #[test]
+    fn a_renew_request_builds_nothing_from_fields_it_doesnt_have() {
+        // A newer agent's field 1, a megabyte of bytes: skipped, not kept.
+        let mut bytes = vec![0x0A, 0x80, 0x80, 0x40];
+        bytes.extend(vec![0_u8; 1 << 20]);
+
+        let read = read::<wire::RenewRequest>(&bytes).unwrap();
+
+        assert_eq!(read, wire::RenewRequest {});
+        assert_eq!(read.encoded_len(), 0);
     }
 
     proptest! {

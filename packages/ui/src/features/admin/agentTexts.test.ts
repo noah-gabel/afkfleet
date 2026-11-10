@@ -12,10 +12,10 @@ const on = (days: number, hour: number) => new Date(2026, 10, 3 + days, hour, 0)
 describe("certificateWarning", () => {
   it.each([
     [15, 8, undefined],
-    [14, 8, "Expires in 14 days. Enroll a new agent before then."],
-    [2, 23, "Expires in 2 days. Enroll a new agent before then."],
-    [1, 0, "Expires tomorrow. Enroll a new agent before then."],
-    [0, 20, "Expires today. Enroll a new agent before then."],
+    [14, 8, "Expires in 14 days. It renews once connected on 0.1.2 or later."],
+    [2, 23, "Expires in 2 days. It renews once connected on 0.1.2 or later."],
+    [1, 0, "Expires tomorrow. It renews once connected on 0.1.2 or later."],
+    [0, 20, "Expires today. It renews once connected on 0.1.2 or later."],
     [0, 8, undefined],
     [-3, 12, undefined],
   ])("%i days on at %i h: %s", (days, hour, said) => {

@@ -22,6 +22,9 @@
 //! | `afkfleet_login_lockout_refusals_total` | counter | `reason` ([`LockoutRefusal`]) |
 //! | `afkfleet_agent_connects_refused_total` | counter | `reason` ([`ConnectRefused`]) |
 //! | `afkfleet_agent_identity_conflicts_total` | counter | none |
+//! | `afkfleet_agent_certificate_renewals_total` | counter | none |
+//! | `afkfleet_agent_certificates` | gauge | `state`: `expiring`, `expired` |
+//! | `afkfleet_server_certificate_not_after_timestamp_seconds` | gauge | none |
 //! | `afkfleet_agent_reports_dropped_total` | counter | none |
 //! | `afkfleet_session_grants_total` | counter | `kind` ([`GrantKind`]), `fresh` |
 //! | `afkfleet_session_denials_total` | counter | `reason` ([`SessionDenial`]) |
@@ -44,7 +47,7 @@ use core::time::Duration;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use fleet_core::agent::ConnectRefusal;
+use fleet_core::agent::{ConnectRefusal, Expiry};
 use fleet_core::placement::Unplaced;
 use metrics::{NoopRecorder, Recorder, counter, describe_counter, describe_gauge, gauge};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
@@ -62,6 +65,13 @@ const LOCKOUT_REFUSALS: &str = "afkfleet_login_lockout_refusals_total";
 const CONNECTS_REFUSED: &str = "afkfleet_agent_connects_refused_total";
 /// Two processes found holding one agent's identity.
 const IDENTITY_CONFLICTS: &str = "afkfleet_agent_identity_conflicts_total";
+/// Agents' certificates renewed.
+const CERTIFICATE_RENEWALS: &str = "afkfleet_agent_certificate_renewals_total";
+/// Enabled agents whose latest certificate ends soon or has ended.
+const AGENT_CERTIFICATES: &str = "afkfleet_agent_certificates";
+/// When the server's own certificate ends.
+const SERVER_CERTIFICATE_NOT_AFTER: &str =
+    "afkfleet_server_certificate_not_after_timestamp_seconds";
 /// Reports about bots their agent doesn't hold.
 const REPORTS_DROPPED: &str = "afkfleet_agent_reports_dropped_total";
 /// Minecraft sessions granted to agents.
@@ -443,6 +453,27 @@ impl ServerMetrics {
         self.record(|| counter!(IDENTITY_CONFLICTS).increment(1));
     }
 
+    /// An agent's certificate was renewed (P13.6; ADR-0027).
+    pub fn certificate_renewed(&self) {
+        self.record(|| counter!(CERTIFICATE_RENEWALS).increment(1));
+    }
+
+    /// `expiring` enabled agents' latest certificates end soon, and
+    /// `expired` have ended (P13.6; ADR-0027).
+    pub fn agent_certificates(&self, expiring: usize, expired: usize) {
+        self.record(|| {
+            gauge!(AGENT_CERTIFICATES, "state" => Expiry::Soon.as_str())
+                .set(exact(count(expiring)));
+            gauge!(AGENT_CERTIFICATES, "state" => Expiry::Expired.as_str())
+                .set(exact(count(expired)));
+        });
+    }
+
+    /// The server's own certificate is valid until `not_after`.
+    pub fn server_certificate(&self, not_after: DateTime<Utc>) {
+        self.record(|| gauge!(SERVER_CERTIFICATE_NOT_AFTER).set(seconds(not_after)));
+    }
+
     /// A report about a bot its agent doesn't hold was dropped.
     pub fn report_dropped(&self) {
         self.record(|| counter!(REPORTS_DROPPED).increment(1));
@@ -567,6 +598,23 @@ fn register() {
         "Times two processes were found holding one agent's identity."
     );
     counter!(IDENTITY_CONFLICTS).increment(0);
+    describe_counter!(
+        CERTIFICATE_RENEWALS,
+        "Agents' certificates the server renewed."
+    );
+    counter!(CERTIFICATE_RENEWALS).increment(0);
+    describe_gauge!(
+        AGENT_CERTIFICATES,
+        "Enabled agents whose latest certificate ends soon (expiring: its last 14 days, though an agent renews with a third of its lifetime left) or has ended (expired: it must enroll again)."
+    );
+    for state in [Expiry::Soon, Expiry::Expired] {
+        gauge!(AGENT_CERTIFICATES, "state" => state.as_str()).set(0.0);
+    }
+    describe_gauge!(
+        SERVER_CERTIFICATE_NOT_AFTER,
+        "When the gRPC port's server certificate ends, in Unix seconds; 0 without [grpc]. After it no agent can connect: renew it with pki server-cert before."
+    );
+    gauge!(SERVER_CERTIFICATE_NOT_AFTER).set(0.0);
     describe_counter!(
         REPORTS_DROPPED,
         "Agent reports about bots the agent doesn't hold, dropped."
@@ -857,8 +905,10 @@ mod tests {
             assert!(name.starts_with("afkfleet_"), "{name}");
             for (key, label) in labels {
                 assert!(
-                    ["limit", "reason", "kind", "fresh", "outcome", "phase"]
-                        .contains(&key.as_str()),
+                    [
+                        "limit", "reason", "kind", "fresh", "outcome", "phase", "state"
+                    ]
+                    .contains(&key.as_str()),
                     "{name}: {key}"
                 );
                 assert!(

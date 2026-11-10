@@ -11,8 +11,12 @@
 //! and says what to do, never their content.
 //!
 //! The identity is consumed into tonic's TLS config for the control
-//! stream; what's kept is the certificate and the CA without the key
-//! ([`KeptCertificate`]), for the check before each attempt (R52).
+//! stream ([`ManagedIdentity::into_link`]); what's kept is the certificate
+//! and the CA without the key ([`KeptCertificate`]), for the check before
+//! each attempt (R52), and what a renewal needs ([`RenewalParts`]): the
+//! key, wiped when dropped, the CA, the certificate's file and its lifetime
+//! (P13.6; ADR-0027). The files are still read once: a renewal replaces the
+//! certificate's file and swaps the identity in memory, from what it holds.
 //!
 //! **Residual (recorded in ADR-0019):** tonic's `Identity` and
 //! `ClientTlsConfig` hold the key's PEM unwiped for the process's life, and
@@ -30,7 +34,7 @@ use tracing::info;
 use zeroize::Zeroizing;
 
 use crate::config::ControlPlaneConfig;
-use crate::enroll::certificate::{self, CertificateProblem};
+use crate::enroll::certificate::{self, CertificateProblem, Lifetime};
 use crate::enroll::client::HANDSHAKE_TIMEOUT;
 use crate::enroll::key::{AgentKey, KeyError};
 use crate::enroll::pin::{fingerprint, one_certificate};
@@ -153,6 +157,14 @@ pub struct KeptCertificate {
 }
 
 impl KeptCertificate {
+    /// `certificate_der`, checked against the CA `ca_der`.
+    pub(crate) const fn new(certificate_der: Vec<u8>, ca_der: Vec<u8>) -> Self {
+        Self {
+            certificate_der,
+            ca_der,
+        }
+    }
+
     /// Whether the certificate is still valid at `now`.
     ///
     /// # Errors
@@ -164,13 +176,58 @@ impl KeptCertificate {
     }
 }
 
+/// What a renewal needs of the identity (P13.6; ADR-0027). It isn't
+/// `Clone`, and its `Debug` shows no key.
+pub struct RenewalParts {
+    /// The agent's key, which the next certificate is for too; wiped when
+    /// dropped.
+    pub key: AgentKey,
+    /// The CA file's PEM, the TLS client's one root.
+    pub ca_pem: Vec<u8>,
+    /// The CA certificate's DER, which a renewed certificate is checked
+    /// against.
+    pub ca_der: Vec<u8>,
+    /// `cert_file`, which a renewal replaces.
+    pub cert_file: PathBuf,
+    /// When the certificate in use is valid.
+    pub lifetime: Lifetime,
+}
+
+impl fmt::Debug for RenewalParts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RenewalParts")
+            .field("cert_file", &self.cert_file)
+            .field("lifetime", &self.lifetime)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The TLS config of the control stream: trusting only the CA in `ca_pem`,
+/// `domain` as the server's name, the certificate `certificate_pem` with
+/// `key` as the client's identity, and enroll's handshake bound.
+pub(crate) fn tls_config(
+    certificate_pem: &[u8],
+    key: &AgentKey,
+    ca_pem: &[u8],
+    domain: String,
+) -> ClientTlsConfig {
+    let identity = Identity::from_pem(certificate_pem, key.to_pem().as_bytes());
+    ClientTlsConfig::new()
+        .ca_certificate(Certificate::from_pem(ca_pem))
+        .domain_name(domain)
+        .identity(identity)
+        .timeout(HANDSHAKE_TIMEOUT)
+}
+
 /// A managed agent's identity, checked; see the [module docs](self). It
 /// isn't `Clone`, and its `Debug` shows only the two fingerprints.
 pub struct ManagedIdentity {
-    key_pem: Zeroizing<String>,
+    key: AgentKey,
     certificate_pem: Vec<u8>,
     ca_pem: Vec<u8>,
+    cert_file: PathBuf,
     kept: KeptCertificate,
+    lifetime: Lifetime,
     certificate: CertFingerprint,
     ca: CertFingerprint,
 }
@@ -210,21 +267,36 @@ impl ManagedIdentity {
         let checked = core::str::from_utf8(&certificate_pem)
             .map_err(|_| CertificateProblem::NotOnePem)
             .and_then(|text| certificate::check(text, &ca_der, &key, now));
-        let certificate_der = match checked {
-            Ok(der) => der,
+        // A certificate rustls just accepted has two dates x509-parser
+        // reads too; one it can't read isn't one certificate.
+        let read = checked.and_then(|der| {
+            certificate::lifetime(&der)
+                .map(|lifetime| (der, lifetime))
+                .ok_or(CertificateProblem::NotOnePem)
+        });
+        let (certificate_der, lifetime) = match read {
+            Ok(read) => read,
             Err(problem) => return Err(IdentityError::Certificate { paths, problem }),
         };
         Ok(Self {
-            key_pem: Zeroizing::new(String::from(key.to_pem().as_str())),
+            key,
             certificate_pem: certificate_pem.to_vec(),
             ca_pem: ca_pem.to_vec(),
+            cert_file: paths.certificate,
             certificate: fingerprint(&certificate_der),
             ca: fingerprint(&ca_der),
+            lifetime,
             kept: KeptCertificate {
                 certificate_der,
                 ca_der,
             },
         })
+    }
+
+    /// When the certificate is valid.
+    #[must_use]
+    pub const fn lifetime(&self) -> Lifetime {
+        self.lifetime
     }
 
     /// The certificate's fingerprint and the CA's.
@@ -233,27 +305,31 @@ impl ManagedIdentity {
         (self.certificate, self.ca)
     }
 
-    /// Logs the identity's one start line: both fingerprints, never the key.
+    /// Logs the identity's one start line: both fingerprints and the
+    /// certificate's end, never the key.
     pub fn log_loaded(&self) {
         info!(
             certificate_sha256 = %self.certificate,
             ca_sha256 = %self.ca,
+            not_after = %self.lifetime.not_after,
             "the agent's identity is loaded"
         );
     }
 
     /// Hands the identity to tonic's TLS config for `domain`, the server
     /// URL's host, trusting only the CA, with enroll's handshake bound; what
-    /// stays is the [`KeptCertificate`].
+    /// stays is the [`KeptCertificate`] and what a renewal needs.
     #[must_use]
-    pub fn into_tls(self, domain: String) -> (ClientTlsConfig, KeptCertificate) {
-        let identity = Identity::from_pem(&self.certificate_pem, self.key_pem.as_bytes());
-        let tls = ClientTlsConfig::new()
-            .ca_certificate(Certificate::from_pem(&self.ca_pem))
-            .domain_name(domain)
-            .identity(identity)
-            .timeout(HANDSHAKE_TIMEOUT);
-        (tls, self.kept)
+    pub fn into_link(self, domain: String) -> (ClientTlsConfig, KeptCertificate, RenewalParts) {
+        let tls = tls_config(&self.certificate_pem, &self.key, &self.ca_pem, domain);
+        let renewal = RenewalParts {
+            key: self.key,
+            ca_pem: self.ca_pem,
+            ca_der: self.kept.ca_der.clone(),
+            cert_file: self.cert_file,
+            lifetime: self.lifetime,
+        };
+        (tls, self.kept, renewal)
     }
 }
 

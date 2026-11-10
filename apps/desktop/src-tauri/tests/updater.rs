@@ -18,7 +18,9 @@
 //!   the download's checks;
 //! - the app's own version is no update, with or without a Windows entry; a
 //!   newer release without one, and a manifest that isn't JSON, can't be
-//!   read; a missing one is unreachable; a download over the cap is refused.
+//!   read; a missing one is unreachable; a download over the cap is refused;
+//! - a release build's download that isn't https is refused before any
+//!   request (ADR-0027).
 //!
 //! It needs `node` and `pnpm install` (the CLI). It runs on real time, as
 //! tests over real sockets do, with short bounds and no sleep.
@@ -32,7 +34,7 @@ use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
 use afkfleet_desktop::update::{PluginUpdates, UpdateFailure, Updates};
@@ -62,6 +64,8 @@ struct Served {
     manifest: Mutex<Option<Vec<u8>>>,
     /// Whether the installer's last byte is changed on its way out.
     tamper: AtomicBool,
+    /// How many requests for the installer arrived.
+    installer_requests: AtomicUsize,
     /// When set, the installer streams without end and with no length, and
     /// the bytes it got out go here once the client stops reading.
     endless: Mutex<Option<mpsc::Sender<u64>>>,
@@ -128,6 +132,9 @@ fn answer(mut stream: TcpStream, served: &Served) {
     }
     let head = String::from_utf8_lossy(&head);
     let path = head.split(' ').nth(1).unwrap_or_default().to_owned();
+    if path == format!("/{INSTALLER}") {
+        served.installer_requests.fetch_add(1, Ordering::SeqCst);
+    }
     if path == format!("/{INSTALLER}")
         && let Some(sent) = served.endless.lock().unwrap().take()
     {
@@ -195,6 +202,7 @@ impl Release {
             dir: dir.path().to_path_buf(),
             manifest: Mutex::new(Some(std::fs::read(dir.path().join("latest.json")).unwrap())),
             tamper: AtomicBool::new(false),
+            installer_requests: AtomicUsize::new(0),
             endless: Mutex::new(None),
             stop: AtomicBool::new(false),
         });
@@ -421,6 +429,23 @@ async fn the_cap_stops_a_download_within_one_chunk_past_64_mib() {
         "it stopped before the cap: {}",
         kept + last
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_release_builds_download_that_isnt_https_is_refused_before_any_request() {
+    let release = Release::new();
+    // As a release build's: the loopback release's download is plain http.
+    let updates = release.updates().requiring_https(true);
+
+    let refused = download(&updates).await;
+    let asked = release.served.installer_requests.load(Ordering::SeqCst);
+    // The same release downloads where http is allowed, the rehearsal's.
+    let allowed = download(&release.updates().requiring_https(false)).await;
+
+    assert_eq!(refused, Err(UpdateFailure::Invalid));
+    assert_eq!(asked, 0, "nothing was asked of the server");
+    assert!(allowed.is_ok(), "{allowed:?}");
+    assert_eq!(release.served.installer_requests.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

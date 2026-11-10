@@ -1,7 +1,8 @@
 //! The agent's identity files (Plan.md P10.3; ADR-0019, S18):
-//! `[control_plane] key_file` and `cert_file`, written once, owner-only,
-//! and never replaced. An identity that exists is refused, never replaced:
-//! every enrollment makes a new agent.
+//! `[control_plane] key_file` and `cert_file`, written once, owner-only.
+//! An identity that exists is refused by `enroll`, never replaced: every
+//! enrollment makes a new agent. Only a renewal replaces the certificate,
+//! for the same key ([`replace_certificate`]; P13.6, ADR-0027).
 //!
 //! 1. **Check** ([`Claimed::claim`]): nothing may exist at either path (a
 //!    file, a folder, a dangling link: `symlink_metadata`), and their
@@ -216,6 +217,96 @@ impl Drop for Claimed {
         let _ = fs::remove_file(&self.key_temp);
         let _ = fs::remove_file(&self.cert_temp);
     }
+}
+
+/// The suffix of a renewal's temp file, `<cert_file>.renew.tmp`: another
+/// name than enroll's lock, which a renewal never takes or removes.
+pub const RENEW_TEMP_SUFFIX: &str = ".renew.tmp";
+
+/// The temp file a renewal writes next to `cert`: `<cert>.renew.tmp`.
+#[must_use]
+pub fn renew_temp_path(cert: &Path) -> PathBuf {
+    let mut name = OsString::from(cert.as_os_str());
+    name.push(RENEW_TEMP_SUFFIX);
+    PathBuf::from(name)
+}
+
+/// Why a renewed certificate wasn't stored. Each names its path.
+#[derive(Debug, thiserror::Error)]
+pub enum ReplaceError {
+    /// The temp file couldn't be made or written.
+    #[error("{} can't be written", path.display())]
+    Write {
+        /// The temp file.
+        path: PathBuf,
+        /// The OS's error.
+        #[source]
+        source: io::Error,
+    },
+    /// The temp file couldn't be renamed over the certificate, which is
+    /// left as it was.
+    #[error("{} can't be replaced; it's left as it was", path.display())]
+    Rename {
+        /// The certificate.
+        path: PathBuf,
+        /// The OS's error.
+        #[source]
+        source: io::Error,
+    },
+}
+
+/// Replaces the certificate at `cert` with `pem`, a renewal's (Plan.md
+/// P13.6; ADR-0027): the one time an identity's file is replaced, and only
+/// the certificate, never the key.
+///
+/// `pem` is written into `<cert>.renew.tmp`, made new and owner-only on
+/// Unix, and synced; then the temp is renamed over `cert`, which replaces it
+/// in one step, so a reader finds the old certificate or the new one, never
+/// a part; then the folder is synced on Unix. A temp left by a renewal that
+/// was cut off is removed first: only the one running agent writes it. A
+/// failure leaves `cert` as it was, and no temp.
+///
+/// # Errors
+/// [`ReplaceError`].
+pub fn replace_certificate(cert: &Path, pem: &[u8]) -> Result<(), ReplaceError> {
+    let temp = renew_temp_path(cert);
+    let write = |source| ReplaceError::Write {
+        path: temp.clone(),
+        source,
+    };
+    // A renewal that was cut off: its temp holds a part at most.
+    match fs::remove_file(&temp) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(source) => return Err(write(source)),
+    }
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let written = options.open(&temp).and_then(|mut file| {
+        file.write_all(pem)?;
+        file.sync_all()
+    });
+    if let Err(source) = written {
+        let _ = fs::remove_file(&temp);
+        return Err(write(source));
+    }
+    // `rename` replaces its target in one step, on Unix and on Windows.
+    if let Err(source) = fs::rename(&temp, cert) {
+        let _ = fs::remove_file(&temp);
+        return Err(ReplaceError::Rename {
+            path: cert.to_owned(),
+            source,
+        });
+    }
+    if let Some(folder) = cert.parent() {
+        sync_folder(folder);
+    }
+    Ok(())
 }
 
 /// Creates the temp file at `path`, owner-only on Unix, and returns its

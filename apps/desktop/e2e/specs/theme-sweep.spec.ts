@@ -1360,7 +1360,9 @@ test("agents: a certificate ending soon", async ({ page, context }) => {
   await signIn(page, backend, OWNER);
   await nav(page, "Agents");
   const main = page.getByRole("main");
-  await expect(main.getByText("Expires in 3 days. Enroll a new agent before then.")).toBeVisible();
+  await expect(
+    main.getByText("Expires in 3 days. It renews once connected on 0.1.2 or later."),
+  ).toBeVisible();
   await bothThemes(page, "agents, a certificate ending soon", { small: true });
 });
 

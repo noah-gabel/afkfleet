@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT a.rowid AS \"rowid!: i64\", a.id AS \"id!\", a.name AS \"name!\",\n                  c.rowid AS \"cert_rowid!: i64\", c.created_at AS \"issued_at!\",\n                  c.not_after AS \"not_after!\"\n           FROM agents a JOIN agent_certs c ON c.agent_id = a.id\n           WHERE a.enabled = 1\n             AND c.rowid = (SELECT latest.rowid FROM agent_certs latest\n                            WHERE latest.agent_id = a.id AND latest.revoked_at IS NULL\n                            ORDER BY latest.not_after DESC, latest.rowid DESC\n                            LIMIT 1)\n           ORDER BY a.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "name!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "cert_rowid!: i64",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "agent_certs",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "issued_at!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agent_certs",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "not_after!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agent_certs",
+            "name": "not_after"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "8856a7ad7c79b50f7b95830a7a14113ff566ddc52a85c13fccfbf112912bd622"
+}

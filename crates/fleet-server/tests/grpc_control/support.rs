@@ -23,14 +23,15 @@ use fleet_core::system::Clock as _;
 use fleet_core::value::{AgentCapacity, AgentName, AgentVersion, Username};
 use fleet_proto::PROTOCOL_VERSION;
 use fleet_proto::control::{
-    AgentMessage, Assignment, BotEvent, BotEventKind, Hello, RejectReason, ServerMessage,
-    SessionRequest, SessionRequestId, Welcome,
+    AgentMessage, Assignment, BotEvent, BotEventKind, Hello, RejectReason, RenewResponse,
+    ServerMessage, SessionRequest, SessionRequestId, Welcome,
 };
 use fleet_proto::generated as wire;
 use fleet_proto::generated::agent_control_client::AgentControlClient;
 use fleet_server::app::agents::ingest::{IngestBounds, IngestTimings, IngestWriter, Tick, ingest};
 use fleet_server::app::agents::{
-    AgentConnectionService, AgentService, AssignmentService, Disabler, SessionGrantService,
+    AgentConnectionService, AgentService, AssignmentService, CertificateRenewalService, Disabler,
+    SessionGrantService,
 };
 use fleet_server::app::bots::BotService;
 use fleet_server::app::enrollment::EnrollmentService;
@@ -71,6 +72,8 @@ use fleet_server::ports::store::{Store as _, StoreError};
 use fleet_server::ports::tokens::TokenHash;
 use fleet_server::ports::users::{NewUser, PasswordHash};
 use fleet_testkit::system::{ManualClock, SeededRandom};
+use rustls::pki_types::CertificateDer;
+use rustls::pki_types::pem::PemObject as _;
 use secrecy::SecretString;
 use sqlx::sqlite::SqliteConnectOptions;
 use tokio::net::TcpListener;
@@ -419,6 +422,8 @@ pub(crate) struct Agent {
     pub(crate) id: AgentId,
     pub(crate) name: String,
     pub(crate) identity: Identity,
+    /// The key's PEM, for the identity of a renewed certificate.
+    pub(crate) key_pem: String,
     pub(crate) fingerprint: CertFingerprint,
     pub(crate) der: Vec<u8>,
     pub(crate) pem: String,
@@ -550,6 +555,27 @@ fn enrollment_of(
     )
 }
 
+/// The renewals over `db`, signing with `ca` for 60 days and recording a
+/// refusal through `connections`, as serve builds them.
+fn renewals_of(
+    db: &Database,
+    clock: &ManualClock,
+    random: &SeededRandom,
+    ca: CertificateAuthority,
+    connections: &AgentConnectionService,
+) -> CertificateRenewalService {
+    CertificateRenewalService::new(
+        Arc::new(clock.clone()),
+        Arc::new(db.clone()),
+        Arc::new(AgentIssuer::new(
+            ca,
+            Arc::new(random.clone()),
+            TimeDelta::days(60),
+        )),
+        connections.clone(),
+    )
+}
+
 /// The port over `db` with `pki`: a fresh registry, and the reconciler
 /// when `settings` ask for it.
 async fn serve_on(
@@ -577,13 +603,16 @@ async fn serve_on(
     let failing_detaches = Arc::new(AtomicU32::new(0));
     let (registry, reconciler) = registry_of(&db, &clock, &settings, &failing_detaches, &recording);
     let losing_ends = Arc::new(AtomicU32::new(0));
+    let connection_service = AgentConnectionService::new(
+        Arc::new(clock.clone()),
+        Arc::new(db.clone()),
+        Arc::new(X509AgentNames),
+    )
+    .with_metrics(recording.clone());
+    let renewals = renewals_of(&db, &clock, &random, copy(&ca), &connection_service)
+        .with_metrics(recording.clone());
     let connections: Arc<dyn AgentConnections> = Arc::new(LostEnds {
-        real: AgentConnectionService::new(
-            Arc::new(clock.clone()),
-            Arc::new(db.clone()),
-            Arc::new(X509AgentNames),
-        )
-        .with_metrics(recording.clone()),
+        real: connection_service,
         losing: Arc::clone(&losing_ends),
     });
     let minecraft = ScriptedSessions::default();
@@ -599,6 +628,7 @@ async fn serve_on(
     let control = control_service(
         ControlPorts {
             connections: Arc::clone(&connections),
+            renewals: Arc::new(renewals),
             grants: Arc::new(
                 grants(&db, &clock, &registry, &minecraft, &settings)
                     .with_metrics(recording.clone()),
@@ -696,6 +726,7 @@ impl Port {
             id: named,
             name: String::new(),
             identity: identity(&cert.pem, &key),
+            key_pem: key.to_pem().as_str().to_owned(),
             fingerprint: cert.fingerprint,
             der: cert.der.to_vec(),
             pem: cert.pem,
@@ -751,6 +782,35 @@ impl Port {
     pub(crate) async fn enroll(&self, n: u8, name: &str) -> Agent {
         let certificate = self.certificate(self.agent_id(n), self.clock.now(), TimeDelta::days(60));
         self.store(n, name, certificate).await
+    }
+
+    /// Calls `RenewCertificate` with `agent`'s certificate: the new
+    /// certificate as `agent` holds it next, and the answer's metadata.
+    pub(crate) async fn renew(&self, agent: &Agent) -> Result<(Agent, MetadataMap), Status> {
+        let mut client = self
+            .client(Some(&agent.identity))
+            .await
+            .map_err(|error| Status::unavailable(error.to_string()))?;
+        let response = tokio::time::timeout(BOUND, client.renew_certificate(wire::RenewRequest {}))
+            .await
+            .expect("the renewal should be answered")?;
+        let metadata = response.metadata().clone();
+        let renewed = RenewResponse::try_from(response.into_inner()).unwrap();
+        let der = CertificateDer::from_pem_slice(renewed.certificate_pem.as_bytes())
+            .unwrap()
+            .to_vec();
+        let renewed = Agent {
+            id: agent.id,
+            name: agent.name.clone(),
+            identity: Identity::from_pem(&renewed.certificate_pem, &agent.key_pem),
+            key_pem: agent.key_pem.clone(),
+            fingerprint: fleet_server::infra::pki::fingerprint(&der),
+            der,
+            pem: renewed.certificate_pem,
+            issued: self.clock.now(),
+            not_after: renewed.not_after,
+        };
+        Ok((renewed, metadata))
     }
 
     /// A certificate of this CA that no agent holds.

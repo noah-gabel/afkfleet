@@ -56,6 +56,7 @@ use fleet_server::infra::pki::load;
 use fleet_server::infra::sqlite::{self, Database, DatabaseOptions};
 use fleet_server::infra::system::{MonotonicClock, OsRandom, SystemClock, TokioPace};
 use fleet_server::metrics::Metrics;
+use fleet_server::ports::agents::AgentCert;
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord};
 use fleet_server::ports::bots::Bot;
 use fleet_server::ports::msauth::MicrosoftAuthProvider;
@@ -86,6 +87,10 @@ pub(crate) struct ServerOptions {
     /// tell a hinted pass from a periodic one
     /// ([`QUIET_RECONCILE`](super::logs::QUIET_RECONCILE)).
     pub(crate) reconcile: ReconcileTimings,
+    /// How far behind the real time the server's clock starts: nothing,
+    /// but for the renewal's case, which enrolls an agent in the past and
+    /// then moves the clock to the real time TLS reads (P13.6).
+    pub(crate) clock_behind: Duration,
 }
 
 /// What the managed check's server runs on, beside the real clock and the OS's
@@ -196,7 +201,10 @@ impl Server {
     /// A loopback case's server with its files in `dir`; see the [module
     /// docs](self).
     pub(crate) async fn start(dir: &Path, options: ServerOptions) -> Self {
-        let manual = ManualClock::new(whole_millis(SystemClock.now()));
+        let manual = ManualClock::new(fleet_core::time::sub(
+            whole_millis(SystemClock.now()),
+            options.clock_behind,
+        ));
         Self::begin(
             dir,
             Begin {
@@ -498,6 +506,11 @@ impl Server {
             .expect("the agent is enrolled")
             .agent
             .id
+    }
+
+    /// Agent `agent`'s certificates, oldest first.
+    pub(crate) async fn certs(&self, agent: AgentId) -> Vec<AgentCert> {
+        self.running().db.agents().certs(agent).await.unwrap()
     }
 
     /// Bot `bot`'s row.

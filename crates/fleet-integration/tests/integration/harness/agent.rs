@@ -206,6 +206,11 @@ impl Agent {
         });
     }
 
+    /// The agent's certificate file, as it is now.
+    pub(crate) fn certificate(&self) -> Vec<u8> {
+        std::fs::read(&self.plane.cert_file).unwrap()
+    }
+
     fn running(&self) -> &Running {
         self.running.as_ref().expect("the agent runs")
     }

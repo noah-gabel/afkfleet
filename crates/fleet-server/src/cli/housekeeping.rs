@@ -20,15 +20,21 @@
 //!    session requests it denied before any grant was worked out (P10.6;
 //!    S57, R43), since the last run, only for an agent that sent any.
 //!
+//! 7. the certificates' watch, when the control plane is on, counts the
+//!    agents whose certificates end soon or have ended, and names them and
+//!    the server's own certificate once a day (P13.6; ADR-0027).
+//!
 //! The first run comes one interval after the start. [`every`] holds the
 //! timing, generic over its chore, so it's tested on paused time.
 
 use core::time::Duration;
 
+use chrono::{DateTime, Utc};
 use tokio::time::{Instant, MissedTickBehavior, interval_at};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+use crate::app::certificates::CertificateWatch;
 use crate::app::challenges::Challenges;
 use crate::app::event_tickets::EventTickets;
 use crate::app::link_flows::LinkFlows;
@@ -41,8 +47,8 @@ use crate::http::rate_limit::RateLimits;
 pub const INTERVAL: Duration = Duration::from_mins(1);
 
 /// What the housekeeping looks after: the rate limits, the lockout, the
-/// login's challenges, the live events' tickets, the link flows and the
-/// agents' streams.
+/// login's challenges, the live events' tickets, the link flows, the
+/// agents' streams and, with a control plane, the certificates.
 #[derive(Debug, Clone)]
 pub struct Housekeeping {
     limits: RateLimits,
@@ -51,6 +57,7 @@ pub struct Housekeeping {
     event_tickets: EventTickets,
     link_flows: LinkFlows,
     agents: AgentRegistry,
+    certificates: Option<CertificateWatch>,
 }
 
 impl Housekeeping {
@@ -72,6 +79,30 @@ impl Housekeeping {
             event_tickets,
             link_flows,
             agents,
+            certificates: None,
+        }
+    }
+
+    /// The housekeeping, running `watch` too: the warnings before an
+    /// agent's certificate or the server's own ends (P13.6; ADR-0027).
+    #[must_use]
+    pub fn with_certificates(self, watch: CertificateWatch) -> Self {
+        Self {
+            certificates: Some(watch),
+            ..self
+        }
+    }
+
+    /// The housekeeping, whose certificates' watch knows that the server's
+    /// own certificate is valid until `not_after`. Without a watch, there
+    /// is no control plane, and nothing changes.
+    #[must_use]
+    pub fn with_server_certificate(self, not_after: DateTime<Utc>) -> Self {
+        Self {
+            certificates: self
+                .certificates
+                .map(|watch| watch.with_server_certificate(not_after)),
+            ..self
         }
     }
 
@@ -136,6 +167,9 @@ impl Housekeeping {
                 chat_dropped = refused.chat_dropped,
                 "an agent's reports, session requests or chat messages were refused since the last report"
             );
+        }
+        if let Some(watch) = &self.certificates {
+            watch.run_once().await;
         }
     }
 }
