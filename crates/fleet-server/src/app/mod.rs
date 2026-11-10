@@ -14,6 +14,8 @@
 //!   detection (P7.3), and from P7.8 authenticating every request.
 //! - [`bots`]: the bots as they read, with what their state reads as now
 //!   (P10.5).
+//! - [`certificates`]: the warnings before an agent's certificate or the
+//!   server's own ends (P13.6).
 //! - [`challenges`]: the login's mfa and setup tokens, held in memory
 //!   (P7.6, P7.7).
 //! - [`enrollment`]: the agents' enrollment tokens, and enrolling an agent
@@ -49,6 +51,7 @@ pub mod audit;
 pub mod auth;
 pub mod backup;
 pub mod bots;
+pub mod certificates;
 pub mod challenges;
 pub mod enrollment;
 pub mod event_tickets;

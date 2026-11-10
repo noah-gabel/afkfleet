@@ -91,12 +91,14 @@ use super::retention::Retention;
 use crate::app::accounts::{AccountService, AccountSettings};
 use crate::app::agents::ingest::{IngestBounds, IngestTimings, IngestWriter, ingest};
 use crate::app::agents::{
-    AgentConnectionService, AgentService, AssignmentService, SessionGrantService,
+    AgentConnectionService, AgentService, AssignmentService, CertificateRenewalService,
+    SessionGrantService,
 };
 use crate::app::audit::AuditService;
 use crate::app::auth::TokenService;
 use crate::app::backup::BackupService;
 use crate::app::bots::{BotService, ChatWait};
+use crate::app::certificates::{CertificateWatch, log_server_certificate};
 use crate::app::challenges::Challenges;
 use crate::app::enrollment::EnrollmentService;
 use crate::app::event_tickets::EventTickets;
@@ -144,6 +146,7 @@ use crate::ports::live_hints::LiveHints;
 use crate::ports::msauth::MicrosoftAuthProvider;
 use crate::ports::pace::Pace;
 use crate::ports::passwords::{HashError, Passwords};
+use crate::ports::pki::AgentCertificates;
 use crate::ports::reconcile::{NoReconcile, Reconcile};
 use crate::ports::session_grants::SessionGrants;
 use crate::ports::store::Store;
@@ -496,6 +499,7 @@ pub fn app_with(
         RateLimits::new(&config.rate_limits, ports.limiter_clock).with_metrics(metrics.clone());
     let ids = RequestIds::new(Arc::clone(&ports.clock), Arc::clone(&ports.random));
     let audit = AuditService::new(Arc::clone(&ports.clock), Arc::clone(&store));
+    let certificates = certificate_watch(config.grpc.is_some() && ca.is_some(), shared);
     let fleet = fleet_services(config, shared, &hints, &events, reconcile);
     let retention = retention(config, &ports.clock, &store).with_metrics(metrics.clone());
     let shutdown = CancellationToken::new();
@@ -549,6 +553,7 @@ pub fn app_with(
             auth.tickets,
             &link_flows,
             fleet.registry,
+            certificates,
         ),
         retention,
         link_flows,
@@ -765,8 +770,22 @@ fn retention(config: &ServerConfig, clock: &Arc<dyn Clock>, store: &Arc<dyn Stor
     ))
 }
 
+/// The certificates' watch when the control plane is `on`: the housekeeping
+/// then warns before an agent's certificate or the server's own ends
+/// (P13.6; ADR-0027).
+fn certificate_watch(on: bool, shared: Shared<'_>) -> Option<CertificateWatch> {
+    on.then(|| {
+        CertificateWatch::new(
+            Arc::clone(shared.clock),
+            Arc::clone(shared.store),
+            shared.metrics.clone(),
+        )
+    })
+}
+
 /// The housekeeping of the app's limits, lockout, login challenges, live
-/// events tickets, link flows and agents' streams.
+/// events tickets, link flows and agents' streams, and of the control
+/// plane's certificates when there is one.
 fn housekeeping(
     limits: RateLimits,
     lockout: LockoutService,
@@ -774,15 +793,20 @@ fn housekeeping(
     event_tickets: EventTickets,
     link_flows: &LinkFlowService,
     agents: AgentRegistry,
+    certificates: Option<CertificateWatch>,
 ) -> Housekeeping {
-    Housekeeping::new(
+    let housekeeping = Housekeeping::new(
         limits,
         lockout,
         challenges,
         event_tickets,
         link_flows.flows(),
         agents,
-    )
+    );
+    match certificates {
+        Some(watch) => housekeeping.with_certificates(watch),
+        None => housekeeping,
+    }
 }
 
 /// The per-username lockout over the app's ports, with `[auth]`'s policy
@@ -1037,16 +1061,27 @@ fn control_plane_services(
         config.rate_limits.chat_per_bot,
     )
     .with_live_hints(Arc::new(ports.bus.clone()));
-    let issuer = AgentIssuer::new(ca, Arc::clone(&ports.random), grpc.agent_cert_lifetime);
-    let connections: Arc<dyn AgentConnections> = Arc::new(
-        AgentConnectionService::new(
-            Arc::clone(&ports.clock),
-            Arc::clone(&ports.store),
-            Arc::new(X509AgentNames),
-        )
-        .with_live_hints(Arc::new(ports.bus.clone()))
-        .with_metrics(ports.metrics.clone()),
-    );
+    // One CA signs an agent's first certificate and each renewal.
+    let issuer: Arc<dyn AgentCertificates> = Arc::new(AgentIssuer::new(
+        ca,
+        Arc::clone(&ports.random),
+        grpc.agent_cert_lifetime,
+    ));
+    let connection_service = AgentConnectionService::new(
+        Arc::clone(&ports.clock),
+        Arc::clone(&ports.store),
+        Arc::new(X509AgentNames),
+    )
+    .with_live_hints(Arc::new(ports.bus.clone()))
+    .with_metrics(ports.metrics.clone());
+    let renewals = CertificateRenewalService::new(
+        Arc::clone(&ports.clock),
+        Arc::clone(&ports.store),
+        Arc::clone(&issuer),
+        connection_service.clone(),
+    )
+    .with_metrics(ports.metrics.clone());
+    let connections: Arc<dyn AgentConnections> = Arc::new(connection_service);
     let sessions = Sessions::new(CancellationToken::new());
     let (session_tokens, grants) = session_grants(config, &ports);
     let (ingest, ingest_writer) = ingest(
@@ -1060,6 +1095,7 @@ fn control_plane_services(
     let control = control_service(
         ControlPorts {
             connections: Arc::clone(&connections),
+            renewals: Arc::new(renewals),
             grants,
             ingest: Arc::new(ingest),
             clock: Arc::clone(&ports.clock),
@@ -1071,13 +1107,8 @@ fn control_plane_services(
         sessions.clone(),
         ports.registry.clone(),
     );
-    let enrollment = EnrollmentService::new(
-        ports.clock,
-        ports.random,
-        ports.store,
-        ports.tokens,
-        Arc::new(issuer),
-    );
+    let enrollment =
+        EnrollmentService::new(ports.clock, ports.random, ports.store, ports.tokens, issuer);
     Some(GrpcRoutes {
         enrollment: enrollment_service(enrollment, ports.limits, ports.ids, SERVER_DEADLINE),
         control,
@@ -1162,6 +1193,9 @@ pub async fn run<S: ShutdownSignals>(
     if let Err(error) = check_backups(config).await {
         return cant_start(&StartError::Backups(error));
     }
+    let server_not_after = control_plane
+        .as_ref()
+        .map(|plane| plane.pki.server_not_after);
     let (opened, ca) = if let Some(plane) = control_plane {
         let (opened, ca) = open(plane, SystemClock.now());
         (Some(opened), Some(ca))
@@ -1175,6 +1209,11 @@ pub async fn run<S: ShutdownSignals>(
         Ok(app) => app,
         Err(error) => return cant_start(&error),
     };
+    if let Some(not_after) = server_not_after {
+        // The watch warns daily once the certificate nears its end, and
+        // the metrics show the end from now on (P13.6).
+        app.housekeeping = app.housekeeping.with_server_certificate(not_after);
+    }
     let grpc = match grpc_port(config, opened, app.grpc.take()) {
         Ok(grpc) => grpc,
         Err(error) => return cant_start(&error),
@@ -1210,7 +1249,8 @@ pub const METRICS_OFF: &str = "metrics are off: [metrics] bind isn't set";
 
 /// The gRPC port's listener and TLS, and the CA, from `plane`. A server
 /// certificate that expired by `now` is logged at `error`: agents can't
-/// connect, but the API keeps working (ADR-0019, S12).
+/// connect, but the API keeps working (ADR-0019, S12). One that ends
+/// within 30 days is a `warn` line (P13.6; ADR-0027).
 ///
 /// [`run`] calls it before [`app_with`], which takes the CA, and
 /// [`grpc_port`] after; tests that build the app over their own ports call
@@ -1221,12 +1261,7 @@ pub fn open(
     now: DateTime<Utc>,
 ) -> ((TcpListener, ServerTlsConfig), CertificateAuthority) {
     let ControlPlane { listener, pki } = plane;
-    if pki.server_not_after <= now {
-        error!(
-            not_after = %pki.server_not_after,
-            "the server certificate has expired: no agent can connect until `afkfleet-server pki server-cert` replaces it"
-        );
-    }
+    log_server_certificate(pki.server_not_after, now);
     let tls = grpc_listener::tls(&pki);
     ((listener, tls), pki.ca)
 }

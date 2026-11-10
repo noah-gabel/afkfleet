@@ -83,6 +83,8 @@ const OFF: &str =
     "the control plane is off: [grpc] isn't configured, so no agent can enroll or connect";
 /// What a start logs with an expired server certificate.
 const EXPIRED: &str = "the server certificate has expired: no agent can connect until `afkfleet-server pki server-cert` replaces it";
+/// What a start logs within 30 days of the server certificate's end.
+const EXPIRING: &str = "the server certificate expires soon: no agent can connect after that; renew it with `afkfleet-server pki server-cert` and restart the server";
 
 /// The longest a test waits for anything.
 const PATIENCE: Duration = Duration::from_secs(30);
@@ -1363,6 +1365,7 @@ async fn a_start_with_grpc_says_where_the_control_plane_listens() {
     assert_eq!(on[0]["address"], grpc_address.to_string());
     assert_eq!(logs.lines_with(OFF).unwrap().len(), 0);
     assert_eq!(logs.lines_with(EXPIRED).unwrap().len(), 0);
+    assert_eq!(logs.lines_with(EXPIRING).unwrap().len(), 0);
 }
 
 #[tokio::test]
@@ -1391,6 +1394,33 @@ async fn an_expired_server_certificate_is_an_error_and_the_server_still_starts()
         "{}",
         logs.text()
     );
+    assert_eq!(logs.lines_with("the server is listening").unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_server_certificate_in_its_last_thirty_days_is_a_warning_at_the_start() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let dir = test_dir("control_plane_expiring");
+    let (_, address) = listener().await;
+    let grpc = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let grpc_address = grpc.local_addr().unwrap();
+    let config = with_grpc(server_config(&dir, address, false), &dir, grpc_address);
+    // Issued 340 days ago for a year: 25 days are left.
+    let pki = pki(SystemClock.now() - TimeDelta::days(340));
+    let not_after = pki.server_not_after;
+    let plane = ControlPlane {
+        listener: grpc,
+        pki,
+    };
+
+    let logs = start_and_stop(&config, Some(plane)).await;
+
+    let soon = logs.lines_with(EXPIRING).unwrap();
+    assert_eq!(soon.len(), 1, "{}", logs.text());
+    assert_eq!(soon[0]["level"], "WARN");
+    assert_eq!(soon[0]["not_after"], not_after.to_string());
+    assert_eq!(soon[0]["days_left"], 24, "{}", logs.text());
+    assert_eq!(logs.lines_with(EXPIRED).unwrap().len(), 0);
     assert_eq!(logs.lines_with("the server is listening").unwrap().len(), 1);
 }
 

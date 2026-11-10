@@ -457,3 +457,60 @@ async fn a_failed_purge_is_a_warning_and_the_run_goes_on(
         "the summary still comes"
     );
 }
+
+// --- The certificates' watch (P13.6; ADR-0027) ---
+
+/// The watch's line about the server's certificate.
+const SERVER_EXPIRING: &str = "the server certificate expires soon: no agent can connect after that; renew it with `afkfleet-server pki server-cert` and restart the server";
+
+#[sqlx::test(migrations = false)]
+async fn a_run_runs_the_certificates_watch_it_was_given(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let metrics = fleet_server::metrics::Metrics::prometheus();
+    let series = "afkfleet_server_certificate_not_after_timestamp_seconds";
+    let value = || {
+        metrics.render().text().lines().find_map(|line| {
+            line.strip_prefix(series)?
+                .strip_prefix(' ')
+                .map(str::to_owned)
+        })
+    };
+    // 20 days are left of the server's certificate.
+    let not_after = setup.clock.now() + chrono::TimeDelta::days(20);
+    let watch = fleet_server::app::certificates::CertificateWatch::new(
+        Arc::new(setup.clock.clone()),
+        Arc::new(setup.db.clone()),
+        metrics.recording().clone(),
+    );
+    let bare = Setup {
+        housekeeping: setup
+            .housekeeping
+            .clone()
+            .with_server_certificate(not_after),
+        ..setup
+    };
+
+    let without = bare.run_once().await;
+
+    assert_eq!(value().as_deref(), Some("0"), "no watch, no certificate");
+    assert_eq!(without.lines_with(SERVER_EXPIRING).unwrap().len(), 0);
+    let watching = Setup {
+        housekeeping: bare
+            .housekeeping
+            .clone()
+            .with_certificates(watch)
+            .with_server_certificate(not_after),
+        ..bare
+    };
+
+    let logs = watching.run_once().await;
+
+    assert_eq!(value(), Some(not_after.timestamp().to_string()));
+    let warned = logs.lines_with(SERVER_EXPIRING).unwrap();
+    assert_eq!(warned.len(), 1, "{}", logs.text());
+    assert_eq!(warned[0]["level"], "WARN");
+    assert_eq!(warned[0]["days_left"], 20);
+}
