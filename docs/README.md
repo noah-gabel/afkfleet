@@ -37,5 +37,6 @@ Each architecture decision record (ADR) holds one decision with its context, its
 - [0020. Bot operations, modes and live events: Phase 11 refinements](adr/0020-bot-operations-and-phase-11-refinements.md)
 - [0021. testcontainers' unmaintained tar crate](adr/0021-testcontainers-unmaintained-tar-exception.md)
 - [0022. Deployment and operations: Phase 12 refinements](adr/0022-deployment-and-phase-12-refinements.md)
-- [0023. Local autonomous pipeline](adr/0023-local-autonomous-pipeline.md)
-- [0024. Subagents read-only, enforced by the merge guard](adr/0024-subagents-read-only-enforced.md)
+- [0023. Local autonomous pipeline](adr/0023-local-autonomous-pipeline.md) (superseded by 0025)
+- [0024. SQLite's advisory via sqlx, zlib in the runtime image, and Caddy 2.11.9](adr/0024-sqlite-zlib-and-caddy-advisories.md)
+- [0025. A simpler workflow](adr/0025-a-simpler-workflow.md)
