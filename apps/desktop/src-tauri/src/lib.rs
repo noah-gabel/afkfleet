@@ -158,14 +158,13 @@ pub fn configure<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
 /// Manages the [`Updater`] the update commands use on `app`, as [`configure`] built it:
 /// on only for a release build whose updater points at the release's manifest, or a
 /// debug build whose updater points only at loopback, the rehearsal's
-/// ([`update::updates_on`]), at the app's own version.
+/// ([`update::updates_on`]), at the app's own version. A release build downloads
+/// over https alone (ADR-0027).
 pub fn manage_updates<R: Runtime>(app: &tauri::App<R>) {
-    let on = update::updates_on(
-        app.config().plugins.0.get("updater"),
-        !cfg!(debug_assertions),
-    );
+    let release_build = !cfg!(debug_assertions);
+    let on = update::updates_on(app.config().plugins.0.get("updater"), release_build);
     app.manage(Updater::new(
-        PluginUpdates::new(app.handle().clone()),
+        PluginUpdates::new(app.handle().clone()).requiring_https(release_build),
         on,
         &app.package_info().version.to_string(),
     ));
