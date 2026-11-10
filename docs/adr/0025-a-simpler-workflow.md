@@ -37,8 +37,8 @@ The user's decision (2026-11-09): less process and more autonomy, with the user 
 - CLAUDE.md's step 2's plan review, step 7's merge, step 10's question rules, the "Review pipeline" section and the `gh` allowlist.
 
 **`.claude/settings.json`:** the allow list is broad (`Bash`, `PowerShell`, `Read`, `Edit`, `Write`, `Glob`, `Grep`, `NotebookEdit`, `WebFetch`, `WebSearch`); there's no ask list; the deny list holds exactly the hard limits Claude Code can enforce, each shell rule twinned for the PowerShell tool:
-- secret paths, for reading and editing: `/secrets/**`, `**/.env*`, `**/*.key`, `**/*.pem`, `**/vault-key-*`, `/target/dod-run/**`;
-- editing Claude Code's own settings, `/.claude/settings*.json` and `~/.claude/settings*.json` (an Edit rule covers Write too), so the AI can't loosen its own limits; and shell commands naming `secrets/`, `target/dod-run` or `vault-key-`, and `gh auth` (it prints the token);
+- secret paths, for reading and editing: `/secrets/**`, `**/.env*`, `**/*.key`, `**/*.pem`, `**/vault-key-*`, `/target/dod-run/**`; and shell commands naming `secrets/`, `target/dod-run` or `vault-key-`, and `gh auth` (it prints the token);
+- editing Claude Code's own settings, `/.claude/settings*.json` and `~/.claude/settings*.json` (an Edit rule covers Write too), so the AI can't loosen its own limits;
 - `gh pr merge`; pushes to `main`, force pushes, tag pushes (`--tags`, `--follow-tags`, `refs/tags/`, a `v…` refspec); `gh release`, `gh repo`, `gh secret`, `gh variable`, `gh ruleset`, `gh workflow enable` and `disable`; `gh api` with a method, a field or an input (its writes);
 - the user's real systems: `just test-real-account`, `test-ms-account`, `test-managed-account`, every `dod-*`, `updater-sign`, and the `manual` nextest profile;
 - `gh codespace` (paid);
