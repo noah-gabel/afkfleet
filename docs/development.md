@@ -242,6 +242,7 @@ just update-rehearsal # rehearse an app update on this PC with a throwaway key, 
 just updater-sign key installer sha256 version # sign a release's installer for the updater, the maintainer only (docs/releasing.md)
 just ui-test   # the frontend's Vitest tests
 just e2e       # the Playwright tests in the installed Edge (part of just check)
+just fuzz chat_sender 300 # one fuzz target for 300 s, or every target with `just fuzz` (needs cargo-fuzz)
 just shots     # compare every screen with its screenshot baseline, in Docker (see below)
 just shots-update # write the baselines that changed or are new, in Docker
 just cov-desktop # the desktop crate's coverage and its 90 % gate (Windows only)
@@ -270,6 +271,8 @@ just icons     # after changing apps/desktop/src-tauri/icons/icon.svg: render ic
 - Each build removes this image's earlier builds. To free the space, `docker image rm afkfleet-shots:local`; Docker's build cache can keep its layers until `docker builder prune`, which clears every project's cache.
 
 **The API's TypeScript types** are generated from the Rust DTOs in `crates/fleet-api-types` with ts-rs and committed in `packages/ui/src/generated/`; never edit them by hand. After changing a DTO, run `just gen` and commit the result; `just check` (`gen-check`) and CI's `ts-types-fresh` job fail while they're stale. `just gen` exports into a fresh folder in `target/` first and deletes only files ts-rs generated: if the folder holds anything else, it stops and changes nothing.
+
+**Fuzzing** (P13.2): the ten targets read what's untrusted somewhere: fleet-core's string parsers, the chat sanitizer, the chat formats and their sender, the agents' private targets, mode definitions, the control plane's messages both ways, the vault's envelopes and the agent's metrics responder. Each target's body is a plain function in `crates/fleet-fuzz` that panics when a property breaks, and that crate's tests run every one over its seeds and over proptest's inputs, so `just check` holds them without a fuzzer. `just fuzz [target] [seconds]` explores further with cargo-fuzz (`cargo +stable install --locked cargo-fuzz@0.13.2`; on Windows it also needs Visual Studio's "C++ AddressSanitizer" component, whose runtime the recipe finds itself). It keeps what it finds in `fuzz/corpus/` and a failing input as `fuzz/artifacts/<target>/failing-input` (the target writes it itself: on Windows libFuzzer saves nothing when a target panics), both folders ignored by git, and its build is `fuzz/target/`, about 2.5 GB. A failing input becomes a test of the code it broke, and a seed in `crates/fleet-fuzz/src/seeds.rs` if it's a new kind of input. A new target is a function in fleet-fuzz, a line in its `TARGETS`, its seeds, a one-line file in `fuzz/fuzz_targets/` and a `[[bin]]` in `fuzz/Cargo.toml`; `just scripts-test` fails when they disagree ([ADR-0030](adr/0030-fuzz-targets.md)).
 
 **The control plane's protocol** is written in `crates/fleet-proto/proto/fleet/v1/`. Its Rust code is generated at every build (protox, so no `protoc` is needed) and never committed. A snapshot test pins the wire schema the files compile to, so any change to a message, a field's number or type, an enum or the service shows up as a changed snapshot to review.
 

@@ -69,7 +69,7 @@ Moved from `CLAUDE.md` word for word; it points here. CLAUDE.md keeps the rule: 
 | | Plugins | `tauri-plugin-opener`, `tauri-plugin-single-instance`, `tauri-plugin-updater` |
 | | Keychain | `keyring-core` + `windows-native-keyring-store` |
 | Tests | Testing crates | `rstest`, `proptest`, `insta`, `mockall`, `testcontainers`, tokio `test-util`, `log` (dev only: fleet-testkit's log capture and fleet-agent's telemetry, each to prove the `log` bridge; fleet-server's one normal use is sqlx's `LevelFilter`, and its logging macros are banned there), `tempfile` (fleet-server's database tests, fleet-integration's cases), `ipnet` (dev only: fleet-server's property test of fleet-core's `IpNet`), `hyper-util` (dev only, `tokio`: fleet-server's in-memory control-plane test hands tonic's client a pipe through `rt::TokioIo`) |
-| | Fuzzing | `libfuzzer-sys`, `arbitrary` |
+| | Fuzzing | `libfuzzer-sys`, in `fuzz/` alone (its own workspace and lockfile; ADR-0030) |
 
 **Frontend packages**
 
