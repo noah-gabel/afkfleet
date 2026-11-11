@@ -1,9 +1,9 @@
 //! `GET /agents`, `POST /agents/{id}/disable` and `POST
 //! /agents/{id}/release` (Plan.md P10.10, P11.9, Appendix B; ADR-0019, S31;
 //! ADR-0020, S49): every agent with its status for Admins and the Owner;
-//! disabling one after a step-up, its certificates revoked and its live
-//! stream ended before the answer; releasing a disabled one's bots after a
-//! step-up, audited with who vouched for it and hinted; everyone else
+//! disabling one, its certificates revoked and its live
+//! stream ended before the answer; releasing a disabled one's bots,
+//! audited with who vouched for it and hinted; everyone else
 //! refused; the re-checks in the transaction; the limits.
 
 use core::num::NonZeroU32;
@@ -153,13 +153,6 @@ impl Setup {
     }
 }
 
-/// `role`'s person `n`, stepped up now.
-async fn stepped_up(setup: &Setup, n: u8, name: &str, role: Role) -> Person {
-    let person = setup.person(n, name, role).await;
-    setup.stamp(person.session).await;
-    person
-}
-
 #[sqlx::test(migrations = false)]
 async fn admins_and_the_owner_list_every_agent_with_its_status(
     _pool: SqlitePoolOptions,
@@ -208,7 +201,7 @@ async fn a_member_may_not_list_or_disable_agents(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let member = stepped_up(&setup, 4, "member", Role::Member).await;
+    let member = setup.person(4, "member", Role::Member).await;
     let agent = setup.agent(1).await;
 
     let listed = setup.get(AGENTS, Some(&member.token)).await;
@@ -269,7 +262,7 @@ async fn an_admin_disables_an_agent_whose_stream_ends_before_the_answer(
     // With the control plane off: an agent enrolled before is still
     // disabled.
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let agent = setup.agent(1).await;
     let (_lease, _queued, mut ended) = setup.stream(1);
 
@@ -312,7 +305,7 @@ async fn disabling_an_agent_that_never_connected_and_then_again_records_once(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let owner = stepped_up(&setup, 3, "owner", Role::Owner).await;
+    let owner = setup.person(3, "owner", Role::Owner).await;
     let agent = setup.agent(1).await;
 
     let first = setup.disable(agent, &owner).await;
@@ -325,17 +318,16 @@ async fn disabling_an_agent_that_never_connected_and_then_again_records_once(
 }
 
 #[sqlx::test(migrations = false)]
-async fn disabling_needs_a_fresh_step_up(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
+async fn disabling_needs_no_step_up(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
     let setup = setup(options).await;
     let admin = setup.person(2, "admin", Role::Admin).await;
     let agent = setup.agent(1).await;
 
     let seen = setup.disable(agent, &admin).await;
 
-    assert_eq!(seen.status, 403, "{}", seen.text);
-    assert_eq!(seen.code(), "step_up_required");
-    assert!(setup.enabled(agent).await);
-    assert_eq!(setup.disables().await, 0);
+    assert_eq!(seen.status, 200, "{}", seen.text);
+    assert!(!setup.enabled(agent).await);
+    assert_eq!(setup.disables().await, 1);
 }
 
 #[sqlx::test(migrations = false)]
@@ -344,7 +336,7 @@ async fn an_unknown_or_malformed_agent_is_404(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
 
     let unknown = setup
         .disable(AgentId::new_v7(at(T0), [9; 10]).unwrap(), &admin)
@@ -369,8 +361,8 @@ async fn an_admin_demoted_or_logged_out_meanwhile_disables_nothing(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let demoted = stepped_up(&setup, 2, "admin", Role::Admin).await;
-    let logged_out = stepped_up(&setup, 3, "other", Role::Admin).await;
+    let demoted = setup.person(2, "admin", Role::Admin).await;
+    let logged_out = setup.person(3, "other", Role::Admin).await;
     let agent = setup.agent(1).await;
 
     setup
@@ -405,7 +397,7 @@ async fn both_routes_spend_the_users_limit(
         },
     )
     .await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let agent = setup.agent(1).await;
     assert_eq!(setup.get(AGENTS, Some(&admin.token)).await.status, 200);
 
@@ -424,7 +416,7 @@ async fn an_admin_releases_a_disabled_agents_bots_audited_with_who_vouched_and_h
 ) {
     let setup = setup(options).await;
     let owner = setup.person(3, "owner", Role::Owner).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let (agent, bot) = setup.disabled_with_a_bot(&owner, &admin).await;
     let before = *setup.db.commits().borrow();
 
@@ -477,7 +469,7 @@ async fn a_release_whose_read_after_its_commit_fails_says_the_bots_went(
 ) {
     let setup = setup(options).await;
     let owner = setup.person(3, "owner", Role::Owner).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let (agent, bot) = setup.disabled_with_a_bot(&owner, &admin).await;
     let agents = AgentService::new(
         Arc::new(setup.clock.clone()),
@@ -505,7 +497,7 @@ async fn releasing_an_enabled_agent_is_409_and_keeps_its_bots(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let owner = stepped_up(&setup, 3, "owner", Role::Owner).await;
+    let owner = setup.person(3, "owner", Role::Owner).await;
     let (_, bot) = setup.bot_of(owner.id, 1).await;
     let agent = setup.assigned(bot, 1, None).await;
 
@@ -528,7 +520,7 @@ async fn releasing_an_agent_that_holds_no_bots_answers_it_and_records_nothing(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let agent = setup.agent(1).await;
     assert_eq!(setup.disable(agent, &admin).await.status, 200);
     setup.hints.take();
@@ -550,8 +542,8 @@ async fn a_member_may_not_release_an_agent(
 ) {
     let setup = setup(options).await;
     let owner = setup.person(3, "owner", Role::Owner).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
-    let member = stepped_up(&setup, 4, "member", Role::Member).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+    let member = setup.person(4, "member", Role::Member).await;
     let (agent, bot) = setup.disabled_with_a_bot(&owner, &admin).await;
 
     let seen = setup.release(agent, &member).await;
@@ -563,19 +555,18 @@ async fn a_member_may_not_release_an_agent(
 }
 
 #[sqlx::test(migrations = false)]
-async fn releasing_needs_a_fresh_step_up(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
+async fn releasing_needs_no_step_up(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
     let setup = setup(options).await;
     let owner = setup.person(3, "owner", Role::Owner).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let (agent, bot) = setup.disabled_with_a_bot(&owner, &admin).await;
     let fresh = setup.person(5, "other", Role::Admin).await;
 
     let seen = setup.release(agent, &fresh).await;
 
-    assert_eq!(seen.status, 403, "{}", seen.text);
-    assert_eq!(seen.code(), "step_up_required");
-    assert_eq!(setup.holder(bot).await, Some(agent));
-    assert_eq!(setup.releases().await, 0);
+    assert_eq!(seen.status, 200, "{}", seen.text);
+    assert_eq!(setup.holder(bot).await, None);
+    assert_eq!(setup.releases().await, 1);
 }
 
 #[sqlx::test(migrations = false)]
@@ -584,7 +575,7 @@ async fn an_unknown_or_malformed_agent_is_404_to_a_release(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
 
     let unknown = setup
         .release(AgentId::new_v7(at(T0), [9; 10]).unwrap(), &admin)
@@ -610,8 +601,8 @@ async fn an_admin_demoted_or_logged_out_meanwhile_releases_nothing(
 ) {
     let setup = setup(options).await;
     let owner = setup.person(3, "owner", Role::Owner).await;
-    let demoted = stepped_up(&setup, 2, "admin", Role::Admin).await;
-    let logged_out = stepped_up(&setup, 4, "other", Role::Admin).await;
+    let demoted = setup.person(2, "admin", Role::Admin).await;
+    let logged_out = setup.person(4, "other", Role::Admin).await;
     let (agent, bot) = setup.disabled_with_a_bot(&owner, &demoted).await;
 
     setup
@@ -643,7 +634,7 @@ async fn releasing_spends_the_users_limit(_pool: SqlitePoolOptions, options: Sql
         },
     )
     .await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let agent = setup.agent(1).await;
     assert_eq!(setup.get(AGENTS, Some(&admin.token)).await.status, 200);
 
@@ -666,7 +657,7 @@ async fn without_credentials_a_release_is_401(
 }
 
 /// Tokens come only from the server's host (ADR-0020, U76, S88): a
-/// stepped-up Owner and an anonymous caller get what any path nobody
+/// signed-in Owner and an anonymous caller get what any path nobody
 /// registered gets.
 #[sqlx::test(migrations = false)]
 async fn the_enrollment_route_answers_as_an_unknown_path(
@@ -675,7 +666,6 @@ async fn the_enrollment_route_answers_as_an_unknown_path(
 ) {
     let setup = setup(options).await;
     let owner = setup.person(2, "owner", Role::Owner).await;
-    setup.stamp(owner.session).await;
     let path = format!("{AGENTS}/enrollment-tokens");
     let unknown = format!("{AGENTS}/no-such-route");
 

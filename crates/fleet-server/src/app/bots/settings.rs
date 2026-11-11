@@ -1,5 +1,5 @@
 //! The two settings a user changes on a bot (Plan.md P11.2; ADR-0019, S47,
-//! S53, S55): the server it joins (Manage, after a step-up) and its mode
+//! S53, S55): the server it joins (Manage) and its mode
 //! (Control, or Manage when the mode sends a command off the allowlist; the
 //! mode must be one the user may see).
 //!

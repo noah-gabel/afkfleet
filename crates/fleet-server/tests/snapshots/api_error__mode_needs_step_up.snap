@@ -10,7 +10,7 @@ expression: seen
   "body": {
     "error": {
       "code": "mode_needs_step_up",
-      "message": "This mode holds a command that needs your password: confirm it's you to save it.",
+      "message": "This mode holds a command that isn't on the server's list: save it with its commands.",
       "request_id": "test-request-id"
     }
   }

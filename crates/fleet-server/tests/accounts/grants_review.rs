@@ -69,7 +69,7 @@ struct Sharing {
 
 async fn sharing(options: SqliteConnectOptions) -> Sharing {
     let setup = HttpSetup::new(options).await;
-    let owner = setup.stepped_up(1, Role::Owner).await;
+    let owner = setup.person(1, Role::Owner).await;
     let alice = setup.person(2, Role::Member).await;
     let bob = setup.person(3, Role::Member).await;
     let alices = setup.add_account(alice.id, 4, None).await;
@@ -179,7 +179,7 @@ async fn a_demotion_makes_an_admins_grant_on_the_users_account_dormant_for_the_o
     options: SqliteConnectOptions,
 ) {
     let setup = HttpSetup::new(options).await;
-    let owner = setup.stepped_up(1, Role::Owner).await;
+    let owner = setup.person(1, Role::Owner).await;
     let bob = setup.person(2, Role::Admin).await;
     let admin = setup.person(3, Role::Admin).await;
     let other_admin = setup.person(4, Role::Admin).await;

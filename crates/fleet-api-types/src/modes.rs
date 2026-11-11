@@ -6,15 +6,16 @@
 //!   [`ModeResponse`] built for its viewer (S14, S15).
 //! - **`POST /modes`** takes a [`CreateModeRequest`]. A mode whose steps
 //!   send a command off the server's allowlist is written only through
-//!   `POST /modes/with-commands`, after a step-up; the plain route answers
-//!   403 `mode_needs_step_up` (S16).
+//!   `POST /modes/with-commands`; the plain route answers 403
+//!   `mode_needs_step_up` (S16), named from when the twin needed a step-up
+//!   (ADR-0028).
 //! - **`PUT /modes/{id}`** takes an [`UpdateModeRequest`]: the whole mode
 //!   again, with the `version` the caller read (S18), and the same
 //!   `/with-commands` twin. An edit that shows the same as the stored mode
 //!   changes nothing and answers the mode (S21); a stale `version` is 409
 //!   `mode_changed`, and an edit a bot that uses the mode would refuse from
 //!   this caller is 409 `mode_in_use_by_others` (S17).
-//! - **`DELETE /modes/{id}`**, after a step-up, deletes a mode no bot uses;
+//! - **`DELETE /modes/{id}`** deletes a mode no bot uses;
 //!   one a bot uses is 409 `mode_in_use` (S16, S17).
 //! - **The steps** are ADR-0010's mode JSON
 //!   (`{"action":{"type":"look","yaw":0.0,"pitch":0.0},"schedule":{"type":"every","interval_ms":…,"jitter_ms":…},"probability":…}`)

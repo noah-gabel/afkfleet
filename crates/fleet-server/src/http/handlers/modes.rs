@@ -6,17 +6,18 @@
 //!   built for its viewer by [`super::mode_response`]: who owns it only for
 //!   Admins and the Owner, what the viewer may do with it, and a chat step's
 //!   command arguments only for a viewer who may edit it (S14, S15).
-//! - **Creating** (`POST /api/v1/modes`, and `POST
-//!   /api/v1/modes/with-commands` after a step-up) takes a
+//! - **Creating** (`POST /api/v1/modes`, and its twin `POST
+//!   /api/v1/modes/with-commands`) takes a
 //!   `CreateModeRequest`, whose every rule garde checked (S12). `authorize()`
 //!   asks `CreateMode` (a shared mode needs an Admin or the Owner); then the
 //!   plain route points a mode whose steps send a command off the allowlist
-//!   to the twin (403 `mode_needs_step_up`), after `forbidden`, so only a
-//!   caller the twin would take ever sees the pointer (S16). The service
+//!   to the twin (403 `mode_needs_step_up`, named from when the twin needed
+//!   a step-up; ADR-0028), after `forbidden`, so only a caller the twin
+//!   would take ever sees the pointer (S16). The service
 //!   checks it all again in its transaction: the cap (409 `conflict`, S19)
 //!   and a taken name (422 on `name`, S13).
-//! - **Editing** (`PUT /api/v1/modes/{id}`, and `PUT
-//!   /api/v1/modes/{id}/with-commands` after a step-up) takes an
+//! - **Editing** (`PUT /api/v1/modes/{id}`, and its twin `PUT
+//!   /api/v1/modes/{id}/with-commands`) takes an
 //!   `UpdateModeRequest`: the whole mode and the `version` read. A mode the
 //!   caller may not see is 404; `authorize()` asks `UpdateMode` with the
 //!   mode's visibility, then with the requested one (403), so a switch needs
@@ -26,7 +27,7 @@
 //!   `version` is 409 `mode_changed` (S18), a taken name 422 on `name`, and
 //!   a bot using the mode that the caller couldn't set it on 409
 //!   `mode_in_use_by_others` (S17).
-//! - **Deleting** (`DELETE /api/v1/modes/{id}`, after a step-up): a mode
+//! - **Deleting** (`DELETE /api/v1/modes/{id}`): a mode
 //!   the caller may not see is 404, one they may not delete 403 (a built-in
 //!   one for everyone); the service checks again in its transaction and
 //!   refuses a mode any bot uses (409 `mode_in_use`, S17). 204.
@@ -51,7 +52,7 @@ use crate::app::modes::{
     CreateModeError, DeleteModeError, ListModesError, ModeEdit, ModeRoute, UpdateModeError,
 };
 use crate::http::error::ApiError;
-use crate::http::extractors::{AuthUser, SteppedUpUser, ValidJson, ValidPath, ValidQuery};
+use crate::http::extractors::{AuthUser, ValidJson, ValidPath, ValidQuery};
 use crate::http::rate_limit::ClientIp;
 use crate::http::router::AppState;
 
@@ -112,7 +113,7 @@ pub(crate) async fn list(
         (status = 201, description = "The new mode, as its creator sees it.", body = ModeResponse),
         (status = 400, description = "A body of the wrong shape: an unknown field or `type`, a value of the wrong type, or a number its type can't hold. The answer never repeats what it read.", body = ErrorResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "`mode_needs_step_up`: the steps send a command off the allowlist, which only `POST /modes/with-commands` takes, after a step-up; `forbidden`: a shared mode, which needs an Admin or the Owner.", body = ErrorResponse),
+        (status = 403, description = "`mode_needs_step_up`: the steps send a command off the allowlist, which only `POST /modes/with-commands` takes; `forbidden`: a shared mode, which needs an Admin or the Owner.", body = ErrorResponse),
         (status = 409, description = "`conflict`: the caller already owns 50 modes.", body = ErrorResponse),
         (status = 422, description = "A field breaks its rule, named at its own path (`name`, `steps[3].action.message`): one error, the earliest step's first.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
@@ -129,8 +130,8 @@ pub(crate) async fn create(
     creating(&user, &state, ip, &request, ModeRoute::Plain).await
 }
 
-/// `POST /api/v1/modes/with-commands`: a new mode of the caller's, after a
-/// step-up, whatever commands its steps send.
+/// `POST /api/v1/modes/with-commands`: a new mode of the caller's,
+/// whatever commands its steps send.
 #[utoipa::path(
     post,
     path = "/api/v1/modes/with-commands",
@@ -141,7 +142,7 @@ pub(crate) async fn create(
         (status = 201, description = "The new mode, as its creator sees it.", body = ModeResponse),
         (status = 400, description = "A body of the wrong shape: an unknown field or `type`, a value of the wrong type, or a number its type can't hold. The answer never repeats what it read.", body = ErrorResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "Step up first: `POST /auth/step-up`; or a shared mode, which needs an Admin or the Owner.", body = ErrorResponse),
+        (status = 403, description = "A shared mode, which needs an Admin or the Owner.", body = ErrorResponse),
         (status = 409, description = "`conflict`: the caller already owns 50 modes.", body = ErrorResponse),
         (status = 422, description = "A field breaks its rule, named at its own path (`name`, `steps[3].action.message`): one error, the earliest step's first.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
@@ -150,12 +151,12 @@ pub(crate) async fn create(
     ),
 )]
 pub(crate) async fn create_with_commands(
-    user: SteppedUpUser,
+    user: AuthUser,
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     ValidJson(request): ValidJson<CreateModeRequest>,
 ) -> Result<(StatusCode, Json<ModeResponse>), ApiError> {
-    creating(user.user(), &state, ip, &request, ModeRoute::WithCommands).await
+    creating(&user, &state, ip, &request, ModeRoute::WithCommands).await
 }
 
 /// `request` through `route` for `user` from `ip`: authorized, pointed to
@@ -222,7 +223,7 @@ async fn creating(
         (status = 200, description = "The mode as it now is, as the caller sees it: at the next version, or unchanged when the edit shows the same as the stored mode.", body = ModeResponse),
         (status = 400, description = "A body of the wrong shape: an unknown field or `type`, a value of the wrong type, or a number its type can't hold. The answer never repeats what it read.", body = ErrorResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "`mode_needs_step_up`: the steps send a command off the allowlist, which only `PUT /modes/{id}/with-commands` takes, after a step-up; `forbidden`: the caller may see the mode but not edit it, or not with this visibility. A built-in mode is read-only.", body = ErrorResponse),
+        (status = 403, description = "`mode_needs_step_up`: the steps send a command off the allowlist, which only `PUT /modes/{id}/with-commands` takes; `forbidden`: the caller may see the mode but not edit it, or not with this visibility. A built-in mode is read-only.", body = ErrorResponse),
         (status = 404, description = "No such mode, or one the caller may not see.", body = ErrorResponse),
         (status = 409, description = "`mode_changed`: the mode changed since the caller read `version`; `mode_in_use_by_others`: a bot uses the mode that the caller couldn't set the edited mode on.", body = ErrorResponse),
         (status = 422, description = "A field breaks its rule, named at its own path (`version`, `name`, `steps[3].action.message`): one error, the earliest step's first.", body = ErrorResponse),
@@ -241,8 +242,8 @@ pub(crate) async fn update(
     editing(&user, &state, ip, id, request, ModeRoute::Plain).await
 }
 
-/// `PUT /api/v1/modes/{id}/with-commands`: the mode as it should be, after
-/// a step-up, whatever commands its steps send.
+/// `PUT /api/v1/modes/{id}/with-commands`: the mode as it should be,
+/// whatever commands its steps send.
 #[utoipa::path(
     put,
     path = "/api/v1/modes/{id}/with-commands",
@@ -254,7 +255,7 @@ pub(crate) async fn update(
         (status = 200, description = "The mode as it now is, as the caller sees it: at the next version, or unchanged when the edit shows the same as the stored mode.", body = ModeResponse),
         (status = 400, description = "A body of the wrong shape: an unknown field or `type`, a value of the wrong type, or a number its type can't hold. The answer never repeats what it read.", body = ErrorResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "Step up first: `POST /auth/step-up`; or the caller may see the mode but not edit it, or not with this visibility. A built-in mode is read-only.", body = ErrorResponse),
+        (status = 403, description = "The caller may see the mode but not edit it, or not with this visibility. A built-in mode is read-only.", body = ErrorResponse),
         (status = 404, description = "No such mode, or one the caller may not see.", body = ErrorResponse),
         (status = 409, description = "`mode_changed`: the mode changed since the caller read `version`; `mode_in_use_by_others`: a bot uses the mode that the caller couldn't set the edited mode on.", body = ErrorResponse),
         (status = 422, description = "A field breaks its rule, named at its own path (`version`, `name`, `steps[3].action.message`): one error, the earliest step's first.", body = ErrorResponse),
@@ -264,21 +265,13 @@ pub(crate) async fn update(
     ),
 )]
 pub(crate) async fn update_with_commands(
-    user: SteppedUpUser,
+    user: AuthUser,
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     ValidPath(id): ValidPath<ModeId>,
     ValidJson(request): ValidJson<UpdateModeRequest>,
 ) -> Result<Json<ModeResponse>, ApiError> {
-    editing(
-        user.user(),
-        &state,
-        ip,
-        id,
-        request,
-        ModeRoute::WithCommands,
-    )
-    .await
+    editing(&user, &state, ip, id, request, ModeRoute::WithCommands).await
 }
 
 /// `request` for the mode `id` through `route` for `user` from `ip`: the
@@ -346,8 +339,7 @@ async fn editing(
     Ok(Json(mode_response(&user.actor(), edited.mode(), check)?))
 }
 
-/// `DELETE /api/v1/modes/{id}`: deletes a mode no bot uses, after a
-/// step-up.
+/// `DELETE /api/v1/modes/{id}`: deletes a mode no bot uses.
 #[utoipa::path(
     delete,
     path = "/api/v1/modes/{id}",
@@ -357,7 +349,7 @@ async fn editing(
     responses(
         (status = 204, description = "The mode is deleted."),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "Step up first: `POST /auth/step-up`; or the caller may see the mode but not delete it. A built-in mode is read-only.", body = ErrorResponse),
+        (status = 403, description = "The caller may see the mode but not delete it. A built-in mode is read-only.", body = ErrorResponse),
         (status = 404, description = "No such mode, or one the caller may not see.", body = ErrorResponse),
         (status = 409, description = "`mode_in_use`: a bot uses the mode; switch every bot to another mode first.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
@@ -366,19 +358,18 @@ async fn editing(
     ),
 )]
 pub(crate) async fn delete(
-    user: SteppedUpUser,
+    user: AuthUser,
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     ValidPath(id): ValidPath<ModeId>,
 ) -> Result<StatusCode, ApiError> {
-    let user = user.user();
     let Some(listed) = state.modes.find(id).await? else {
         return Err(ApiError::NotFound);
     };
     user.require(Permission::DeleteMode, &listed.context())?;
     state
         .modes
-        .delete(&acting(user, ip), id)
+        .delete(&acting(&user, ip), id)
         .await
         .map_err(|error| match error {
             DeleteModeError::SessionGone => ApiError::Unauthorized,

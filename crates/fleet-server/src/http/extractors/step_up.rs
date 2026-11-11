@@ -1,6 +1,10 @@
 //! [`SteppedUpUser`]: an authenticated user who entered their password
 //! again within 5 minutes (Plan.md §7.2, P7.6, ADR-0016).
 //!
+//! Two actions need it, the ones that replace a login credential:
+//! `POST /me/password` and `POST /me/mfa/reset`. A session is enough for
+//! everything else (ADR-0028).
+//!
 //! A step-up action's handler takes it instead of `AuthUser`, and the route
 //! registers with `step_up_route`, so the route-coverage test can call it
 //! with a live session but no fresh stamp and expect 403. A request without

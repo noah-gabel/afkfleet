@@ -39,8 +39,8 @@ struct Cast {
     bob: Person,
 }
 
-/// The cast, none of them stepped up.
-async fn unstamped_cast(setup: &Setup) -> Cast {
+/// The cast. No session ever steps up: the writes need none (ADR-0028).
+async fn cast(setup: &Setup) -> Cast {
     Cast {
         owner: setup.person(2, "owner", Role::Owner).await,
         admin: setup.person(3, "admin", Role::Admin).await,
@@ -48,23 +48,6 @@ async fn unstamped_cast(setup: &Setup) -> Cast {
         alice: setup.alice_person().await,
         bob: setup.person(5, "bob", Role::Member).await,
     }
-}
-
-/// The cast, every session stepped up now: the writes are step-up routes,
-/// so a test of what `authorize()` decides starts past the step-up check.
-/// Each test's later clock moves stay well inside the 5 minutes.
-async fn cast(setup: &Setup) -> Cast {
-    let cast = unstamped_cast(setup).await;
-    for person in [
-        &cast.owner,
-        &cast.admin,
-        &cast.other_admin,
-        &cast.alice,
-        &cast.bob,
-    ] {
-        setup.stamp(person.session).await;
-    }
-    cast
 }
 
 /// The cast's IDs by name, for redacting a snapshot.
@@ -801,15 +784,12 @@ async fn a_change_spends_the_users_limit(_pool: SqlitePoolOptions, options: Sqli
     assert!(!disabled(&setup, cast.alice.id).await);
 }
 
-// --- The step-up -------------------------------------------------------------------
+// --- No step-up (ADR-0028) ------------------------------------------------------------
 
 #[sqlx::test(migrations = false)]
-async fn a_user_change_without_a_fresh_step_up_is_refused_and_changes_nothing(
-    _pool: SqlitePoolOptions,
-    options: SqliteConnectOptions,
-) {
+async fn a_user_change_needs_no_step_up(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
     let setup = setup(options).await;
-    let cast = unstamped_cast(&setup).await;
+    let cast = cast(&setup).await;
 
     let promoting = setup
         .patch(
@@ -820,21 +800,20 @@ async fn a_user_change_without_a_fresh_step_up_is_refused_and_changes_nothing(
         .await;
     let disabling = setup
         .patch(
-            &user_path(cast.alice.id),
+            &user_path(cast.bob.id),
             Some(&cast.admin.token),
             json!({ "disabled": true }),
         )
         .await;
 
     for seen in [&promoting, &disabling] {
-        assert_eq!(seen.status, 403, "{}", seen.text);
-        assert_eq!(seen.code(), "step_up_required");
+        assert_eq!(seen.status, 200, "{}", seen.text);
     }
-    assert_eq!(role(&setup, cast.alice.id).await, Role::Member);
-    assert!(!disabled(&setup, cast.alice.id).await);
-    assert!(setup.live(cast.alice.session).await);
-    assert_eq!(entries(&setup, &AuditAction::USER_SET_ROLE).await, 0);
-    assert_eq!(entries(&setup, &AuditAction::USER_SET_DISABLED).await, 0);
+    assert_eq!(role(&setup, cast.alice.id).await, Role::Admin);
+    assert!(disabled(&setup, cast.bob.id).await);
+    assert!(!setup.live(cast.bob.session).await);
+    assert_eq!(entries(&setup, &AuditAction::USER_SET_ROLE).await, 1);
+    assert_eq!(entries(&setup, &AuditAction::USER_SET_DISABLED).await, 1);
 }
 
 // --- The re-check in the transaction --------------------------------------------------

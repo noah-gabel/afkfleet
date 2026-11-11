@@ -643,24 +643,4 @@ impl HttpSetup {
     pub(crate) async fn start(&self, by: &Person) -> Seen {
         self.server.start_link(by).await
     }
-
-    /// Stamps `by`'s session as stepped up now, as `POST /auth/step-up`
-    /// does.
-    pub(crate) async fn step_up(&self, by: &Person) {
-        let mut tx = self.db.write().await.unwrap();
-        assert!(
-            tx.sessions()
-                .stamp_step_up(by.session, self.clock.now())
-                .await
-                .unwrap()
-        );
-        tx.commit(setup_entry()).await.unwrap();
-    }
-
-    /// `user<n>` with `role`, a live session and a fresh step-up.
-    pub(crate) async fn stepped_up(&self, n: u8, role: Role) -> Person {
-        let person = self.person(n, role).await;
-        self.step_up(&person).await;
-        person
-    }
 }

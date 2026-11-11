@@ -10,7 +10,7 @@
 //! - [`step_up`]: the stamp, a wrong password counted, and the re-checks.
 //! - [`users`]: the admins' list and change, P7.12's escalation and
 //!   disabling, and the re-check in the transaction.
-//! - [`bots`]: what each viewer sees of a bot, its server after a step-up,
+//! - [`bots`]: what each viewer sees of a bot, its server,
 //!   its mode, and the lifecycle calls in every state; the entries, hints,
 //!   re-checks and limits.
 //! - [`invites`]: who may invite whom, the code shown once, the cap, the

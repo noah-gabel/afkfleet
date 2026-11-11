@@ -1,6 +1,6 @@
 //! The servers' settings' use cases (Plan.md P11.9; ADR-0020, U54,
 //! S74–S80, R141, R142): what every bot on one Minecraft server shares, whoever's bot
-//! it is. Admins and the Owner read them and, after a step-up, write them.
+//! it is. Admins and the Owner read and write them.
 //!
 //! - **Listing** ([`ServerSettingsService::list`]): every row, newest
 //!   first; the handler asks `authorize()` for `ViewServerSettings` first.

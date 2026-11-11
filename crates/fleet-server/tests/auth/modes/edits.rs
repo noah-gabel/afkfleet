@@ -1,5 +1,5 @@
 //! Editing a mode over HTTP (Plan.md P11.4; ADR-0020, S16–S18, S21, R3):
-//! `PUT /api/v1/modes/{id}` and its step-up twin, with the rights both ways,
+//! `PUT /api/v1/modes/{id}` and its twin, with the rights both ways,
 //! the pointer, the no-op, the version, names, the bots that use the mode,
 //! the re-checks in the transaction, the audit entry and the hint.
 
@@ -18,7 +18,7 @@ use fleet_testkit::log_capture;
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
-use super::{MODES, metadata, stepped_up, swinging, with_spawn};
+use super::{MODES, metadata, swinging, with_spawn};
 use crate::support::{
     Meanwhile, Options, Person, Seen, Setup, T0, at, redacted, setup, setup_entry, setup_with,
 };
@@ -63,7 +63,7 @@ fn path(id: ModeId) -> String {
     format!("{MODES}/{id}")
 }
 
-/// Its step-up twin.
+/// Its twin.
 fn twin(id: ModeId) -> String {
     format!("{MODES}/{id}/with-commands")
 }
@@ -159,7 +159,7 @@ async fn editing_spends_the_users_request_limit(
         },
     )
     .await;
-    let member = stepped_up(&setup, 2, "member", Role::Member).await;
+    let member = setup.person(2, "member", Role::Member).await;
     let id = setup
         .add_mode(1, member.id, "Mine", "private", &swinging())
         .await;
@@ -189,10 +189,10 @@ async fn editing_spends_the_users_request_limit(
     }
 }
 
-/// The twin needs a fresh step-up, and changes nothing without one; then it
-/// takes any steps, a command off the allowlist included (S16).
+/// The twin needs no step-up, and takes any steps, a command off the
+/// allowlist included (S16; ADR-0028).
 #[sqlx::test(migrations = false)]
-async fn the_twin_needs_a_fresh_step_up_and_then_takes_any_steps(
+async fn the_twin_needs_no_step_up_and_takes_any_steps(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
@@ -203,18 +203,8 @@ async fn the_twin_needs_a_fresh_step_up_and_then_takes_any_steps(
         .await;
     let ops = body(1, "Mine", "private", &sending("/op AfkBot2"));
 
-    let refused = setup.edit_with_commands(&member, id, ops.clone()).await;
-    let before = setup.stored(id).await;
-    setup.stamp(member.session).await;
     let taken = setup.edit_with_commands(&member, id, ops).await;
 
-    assert_eq!(
-        (refused.status, refused.code()),
-        (403, "step_up_required"),
-        "{}",
-        refused.text
-    );
-    assert_eq!(before.unwrap().version.get(), 1);
     assert_eq!(taken.status, 200, "{}", taken.text);
     assert_eq!(taken.body["version"], 2);
 }
@@ -315,9 +305,9 @@ async fn a_built_in_mode_is_403_for_everyone(
 ) {
     let setup = setup(options).await;
     let people = [
-        stepped_up(&setup, 2, "theowner", Role::Owner).await,
-        stepped_up(&setup, 3, "admin", Role::Admin).await,
-        stepped_up(&setup, 4, "member", Role::Member).await,
+        setup.person(2, "theowner", Role::Owner).await,
+        setup.person(3, "admin", Role::Admin).await,
+        setup.person(4, "member", Role::Member).await,
     ];
 
     for preset in ModePreset::ALL {
@@ -681,8 +671,8 @@ async fn an_edit_answers_its_editor_as_the_list_shows_them(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let the_owner = stepped_up(&setup, 2, "theowner", Role::Owner).await;
-    let admin = stepped_up(&setup, 3, "admin", Role::Admin).await;
+    let the_owner = setup.person(2, "theowner", Role::Owner).await;
+    let admin = setup.person(3, "admin", Role::Admin).await;
     let member = setup.person(4, "member", Role::Member).await;
     let members = setup
         .add_mode(1, member.id, "Member farm", "private", &super::planted())
@@ -763,7 +753,7 @@ async fn an_edit_is_recorded_without_the_name_or_a_steps_text(
 ) {
     log_capture::install().unwrap();
     let setup = with_spawn(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let id = setup
         .add_mode(1, admin.id, "Quiet hunter2", "private", &swinging())
         .await;
@@ -929,7 +919,7 @@ async fn an_edit_needs_set_bot_mode_on_every_bot_that_uses_it(
     options: SqliteConnectOptions,
 ) {
     let setup = with_spawn(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let other = setup.person(3, "admin2", Role::Admin).await;
     let member = setup.person(4, "member", Role::Member).await;
     let id = setup
@@ -1006,7 +996,7 @@ async fn an_unlisted_command_on_respawn_counts_in_the_bots_check(
     options: SqliteConnectOptions,
 ) {
     let setup = with_spawn(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let other = setup.person(3, "admin2", Role::Admin).await;
     let id = setup
         .add_mode(1, admin.id, "Shared farm", "shared", &swinging())

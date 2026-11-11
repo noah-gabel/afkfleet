@@ -4,10 +4,10 @@
 //! - **`POST /bots/{id}/chat`** takes a [`ChatSendRequest`]: plain chat, or a
 //!   command on the server's allowlist (Control). A command off the
 //!   allowlist is never sent here: a Manage holder gets 403
-//!   `command_needs_step_up` and sends it again through `/command`.
+//!   `command_needs_step_up` and sends it again through `/command`, which
+//!   needs no step-up any more (ADR-0028); the code keeps its name.
 //! - **`POST /bots/{id}/command`** takes a [`ChatCommandRequest`]: any
-//!   command, after a step-up; Control for an allowlisted one, Manage for any
-//!   other (S8). A line that isn't a command is 422.
+//!   command; Control for an allowlisted one, Manage for any other (S8). A line that isn't a command is 422.
 //! - **Both answer** [`ChatSendResponse`]: 200 when the bot's agent said the
 //!   bot sent it, 202 when no answer came in time (S5). Either way the line
 //!   is in the bot's chat history as what the user asked it to send, never as
@@ -54,8 +54,7 @@ pub struct ChatSendRequest {
     pub message: String,
 }
 
-/// `POST /bots/{id}/command`: a command for the bot to send, after a
-/// step-up.
+/// `POST /bots/{id}/command`: a command for the bot to send.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Validate, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChatCommandRequest {

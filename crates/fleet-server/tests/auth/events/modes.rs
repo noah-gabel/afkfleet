@@ -275,7 +275,6 @@ async fn a_role_change_resyncs_the_other_admins(
     let watchers = watchers(&setup).await;
     let served = Served::start(&setup).await;
     let mut sockets = sockets(&setup, &served, &watchers).await;
-    setup.stamp(watchers.the_owner.session).await;
 
     let seen = setup
         .patch(
@@ -393,7 +392,6 @@ async fn each_mode_write_hints_the_sockets_after_its_commit(
         .await;
     assert_eq!(unchanged.status, 200, "{}", unchanged.text);
     let after_no_op = setup.heard.take();
-    setup.stamp(member.session).await;
     let deleted = setup
         .delete(&format!("{MODES}/{id}"), Some(&member.token))
         .await;
@@ -438,7 +436,6 @@ async fn a_real_role_change_hints_the_sockets_after_its_commit(
     let setup = setup(options).await;
     let the_owner = setup.person(6, "theowner", Role::Owner).await;
     let member = setup.person(2, "member", Role::Member).await;
-    setup.stamp(the_owner.session).await;
     let path = format!("{USERS}/{}", member.id);
     let patch = |role: &str| setup.patch(&path, Some(&the_owner.token), json!({ "role": role }));
 

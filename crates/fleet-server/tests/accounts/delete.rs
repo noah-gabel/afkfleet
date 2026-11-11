@@ -1,7 +1,7 @@
 //! Deleting an account (Plan.md P9.6, ADR-0018): `DELETE
 //! /api/v1/accounts/{id}`, through serve's own app. Manage deletes it in any
 //! status and of any kind (offline ones too while `[accounts]
-//! allow_offline` is off), after a step-up, with its grants; the Member's
+//! allow_offline` is off), with its grants; the Member's
 //! quota slot is free again; the deletion is audited; and the service
 //! re-checks everything in its transaction.
 
@@ -107,7 +107,7 @@ async fn the_owner_deletes_their_account_with_its_grants_and_it_is_audited(
     options: SqliteConnectOptions,
 ) {
     let setup = HttpSetup::new(options).await;
-    let member = setup.stepped_up(1, Role::Member).await;
+    let member = setup.person(1, Role::Member).await;
     let friend = setup.person(2, Role::Member).await;
     let id = setup
         .add_account(
@@ -152,7 +152,7 @@ async fn deleting_an_account_whose_bot_an_agent_runs_records_that_agent(
     options: SqliteConnectOptions,
 ) {
     let setup = HttpSetup::new(options).await;
-    let member = setup.stepped_up(1, Role::Member).await;
+    let member = setup.person(1, Role::Member).await;
     let id = setup.add_account(member.id, 3, None).await;
     let bot = setup.add_bot(id, 3).await;
     let agent = setup.assign_to_agent(bot, 4).await;
@@ -173,7 +173,7 @@ async fn an_offline_account_is_deleted_while_offline_accounts_are_off_freeing_th
 ) {
     // `AccountsConfig::default()` has `allow_offline` off.
     let setup = HttpSetup::new(options).await;
-    let member = setup.stepped_up(1, Role::Member).await;
+    let member = setup.person(1, Role::Member).await;
     let id = setup.add_account(member.id, 2, None).await;
 
     let deleted = delete(&setup, &member, id).await;
@@ -195,12 +195,12 @@ async fn manage_deletes_any_status_and_below_manage_or_unseen_it_is_refused(
     options: SqliteConnectOptions,
 ) {
     let setup = HttpSetup::new(options).await;
-    let admin = setup.stepped_up(1, Role::Admin).await;
+    let admin = setup.person(1, Role::Admin).await;
     let other_admin = setup.person(2, Role::Admin).await;
     let member = setup.person(3, Role::Member).await;
-    let manager = setup.stepped_up(4, Role::Member).await;
-    let controller = setup.stepped_up(5, Role::Member).await;
-    let stranger = setup.stepped_up(6, Role::Member).await;
+    let manager = setup.person(4, Role::Member).await;
+    let controller = setup.person(5, Role::Member).await;
+    let stranger = setup.person(6, Role::Member).await;
     let pending = setup
         .add_account(member.id, 7, Some(AccountStatus::Pending))
         .await;
@@ -236,20 +236,16 @@ async fn manage_deletes_any_status_and_below_manage_or_unseen_it_is_refused(
 }
 
 #[sqlx::test(migrations = false)]
-async fn deleting_needs_a_fresh_step_up_and_changes_nothing_without_one(
-    _pool: SqlitePoolOptions,
-    options: SqliteConnectOptions,
-) {
+async fn deleting_needs_no_step_up(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
     let setup = HttpSetup::new(options).await;
     let member = setup.person(1, Role::Member).await;
     let id = setup.add_account(member.id, 2, None).await;
 
     let deleted = delete(&setup, &member, id).await;
 
-    assert_eq!(deleted.status, 403, "{}", deleted.text);
-    assert_eq!(deleted.code(), "step_up_required");
-    assert!(setup.stored(id).await.is_some());
-    assert_eq!(setup.entries(&AuditAction::ACCOUNT_DELETE).await.len(), 0);
+    assert_eq!(deleted.status, 204, "{}", deleted.text);
+    assert!(setup.stored(id).await.is_none());
+    assert_eq!(setup.entries(&AuditAction::ACCOUNT_DELETE).await.len(), 1);
 }
 
 #[sqlx::test(migrations = false)]
@@ -268,7 +264,7 @@ async fn an_unknown_account_is_404_and_a_deletion_spends_the_users_limit(
         fleet_server::config::AccountsConfig::default(),
     )
     .await;
-    let owner = setup.stepped_up(1, Role::Owner).await;
+    let owner = setup.person(1, Role::Owner).await;
     let unknown = AccountId::new_v7(at(T0), [99; 10]).unwrap();
 
     let first = delete(&setup, &owner, unknown).await;

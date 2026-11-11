@@ -10,13 +10,14 @@
 //! - **`POST /api/v1/bots/{id}/chat`** (authed) sends plain chat or a command
 //!   on the allowlist: Control (`SendChat`). It never sends a command off the
 //!   allowlist: a Manage holder gets 403 `command_needs_step_up`, the pointer
-//!   to the next route, before any chat limit is spent (S4).
-//! - **`POST /api/v1/bots/{id}/command`** (step-up) sends a command: Control
+//!   to the next route, before any chat limit is spent (S4). The code keeps
+//!   its name from when that route needed a step-up (ADR-0028).
+//! - **`POST /api/v1/bots/{id}/command`** (authed) sends a command: Control
 //!   for an allowlisted one, Manage for any other, as `/chat` authorizes it;
 //!   a line that isn't a command is 422 (S8).
 //!
-//! Both answer in the extractors' order: 401, the per-user 429, the step-up's
-//! 403, a malformed path's 404, the body's 400/415/422, an unseen bot's 404,
+//! Both answer in the extractors' order: 401, the per-user 429, a malformed
+//! path's 404, the body's 400/415/422, an unseen bot's 404,
 //! 403, the pointer, the chat 429s (the user's, then the bot's, spent
 //! whatever then happens, so neither tells a stranger the bot exists), then
 //! what the send answers: 200 when the bot's agent said the bot sent it, 202
@@ -42,7 +43,7 @@ use super::bots::{facts, writing};
 use super::{acting, chat_failure, chat_line};
 use crate::app::bots::{ChatHistoryError, ChatOutcome, ChatRoute, ChatSendDone, ChatSendError};
 use crate::http::error::ApiError;
-use crate::http::extractors::{AuthUser, SteppedUpUser, ValidJson, ValidPath, ValidQuery};
+use crate::http::extractors::{AuthUser, ValidJson, ValidPath, ValidQuery};
 use crate::http::middleware::Arrival;
 use crate::http::rate_limit::{ClientIp, RateLimits};
 use crate::http::router::AppState;
@@ -128,7 +129,7 @@ fn reading(error: ChatHistoryError) -> ApiError {
         (status = 202, description = "The line went to the bot's agent, and no answer came in time: it may yet be sent or refused.", body = ChatSendResponse),
         (status = 400, description = "A body of the wrong shape.", body = ErrorResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "`command_needs_step_up`: a command off the allowlist, which only `POST /bots/{id}/command` sends, after a step-up; `forbidden`: the caller may see the bot but not chat through it (Control), or not send that command (Manage).", body = ErrorResponse),
+        (status = 403, description = "`command_needs_step_up`: a command off the allowlist, which only `POST /bots/{id}/command` sends; `forbidden`: the caller may see the bot but not chat through it (Control), or not send that command (Manage).", body = ErrorResponse),
         (status = 404, description = "No such bot, or one the caller may not see.", body = ErrorResponse),
         (status = 409, description = "`bot_not_online`: the bot isn't online; `chat_unavailable`: its Minecraft server takes only signed chat, and the bot can't sign this line; `bot_unreachable`: its agent can't be reached, or didn't get the line through.", body = ErrorResponse),
         (status = 422, description = "A line that's empty, too long, or holds a line break or another control character, `§` or text-direction marks.", body = ErrorResponse),
@@ -158,8 +159,7 @@ pub(crate) async fn send(
     .await
 }
 
-/// `POST /api/v1/bots/{id}/command`: a command for the bot to send, after a
-/// step-up.
+/// `POST /api/v1/bots/{id}/command`: a command for the bot to send.
 #[utoipa::path(
     post,
     path = "/api/v1/bots/{id}/command",
@@ -172,7 +172,7 @@ pub(crate) async fn send(
         (status = 202, description = "The command went to the bot's agent, and no answer came in time: it may yet be sent or refused.", body = ChatSendResponse),
         (status = 400, description = "A body of the wrong shape.", body = ErrorResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "Step up first: `POST /auth/step-up`; or the caller may see the bot but not send this command: Control for one on the allowlist, Manage for any other.", body = ErrorResponse),
+        (status = 403, description = "The caller may see the bot but not send this command: Control for one on the allowlist, Manage for any other.", body = ErrorResponse),
         (status = 404, description = "No such bot, or one the caller may not see.", body = ErrorResponse),
         (status = 409, description = "`bot_not_online`: the bot isn't online; `chat_unavailable`: its Minecraft server takes only signed chat, and the bot can't sign this command; `bot_unreachable`: its agent can't be reached, or didn't get the command through.", body = ErrorResponse),
         (status = 422, description = "A line that isn't a command, or that's empty, too long, or holds a line break or another control character, `§` or text-direction marks.", body = ErrorResponse),
@@ -182,7 +182,7 @@ pub(crate) async fn send(
     ),
 )]
 pub(crate) async fn command(
-    user: SteppedUpUser,
+    user: AuthUser,
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     arrival: Arrival,
@@ -191,7 +191,7 @@ pub(crate) async fn command(
 ) -> Result<(StatusCode, Json<ChatSendResponse>), ApiError> {
     let message = line(&request.message)?;
     send_line(
-        user.user(),
+        &user,
         &state,
         ip,
         id,

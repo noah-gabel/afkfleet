@@ -738,7 +738,7 @@ pub struct BotPage {
 }
 
 /// `PATCH /bots/{id}`: the Minecraft server the bot joins. Needs Manage on
-/// the bot and a step-up. Where the address points isn't checked here:
+/// the bot. Where the address points isn't checked here:
 /// that's the agent's, on the address it resolves before it connects
 /// (ADR-0019, S46).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Validate, TS, ToSchema)]

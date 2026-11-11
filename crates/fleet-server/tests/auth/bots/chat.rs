@@ -1,7 +1,7 @@
 //! Tests for a bot's chat routes (Plan.md P11.3, Appendix B; ADR-0020,
 //! S3–S8): `POST /api/v1/bots/{id}/chat` sends plain chat and allowlisted
 //! commands, and points a Manage holder's unlisted command to
-//! `POST /api/v1/bots/{id}/command`, a step-up route for commands. Both
+//! `POST /api/v1/bots/{id}/command`, the route for commands. Both
 //! answer in the extractors' order, spend the user's and then the bot's chat
 //! limit after `authorize()`, store the line as the user's and record it
 //! without its text before it's sent, and answer as the bot's agent says
@@ -36,7 +36,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::time::Instant;
 
 use super::super::support::{Meanwhile, Options, Person, Seen, Setup, T0, at, setup_with};
-use super::{BOTS, Stream, stepped_up};
+use super::{BOTS, Stream};
 
 /// How long a test waits for the line its stream got.
 const BOUND: Duration = Duration::from_secs(5);
@@ -213,7 +213,7 @@ async fn both_routes_answer_404_for_an_unknown_a_malformed_or_an_unseen_bot(
 ) {
     let setup = setup_with(options, quick()).await;
     let owner = setup.person(2, "owner", Role::Member).await;
-    let stranger = stepped_up(&setup, 3, "stranger", Role::Member).await;
+    let stranger = setup.person(3, "stranger", Role::Member).await;
     let (_, bot) = setup.bot_of(owner.id, 10).await;
     let unknown = BotId::new_v7(at(T0), [0xAB; 10]).unwrap();
 
@@ -273,7 +273,7 @@ async fn an_unlisted_command_needs_manage_on_either_route(
 ) {
     let setup = setup_with(options, quick()).await;
     let owner = setup.person(2, "owner", Role::Member).await;
-    let controller = stepped_up(&setup, 3, "controller", Role::Member).await;
+    let controller = setup.person(3, "controller", Role::Member).await;
     let (account, bot) = setup.bot_of(owner.id, 10).await;
     setup
         .share(account, controller.id, GrantLevel::Control, owner.id)
@@ -306,7 +306,7 @@ async fn a_manage_holder_is_pointed_to_the_command_route_and_spends_no_chat_limi
     let mut settings = quick();
     settings.limits.chat_per_user = Rate::per_minute(NonZeroU32::MIN);
     let setup = setup_with(options, settings).await;
-    let owner = stepped_up(&setup, 2, "owner", Role::Member).await;
+    let owner = setup.person(2, "owner", Role::Member).await;
     let (_, bot) = setup.bot_of(owner.id, 10).await;
 
     let pointed = setup.chat(bot, &owner, "/op AfkBot2").await;
@@ -321,7 +321,7 @@ async fn a_manage_holder_is_pointed_to_the_command_route_and_spends_no_chat_limi
 }
 
 #[sqlx::test(migrations = false)]
-async fn the_command_route_needs_a_fresh_step_up_and_writes_sends_and_spends_nothing_without_one(
+async fn the_command_route_needs_no_step_up(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
@@ -331,16 +331,12 @@ async fn the_command_route_needs_a_fresh_step_up_and_writes_sends_and_spends_not
     let owner = setup.person(2, "owner", Role::Member).await;
     let (_, bot, mut stream) = setup.online_bot(owner.id, 10).await;
 
-    let without = setup.command(bot, &owner, "/op AfkBot2").await;
-    setup.stamp(owner.session).await;
-    let (with, _) = tokio::join!(
+    let (sent, _) = tokio::join!(
         setup.command(bot, &owner, "/op AfkBot2"),
         setup.answer(&mut stream, bot, LiveEventKind::ChatSent)
     );
 
-    assert_eq!(without.status, 403);
-    assert_eq!(without.code(), "step_up_required");
-    assert_eq!(with.status, 200, "{}", with.text);
+    assert_eq!(sent.status, 200, "{}", sent.text);
     assert_eq!(setup.lines(bot).await.len(), 1);
     assert_eq!(setup.chat_entries().await.len(), 1);
 }
@@ -354,7 +350,7 @@ async fn a_grant_lowered_before_the_transaction_is_403_and_writes_nothing(
 ) {
     let setup = setup_with(options, quick()).await;
     let owner = setup.person(2, "owner", Role::Member).await;
-    let manager = stepped_up(&setup, 3, "manager", Role::Member).await;
+    let manager = setup.person(3, "manager", Role::Member).await;
     let (account, bot, _stream) = setup.online_bot(owner.id, 10).await;
     setup
         .share(account, manager.id, GrantLevel::Manage, owner.id)
@@ -413,8 +409,8 @@ async fn an_invalid_line_is_422_on_message_and_never_echoed(
     options: SqliteConnectOptions,
 ) {
     let setup = setup_with(options, quick()).await;
-    let owner = stepped_up(&setup, 2, "owner", Role::Member).await;
-    let stranger = stepped_up(&setup, 3, "stranger", Role::Member).await;
+    let owner = setup.person(2, "owner", Role::Member).await;
+    let stranger = setup.person(3, "stranger", Role::Member).await;
     let (_, bot) = setup.bot_of(owner.id, 10).await;
     let long = format!("secret_label{}", "x".repeat(300));
 
@@ -761,7 +757,7 @@ async fn the_wait_counts_from_the_requests_arrival_not_the_handlers_start(
 
 // --- The audit --------------------------------------------------------------------------
 
-/// The command route records `bot.send_command`: a stepped-up Control
+/// The command route records `bot.send_command`: a Control
 /// holder's allowlisted command with its name, a Manage holder's unlisted
 /// one without (S6, S8).
 #[sqlx::test(migrations = false)]
@@ -770,8 +766,8 @@ async fn the_command_route_records_whether_the_command_is_listed_and_only_a_list
     options: SqliteConnectOptions,
 ) {
     let setup = setup_with(options, quick()).await;
-    let owner = stepped_up(&setup, 2, "owner", Role::Member).await;
-    let controller = stepped_up(&setup, 3, "controller", Role::Member).await;
+    let owner = setup.person(2, "owner", Role::Member).await;
+    let controller = setup.person(3, "controller", Role::Member).await;
     let (account, bot, _stream) = setup.online_bot(owner.id, 10).await;
     setup
         .share(account, controller.id, GrantLevel::Control, owner.id)

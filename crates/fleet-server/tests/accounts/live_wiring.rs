@@ -100,7 +100,7 @@ async fn an_approval_tells_the_bus_its_bot(
     options: SqliteConnectOptions,
 ) {
     let setup = HttpSetup::new(options).await;
-    let admin = setup.stepped_up(1, Role::Admin).await;
+    let admin = setup.person(1, Role::Admin).await;
     let member = setup.person(2, Role::Member).await;
     let id = setup
         .add_account(member.id, 3, Some(AccountStatus::Pending))
@@ -155,7 +155,7 @@ async fn disabling_a_user_tells_the_bus_their_bots(
     options: SqliteConnectOptions,
 ) {
     let setup = HttpSetup::new(options).await;
-    let owner = setup.stepped_up(1, Role::Owner).await;
+    let owner = setup.person(1, Role::Owner).await;
     let member = setup.person(2, Role::Member).await;
     let id = setup.add_account(member.id, 3, None).await;
     let bot = setup.add_bot(id, 3).await;
@@ -180,7 +180,7 @@ async fn disabling_an_agent_tells_the_bus_its_bots(
     options: SqliteConnectOptions,
 ) {
     let setup = HttpSetup::new(options).await;
-    let admin = setup.stepped_up(1, Role::Admin).await;
+    let admin = setup.person(1, Role::Admin).await;
     let member = setup.person(2, Role::Member).await;
     let id = setup.add_account(member.id, 3, None).await;
     let bot = setup.add_bot(id, 3).await;
@@ -207,7 +207,7 @@ async fn releasing_an_agent_tells_the_bus_its_bots(
     options: SqliteConnectOptions,
 ) {
     let setup = HttpSetup::new(options).await;
-    let admin = setup.stepped_up(1, Role::Admin).await;
+    let admin = setup.person(1, Role::Admin).await;
     let member = setup.person(2, Role::Member).await;
     let id = setup.add_account(member.id, 3, None).await;
     let bot = setup.add_bot(id, 3).await;

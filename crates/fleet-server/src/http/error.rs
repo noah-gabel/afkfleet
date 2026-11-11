@@ -181,13 +181,15 @@ pub enum ApiError {
     #[error("the bot can't sign this line")]
     ChatUnavailable,
     /// A command off the allowlist sent to `/chat` by someone who may send
-    /// it: it goes to `/command`, after a step-up (403).
-    #[error("the command needs a step-up")]
+    /// it: it goes to `/command` (403; the name is from when that route
+    /// needed a step-up, ADR-0028).
+    #[error("the command goes to the command route")]
     CommandNeedsStepUp,
     /// A mode whose steps send a command off the allowlist, sent to a plain
     /// mode route by someone who may write it: it goes to the route's
-    /// `/with-commands` twin, after a step-up (403; ADR-0020, S16).
-    #[error("the mode needs a step-up")]
+    /// `/with-commands` twin (403; ADR-0020, S16; the name is from when the
+    /// twin needed a step-up, ADR-0028).
+    #[error("the mode goes to its with-commands twin")]
     ModeNeedsStepUp,
     /// An edit of a mode whose `version` is stale (409; ADR-0020, S18).
     #[error("the mode changed since it was read")]

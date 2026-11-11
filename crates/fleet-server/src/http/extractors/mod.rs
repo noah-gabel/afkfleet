@@ -3,7 +3,7 @@
 //! - [`AuthUser`]: who a request comes from, from its access token; every
 //!   authed handler takes it and authorizes through [`AuthUser::require`].
 //! - [`SteppedUpUser`]: an [`AuthUser`] who entered their password again
-//!   within 5 minutes, for the step-up actions (§7.2).
+//!   within 5 minutes, for the two step-up actions (§7.2, ADR-0028).
 //! - [`SetupToken`]: a request to enroll a TOTP authenticator, from its
 //!   setup token.
 //! - [`ValidJson`]: a JSON request body that passed its DTO's garde rules.

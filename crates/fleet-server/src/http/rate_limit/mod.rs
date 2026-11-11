@@ -13,7 +13,7 @@
 //! - **Every authed request spends its user's limit,** in `AuthUser`, right
 //!   after authentication ([`RateLimits::check_user`]).
 //! - **Creating a grant by a username spends its own per-user limit** too,
-//!   in its handler after the step-up check, since each one tries a name
+//!   in its handler, since each one tries a name
 //!   ([`RateLimits::check_grant_by_name`]; ADR-0018, group E).
 //! - **Reading the suggestions behind "Share with" spends its own per-user
 //!   limit,** one bucket across all of the user's accounts, in its handler
@@ -366,7 +366,7 @@ impl RateLimits {
     }
 
     /// Spends one of `user`'s grants created by a username, which the grant
-    /// handler does right after the step-up check: each one tries a name
+    /// handler does first: each one tries a name
     /// (ADR-0018, group E).
     ///
     /// # Errors

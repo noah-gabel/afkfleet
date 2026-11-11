@@ -523,78 +523,6 @@ async fn the_setup_and_step_up_routes_are_registered_with_their_access_and_class
         BTreeSet::from([
             entry(Method::POST, "/api/v1/me/mfa/reset", RateClass::Standard),
             entry(Method::POST, "/api/v1/me/password", RateClass::Login),
-            entry(Method::PATCH, "/api/v1/users/{id}", RateClass::Standard),
-            entry(Method::POST, "/api/v1/invites", RateClass::Standard),
-            entry(
-                Method::POST,
-                "/api/v1/agents/{id}/disable",
-                RateClass::Standard
-            ),
-            entry(
-                Method::POST,
-                "/api/v1/agents/{id}/release",
-                RateClass::Standard
-            ),
-            entry(Method::DELETE, "/api/v1/invites/{id}", RateClass::Standard),
-            entry(Method::DELETE, "/api/v1/accounts/{id}", RateClass::Standard),
-            entry(
-                Method::POST,
-                "/api/v1/accounts/{id}/approve",
-                RateClass::Standard
-            ),
-            entry(
-                Method::POST,
-                "/api/v1/accounts/{id}/refuse",
-                RateClass::Standard
-            ),
-            entry(
-                Method::POST,
-                "/api/v1/accounts/{id}/grants",
-                RateClass::Standard
-            ),
-            entry(
-                Method::PUT,
-                "/api/v1/accounts/{id}/grants/{user}",
-                RateClass::Standard
-            ),
-            entry(
-                Method::DELETE,
-                "/api/v1/accounts/{id}/grants/{user}",
-                RateClass::Standard
-            ),
-            entry(
-                Method::DELETE,
-                "/api/v1/accounts/{id}/grants/me",
-                RateClass::Standard
-            ),
-            entry(Method::PATCH, "/api/v1/bots/{id}", RateClass::Standard),
-            entry(
-                Method::POST,
-                "/api/v1/bots/{id}/command",
-                RateClass::Standard
-            ),
-            entry(
-                Method::POST,
-                "/api/v1/modes/with-commands",
-                RateClass::Standard
-            ),
-            entry(
-                Method::PUT,
-                "/api/v1/modes/{id}/with-commands",
-                RateClass::Standard
-            ),
-            entry(Method::DELETE, "/api/v1/modes/{id}", RateClass::Standard),
-            entry(Method::POST, "/api/v1/server-settings", RateClass::Standard),
-            entry(
-                Method::PUT,
-                "/api/v1/server-settings/{id}",
-                RateClass::Standard
-            ),
-            entry(
-                Method::DELETE,
-                "/api/v1/server-settings/{id}",
-                RateClass::Standard
-            ),
         ])
     );
     db.close().await;
@@ -697,6 +625,79 @@ async fn the_authed_routes_are_registered_with_their_class(
             ),
             entry(Method::POST, "/api/v1/events/ticket", RateClass::Standard),
             entry(Method::GET, "/api/v1/events", RateClass::Standard),
+            // Step-up routes until ADR-0028: a session is enough now.
+            entry(Method::PATCH, "/api/v1/users/{id}", RateClass::Standard),
+            entry(Method::POST, "/api/v1/invites", RateClass::Standard),
+            entry(
+                Method::POST,
+                "/api/v1/agents/{id}/disable",
+                RateClass::Standard
+            ),
+            entry(
+                Method::POST,
+                "/api/v1/agents/{id}/release",
+                RateClass::Standard
+            ),
+            entry(Method::DELETE, "/api/v1/invites/{id}", RateClass::Standard),
+            entry(Method::DELETE, "/api/v1/accounts/{id}", RateClass::Standard),
+            entry(
+                Method::POST,
+                "/api/v1/accounts/{id}/approve",
+                RateClass::Standard
+            ),
+            entry(
+                Method::POST,
+                "/api/v1/accounts/{id}/refuse",
+                RateClass::Standard
+            ),
+            entry(
+                Method::POST,
+                "/api/v1/accounts/{id}/grants",
+                RateClass::Standard
+            ),
+            entry(
+                Method::PUT,
+                "/api/v1/accounts/{id}/grants/{user}",
+                RateClass::Standard
+            ),
+            entry(
+                Method::DELETE,
+                "/api/v1/accounts/{id}/grants/{user}",
+                RateClass::Standard
+            ),
+            entry(
+                Method::DELETE,
+                "/api/v1/accounts/{id}/grants/me",
+                RateClass::Standard
+            ),
+            entry(Method::PATCH, "/api/v1/bots/{id}", RateClass::Standard),
+            entry(
+                Method::POST,
+                "/api/v1/bots/{id}/command",
+                RateClass::Standard
+            ),
+            entry(
+                Method::POST,
+                "/api/v1/modes/with-commands",
+                RateClass::Standard
+            ),
+            entry(
+                Method::PUT,
+                "/api/v1/modes/{id}/with-commands",
+                RateClass::Standard
+            ),
+            entry(Method::DELETE, "/api/v1/modes/{id}", RateClass::Standard),
+            entry(Method::POST, "/api/v1/server-settings", RateClass::Standard),
+            entry(
+                Method::PUT,
+                "/api/v1/server-settings/{id}",
+                RateClass::Standard
+            ),
+            entry(
+                Method::DELETE,
+                "/api/v1/server-settings/{id}",
+                RateClass::Standard
+            ),
         ])
     );
     db.close().await;
