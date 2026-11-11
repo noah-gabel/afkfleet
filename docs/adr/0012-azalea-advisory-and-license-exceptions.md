@@ -35,7 +35,7 @@ Both are unconditional azalea dependencies, and both licenses are GPL-compatible
 ### Re-checking
 Every azalea bump (ADR-0003's procedure, step 5):
 - re-checks the `rsa` advisory
-- removes the two hickory ignores once azalea uses hickory-proto ≥ 0.26.1
+- removes the six hickory ignores once azalea uses hickory-proto ≥ 0.26.2 (two until 2026-11-11, at ≥ 0.26.1; the amendment below)
 - updates the license exceptions to the new versions after a review
 
 ### Phase 9, group B: azalea-auth only through azalea *(the user's decision, [ADR-0018](0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md))*
@@ -43,9 +43,23 @@ Every azalea bump (ADR-0003's procedure, step 5):
 - **RUSTSEC-2023-0071 stays where it was.** fleet-server's Microsoft adapter sends its own requests, so neither azalea-auth nor `rsa` reaches it (`cargo tree -p fleet-server -e normal,build,dev --target all -i rsa` finds nothing). The analysis above still covers fleet-mc and the agent, the only crates that build `rsa`; the server never touches certificates or RSA.
 - **At a bump,** a new azalea crate that depends on azalea-auth is named by cargo-deny, and the wrapper list is updated together with a note in ADR-0018 (ADR-0003's procedure).
 
+### 2026-11-11: four more `hickory-proto` advisories *(decided under [ADR-0025](0025-a-simpler-workflow.md))*
+**What happened.** RUSTSEC-2026-0487, 0489, 0490 and 0491 were published against `hickory-proto` before 0.26.2, and `just deny` failed on `main` and on every open pull request. Nothing in the workspace had changed.
+
+**No fix can be taken.** 0.25.2 is the last 0.25 release; the fixes are in 0.26.2. azalea-protocol 0.16.0 asks for `hickory-resolver` 0.25, and 0.16.0 is still azalea's newest release, so only an azalea bump (a Minecraft-version bump, `docs/releasing.md`) brings 0.26.
+
+| Advisory | Why it's acceptable | Removal trigger |
+|---|---|---|
+| RUSTSEC-2026-0487 (a malformed `alpn` value in an SVCB or HTTPS record's text panics) | In 0.25.2 the code is `serialize/txt/rdata_parsers/svcb.rs`. `serialize::txt` is declared under `#[cfg(feature = "text-parsing")]`, and `cargo tree -i hickory-proto -e features --target all` shows only `std`, `tokio` and `futures-io`: the code isn't compiled. Nothing here parses zone files or record text either: azalea's resolver only looks names up | Removed once azalea uses hickory-proto ≥ 0.26.2 |
+| RUSTSEC-2026-0489 (a parameter value of one quote character panics) | The same file and the same feature: not compiled | The same |
+| RUSTSEC-2026-0490 (the zone file lexer panics on a token of 4096 characters) | `serialize/txt/zone_lex.rs`, under the same feature: not compiled | The same |
+| RUSTSEC-2026-0491 (decoding a DNS message reserves memory for as many records as its header claims, 65,535 at most, about 18 MB by the upstream advisory, before it reads one) | **This one is compiled and runs:** the agent decodes the answers to its own lookups. Who can send one: the resolver the agent's host is configured with (or Google's, azalea's fallback), or someone who can spoof its answers on that path. A Minecraft server's own name server can't: a recursive resolver writes its own header. What they get: one reservation per answer, freed when the decode fails; the lookup then fails, the bot reads `unresolvable` and backs off. A bot looks a name up only when it connects, the connect timeout bounds each lookup (ADR-0011), and whoever answers the agent's DNS can already keep every bot offline by answering nothing | The same |
+
+**Not done:** resolving with the OS resolver instead (the alternative below, rejected for SRV records); a `[patch]` to a fork of hickory 0.25 with the fix, which would put unreviewed code where a reviewed release was.
+
 ## Consequences
 - **Easier:** azalea builds in the workspace, and `cargo deny` stays strict everywhere else. Each exception carries its reason and its removal trigger in `deny.toml` itself.
-- **Harder:** every azalea bump has to revisit five entries. A new advisory against `rsa` or `hickory-proto` still fails the build, because the ignores name single advisory IDs.
+- **Harder:** every azalea bump has to revisit five entries (nine since 2026-11-11). A new advisory against `rsa` or `hickory-proto` still fails the build, because the ignores name single advisory IDs.
 - **Accepted risk:** the `rsa` advisory has no fix in sight. The analysis above holds only as long as azalea never decrypts with RSA, so each bump checks that again.
 
 ## Alternatives considered
