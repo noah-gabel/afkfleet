@@ -348,6 +348,14 @@ opt-level = 3
 [profile.dev.package.zxcvbn]
 opt-level = 3
 
+# cargo-mutants builds every mutant with this profile (.cargo/mutants.toml; ADR-0031): the
+# test profile without debug info, which a mutant's verdict never reads, so each of some
+# two thousand builds links faster and takes less disk. It inherits the three optimized
+# packages above through `test`.
+[profile.mutants]
+inherits = "test"
+debug = "none"
+
 [profile.release]
 panic = "unwind"
 overflow-checks = true

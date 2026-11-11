@@ -1,0 +1,6 @@
+# cargo-mutants 27.1.0 (Plan.md P13.3, ADR-0031): `just mutants` runs it over fleet-core
+# and over the auth and vault modules, the files the coverage gates of those names list.
+# A mutant no test catches gets a test, or a line below with the reason it changes
+# nothing a test could see.
+test_tool = "nextest"
+profile = "mutants"
