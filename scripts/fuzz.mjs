@@ -17,7 +17,7 @@
 // Tests: scripts/fuzz.test.mjs.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, win32 } from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -86,7 +86,8 @@ export function asanFolder(output) {
     .filter((line) => line.toLowerCase().endsWith(ASAN_DLL.toLowerCase()))
     .sort();
   const newest = found.at(-1);
-  return newest === undefined ? undefined : dirname(newest);
+  // vswhere's paths are Windows paths, whatever platform reads them.
+  return newest === undefined ? undefined : win32.dirname(newest);
 }
 
 /** `env` with `folder` first on its PATH, whatever case the variable's name has. */
