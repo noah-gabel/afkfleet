@@ -62,6 +62,9 @@ unused-allowed-license = "allow"
 exceptions = [
     { crate = "minecraft_folder_path@0.1.2", allow = ["Unlicense"] },
     { crate = "socks5-impl@0.8.7", allow = ["GPL-3.0-or-later"] },
+    # libFuzzer's own license, GPL-compatible. Only fuzz/ depends on it, a workspace of
+    # its own whose binaries are never shipped (ADR-0030).
+    { crate = "libfuzzer-sys@0.4.13", allow = ["NCSA"] },
 ]
 
 [licenses.private]

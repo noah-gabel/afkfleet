@@ -16,7 +16,7 @@
 
 use core::net::SocketAddr;
 use core::time::Duration;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::Router;
@@ -407,7 +407,7 @@ impl World {
             .expect("the world's database closes");
         // The world's own file, in the matrix's own folder; a close removes
         // the WAL's files with it.
-        std::fs::remove_file(&self.file).unwrap();
+        remove_or_leave(&self.file);
     }
 
     // --- The people ----------------------------------------------------------------------
@@ -749,6 +749,17 @@ fn grant(account: AccountId, user: UserId, level: GrantLevel, by: UserId) -> Acc
     }
 }
 
+/// Removes `file`, or leaves it to its folder's own removal when it can't
+/// be removed now. On Windows something else may hold a file for a moment
+/// after its last handle here closed (a scanner, the indexer): the removal
+/// then fails with a sharing violation, which once failed the whole matrix
+/// under the full suite's load. The file is in the matrix's own temporary
+/// folder, which goes at the test's end; removing each world's file early
+/// only keeps that folder small.
+fn remove_or_leave(file: &Path) {
+    let _ = std::fs::remove_file(file);
+}
+
 /// `method path` to `router` with `bearer` and the JSON `body`, if any.
 async fn send(
     router: &Router,
@@ -852,4 +863,31 @@ async fn upgrade(router: &Router, path: &str, bearer: Option<&SecretString>) -> 
         },
         Err(other) => panic!("the handshake failed: {other}"),
     }
+}
+
+/// A file another handle holds without sharing it, as a scanner does on
+/// Windows, is left where it is, and one nothing holds is removed.
+#[cfg(windows)]
+#[test]
+fn a_file_something_still_holds_is_left_and_a_free_one_is_removed() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    let folder = TempDir::new().unwrap();
+    let held = folder.path().join("held.db");
+    let free = folder.path().join("free.db");
+    std::fs::write(&held, b"held").unwrap();
+    std::fs::write(&free, b"free").unwrap();
+    // No sharing at all: any other open or delete is a sharing violation.
+    let holder = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&held)
+        .unwrap();
+
+    remove_or_leave(&held);
+    remove_or_leave(&free);
+
+    assert!(held.exists(), "the held file is left");
+    assert!(!free.exists(), "the free file is removed");
+    drop(holder);
 }

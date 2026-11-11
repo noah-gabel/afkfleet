@@ -1,0 +1,45 @@
+[package]
+name = "fleet-fuzz"
+description = "The fuzz targets' bodies (P13.2): each a plain function over bytes, run by cargo-fuzz from fuzz/ and by this crate's own tests."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+# Nothing ships from here: fuzz/ and this crate's tests are its only users
+# (ADR-0030).
+[dependencies]
+# The metrics responder (`metrics_endpoint::serve`).
+fleet-agent.workspace = true
+# The API's mode requests, which garde checks.
+fleet-api-types.workspace = true
+# The value objects, the sanitizer, the chat formats, the private targets.
+fleet-core.workspace = true
+# The control plane's messages, their codec's bound and their conversions.
+fleet-proto.workspace = true
+# The vault and its envelope's header.
+fleet-server.workspace = true
+# `Validate`, to check a request as the API's extractors do.
+garde.workspace = true
+# Decoding the wire messages.
+prost.workspace = true
+# The vault's key, and a password's and an opened secret's wrappers.
+secrecy.workspace = true
+# Mode definitions and mode requests.
+serde_json.workspace = true
+# The metrics target's exchange: a runtime with paused time and an in-memory pipe.
+tokio = { workspace = true, features = ["io-util", "rt", "test-util", "time"] }
+# The metrics endpoint's stop.
+tokio-util.workspace = true
+# The vault's record IDs and the seeds' IDs.
+uuid.workspace = true
+
+[dev-dependencies]
+# Every target over arbitrary bytes and text.
+proptest = { workspace = true, features = ["std"] }
+# The folder the kept failing input's test writes into.
+tempfile.workspace = true

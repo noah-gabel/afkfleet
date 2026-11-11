@@ -1,0 +1,73 @@
+# The fuzz targets (`just fuzz`, Plan.md P13.2, ADR-0030), weekly and on demand, and on
+# the pull requests that touch them. Every pull request already holds each target's
+# properties over proptest's inputs in the test job (crates/fleet-fuzz's tests); this
+# explores further, with cargo-fuzz, for five minutes a target, one minute on a pull
+# request. It builds the whole server and agent with a sanitizer, so it isn't a
+# required check. A failing input is printed into the log as Base64, whole: nothing
+# is uploaded.
+# Third-party actions are pinned to full commit SHAs (version in the comment), as
+# in ci.yml.
+name: Fuzz
+
+on:
+  schedule:
+    - cron: "17 8 * * 1" # Mondays, 08:17 UTC, an hour after slow-tests.yml
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "fuzz/**"
+      - "crates/fleet-fuzz/**"
+      - "scripts/fuzz.mjs"
+      - ".github/workflows/fuzz.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  JUST_VERSION: "1.58.0"
+  CARGO_FUZZ_VERSION: "0.13.2"
+
+jobs:
+  fuzz:
+    name: fuzz
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      FUZZ_SECONDS: ${{ github.event_name == 'pull_request' && '60' || '300' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain
+        run: rustup install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            .
+            fuzz
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+        with:
+          tool: just@${{ env.JUST_VERSION }}
+      - name: Install cargo-fuzz
+        run: cargo install --locked cargo-fuzz@${{ env.CARGO_FUZZ_VERSION }}
+      - run: just fuzz all "$FUZZ_SECONDS"
+      # libFuzzer prints only short inputs itself. Every input here is one this run made
+      # from invented seeds, so the log may hold it.
+      - name: Print the failing input
+        if: failure()
+        run: |
+          for input in fuzz/artifacts/*/*; do
+            [ -f "$input" ] || continue
+            echo "$input:"
+            base64 --wrap=0 "$input"
+            echo
+          done

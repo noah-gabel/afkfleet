@@ -2635,6 +2635,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "fleet-fuzz"
+version = "0.1.2"
+dependencies = [
+ "fleet-agent",
+ "fleet-api-types",
+ "fleet-core",
+ "fleet-proto",
+ "fleet-server",
+ "garde",
+ "proptest",
+ "prost",
+ "secrecy",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
 name = "fleet-integration"
 version = "0.1.2"
 dependencies = [

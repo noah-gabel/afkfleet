@@ -1,0 +1,91 @@
+# The cargo-fuzz crate (Plan.md P13.2, ADR-0030): one binary per target, each one line
+# around its body in crates/fleet-fuzz. It's a workspace of its own with its own
+# Cargo.lock, because cargo-fuzz builds with sanitizer and coverage flags that must
+# never reach the main build, and libfuzzer-sys must never be a dependency of anything
+# that ships. `just fuzz <target>` runs one; fleet-fuzz's tests keep this list equal
+# to its `TARGETS`.
+[package]
+name = "afkfleet-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+fleet-fuzz = { path = "../crates/fleet-fuzz" }
+libfuzzer-sys = "0.4.13"
+
+[[bin]]
+name = "value_objects"
+path = "fuzz_targets/value_objects.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "chat_sanitizer"
+path = "fuzz_targets/chat_sanitizer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "chat_formats"
+path = "fuzz_targets/chat_formats.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "chat_sender"
+path = "fuzz_targets/chat_sender.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "private_targets"
+path = "fuzz_targets/private_targets.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mode_definition"
+path = "fuzz_targets/mode_definition.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "agent_message"
+path = "fuzz_targets/agent_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "server_message"
+path = "fuzz_targets/server_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "vault_envelope"
+path = "fuzz_targets/vault_envelope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "agent_metrics"
+path = "fuzz_targets/agent_metrics.rs"
+test = false
+doc = false
+bench = false

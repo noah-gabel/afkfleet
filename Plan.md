@@ -146,7 +146,8 @@ afkfleet/
 │   ├── fleet-client/          # typed HTTP + WS client (used by the Tauri backend and integration tests)
 │   ├── fleet-startup/         # the binaries' start-up code: config loader and errors, [log], log layer, panic hook, stop signals, secret-file loader
 │   ├── fleet-testkit/         # fakes, fixtures, builders (dev-dependency only)
-│   └── fleet-integration/     # tests only: the real server with the real managed agent (P10.9, the DoD check, P11.7)
+│   ├── fleet-integration/     # tests only: the real server with the real managed agent (P10.9, the DoD check, P11.7)
+│   └── fleet-fuzz/            # the fuzz targets' bodies, run by fuzz/ (cargo-fuzz) and by its own tests (P13.2)
 ├── apps/
 │   └── desktop/               # Tauri app: src-tauri/ (Rust, workspace member) + thin TS entry and TauriApiClient
 ├── packages/
@@ -177,6 +178,7 @@ Crates are created in the phase that first needs them, not up front.
 | `apps/desktop/src-tauri` | `fleet-client`, `fleet-api-types` |
 | `fleet-testkit` | `fleet-core` (dev-dependency for everyone else) |
 | `fleet-integration` (tests only) | Nothing as a normal dependency; its tests: `fleet-agent`, `fleet-server`, `fleet-client`, `fleet-core`, `fleet-api-types`, `fleet-mc`, `fleet-runtime`, `fleet-startup` and `fleet-testkit`, as dev-dependencies. Nothing depends on it ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md), the user's choice, U19) |
+| `fleet-fuzz` (test tooling) | `fleet-core`, `fleet-proto`, `fleet-api-types`, `fleet-server` and `fleet-agent`: what its targets read. Only `fuzz/`, the cargo-fuzz crate outside the workspace, depends on it ([ADR-0030](docs/adr/0030-fuzz-targets.md)) |
 
 Binaries stay thin: `main.rs` parses the CLI and config and wires adapters together, and all logic lives in the crate's library part.
 
@@ -272,7 +274,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | In-memory gRPC transport | `hyper-util` | 0.1.21, dfo | Dev only: fleet-server's control-plane test hands tonic's client a tokio duplex pipe through `rt::TokioIo` (`tokio` only), so an agent's stream runs a virtual hour through the real router on paused time. The user's choice in Phase 10's group C (U6). Already in Cargo.lock through tonic, axum and reqwest ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)) |
 | Temporary files | `tempfile` | 3.27.0 | fleet-server's database tests: a fresh folder per test, removed on drop; fleet-integration's cases keep a server's database, PKI and agents' identities in one (ADR-0019, U21). Already in the lockfile through figment and insta (ADR-0015) |
 | `log` records in tests | `log` | 0.4.34 | fleet-server's one normal use: `log::LevelFilter`, which sqlx's statement-logging levels take; clippy bans its logging macros there, so all server logging stays on tracing (ADR-0015). Otherwise a dev-dependency. fleet-testkit: its log capture's test emits a `log` record to prove that reqwest's and rustls's logs reach the redaction check through `tracing-log` (ADR-0011). fleet-agent: its telemetry test proves that the log filter and azalea's caps see a `log` record's real target (ADR-0014) |
-| Fuzzing | `libfuzzer-sys`, `arbitrary` | 0.4.13, 1.4.2 | Driven by cargo-fuzz |
+| Fuzzing | `libfuzzer-sys` | 0.4.13 | Only in `fuzz/`, the cargo-fuzz crate, a workspace of its own with its own `Cargo.lock`: never a dependency of a workspace member. The targets take bytes, so `arbitrary` (1.5.0 in `fuzz/Cargo.lock`) comes in only as libfuzzer-sys's own dependency ([ADR-0030](docs/adr/0030-fuzz-targets.md)) |
 
 ### Frontend (same one-library-per-concern rule)
 | Concern | Package | Notes |
@@ -304,7 +306,8 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
   - `just` 1.58.0
   - cargo-nextest 0.9.146, cargo-llvm-cov 0.9.1, cargo-deny 0.20.2, cargo-insta 1.49.0
   - sqlx-cli **0.9.0** (P6), SQLite-only: `cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features sqlite`, the same in CI and `docs/development.md`
-  - Later: cargo-chef 0.1.78 (P5), cargo-mutants 27.1.0 and cargo-fuzz 0.13.2 (P13)
+  - cargo-fuzz 0.13.2 (P13.2), re-checked on 2026-11-11: still the newest, from 2026-06-09. `just fuzz` and the Fuzz workflow need it; `just check` doesn't
+  - Later: cargo-chef 0.1.78 (P5), cargo-mutants 27.1.0 (P13)
 - **Frontend tooling:** pnpm 12.9.1 (`packageManager`) and Biome 2.5.15 from P0.8; every other package is pinned in the phase that introduces it, exactly (no `^`), with `pnpm-lock.yaml` as the lock. From P8.6 `pnpm-workspace.yaml` sets `minimumReleaseAge: 4320`: pnpm resolves no release younger than 3 days and checks the whole lockfile at every install; exceptions only in `minimumReleaseAgeExclude`, with a comment and the user's approval. The Tauri CLI is `@tauri-apps/cli` 2.12.4, a dev-dependency of `apps/desktop` (approved in P8.2, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md); 2.12.4 for NSIS 3.13 and a clean uninstall, P12.5, [ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), U26).
 - **Runtime & hosting:**
   - Docker + Docker Compose
@@ -2271,7 +2274,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Rules asserted beyond the snapshot:** no cell is a 400, 422, 429 or 5xx; a public route answers everyone alike; nobody gets anything but 401 elsewhere; a Member without a grant gets 404 under a bot or an account; a higher grant may do what a lower one may; each step-up route asks in one row and not in another; an Admin's account is 404 for a Member and another Admin.
   > - **What it found:** nothing: every cell reads as fleet-core's matrix and the handlers' docs say.
   > - **Deviations:** the restart row and the three chat rows end at their 409 (`bot_not_running`, `bot_not_online`) for a caller who may act, since nothing in-process runs a bot; the 409 comes after `authorize()`. The table shows one config: offline accounts on, `/spawn` allowlisted. The second block isn't in P13.1's text.
-- [ ] **P13.2** Fuzz targets:
+- [x] **P13.2** Fuzz targets:
   - value-object parsers
   - the chat sanitizer
   - mode definition deserialization + validation
@@ -2285,6 +2288,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P13.2, from Phase 11, group H7) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S80, R138): two targets for the chat formats, which read untrusted server text: `ChatFormats::try_new` over any list of strings (no panic, an error that never holds the text), and `sender_of` over any valid formats and any received system line (no panic, and a `Some` is a valid `McUsername` read from the text's first characters).
 
   > Note (P13.2, from Phase 12, group B) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S9): a target for the agent's metrics responder: its request-head reader and router over arbitrary bytes.
+
+  > Note (P13.2, as built) ([ADR-0030](docs/adr/0030-fuzz-targets.md)): **the targets.**
+  > - **Two crates:** `crates/fleet-fuzz` holds each target's body, a plain function over bytes that panics when a property breaks, and its tests run all ten over their seeds and proptest's inputs, so `just check` holds the properties without a fuzzer. `fuzz/` is the cargo-fuzz crate, a workspace of its own with its own lockfile, one line a target.
+  > - **Ten targets:** `value_objects`, `chat_sanitizer`, `chat_formats`, `chat_sender`, `private_targets`, `mode_definition`, `agent_message`, `server_message`, `vault_envelope`, `agent_metrics`. Each note above has its target; ADR-0030's table says what each holds besides never panicking.
+  > - **Where they run:** `just fuzz [target] [seconds]`, natively on Windows too (with MSVC's AddressSanitizer runtime, which the script finds); the Fuzz workflow weekly and on pull requests that touch the targets.
+  > - **What they found:** no defect in the code under test in 36.5 million inputs. Two in the fuzzing itself, both fixed: a property of `chat_formats` that an entry spelling the error's own wording broke, and that on Windows a panicking target leaves no input behind, so each target now keeps its own.
+  > - **Deviations:** the proto conversions are two targets, one per direction, and the codec's check of a hello's bots runs inside `agent_message`. `arbitrary` isn't used: the targets cut their bytes themselves. `just deny` gains a third pass over `fuzz/Cargo.toml`, and `deny.toml` an exception for libfuzzer-sys's NCSA license.
 - [ ] **P13.3** cargo-mutants on `fleet-core` and auth/vault. Add tests until no relevant mutants survive.
 - [ ] **P13.4** Load test: 200+ fake bots on one agent and 20 WebSocket clients. Measure CPU, RAM and event latency, then fix the hot spots.
 

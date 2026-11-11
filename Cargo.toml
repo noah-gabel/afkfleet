@@ -4,7 +4,7 @@ resolver = "3"
 # Windows, so Linux CI excludes it and the justfile adds the flag (ADR-0017).
 members = ["crates/*", "apps/desktop/src-tauri"]
 # Spikes are throwaway experiments with their own Cargo.lock (Plan.md §4).
-exclude = ["spikes"]
+exclude = ["spikes", "fuzz"]
 
 [workspace.package]
 version = "0.1.2"
