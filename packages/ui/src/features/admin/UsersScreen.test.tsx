@@ -1,17 +1,19 @@
 import { screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { ApiClient } from "../../api/ApiClient";
+import { OLDER_SERVER } from "../../api/describeError";
 import type { MeResponse } from "../../generated/MeResponse";
 import type { UserPatchRequest } from "../../generated/UserPatchRequest";
 import type { UserResponse } from "../../generated/UserResponse";
 import type { UserRole } from "../../generated/UserRole";
 import { formatTime } from "../../lib/time";
 import { me } from "../../test/fixtures";
-import { fakeTime } from "../../test/renderApp";
-import { expectWait, limited } from "../../test/retryWait";
 import { atScreen } from "../../test/signedIn";
-import { cacheText, PASSWORD, refusal } from "../../test/signIn";
+import { refusal } from "../../test/signIn";
+
+/** The text's start, as a pattern. */
+const OLDER_SERVER_PATTERN = "This server is older than the app";
 
 const OWNER_ID = "01900000-0000-7000-8000-000000000001";
 
@@ -48,32 +50,15 @@ function actor(role: UserRole = "owner", username = "afkowner"): MeResponse {
 
 /**
  * The users screen over a stateful fake: `patchUser` applies the change and answers the
- * user, after a step-up when `stepUpFirst` (the server's stamp, held for the test).
+ * user. It has no `stepUp`: a call to it would fail the test.
  */
-async function atUsers(
-  options: {
-    me?: MeResponse;
-    stepUpFirst?: boolean;
-    handlers?: Partial<ApiClient>;
-    advanceTimers?: (ms: number) => unknown;
-  } = {},
-) {
+async function atUsers(options: { me?: MeResponse; handlers?: Partial<ApiClient> } = {}) {
   let users = [...ALL];
-  let stamped = options.stepUpFirst !== true;
   const app = await atScreen(
     "/admin/users",
     {
       users: async () => ({ items: users }),
-      stepUp: async ({ password }) => {
-        if (password !== PASSWORD) {
-          throw refusal(403, "forbidden");
-        }
-        stamped = true;
-      },
       patchUser: async (id: string, request: UserPatchRequest) => {
-        if (!stamped) {
-          throw refusal(403, "step_up_required");
-        }
         users = users.map((user) => (user.id === id ? { ...user, ...request } : user));
         const changed = users.find((user) => user.id === id);
         if (changed === undefined) {
@@ -83,10 +68,7 @@ async function atUsers(
       },
       ...options.handlers,
     },
-    {
-      user: options.me ?? actor(),
-      ...(options.advanceTimers === undefined ? {} : { advanceTimers: options.advanceTimers }),
-    },
+    { user: options.me ?? actor() },
   );
   await screen.findByRole("table", { name: "Users" });
   return app;
@@ -286,114 +268,34 @@ describe("the users screen", () => {
   });
 });
 
-describe("a change that needs a step-up", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("asks for the password at the row, then sends the change once more", async () => {
-    const app = await atUsers({ stepUpFirst: true });
+describe("a change, once signed in (ADR-0028)", () => {
+  it("never asks for the password, and sends the change once", async () => {
+    const app = await atUsers();
 
     await app.user.click(row("afkbot4").getByRole("button", { name: "Enable" }));
-    const prompt = await screen.findByLabelText("Current password");
-    await app.user.type(prompt, PASSWORD);
-    await app.user.click(screen.getByRole("button", { name: "Continue" }));
 
     expect(await screen.findByText("afkbot4 enabled.")).toBeDefined();
-    expect(app.fake.calls.find((call) => call.method === "stepUp")?.args).toEqual([
-      { password: PASSWORD },
-    ]);
-    expect(patches(app)).toEqual([
-      [GONE.id, { disabled: false }],
-      [GONE.id, { disabled: false }],
-    ]);
     expect(screen.queryByLabelText("Current password")).toBeNull();
+    expect(patches(app)).toEqual([[GONE.id, { disabled: false }]]);
+    expect(app.fake.calls.filter((call) => call.method === "stepUp")).toHaveLength(0);
   });
 
-  it("doesn't ask again while the server's step-up holds", async () => {
-    const app = await atUsers({ stepUpFirst: true });
-    await app.user.click(row("afkbot4").getByRole("button", { name: "Enable" }));
-    await app.user.type(await screen.findByLabelText("Current password"), PASSWORD);
-    await app.user.click(screen.getByRole("button", { name: "Continue" }));
-    await screen.findByText("afkbot4 enabled.");
-
-    await app.user.click(row("afkbot3").getByRole("button", { name: "Disable" }));
-    await app.user.click(
-      within(screen.getByRole("alert")).getByRole("button", { name: "Disable" }),
-    );
-
-    expect(await screen.findByText("afkbot3 disabled.")).toBeDefined();
-    expect(app.fake.calls.filter((call) => call.method === "stepUp")).toHaveLength(1);
-  });
-
-  it("stays on a wrong password, sending no change", async () => {
-    const app = await atUsers({ stepUpFirst: true });
-    await app.user.click(row("afkbot4").getByRole("button", { name: "Enable" }));
-
-    await app.user.type(await screen.findByLabelText("Current password"), "not the password");
-    await app.user.click(screen.getByRole("button", { name: "Continue" }));
-
-    expect(await screen.findByText("Wrong password.")).toBeDefined();
-    expect(patches(app)).toHaveLength(1);
-  });
-
-  it("shows a retry the server refuses again, and never asks twice for one change", async () => {
+  it("says the server is older when it still asks for the password, and asks for none", async () => {
     const app = await atUsers({
-      stepUpFirst: true,
       handlers: {
         patchUser: async () => {
           throw refusal(403, "step_up_required");
         },
       },
     });
+
     await app.user.click(row("afkbot4").getByRole("button", { name: "Enable" }));
-    await app.user.type(await screen.findByLabelText("Current password"), PASSWORD);
 
-    await app.user.click(screen.getByRole("button", { name: "Continue" }));
-
-    expect(await screen.findByText(/refused: step_up_required/)).toBeDefined();
-    expect(screen.queryByLabelText("Current password")).toBeNull();
-    expect(patches(app)).toHaveLength(2);
-  });
-
-  it("counts a refusal's wait down at the prompt with Continue disabled", async () => {
-    const time = fakeTime();
-    const app = await atUsers({
-      stepUpFirst: true,
-      advanceTimers: time.advanceTimers,
-      handlers: {
-        stepUp: async () => {
-          throw limited();
-        },
-      },
-    });
-    await app.user.click(row("afkbot4").getByRole("button", { name: "Enable" }));
-    await app.user.type(await screen.findByLabelText("Current password"), PASSWORD);
-
-    await app.user.click(screen.getByRole("button", { name: "Continue" }));
-
-    await expectWait(app, time, { button: "Continue", method: "stepUp" });
-  });
-
-  it("sends nothing more when the prompt is cancelled", async () => {
-    const app = await atUsers({ stepUpFirst: true });
-    await app.user.click(row("afkbot4").getByRole("button", { name: "Enable" }));
-    await screen.findByLabelText("Current password");
-
-    await app.user.click(screen.getByRole("button", { name: "Cancel" }));
-
+    expect((await screen.findByText(new RegExp(`^${OLDER_SERVER_PATTERN}`))).textContent).toBe(
+      `${OLDER_SERVER} (request 01900000-0000-7000-8000-000000000009)`,
+    );
     expect(screen.queryByLabelText("Current password")).toBeNull();
     expect(patches(app)).toHaveLength(1);
     expect(app.fake.calls.filter((call) => call.method === "stepUp")).toHaveLength(0);
-  });
-
-  it("keeps the step-up's password out of the cache", async () => {
-    const app = await atUsers({ stepUpFirst: true });
-    await app.user.click(row("afkbot4").getByRole("button", { name: "Enable" }));
-    await app.user.type(await screen.findByLabelText("Current password"), PASSWORD);
-    await app.user.click(screen.getByRole("button", { name: "Continue" }));
-    await screen.findByText("afkbot4 enabled.");
-
-    expect(cacheText(app)).not.toContain(PASSWORD);
   });
 });

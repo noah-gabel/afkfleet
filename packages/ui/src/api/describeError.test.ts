@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { CommandError } from "../generated/CommandError";
-import { describeError } from "./describeError";
+import { describeError, OLDER_SERVER } from "./describeError";
 
 /** A refusal from the server with `code`, cast as the generated type allows only known ones. */
 function refusal(code: string, extra: Record<string, unknown> = {}): CommandError {
@@ -25,6 +25,15 @@ describe("describeError", () => {
     expect(text).toBe(
       "Something only a newer server says. (request 01900000-0000-7000-8000-000000000009)",
     );
+  });
+
+  it("says the server is older when it asks for a step-up the app no longer does (ADR-0028)", () => {
+    const text = describeError(refusal("step_up_required"));
+
+    expect(text).toBe(
+      "This server is older than the app and still asks for your password here. Ask its owner to update it. (request 01900000-0000-7000-8000-000000000009)",
+    );
+    expect(text.startsWith(OLDER_SERVER)).toBe(true);
   });
 
   it("adds the wait to a rate limit or a busy server", () => {

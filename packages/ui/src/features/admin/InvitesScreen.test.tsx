@@ -10,7 +10,7 @@ import type { UserRole } from "../../generated/UserRole";
 import { formatTime, formatTimeWithZone } from "../../lib/time";
 import { deferred, me } from "../../test/fixtures";
 import { atScreen } from "../../test/signedIn";
-import { cacheText, PASSWORD, refusal } from "../../test/signIn";
+import { cacheText, refusal } from "../../test/signIn";
 import { CODE_COPIED, INVITATION_COPIED, INVITE_CAP } from "./components/InvitesScreen";
 import { invitationText } from "./invitation";
 
@@ -46,24 +46,13 @@ function actor(role: UserRole = "owner"): MeResponse {
   return { ...me(role, role === "owner" ? "afkowner" : "afkadmin"), id: OWNER.id };
 }
 
-/** The invites screen, the Owner signed in, `createInvite` after a step-up when `stepUpFirst`. */
-async function atInvites(
-  options: { me?: MeResponse; stepUpFirst?: boolean; handlers?: Partial<ApiClient> } = {},
-) {
-  let stamped = options.stepUpFirst !== true;
+/** The invites screen, the Owner signed in. It has no `stepUp`: a call to it would fail the test. */
+async function atInvites(options: { me?: MeResponse; handlers?: Partial<ApiClient> } = {}) {
   const app = await atScreen(
     "/admin/invites",
     {
       invites: async () => ({ items: [EXPIRED, USED, PENDING_ADMIN, PENDING_MEMBER] }),
-      stepUp: async () => {
-        stamped = true;
-      },
-      createInvite: async () => {
-        if (!stamped) {
-          throw refusal(403, "step_up_required");
-        }
-        return CREATED;
-      },
+      createInvite: async () => CREATED,
       revokeInvite: async () => {},
       ...options.handlers,
     },
@@ -206,19 +195,18 @@ describe("the invites screen", () => {
     expect(called(app, "createInvite")).toEqual([[{ role: "member" }]]);
   });
 
-  it("asks for the password first when the server wants a step-up, then shows the code once", async () => {
-    const app = await atInvites({ stepUpFirst: true });
+  it("never asks for the password (ADR-0028), and shows the code once", async () => {
+    const app = await atInvites();
     await create(app);
 
-    await app.user.type(await screen.findByLabelText("Current password"), PASSWORD);
-    await app.user.click(screen.getByRole("button", { name: "Continue" }));
-
     expect(await screen.findByText(CODE)).toBeDefined();
+    expect(screen.queryByLabelText("Current password")).toBeNull();
     expect(screen.getByText(/Shown only now/)).toBeDefined();
     expect(
       screen.getByText(`Works once, until ${formatTimeWithZone(CREATED.invite.expires_at)}.`),
     ).toBeDefined();
-    expect(called(app, "createInvite")).toHaveLength(2);
+    expect(called(app, "createInvite")).toHaveLength(1);
+    expect(called(app, "stepUp")).toHaveLength(0);
   });
 
   it("copies the invitation and the code, each with the clipboard note", async () => {
@@ -257,17 +245,13 @@ describe("the invites screen", () => {
     expect(screen.queryByText(CODE)).toBeNull();
   });
 
-  it("keeps the code and the step-up's password out of the cache", async () => {
-    const app = await atInvites({ stepUpFirst: true });
+  it("keeps the code out of the cache", async () => {
+    const app = await atInvites();
     await create(app);
-    await app.user.type(await screen.findByLabelText("Current password"), PASSWORD);
-    await app.user.click(screen.getByRole("button", { name: "Continue" }));
     await screen.findByText(CODE);
     await waitFor(() => expect(called(app, "invites").length).toBeGreaterThan(1));
 
-    const cached = cacheText(app);
-    expect(cached).not.toContain(CODE);
-    expect(cached).not.toContain(PASSWORD);
+    expect(cacheText(app)).not.toContain(CODE);
   });
 
   it("says why when 20 invites are pending", async () => {

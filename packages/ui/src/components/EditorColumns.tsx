@@ -1,6 +1,6 @@
 // An editor's two columns (Plan.md P11.11; ADR-0020, U120, U121, R232), as a bot's screen has them
-// (U105, U113): the thing's box on the left with Save and Cancel at its foot, then its notes, the
-// password prompt and what's set apart (a copy, Delete); its long sections on the right. Each column
+// (U105, U113): the thing's box on the left with Save and Cancel at its foot, then its notes and
+// what's set apart (a copy, Delete); its long sections on the right. Each column
 // scrolls inside itself, so Save stays in view while the sections scroll.
 //
 // Stacked, under 53rem of content, the parts follow the order they're in, which is the Tab order
@@ -8,8 +8,8 @@
 // and never lies over the last section once that's scrolled to, then the rest. Two columns place
 // the same parts by grid lines, so nothing moves in the document.
 //
-// The form wraps the box, the sections, the notes and the bar, but not the password prompt, which
-// is a form of its own: it's `display: contents`, so its parts are the grid's. Whatever Tab
+// The form wraps the box, the sections, the notes and the bar: it's `display: contents`, so its
+// parts are the grid's. Whatever Tab
 // scrolls to in the sections and the notes stops a bar's height above the column's foot, so the
 // bar never covers the focus (WCAG 2.4.11).
 import { cn } from "cn";
@@ -17,7 +17,7 @@ import type { FormEventHandler, ReactNode } from "react";
 
 /** What an editor shows, by where it goes. */
 export interface EditorParts {
-  /** The editor's form, around everything but the prompt; a read-only view has none. */
+  /** The editor's form, around everything but what's set apart; a read-only view has none. */
   readonly form?: { readonly id: string; readonly onSubmit: FormEventHandler<HTMLFormElement> };
   /** The thing's own box: its heading, its facts and its fields. */
   readonly box: ReactNode;
@@ -27,14 +27,12 @@ export interface EditorParts {
   readonly notes?: ReactNode;
   /** Save and Cancel; a read-only view has none, and no bar. */
   readonly actions?: ReactNode;
-  /** The password prompt, outside the form. */
-  readonly prompt?: ReactNode;
   /** What's set apart at the foot: a copy, Delete. */
   readonly apart?: ReactNode;
 }
 
 /** The parts of an editor in their two columns, or stacked. */
-export function EditorColumns({ form, box, sections, notes, actions, prompt, apart }: EditorParts) {
+export function EditorColumns({ form, box, sections, notes, actions, apart }: EditorParts) {
   const joined = actions !== undefined;
   const inForm = (
     <>
@@ -51,7 +49,7 @@ export function EditorColumns({ form, box, sections, notes, actions, prompt, apa
       </div>
       <div
         data-slot="editor-sections"
-        className="relative flex min-w-0 flex-col gap-3 [&_*]:scroll-mb-16 @min-[53rem]/content:col-start-2 @min-[53rem]/content:row-span-5 @min-[53rem]/content:row-start-1 @min-[53rem]/content:-m-1 @min-[53rem]/content:min-h-0 @min-[53rem]/content:overflow-y-auto @min-[53rem]/content:scroll-p-1 @min-[53rem]/content:p-1"
+        className="relative flex min-w-0 flex-col gap-3 [&_*]:scroll-mb-16 @min-[53rem]/content:col-start-2 @min-[53rem]/content:row-span-4 @min-[53rem]/content:row-start-1 @min-[53rem]/content:-m-1 @min-[53rem]/content:min-h-0 @min-[53rem]/content:overflow-y-auto @min-[53rem]/content:scroll-p-1 @min-[53rem]/content:p-1"
       >
         {sections}
       </div>
@@ -73,7 +71,7 @@ export function EditorColumns({ form, box, sections, notes, actions, prompt, apa
   );
   return (
     <main className="flex flex-1 flex-col p-4 @min-[53rem]/content:min-h-0">
-      <div className="grid gap-3 @min-[53rem]/content:min-h-0 @min-[53rem]/content:flex-[1_1_0] @min-[53rem]/content:grid-cols-[minmax(18rem,2fr)_3fr] @min-[53rem]/content:grid-rows-[auto_auto_auto_auto_minmax(0,1fr)] @min-[53rem]/content:gap-y-0">
+      <div className="grid gap-3 @min-[53rem]/content:min-h-0 @min-[53rem]/content:flex-[1_1_0] @min-[53rem]/content:grid-cols-[minmax(18rem,2fr)_3fr] @min-[53rem]/content:grid-rows-[auto_auto_auto_minmax(0,1fr)] @min-[53rem]/content:gap-y-0">
         {form === undefined ? (
           inForm
         ) : (
@@ -81,18 +79,10 @@ export function EditorColumns({ form, box, sections, notes, actions, prompt, apa
             {inForm}
           </form>
         )}
-        {prompt === undefined ? null : (
-          <div
-            data-slot="editor-prompt"
-            className="flex min-w-0 flex-col gap-2 empty:hidden @min-[53rem]/content:col-start-1 @min-[53rem]/content:row-start-4 @min-[53rem]/content:mb-3"
-          >
-            {prompt}
-          </div>
-        )}
         {apart === undefined ? null : (
           <div
             data-slot="editor-apart"
-            className="relative flex min-w-0 flex-col items-start gap-3 empty:hidden @min-[53rem]/content:col-start-1 @min-[53rem]/content:row-start-5 @min-[53rem]/content:-m-1 @min-[53rem]/content:min-h-0 @min-[53rem]/content:overflow-y-auto @min-[53rem]/content:p-1"
+            className="relative flex min-w-0 flex-col items-start gap-3 empty:hidden @min-[53rem]/content:col-start-1 @min-[53rem]/content:row-start-4 @min-[53rem]/content:-m-1 @min-[53rem]/content:min-h-0 @min-[53rem]/content:overflow-y-auto @min-[53rem]/content:p-1"
           >
             {apart}
           </div>

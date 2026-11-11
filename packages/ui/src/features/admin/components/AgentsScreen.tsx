@@ -3,8 +3,8 @@
 // bots it holds and its certificate. Each row offers only what the server would allow
 // (permissions.ts).
 // - Disabling is final and asks first; releasing a disabled agent's bots asks first too, since
-//   whoever releases vouches that its host and its bots are stopped (S49). Both need a step-up,
-//   which the row asks for when the server wants it (useStepUpAction).
+//   whoever releases vouches that its host and its bots are stopped (S49). Neither asks for
+//   the password: a session is enough (useWriteAction, ADR-0028).
 // - A token to add an agent comes only from the server's host (U76), so nothing here creates one.
 // - An enabled agent whose certificate ends within 14 days says so under its status, which takes the
 //   warning tone, as "Certificate until" drops in a small window (the user's choice, PR #92's
@@ -14,9 +14,8 @@
 //   (U91, U122), at widths that never show a column, hide it and show it again (R228). A name
 //   keeps 12 characters of width, or the expired hint's column takes it and a name as short as
 //   agent-main breaks.
-// Nothing here carries a secret but the step-up's password, which StepUpForm holds: the list is a
-// query and each change a mutation, and a success or a refusal only reads the list again, once
-// (S87, R177). A step-up isn't a refusal, so it reads nothing before the prompt.
+// Nothing here carries a secret: the list is a query and each change a mutation, and a success or
+// a refusal only reads the list again, once (S87, R177).
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Fragment, useState } from "react";
@@ -64,9 +63,8 @@ import {
   released,
   releaseQuestion,
 } from "../agentTexts";
-import { useStepUpAction } from "../hooks/useStepUpAction";
+import { useWriteAction } from "../hooks/useWriteAction";
 import { agentActions } from "../permissions";
-import { StepUpPrompt } from "./StepUpPrompt";
 
 /** One change a row offers. */
 type Change = "disable" | "release";
@@ -101,7 +99,7 @@ export function AgentsScreen() {
   const agents = useAgents();
   const now = useNow(() => 60_000);
   const refetch = () => void queryClient.invalidateQueries({ queryKey: AGENTS_KEY });
-  const writes = useStepUpAction({ onRefused: refetch });
+  const writes = useWriteAction({ onRefused: refetch });
   const disable = useMutation({
     mutationFn: (id: string) => api.disableAgent(id),
     onSuccess: refetch,
@@ -112,7 +110,7 @@ export function AgentsScreen() {
   });
   const [asking, setAsking] = useState<{ id: string; change: Change } | null>(null);
   const rows = agents.data?.pages.flatMap((page) => page.items) ?? [];
-  const busy = writes.running !== null || writes.prompt !== null;
+  const busy = writes.running !== null;
 
   function run(agent: AgentResponse, change: Change): void {
     setAsking(null);
@@ -248,9 +246,7 @@ export function AgentsScreen() {
                       </div>
                     </TableCell>
                   </TableRow>
-                  {pending === null &&
-                  writes.prompt !== agent.id &&
-                  failure === undefined ? null : (
+                  {pending === null && failure === undefined ? null : (
                     <TableSpanRow span={COLUMNS} className="pb-3">
                       <div className="flex flex-col gap-2">
                         {pending === null ? null : (
@@ -277,14 +273,6 @@ export function AgentsScreen() {
                             </AlertDescription>
                           </Alert>
                         )}
-                        {writes.prompt === agent.id ? (
-                          <StepUpPrompt
-                            id={`step-up-${agent.id}`}
-                            pending={writes.running !== null}
-                            onConfirm={writes.confirm}
-                            onCancel={writes.cancel}
-                          />
-                        ) : null}
                         {failure === undefined ? null : (
                           <p role="alert" className="text-sm text-destructive">
                             {failure}

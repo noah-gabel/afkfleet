@@ -1,6 +1,6 @@
 // The agents' screen (Plan.md P11.9; ADR-0019, ADR-0020, U76, U81, S49, R172, R177): every agent
-// with its status, bots and certificate; disabling through the step-up with a text saying it's
-// final; releasing a disabled agent's bots on the operator's word; `agent_not_disabled`; and no
+// with its status, bots and certificate; disabling with a text saying it's final, never asking
+// for the password (ADR-0028); releasing a disabled agent's bots on the operator's word; `agent_not_disabled`; and no
 // way to create an enrollment token.
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -12,7 +12,7 @@ import type { AuditPage } from "../../generated/AuditPage";
 import { formatTime } from "../../lib/time";
 import { deferred, me } from "../../test/fixtures";
 import { atScreen } from "../../test/signedIn";
-import { PASSWORD, refusal } from "../../test/signIn";
+import { refusal } from "../../test/signIn";
 
 const ADMIN = me("admin", "afkadmin");
 
@@ -263,23 +263,16 @@ describe("the agents' screen", () => {
   });
 
   describe("disabling", () => {
-    /** A stateful fake: the write answers after a step-up when `stepUpFirst`. */
-    async function disabling(stepUpFirst = false, bots = 0) {
+    /** A stateful fake, with no `stepUp`: a call to it would fail the test. */
+    async function disabling(bots = 0) {
       let current = agent(1, { bots });
-      let stamped = !stepUpFirst;
       const disableAgent = vi.fn(async () => {
-        if (!stamped) {
-          throw refusal(403, "step_up_required");
-        }
         current = { ...current, enabled: false, status: "disabled" };
         return current;
       });
       const app = await atAgents([], {
         agents: async () => ({ items: [current] }),
         disableAgent,
-        stepUp: async () => {
-          stamped = true;
-        },
       });
       return { app, disableAgent };
     }
@@ -300,7 +293,7 @@ describe("the agents' screen", () => {
     });
 
     it("says its bots stay with it, when it holds any", async () => {
-      const { app } = await disabling(false, 2);
+      const { app } = await disabling(2);
 
       await app.user.click((await row("agent-1")).getByRole("button", { name: "Disable" }));
 
@@ -311,16 +304,15 @@ describe("the agents' screen", () => {
       ).toBeDefined();
     });
 
-    it("asks for the password when the server wants it, sends once more, and reads again", async () => {
-      const { app, disableAgent } = await disabling(true);
+    it("disables once confirmed, never asking for the password (ADR-0028), and reads again", async () => {
+      const { app, disableAgent } = await disabling();
 
       await app.user.click((await row("agent-1")).getByRole("button", { name: "Disable" }));
       await app.user.click(screen.getByRole("button", { name: "Disable for good" }));
-      await app.user.type(await screen.findByLabelText("Current password"), PASSWORD);
-      await app.user.click(screen.getByRole("button", { name: "Continue" }));
 
       expect(await screen.findByText("agent-1 disabled.")).toBeDefined();
-      expect(disableAgent).toHaveBeenCalledTimes(2);
+      expect(screen.queryByLabelText("Current password")).toBeNull();
+      expect(disableAgent).toHaveBeenCalledTimes(1);
       await waitFor(async () => expect((await row("agent-1")).getByText("Disabled")).toBeDefined());
     });
 
@@ -341,24 +333,6 @@ describe("the agents' screen", () => {
       await waitFor(() => expect(agents.mock.calls.length).toBe(reads + 1));
       await waitFor(() => expect(app.runtime.queryClient.isFetching()).toBe(0));
       expect(agents.mock.calls.length).toBe(reads + 1);
-    });
-
-    it("reads nothing before the password prompt: a step-up isn't a refusal (R177)", async () => {
-      const agents = vi.fn(async () => ({ items: [agent(1)] }));
-      const app = await atAgents([], {
-        agents,
-        disableAgent: async () => {
-          throw refusal(403, "step_up_required");
-        },
-      });
-
-      await app.user.click((await row("agent-1")).getByRole("button", { name: "Disable" }));
-      const reads = agents.mock.calls.length;
-      await app.user.click(screen.getByRole("button", { name: "Disable for good" }));
-      await screen.findByLabelText("Current password");
-
-      expect(agents.mock.calls.length).toBe(reads);
-      expect(app.runtime.queryClient.getQueryState(AGENTS_KEY)?.isInvalidated).toBe(false);
     });
   });
 
@@ -388,18 +362,11 @@ describe("the agents' screen", () => {
       expect(screen.getByText(/^Release 1 bot held by agent-1\?/)).toBeDefined();
     });
 
-    it("releases after the password, says so and reads again", async () => {
+    it("releases once confirmed, never asking for the password, says so and reads again", async () => {
       let current = held(2);
-      let stamped = false;
       const app = await atAgents([], {
         agents: async () => ({ items: [current] }),
-        stepUp: async () => {
-          stamped = true;
-        },
         releaseAgent: async () => {
-          if (!stamped) {
-            throw refusal(403, "step_up_required");
-          }
           current = held(0);
           return current;
         },
@@ -408,10 +375,9 @@ describe("the agents' screen", () => {
       await app.user.click((await row("agent-1")).getByRole("button", { name: "Release bots" }));
       const question = screen.getByText(/^Release 2 bots/).closest("div") as HTMLElement;
       await app.user.click(within(question).getByRole("button", { name: "Release bots" }));
-      await app.user.type(await screen.findByLabelText("Current password"), PASSWORD);
-      await app.user.click(screen.getByRole("button", { name: "Continue" }));
 
       expect(await screen.findByText("agent-1's bots released.")).toBeDefined();
+      expect(screen.queryByLabelText("Current password")).toBeNull();
       await waitFor(async () =>
         expect((await row("agent-1")).queryByRole("button", { name: "Release bots" })).toBeNull(),
       );

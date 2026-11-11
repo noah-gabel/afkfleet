@@ -244,28 +244,18 @@ describe("the Accounts screen", () => {
   });
 
   describe("the waiting section", () => {
-    /** The screen of an Owner with Bob's two pending links, which step-up when asked. */
-    async function reviewer(handlers: Partial<ApiClient> = {}, stepUpFirst = false) {
-      let stamped = !stepUpFirst;
+    /** The screen of an Owner with Bob's two pending links; no `stepUp`, so a call fails. */
+    async function reviewer(handlers: Partial<ApiClient> = {}) {
       let waiting = [bobsPending(3), bobsPending(4)];
       const app = await accountsScreen(
         {
           accounts: async () => ({ items: waiting }),
           accountsAwaitingApproval: async () => ({ items: waiting }),
-          stepUp: async () => {
-            stamped = true;
-          },
           approveAccount: async (id) => {
-            if (!stamped) {
-              throw refusal(403, "step_up_required");
-            }
             waiting = waiting.filter((item) => item.id !== id);
             return account(3, { status: "active" });
           },
           refuseAccount: async (id) => {
-            if (!stamped) {
-              throw refusal(403, "step_up_required");
-            }
             waiting = waiting.filter((item) => item.id !== id);
           },
           ...handlers,
@@ -287,8 +277,8 @@ describe("the Accounts screen", () => {
       expect(card("AfkBot3").getByText("Waiting for approval")).toBeDefined();
     });
 
-    it("approves after asking, with Confirm it's you when the server wants it", async () => {
-      const app = await reviewer({}, true);
+    it("approves after asking, never for the password (ADR-0028)", async () => {
+      const app = await reviewer();
       const waiting = card("AfkBot3", "Waiting for your approval");
 
       await app.user.click(waiting.getByRole("button", { name: "Approve AfkBot3" }));
@@ -297,11 +287,10 @@ describe("the Accounts screen", () => {
       ).toBeDefined();
       expect(called(app, "approveAccount")).toBe(0);
       await app.user.click(waiting.getByRole("button", { name: "Approve" }));
-      await app.user.type(await screen.findByLabelText("Current password"), "placeholder password");
-      await app.user.click(screen.getByRole("button", { name: "Continue" }));
 
       expect(await screen.findByText(approved("AfkBot3"))).toBeDefined();
-      expect(called(app, "approveAccount")).toBe(2);
+      expect(screen.queryByLabelText("Current password")).toBeNull();
+      expect(called(app, "approveAccount")).toBe(1);
       await vi.waitFor(() => expect(screen.queryByRole("heading", { name: "AfkBot3" })).toBeNull());
     });
 

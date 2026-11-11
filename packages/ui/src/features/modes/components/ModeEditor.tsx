@@ -7,8 +7,8 @@
 // - **Save only when something changed:** while an existing mode's form is what was loaded, nothing
 //   is sent, so an untouched save can't move a version or restart a bot (S84).
 // - **A command off the allowlist:** on `mode_needs_step_up` the same request goes to the
-//   `/with-commands` twin through `useStepUpAction`; the form stays locked, so what's sent is what
-//   was shown (S16, R162).
+//   `/with-commands` twin within the same save, never asking for the password (ADR-0028); the
+//   form stays locked, so what's sent is what was shown (S16, R162).
 // - **The 409s:** `mode_changed` shows the server's text with "Load again", which reads the list
 //   again and fills the form from it: only a read that succeeded does, and a failed one keeps the
 //   notice and the edits and says why (U64). `mode_in_use_by_others` shows the server's text with
@@ -46,10 +46,8 @@ import type { ModeResponse } from "../../../generated/ModeResponse";
 import { useRetryWait } from "../../../hooks/useRetryWait";
 import { useAlive } from "../../../hooks/useStepGuard";
 import { fieldErrorsOf, showFieldErrors } from "../../../lib/formErrors";
-import { focusFirstField, inView } from "../../../lib/inView";
-import { isStepUpRequired } from "../../../lib/stepUp";
-import { StepUpPrompt } from "../../admin/components/StepUpPrompt";
-import { useStepUpAction } from "../../admin/hooks/useStepUpAction";
+import { inView } from "../../../lib/inView";
+import { useWriteAction } from "../../admin/hooks/useWriteAction";
 import { rememberMode, rereadModes } from "../cache";
 import {
   copyOfValues,
@@ -75,7 +73,6 @@ import {
   NOTHING_TO_SAVE,
   SAVE,
   SAVE_AS_COPY,
-  SAVE_STEP_UP,
   SAVED,
   STARTS_PRIVATE,
   savedCopy,
@@ -87,9 +84,6 @@ import {
 import { DeleteMode } from "./DeleteMode";
 import { ModeSummary } from "./ModeParts";
 import { StepSection } from "./StepSection";
-
-/** The one write's key. */
-const SAVE_KEY = "save";
 
 /** See the module comment. */
 const startClean: Resolver<ModeValues> = async (values) => ({ values, errors: {} });
@@ -138,7 +132,7 @@ export function ModeEditor({
   const [reloadFailed, setReloadFailed] = useState<string | null>(null);
   const [reloading, setReloading] = useState(false);
   const [goneToSave, setGoneToSave] = useState(false);
-  const writes = useStepUpAction();
+  const writes = useWriteAction();
   const form = useForm<ModeValues>({ resolver: startClean, defaultValues: initial });
   const paths = useRef<Readonly<Record<string, Path<ModeValues>>>>({});
   const shownSteps = useWatch({ control: form.control, name: [...SECTIONS] });
@@ -148,7 +142,7 @@ export function ModeEditor({
     onRespawn: shownSteps[2],
   });
 
-  /** What a refusal other than the step-up's shows: a wait, a field's text, or a line. */
+  /** What a refusal shows: a wait, a field's text, or a line. */
   function show(error: CommandError, creating: boolean): void {
     if (wait.start(error)) {
       return;
@@ -190,24 +184,19 @@ export function ModeEditor({
     }
   }
 
-  /** The twin, after the step-up it asks for (S16). */
-  function throughTwin(send: () => Promise<ModeResponse>, creating: boolean): void {
-    void writes.attempt({
-      key: SAVE_KEY,
-      run: async () => {
-        try {
-          answered(await send(), creating);
-        } catch (rejection) {
-          const error = toApiError(rejection).error;
-          if (isStepUpRequired(error)) {
-            throw rejection;
-          }
-          if (alive.current) {
-            show(error, creating);
-          }
-        }
-      },
-    });
+  /** `plain`, or `twin` when the server points there (S16). */
+  async function send(
+    plain: () => Promise<ModeResponse>,
+    twin: () => Promise<ModeResponse>,
+  ): Promise<ModeResponse> {
+    try {
+      return await plain();
+    } catch (rejection) {
+      if (toApiError(rejection).error.api?.code !== "mode_needs_step_up") {
+        throw rejection;
+      }
+      return await twin();
+    }
   }
 
   /** `plain`, then `twin` when the server points there. */
@@ -218,13 +207,10 @@ export function ModeEditor({
   ): Promise<void> {
     setSending(true);
     try {
-      answered(await plain(), creating);
+      answered(await send(plain, twin), creating);
     } catch (rejection) {
-      const error = toApiError(rejection).error;
-      if (error.api?.code === "mode_needs_step_up") {
-        throughTwin(twin, creating);
-      } else if (alive.current) {
-        show(error, creating);
+      if (alive.current) {
+        show(toApiError(rejection).error, creating);
       }
     } finally {
       if (alive.current) {
@@ -331,9 +317,9 @@ export function ModeEditor({
   }
 
   const gone = left || goneToSave;
-  // While a write runs or the password is asked, what's sent is what's on the screen; and while
-  // Load again reads, nothing starts that its answer would write over.
-  const locked = sending || reloading || writes.prompt !== null || writes.running !== null;
+  // While a write runs, what's sent is what's on the screen; and while Load again reads, nothing
+  // starts that its answer would write over.
+  const locked = sending || reloading || writes.running !== null;
   const view = { readOnly: false, locked, copying };
   const keepAsCopy = (
     <Button
@@ -455,33 +441,10 @@ export function ModeEditor({
             type="button"
             variant="outline"
             disabled={writes.running !== null}
-            onClick={() => {
-              writes.cancel();
-              void navigate({ to: "/modes", replace: true });
-            }}
+            onClick={() => void navigate({ to: "/modes", replace: true })}
           >
             {CANCEL}
           </Button>
-        </>
-      }
-      prompt={
-        <>
-          {writes.prompt === SAVE_KEY ? (
-            <div ref={focusFirstField}>
-              <StepUpPrompt
-                id="step-up-save"
-                text={SAVE_STEP_UP}
-                pending={writes.running !== null}
-                onConfirm={writes.confirm}
-                onCancel={writes.cancel}
-              />
-            </div>
-          ) : null}
-          {writes.failure?.key === SAVE_KEY ? (
-            <p ref={inView} role="alert" className="text-sm text-destructive">
-              {writes.failure.message}
-            </p>
-          ) : null}
         </>
       }
       apart={

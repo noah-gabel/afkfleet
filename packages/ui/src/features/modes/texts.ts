@@ -151,10 +151,6 @@ export const SAVE = "Save";
 export const DELETE = "Delete";
 export const CANCEL = "Cancel";
 
-/** What the password prompt says when a save holds a command off the allowlist (S16). */
-export const SAVE_STEP_UP =
-  "Enter your password to save a command off the allowlist. Counts for 5 minutes.";
-
 /** The toast after a create. */
 export function created(name: string): string {
   return `Created ${name}.`;

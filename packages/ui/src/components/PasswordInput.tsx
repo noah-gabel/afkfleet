@@ -1,5 +1,5 @@
 // A password field with a "show" toggle (Plan.md P8.7): the login and register forms, and
-// group E's step-up and password change. The toggle is a plain button (it never submits)
+// the profile's step-up and password change. The toggle is a plain button (it never submits)
 // whose `aria-pressed` says whether the password shows.
 import { EyeIcon, EyeOffIcon } from "lucide-react";
 import { type ComponentProps, useState } from "react";

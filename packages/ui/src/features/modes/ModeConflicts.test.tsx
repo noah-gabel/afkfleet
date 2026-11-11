@@ -12,7 +12,7 @@ import { deferred } from "../../test/fixtures";
 import { bot, botId, mode, modeId } from "../../test/live";
 import { atMode, calls, card, fill, saveButton, shownStep } from "../../test/modes";
 import type { RenderedApp } from "../../test/renderApp";
-import { PASSWORD, refusal } from "../../test/signIn";
+import { refusal } from "../../test/signIn";
 
 const CHANGED = "This mode changed since you opened it. Load it again to see the change.";
 const BY_OTHERS = "A bot you can't set this mode on uses it, so this change can't be saved.";
@@ -133,13 +133,13 @@ describe("409 mode_changed (U64, S18)", () => {
   });
 });
 
-describe("what's confirmed with the password is what's shown (PR #85's review)", () => {
+describe("what's sent is what's shown while a write runs (PR #85's review)", () => {
   const COMMAND = mode(1, {
     name: "Warp",
     steps: [shownStep({ type: "send_chat", message: "/warp home" })],
   });
 
-  /** A 409 notice up, then Save as copy waiting at "Confirm it's you". */
+  /** A 409 notice up, then Save as copy in flight at the twin. */
   async function asked() {
     const found = await atMode(COMMAND.id, {
       rows: [COMMAND],
@@ -147,16 +147,15 @@ describe("what's confirmed with the password is what's shown (PR #85's review)",
         updateModeWithCommands: async () => {
           throw refusal(409, "mode_changed", { message: CHANGED });
         },
+        createModeWithCommands: () => new Promise(() => {}),
       },
-      stamped: true,
     });
     await screen.findByRole("heading", { name: "Warp", level: 1 });
     await fill(found.app, nameField(), "Mine");
     await found.app.user.click(saveButton());
     await screen.findByText(CHANGED);
-    found.state.stamped = false;
     await found.app.user.click(screen.getByRole("button", { name: "Save as copy" }));
-    await screen.findByLabelText("Current password");
+    await vi.waitFor(() => expect(calls(found.app, "createModeWithCommands")).toHaveLength(1));
     return found;
   }
 
@@ -182,28 +181,24 @@ describe("what's confirmed with the password is what's shown (PR #85's review)",
     expect(button("Drag step 1").disabled).toBe(true);
   });
 
-  it("disables them while Delete's password is asked too", async () => {
-    const { app, state } = await atMode(COMMAND.id, {
+  it("disables them while Delete runs too", async () => {
+    const { app } = await atMode(COMMAND.id, {
       rows: [COMMAND],
-      stamped: true,
       handlers: {
         updateModeWithCommands: async () => {
           throw refusal(409, "mode_changed", { message: CHANGED });
         },
-        deleteMode: async () => {
-          throw refusal(403, "step_up_required");
-        },
+        deleteMode: () => new Promise(() => {}),
       },
     });
     await screen.findByRole("heading", { name: "Warp", level: 1 });
     await fill(app, nameField(), "Mine");
     await app.user.click(saveButton());
     await screen.findByText(CHANGED);
-    state.stamped = false;
 
     await app.user.click(screen.getByRole("button", { name: "Delete" }));
     await app.user.click(await screen.findByRole("button", { name: "Delete mode" }));
-    await screen.findByLabelText("Current password");
+    await vi.waitFor(() => expect(calls(app, "deleteMode")).toHaveLength(1));
 
     expect(button("Load again").disabled).toBe(true);
     expect(button("Save as copy").disabled).toBe(true);
@@ -212,7 +207,6 @@ describe("what's confirmed with the password is what's shown (PR #85's review)",
   it("offers nothing that would change the form while Load again's read runs", async () => {
     const { app, state } = await atMode(COMMAND.id, {
       rows: [COMMAND],
-      stamped: true,
       handlers: {
         updateModeWithCommands: async () => {
           throw refusal(409, "mode_changed", { message: CHANGED });
@@ -287,23 +281,21 @@ describe("the form while its row changes (S83)", () => {
     expect(screen.queryByRole("combobox", { name: "Who can see it" })).toBeNull();
   });
 
-  it("drops to the locked row when editable turns false, without the edits or the prompt", async () => {
+  it("drops to the locked row when editable turns false, without the edits, a save in flight or not", async () => {
     const { app } = await atMode(ROW.id, {
       rows: [ROW],
       handlers: {
         updateMode: async () => {
           throw refusal(403, "mode_needs_step_up");
         },
-        updateModeWithCommands: async () => {
-          throw refusal(403, "step_up_required");
-        },
+        updateModeWithCommands: () => new Promise(() => {}),
       },
     });
     await screen.findByRole("heading", { name: "Fishing", level: 1 });
     const message = within(card("atStart", 1)).getByLabelText("Message");
     await fill(app, message, "/login my-secret");
     await app.user.click(saveButton());
-    await screen.findByLabelText("Current password");
+    await vi.waitFor(() => expect(calls(app, "updateModeWithCommands")).toHaveLength(1));
 
     await listHolds(app, [
       {
@@ -482,11 +474,10 @@ describe("Delete (S16, S17)", () => {
   const deleted = "Deleted Fishing.";
   const ask = "Delete Fishing? Can't be undone.";
 
-  /** The App on a mode with `deleteMode` as `answer`, stepped up unless told otherwise. */
-  async function atDelete(deleteMode: (id: string) => Promise<void>, stamped = true) {
+  /** The App on a mode with `deleteMode` as `answer`. */
+  async function atDelete(deleteMode: (id: string) => Promise<void>) {
     const found = await atMode(ROW.id, {
       rows: [ROW],
-      stamped,
       handlers: { deleteMode },
     });
     await screen.findByRole("heading", { name: "Fishing", level: 1 });
@@ -495,23 +486,17 @@ describe("Delete (S16, S17)", () => {
     return found;
   }
 
-  it("asks first, goes through the step-up, then goes back to the list without it", async () => {
-    let stepped = false;
+  it("asks first, never for the password (ADR-0028), then goes back to the list without it", async () => {
     const { app, state } = await atDelete(async () => {
-      if (!stepped) {
-        stepped = true;
-        throw refusal(403, "step_up_required");
-      }
       state.rows = [];
-    }, false);
+    });
 
     await app.user.click(screen.getByRole("button", { name: "Delete mode" }));
-    await app.user.type(await screen.findByLabelText("Current password"), PASSWORD);
-    await app.user.click(screen.getByRole("button", { name: "Continue" }));
 
     expect(await screen.findByText(deleted)).toBeDefined();
+    expect(screen.queryByLabelText("Current password")).toBeNull();
     await vi.waitFor(() => expect(app.path()).toBe("/modes"));
-    expect(calls(app, "deleteMode")).toEqual([[ROW.id], [ROW.id]]);
+    expect(calls(app, "deleteMode")).toEqual([[ROW.id]]);
     await waitFor(() => expect(screen.queryByRole("link", { name: "Open Fishing" })).toBeNull());
   });
 
@@ -556,13 +541,11 @@ describe("Delete (S16, S17)", () => {
     expect(await screen.findByText(LEFT)).toBeDefined();
   });
 
-  it("locks the form while its password is asked", async () => {
-    const { app } = await atDelete(async () => {
-      throw refusal(403, "step_up_required");
-    }, false);
+  it("locks the form while it runs", async () => {
+    const { app } = await atDelete(() => new Promise(() => {}));
 
     await app.user.click(screen.getByRole("button", { name: "Delete mode" }));
-    await screen.findByLabelText("Current password");
+    await vi.waitFor(() => expect(calls(app, "deleteMode")).toHaveLength(1));
 
     expect(nameField().readOnly).toBe(true);
   });
@@ -574,7 +557,6 @@ describe("Delete (S16, S17)", () => {
     });
     const { app } = await atMode(locked.id, {
       rows: [locked],
-      stamped: true,
       handlers: { deleteMode: async () => {} },
     });
     await screen.findByRole("heading", { name: "Unknown", level: 1 });
@@ -605,7 +587,6 @@ describe("the bots at mode_in_use (U66, R169)", () => {
   async function refused(bots: ApiClient["bots"]) {
     const found = await atMode(ROW.id, {
       rows: [ROW],
-      stamped: true,
       handlers: {
         bots,
         deleteMode: async () => {

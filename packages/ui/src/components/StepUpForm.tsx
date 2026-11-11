@@ -1,6 +1,6 @@
-// "Confirm it's you" (Plan.md §7.2, P8.7, P8.8, ADR-0016): the password again, for a
-// step-up. The profile's flows start with it, and the admin screens show it inline when the
-// server answers `step_up_required`. The password lives only in this form, which empties its
+// "Confirm it's you" (Plan.md §7.2, P8.7, ADR-0016, ADR-0028): the password again, for a
+// step-up. Only the profile's two flows start with it: a new password and a new
+// authenticator. The password lives only in this form, which empties its
 // field after every answer, and goes to `onConfirm`, a direct call (never a query or a
 // mutation, CLAUDE.md). A wrong one is the server's 403 `forbidden`; it counts toward the
 // lockout like a wrong login. A 429's wait (the Login bucket, or a locked name) counts down,

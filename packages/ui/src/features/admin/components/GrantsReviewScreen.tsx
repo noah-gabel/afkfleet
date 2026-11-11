@@ -5,11 +5,10 @@
 // grants first when stacked: under the 833 px the column holds beside the wide sidebar with its
 // scrollbar, as this page scrolls in both forms, so the wide sidebar never stacks it again (PR #92's
 // review). Each table drops When, then Given by, in a small box (U122).
-// Every revoke goes through the accounts' own route, asks first, and takes a step-up when the server
-// wants one (useStepUpAction). The users' screen links here only for whom the Owner may review;
+// Every revoke goes through the accounts' own route and asks first, never for the password
+// (useWriteAction, ADR-0028). The users' screen links here only for whom the Owner may review;
 // anyone else who got here reads the server's refusal in place of each list.
-// Nothing here carries a secret but the step-up's password, which StepUpForm holds. Every answer
-// only reads the lists again (ADR-0020, S87).
+// Nothing here carries a secret. Every answer only reads the lists again (ADR-0020, S87).
 import { useQueryClient } from "@tanstack/react-query";
 import { Fragment, type ReactNode, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -48,8 +47,7 @@ import {
   revoked,
   revokeQuestion,
 } from "../../accounts/texts";
-import { useStepUpAction } from "../hooks/useStepUpAction";
-import { StepUpPrompt } from "./StepUpPrompt";
+import { useWriteAction } from "../hooks/useWriteAction";
 
 const HELD_HEADING = "Grants they hold";
 const HELD_NONE = "No grants held.";
@@ -81,11 +79,11 @@ function dormantOn(who: string): string {
 interface Revoking {
   /** Revokes `userId`'s grant on `account`, under `key`. */
   revoke(key: string, accountId: string, userId: string, who: string): void;
-  readonly writes: ReturnType<typeof useStepUpAction>;
+  readonly writes: ReturnType<typeof useWriteAction>;
   readonly busy: boolean;
 }
 
-/** What a grant's row shows below itself: its question, its prompt, its refusal. */
+/** What a grant's row shows below itself: its question, its refusal. */
 function RevokeExtras({
   revoking,
   rowKey,
@@ -105,7 +103,7 @@ function RevokeExtras({
 }) {
   const { writes, busy } = revoking;
   const failure = writes.failure?.key === rowKey ? writes.failure.message : undefined;
-  if (!asking && writes.prompt !== rowKey && failure === undefined) {
+  if (!asking && failure === undefined) {
     return null;
   }
   return (
@@ -125,14 +123,6 @@ function RevokeExtras({
               </div>
             </AlertDescription>
           </Alert>
-        ) : null}
-        {writes.prompt === rowKey ? (
-          <StepUpPrompt
-            id={`step-up-${rowKey}`}
-            pending={writes.running !== null}
-            onConfirm={writes.confirm}
-            onCancel={writes.cancel}
-          />
         ) : null}
         {failure === undefined ? null : (
           <p role="alert" className="text-sm text-destructive">
@@ -473,10 +463,10 @@ export function GrantsReviewScreen({ id }: { id: string }) {
     void queryClient.invalidateQueries({ queryKey: USERS_KEY });
     void queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY });
   };
-  const writes = useStepUpAction({ onRefused: refresh });
+  const writes = useWriteAction({ onRefused: refresh });
   const revoking: Revoking = {
     writes,
-    busy: writes.running !== null || writes.prompt !== null,
+    busy: writes.running !== null,
     revoke(key, accountId, userId, name) {
       void writes.attempt({
         key,

@@ -4,7 +4,7 @@
 // answered and shows only while both are unchanged, so any change drops it and a late answer
 // never shows against changed input. A refusal at `chat_formats[i]` shows at that format
 // (through the editor), one at `line` under the box, and anything else as its text there.
-// Try stays usable while "Confirm it's you" is up, since it changes nothing. It sits inside
+// Try stays usable while a save is in flight, since it changes nothing. It sits inside
 // the editor's form, so Enter in the line tries rather than saving. The answer, or a refusal's
 // text, scrolls into view as it comes: Try often sits at its column's foot, the answer below it
 // (ADR-0020, L4).

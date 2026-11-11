@@ -1,6 +1,7 @@
 // The Owner's grants review (Plan.md P11.9; ADR-0018, ADR-0020, U79, S50, R178): the grants a user
 // holds first, dormant ones marked, then their accounts a grant shares, each account's grants read
-// only when opened, every revoke through the existing route after the password; and the review
+// only when opened, every revoke through the existing route, never asking for the password
+// (ADR-0028); and the review
 // offered on the users' screen, on every row the Owner may review and after a role change.
 import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -16,7 +17,7 @@ import { account, accountId, BOB_ID, grant, ME_ID } from "../../test/accounts";
 import { auditId, listedUser } from "../../test/audit";
 import { deferred, me } from "../../test/fixtures";
 import { atScreen, signedIn } from "../../test/signedIn";
-import { PASSWORD, refusal } from "../../test/signIn";
+import { refusal } from "../../test/signIn";
 import { NOBODY_ELSE } from "../accounts/texts";
 
 const OWNER = { ...me("owner", "afkowner"), id: ME_ID };
@@ -251,29 +252,22 @@ describe("the grants review", () => {
   });
 
   describe("revoking", () => {
-    /** A stateful fake: Bob's one held grant, gone after a revoke that took the step-up. */
+    /** A stateful fake: Bob's one held grant, gone after a revoke. No `stepUp`: a call fails. */
     function revocable() {
       let grants = [held(1)];
-      let stamped = false;
       const revokeGrant = vi.fn(async () => {
-        if (!stamped) {
-          throw refusal(403, "step_up_required");
-        }
         grants = [];
       });
       return {
         revokeGrant,
         handlers: {
           userGrants: async () => ({ items: grants }),
-          stepUp: async () => {
-            stamped = true;
-          },
           revokeGrant,
         } satisfies Partial<ApiClient>,
       };
     }
 
-    it("asks first, then the password, through the existing route, and reads again", async () => {
+    it("asks first, never for the password, through the existing route, and reads again", async () => {
       const { revokeGrant, handlers } = revocable();
       const app = await atReview(handlers);
       const heldGrants = await section("Grants they hold");
@@ -283,10 +277,10 @@ describe("the grants review", () => {
       );
       expect(heldGrants.getByText("Revoke bob's access to AfkBot1?")).toBeDefined();
       await app.user.click(heldGrants.getByRole("button", { name: "Revoke" }));
-      await app.user.type(await screen.findByLabelText("Current password"), PASSWORD);
-      await app.user.click(screen.getByRole("button", { name: "Continue" }));
 
       expect(await screen.findByText("bob no longer has access.")).toBeDefined();
+      expect(screen.queryByLabelText("Current password")).toBeNull();
+      expect(revokeGrant).toHaveBeenCalledTimes(1);
       expect(revokeGrant).toHaveBeenLastCalledWith(accountId(1), REVIEWED);
       expect(await heldGrants.findByText("No grants held.")).toBeDefined();
     });

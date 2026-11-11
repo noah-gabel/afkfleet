@@ -2,12 +2,12 @@
 // in its state, newest first, a page at a time, and a new one.
 // - "New invite", at the top right as Accounts' add buttons are, opens a box above the table with
 //   the roles the actor may invite (permissions.ts): the Owner a Member or an Admin, an Admin a
-//   Member. Creating needs a step-up, asked for when the server wants it (useStepUpAction).
+//   Member. Creating asks for no password: a session is enough (useWriteAction, ADR-0028).
 // - The code is shown once, in that box. `createInvite` is a direct call, never a mutation, since
 //   its answer carries the code (CLAUDE.md); the code lives only in this screen's state, with
 //   "Copy invitation" (the server, the code, its end and the CA's fingerprints) and "Copy code",
 //   until "Done" closes the box or the user leaves.
-// - Revoking a pending invite the actor may revoke asks first, then needs the step-up too.
+// - Revoking a pending invite the actor may revoke asks first.
 // - In a small window the table drops Created, then Created by, then Used by (U122, R228).
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { PlusIcon } from "lucide-react";
@@ -39,10 +39,9 @@ import { copyWithToast } from "../../../lib/clipboard";
 import { displayOrigin } from "../../../lib/origin";
 import { formatTime, formatTimeWithZone } from "../../../lib/time";
 import { roleLabel } from "../../shell/nav";
-import { useStepUpAction } from "../hooks/useStepUpAction";
+import { useWriteAction } from "../hooks/useWriteAction";
 import { invitationText } from "../invitation";
 import { canRevoke, inviteRoles } from "../permissions";
-import { StepUpPrompt } from "./StepUpPrompt";
 
 /** At most 20 pending invites per creator: the server's 409. */
 export const INVITE_CAP = "20 invites pending. Revoke one, or wait for one to be used or expire.";
@@ -97,7 +96,7 @@ export function InvitesScreen() {
   const { data: actor } = useMe();
   const invites = useInvites();
   const refetch = () => void queryClient.invalidateQueries({ queryKey: INVITES_KEY });
-  const writes = useStepUpAction({ describe: describeRefusal, onRefused: refetch });
+  const writes = useWriteAction({ describe: describeRefusal, onRefused: refetch });
   const revoke = useMutation({
     mutationFn: (id: string) => api.revokeInvite(id),
     onSettled: refetch,
@@ -108,7 +107,7 @@ export function InvitesScreen() {
   const roles = actor === undefined ? [] : inviteRoles(actor.role);
   const [role, setRole] = useState<"member" | "admin">("member");
   const rows = invites.data?.pages.flatMap((page) => page.items) ?? [];
-  const busy = writes.running !== null || writes.prompt !== null;
+  const busy = writes.running !== null;
 
   function create(): void {
     setCreated(null);
@@ -124,7 +123,6 @@ export function InvitesScreen() {
   }
 
   function close(): void {
-    writes.cancel();
     writes.forget(CREATE);
     setCreated(null);
     setOpen(false);
@@ -206,14 +204,6 @@ export function InvitesScreen() {
           ) : (
             <CreatedInvite created={created} onDone={close} />
           )}
-          {writes.prompt === CREATE ? (
-            <StepUpPrompt
-              id="step-up-create"
-              pending={writes.running !== null}
-              onConfirm={writes.confirm}
-              onCancel={writes.cancel}
-            />
-          ) : null}
           {writes.failure?.key === CREATE ? (
             <p role="alert" className="text-sm text-destructive">
               {writes.failure.message}
@@ -250,8 +240,7 @@ export function InvitesScreen() {
               const revocable = actor !== undefined && canRevoke(actor.role, invite);
               const failure =
                 writes.failure?.key === invite.id ? writes.failure.message : undefined;
-              const extra =
-                asking === invite.id || writes.prompt === invite.id || failure !== undefined;
+              const extra = asking === invite.id || failure !== undefined;
               const state = stateLine(invite.state);
               return (
                 <Fragment key={invite.id}>
@@ -310,14 +299,6 @@ export function InvitesScreen() {
                               </div>
                             </AlertDescription>
                           </Alert>
-                        ) : null}
-                        {writes.prompt === invite.id ? (
-                          <StepUpPrompt
-                            id={`step-up-${invite.id}`}
-                            pending={writes.running !== null}
-                            onConfirm={writes.confirm}
-                            onCancel={writes.cancel}
-                          />
                         ) : null}
                         {failure === undefined ? null : (
                           <p role="alert" className="text-sm text-destructive">

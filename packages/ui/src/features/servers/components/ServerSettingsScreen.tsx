@@ -2,7 +2,8 @@
 // its conflict texts, a textarea each (`useFieldArray`), filled from its row in the list,
 // each text's lines joined by line breaks, and its chat formats, an input each, as written,
 // with "Try a line" (R148). Every request is built from the form, never by
-// echoing an answer, at the `version` read. Each write goes through `useStepUpAction`: a new
+// echoing an answer, at the `version` read. Each write goes through `useWriteAction`, never
+// asking for the password (ADR-0028): a new
 // server's Save opens its own screen, an edit's stays with what the server saved (U61), and
 // Delete asks first, then goes back to the list. A 409 `server_settings_changed` shows the
 // server's text with "Load again", which reads the row again: only a read that succeeded
@@ -37,10 +38,8 @@ import type { ServerSettingsResponse } from "../../../generated/ServerSettingsRe
 import { useRetryWait } from "../../../hooks/useRetryWait";
 import { useAlive } from "../../../hooks/useStepGuard";
 import { showFieldErrors } from "../../../lib/formErrors";
-import { focusFirstField, inView } from "../../../lib/inView";
-import { isStepUpRequired } from "../../../lib/stepUp";
-import { StepUpPrompt } from "../../admin/components/StepUpPrompt";
-import { useStepUpAction } from "../../admin/hooks/useStepUpAction";
+import { inView } from "../../../lib/inView";
+import { useWriteAction } from "../../admin/hooks/useWriteAction";
 import { serverSettingsAccess } from "../../admin/permissions";
 import {
   ADD_FORMAT,
@@ -199,7 +198,7 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
   const [stale, setStale] = useState<string | null>(null);
   const [reloadFailed, setReloadFailed] = useState<string | null>(null);
   const [gone, setGone] = useState(false);
-  const writes = useStepUpAction();
+  const writes = useWriteAction();
   const form = useForm<SettingsValues>({
     resolver: zodResolver(settingsForm),
     defaultValues: valuesOf(row),
@@ -210,7 +209,7 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
   const reread = () =>
     void queryClient.invalidateQueries({ queryKey: SERVER_SETTINGS_KEY, exact: true });
 
-  /** What a refusal other than the step-up's shows: a wait, a field's text, or a line. */
+  /** What a refusal shows: a wait, a field's text, or a line. */
   function show(error: CommandError): void {
     if (wait.start(error)) {
       return;
@@ -264,12 +263,8 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
                   chat_formats: chatFormats,
                 });
         } catch (rejection) {
-          const error = toApiError(rejection).error;
-          if (isStepUpRequired(error)) {
-            throw rejection;
-          }
           if (alive.current) {
-            show(error);
+            show(toApiError(rejection).error);
           }
           return;
         }
@@ -327,9 +322,9 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
   if (gone) {
     return <Gone />;
   }
-  // While a write runs or the password is asked, what's sent is what's on the screen: the
-  // fields and the buttons are locked.
-  const locked = writes.prompt !== null || writes.running !== null;
+  // While a write runs, what's sent is what's on the screen: the fields and the buttons are
+  // locked.
+  const locked = writes.running !== null;
   const readOnly = locked || !configure;
   const errors = form.formState.errors;
   const full = texts.fields.length >= CONFLICT_TEXTS_MAX;
@@ -546,32 +541,10 @@ function Editor({ row, configure }: { row?: ServerSettingsResponse; configure: b
             type="button"
             variant="outline"
             disabled={writes.running !== null}
-            onClick={() => {
-              writes.cancel();
-              void navigate({ to: "/admin/servers", replace: true });
-            }}
+            onClick={() => void navigate({ to: "/admin/servers", replace: true })}
           >
             {CANCEL}
           </Button>
-        </>
-      }
-      prompt={
-        <>
-          {writes.prompt === SAVE_KEY ? (
-            <div ref={focusFirstField}>
-              <StepUpPrompt
-                id="step-up-save"
-                pending={writes.running !== null}
-                onConfirm={writes.confirm}
-                onCancel={writes.cancel}
-              />
-            </div>
-          ) : null}
-          {writes.failure?.key === SAVE_KEY ? (
-            <p ref={inView} role="alert" className="text-sm text-destructive">
-              {writes.failure.message}
-            </p>
-          ) : null}
         </>
       }
       apart={
@@ -600,7 +573,7 @@ function DeleteAction({
   onGone,
 }: {
   row: ServerSettingsResponse;
-  writes: ReturnType<typeof useStepUpAction>;
+  writes: ReturnType<typeof useWriteAction>;
   onGone: () => void;
 }) {
   const api = useApiClient();
@@ -609,7 +582,7 @@ function DeleteAction({
   const alive = useAlive();
   const [asking, setAsking] = useState(false);
   const [failure, setFailure] = useState<string>();
-  const busy = writes.prompt !== null || writes.running !== null;
+  const busy = writes.running !== null;
 
   function remove() {
     setAsking(false);
@@ -621,9 +594,6 @@ function DeleteAction({
           await api.deleteServerSettings(row.id);
         } catch (rejection) {
           const error = toApiError(rejection).error;
-          if (isStepUpRequired(error)) {
-            throw rejection;
-          }
           if (!alive.current) {
             return;
           }
@@ -671,19 +641,6 @@ function DeleteAction({
             </div>
           </AlertDescription>
         </Alert>
-      ) : null}
-      {writes.prompt === DELETE_KEY ? (
-        <StepUpPrompt
-          id="step-up-delete"
-          pending={writes.running !== null}
-          onConfirm={writes.confirm}
-          onCancel={writes.cancel}
-        />
-      ) : null}
-      {writes.failure?.key === DELETE_KEY ? (
-        <p role="alert" className="text-sm text-destructive">
-          {writes.failure.message}
-        </p>
       ) : null}
       {failure === undefined ? null : (
         <p role="alert" className="text-sm text-destructive">
