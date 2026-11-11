@@ -12,6 +12,8 @@
 //! - [`review`]: approving and refusing a pending link (P9.6).
 //! - [`delete`]: deleting an account (P9.6).
 //! - [`grants`]: sharing an account (P9.6).
+//! - [`authz_matrix`]: every route asked by every cast (P13.1), here because
+//!   this binary already runs serve's own app over the fakes.
 //! - [`manual`]: the user's hands-on check against Microsoft, which only the
 //!   user runs (`just test-ms-account`).
 //!
@@ -22,6 +24,7 @@
 #![cfg(test)]
 
 mod at_rest;
+mod authz_matrix;
 mod delete;
 mod grant_candidates;
 mod grants;
