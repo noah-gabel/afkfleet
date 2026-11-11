@@ -1222,6 +1222,23 @@ mod tests {
         );
     }
 
+    /// Another agent's record strays a listed bot only when it's a record
+    /// of that bot: bot 9 has no row and no record, and agent 2's record of
+    /// bot 3 says nothing about it.
+    #[test]
+    fn a_listed_bot_without_a_row_isnt_strayed_by_another_agents_record_of_another_bot() {
+        let releases = [ReleaseFacts {
+            bot: bot(3),
+            agent: agent(2),
+            identity: ms(3),
+        }];
+
+        let plan = plan_of(&[], &releases, &[welcomed(1, 5, &[(9, false)])]);
+
+        assert_eq!(part(&plan, 1).release, [left(9, None, false)]);
+        assert_eq!(plan.stray, []);
+    }
+
     #[test]
     fn a_welcome_closes_its_records_of_bots_it_doesnt_list() {
         let releases = [ReleaseFacts {
