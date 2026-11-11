@@ -110,14 +110,16 @@ cov-desktop:
 cov-desktop:
     @echo "The desktop crate is measured on Windows only: CI runs just cov-desktop in its tauri-build job (ADR-0017)."
 
-# Two passes with the same deny.toml (ADR-0017): the workspace without the desktop
+# Three passes with the same deny.toml (ADR-0017): the workspace without the desktop
 # crate on every target in deny.toml, then the desktop crate alone on Windows, the only
 # platform it ships for. Its Linux GTK3 stack is never built or shipped. A new desktop
-# target joins the second pass.
+# target joins the second pass. The third is fuzz/, the cargo-fuzz crate with its own
+# lockfile (ADR-0030): its graph holds no dev-dependency, so some ignores match nothing.
 # cargo-deny: advisories, licenses, bans and sources.
 deny:
     cargo deny --exclude {{ desktop }} check
     cargo deny --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc check -A advisory-not-detected
+    cargo deny --manifest-path fuzz/Cargo.toml check -A advisory-not-detected
 
 # Format Rust and frontend code.
 fmt:
@@ -610,6 +612,15 @@ testkit-check:
 # Fail if the desktop app's hardening changed.
 tauri-check:
     node scripts/tauri-hardening.mjs
+
+# The targets are fuzz/fuzz_targets/, their bodies crates/fleet-fuzz, whose tests hold
+# every target's properties in `check` without a fuzzer (ADR-0030). The seeds are written
+# first, only ever adding `seed-<n>` files to fuzz/corpus/; scripts/fuzz.mjs then runs
+# cargo-fuzz, on Windows with MSVC's AddressSanitizer runtime on the target's PATH.
+# Fuzz one target, or all of them, each for some seconds: `just fuzz chat_sender 300` (needs cargo-fuzz 0.13.2).
+fuzz target="all" seconds="60":
+    cargo run -p fleet-fuzz --example seeds -- fuzz/corpus
+    node scripts/fuzz.mjs {{ target }} {{ seconds }}
 
 # Tests for the scripts in scripts/.
 scripts-test:

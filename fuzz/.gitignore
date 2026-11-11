@@ -1,0 +1,6 @@
+# cargo-fuzz's output: what a run found and kept. The seeds are built by
+# `cargo run -p fleet-fuzz --example seeds`, never committed.
+target/
+corpus/
+artifacts/
+coverage/
