@@ -135,12 +135,19 @@ describe("mutantsArgs", () => {
       "mutants",
       "--in-place",
       "--shard",
-      "2/4",
+      "1/4",
       "-o",
       "C:\\path\\to\\out",
       "-p",
       "fleet-core",
     ]);
+  });
+
+  // cargo-mutants counts its shards from 0 and refuses `4/4`: "shard k must be less than n".
+  it("names the shards from 0, as cargo-mutants counts them", () => {
+    const shardOf = (shard) => mutantsArgs([], shard, 4, "out")[3];
+
+    assert.deepEqual([1, 2, 3, 4].map(shardOf), ["0/4", "1/4", "2/4", "3/4"]);
   });
 });
 

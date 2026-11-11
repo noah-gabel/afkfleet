@@ -106,9 +106,12 @@ export function selection(scope, gates) {
   return [...packages.flatMap((name) => ["-p", name]), ...files.flatMap((file) => ["-f", file])];
 }
 
-/** cargo's arguments for shard `shard` of `shards`, its report going into `out`. */
+/**
+ * cargo's arguments for shard `shard` of `shards`, counted from 1, its report going into
+ * `out`. cargo-mutants counts its shards from 0.
+ */
 export function mutantsArgs(picked, shard, shards, out) {
-  return ["mutants", "--in-place", "--shard", `${shard}/${shards}`, "-o", out, ...picked];
+  return ["mutants", "--in-place", "--shard", `${shard - 1}/${shards}`, "-o", out, ...picked];
 }
 
 /** A shard's worktree, from the repository's root. */
