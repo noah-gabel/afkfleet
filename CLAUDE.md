@@ -158,7 +158,7 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 - **Overload is an explicit error.** When a queue is full or a rate limit is hit, return `QueueFull`, `RateLimited` or `429`. Never wait forever.
 
 ## Security rules (non-negotiable)
-1. **Every HTTP route** is registered with `public_route` (allowlist), `authed_route`, `step_up_route` (an authed route that needs the password entered again within 5 minutes; its handler takes `SteppedUpUser`) or `setup_route` (TOTP enrollment with a setup token; its handler takes `SetupToken`). A route that needs a fresh step-up registers with `step_up_route`, never `authed_route`. Authed handlers call `authorize()`. If the actor can't View a resource, answer **404**.
+1. **Every HTTP route** is registered with `public_route` (allowlist), `authed_route`, `step_up_route` (an authed route that needs the password entered again within 5 minutes; its handler takes `SteppedUpUser`) or `setup_route` (TOTP enrollment with a setup token; its handler takes `SetupToken`). Exactly two routes step up, the ones that replace a login credential: `POST /me/password` and `POST /me/mfa/reset`; they register with `step_up_route`, never `authed_route`. Every other route that needs a session is an `authed_route`: once logged in, nothing else asks for the password again (the user's decision, ADR-0028), and a new step-up route needs the user's word. Authed handlers call `authorize()`. If the actor can't View a resource, answer **404**.
 2. **Validate at the boundary.**
    - DTOs: garde + `#[serde(deny_unknown_fields)]`.
    - Domain values: `fleet-core` constructors.

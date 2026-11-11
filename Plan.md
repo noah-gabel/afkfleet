@@ -403,15 +403,11 @@ The full analysis lives in `docs/threat-model.md`.
   - Admins and above create invites; each is single-use and expires (default 72 h).
   - An invite carries a fixed role: Member, or Admin if the Owner created it.
 - **Bootstrap.** `afkfleet-server user create-owner` (CLI, hidden password prompt). It refuses if an Owner already exists.
-- **Step-up.** These actions require re-entering the password within the last 5 min:
+- **Step-up.** These actions require re-entering the password within the last 5 min, and since v0.1.2 nothing else does ([ADR-0028](docs/adr/0028-a-session-is-enough.md)):
   - changing the password
   - replacing 2FA (`POST /me/mfa/reset`, group D: the new authenticator replaces the old one at confirm)
-  - deleting an MC account
-  - changing a role
-  - disabling or enabling a user, creating or revoking an invite (Phase 8, group E)
-  - approving or refusing a pending link, and creating, changing or revoking a grant (Phase 9, group E)
-  - setting a bot's server address (Phase 10, group E)
-  - rotating keys
+
+> Note (§7.2, Phase 13, P13.9, the user's decision) ([ADR-0028](docs/adr/0028-a-session-is-enough.md)): **a session is enough.** Once logged in with password and 2FA, the app never asks for the password again. The list above lost every entry but the two that replace a login credential: deleting an MC account, changing a role, disabling or enabling a user, creating or revoking an invite, approving or refusing a pending link, creating, changing or revoking a grant, and setting a bot's server address are plain authed routes, as are the later additions the notes below record (a command off the allowlist, the modes' `/with-commands` twins, deleting a mode, the servers' settings, disabling an agent, releasing its bots, leaving a shared account). Roles and grants are unchanged. The two that stay can lock a person out for good, so they keep asking (decided in the ADR, on the reviewer's recommendation). The notes below this one say how each step-up came; they're history now, except for the mechanism itself. Rotating keys never had a route (Phase 9, group A).
 
 > Note (§7.2, Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the bots' writes,** decided per action (S47; decided by the review agent, approved by the user at the plan review). `PATCH /bots/{id} {server_address}` registers with `step_up_route`: the address sends the account, its mode's actions and later its chat to a server the person at the PC picks, and it outlasts the session. The mode switch (`PUT /bots/{id}/mode`) and the five lifecycle calls are plain authed routes: Control-level, nothing lost or widened, undone by the next call. A start or a resume may kick a human playing the account once, who pauses the bot again by logging in, so a step-up on one of them alone would protect nobody. The threat model records the unlocked PC's bots as an accepted risk.
 
@@ -2250,6 +2246,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 > | Group | Branch | Tasks |
 > |---|---|---|
 > | A | `p13/p13.6-cert-renewal` | P13.6 and the update download's scheme, released as v0.1.2: an agent's certificate ends 60 days after its enrollment, so this goes first |
+> | A2 | `p13/p13.9-no-step-up` | P13.9, the user's change to the order on 2026-11-11: right after A and before P13.1, and in v0.1.2 too, which wasn't tagged yet ([ADR-0028](docs/adr/0028-a-session-is-enough.md)) |
 > | B | `p13/p13.1-authz-matrix` | P13.1 |
 > | C | `p13/p13.2-fuzz` | P13.2 |
 > | D | `p13/p13.3-mutants` | P13.3, after B, whose tests kill their share of the mutants first |
@@ -2264,6 +2261,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P13.1, from Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the bot routes** join the matrix: every lifecycle call, `PATCH` (step-up first), and the mode switch with a mode on the allowlist and one off it. The per-bot limit is spent only after `authorize()`, so a stranger's answer stays 404; the cast needs a fresh limit per row, or rows after the fifth read 429.
 
   > Note (P13.1, from Phase 12, group B) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S9): the metrics router joins the matrix: `GET /metrics` on its own port for every cast, and on the API's port as 404.
+
+  > Note (P13.1, from P13.9) ([ADR-0028](docs/adr/0028-a-session-is-enough.md)): only `POST /me/password` and `POST /me/mfa/reset` are step-up routes now, so the two notes above that have the cast step up first hold for those two alone: every other row of the matrix runs on a session that never stepped up, and `PATCH /bots/{id}` needs none.
 - [ ] **P13.2** Fuzz targets:
   - value-object parsers
   - the chat sanitizer
@@ -2322,6 +2321,15 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P13.6, from Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): `RenewCertificate` sits behind `Connect`'s gate and identity check, spends the same per-certificate bucket and answers `CERTIFICATE_REFUSED` alike (S24, S30). A stream ends at its certificate's `not_after`, so an agent renews before it; an expired certificate means enrolling again. The renewed certificate carries the same SAN and is found by its fingerprint, and revoking the old one shows a stale process as `revoked` refusals, under the same daily cap. Both certificates share the agent's one slot: to switch to the renewed one, the old stream ends first (S26).
 
   > Note (P13.6, from Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): the agent loads its identity once and never re-reads it, so a renewal swaps it under a running agent (a new endpoint and kept certificate), and adds the near-expiry warning S68 left out.
+- [x] **P13.9** 🔴 **No password step-up but for the two credential changes** (the user's decision, 2026-11-11; group A2, in v0.1.2). Once logged in with password and 2FA, the app never asks for the password again: every `step_up_route` becomes an `authed_route`, and the app's password dialogs go. Roles and per-bot grants stay as they are.
+
+  > Note (P13.9, as built) ([ADR-0028](docs/adr/0028-a-session-is-enough.md)): **what changed.**
+  > - **The server:** twenty of the 22 step-up routes are authed routes, their handlers taking `AuthUser`. `POST /me/password` and `POST /me/mfa/reset` keep the step-up, and the mechanism (`POST /auth/step-up`, the 5-minute stamp, `SteppedUpUser`, `x-step-up`, `auth.step_up`) is untouched for them: both replace a login credential, so a hijacked session could lock its owner out for good and outlive its own end.
+  > - **The twin routes** (`/command`, the modes' `/with-commands`) stay, without their step-up, and the plain routes still point there; the two codes keep their names, with messages that no longer speak of a password. Merging the twins is proposed, not done.
+  > - **The clients:** fleet-client's and the bridge's docs and full-stack tests, the dev console (it never asks again after its login) and the integration harness.
+  > - **The app:** no inline "Confirm it's you" but in the profile's two flows; `useStepUpAction` is `useWriteAction`; a command or a mode off the allowlist goes on to its twin within the same send or save; whatever asked a question first still does. A server older than the app reads "This server is older than the app and still asks for your password here. Ask its owner to update it.".
+  > - **The records:** the threat model's rows and its accepted risk "A live session does everything its user may, without the password", CLAUDE.md's security rule 1, and notes on ADR-0016 to ADR-0020.
+  > - **Deviations:** two routes keep asking, as the decision allowed. An Owner's or Admin's stolen session can now invite and register an account of the attacker's own; the ADR names it as the edge to revisit at P13.7 and P13.8.
 - [ ] **P13.7** Reviews:
   - threat model
   - dependencies (`cargo deny`, `cargo tree -d`, `pnpm audit`)
@@ -2573,23 +2581,23 @@ All routes are prefixed with `/api/v1`. The required level is checked through `a
 | `GET /me` · `POST /me/password` | user (step-up) | Profile, password change |
 | `POST /me/mfa/enroll` · `/confirm` · `/reset` | setup token (enroll, confirm); user + step-up (reset) | 2FA: enroll answers a new secret, confirm stores it with 10 recovery codes; reset answers a setup token whose confirm replaces the authenticator and revokes the user's other sessions (group D) |
 | `GET /me/sessions` · `DELETE /me/sessions/{id}` | user | Session management |
-| `GET /users` · `PATCH /users/{id}` | Admin+ (`PATCH`: step-up) | Role, disable |
+| `GET /users` · `PATCH /users/{id}` | Admin+ | Role, disable |
 | `GET /users/{id}/grants` · `GET /users/{id}/shared-accounts` | Owner | The grants review at a role change: the grants the user holds (dormant ones marked), and their accounts a grant shares (P11.9) |
-| `POST /invites` · `GET /invites` · `DELETE /invites/{id}` | Admin+ (`POST`, `DELETE`: step-up) | Invites |
+| `POST /invites` · `GET /invites` · `DELETE /invites/{id}` | Admin+ | Invites |
 | `POST /accounts/link` · `GET /accounts/link/{flow}` | Member+ | Microsoft device-code flow |
-| `GET /accounts` · `GET /accounts/awaiting-approval` · `GET/DELETE /accounts/{id}` | View / Manage (`DELETE`: step-up) | MC accounts; the pending links the caller may review |
-| `POST /accounts/{id}/approve` · `/refuse` | above the owner (step-up) | Review a pending link |
+| `GET /accounts` · `GET /accounts/awaiting-approval` · `GET/DELETE /accounts/{id}` | View / Manage | MC accounts; the pending links the caller may review |
+| `POST /accounts/{id}/approve` · `/refuse` | above the owner | Review a pending link |
 | `POST /accounts/{id}/relink` | Manage | Link the account again (a link flow) |
-| `GET/POST /accounts/{id}/grants` · `PUT/DELETE /accounts/{id}/grants/{user}` | Manage (writes: step-up) | Sharing |
-| `DELETE /accounts/{id}/grants/me` | a grantee without implicit Manage (step-up) | Leave a shared account (P11.9) |
+| `GET/POST /accounts/{id}/grants` · `PUT/DELETE /accounts/{id}/grants/{user}` | Manage | Sharing |
+| `DELETE /accounts/{id}/grants/me` | a grantee without implicit Manage | Leave a shared account (P11.9) |
 | `GET /accounts/{id}/grant-candidates?q=` | Manage | "Share with"'s suggestions: at most 8 enabled users' names that start with `q` and could be given a grant (P11.11, ADR-0020, U110, S127) |
-| `GET /bots` · `GET/PATCH /bots/{id}` · `PUT /bots/{id}/mode` | View / Manage (`PATCH`: step-up) / Control | Bots and their state; the server address; the mode |
+| `GET /bots` · `GET/PATCH /bots/{id}` · `PUT /bots/{id}/mode` | View / Manage / Control | Bots and their state; the server address; the mode |
 | `POST /bots/{id}/start\|stop\|restart\|reset\|resume` | Control | Lifecycle |
-| `POST /bots/{id}/chat` · `POST /bots/{id}/command` · `GET /bots/{id}/chat` | Control (`/command`: step-up; a command off the allowlist: Manage) / View | Chat |
-| `GET/POST /modes` · `PUT/DELETE /modes/{id}` | Member+ (own) / Admin+ (shared) (`POST`, `PUT` with a command off the allowlist: their `/with-commands` step-up twins; `DELETE`: step-up) | Modes |
-| `GET/POST /server-settings` · `PUT/DELETE /server-settings/{id}` | Admin+ (writes: step-up) | Each Minecraft server's settings: its conflict texts and chat formats (P11.9) |
+| `POST /bots/{id}/chat` · `POST /bots/{id}/command` · `GET /bots/{id}/chat` | Control (a command off the allowlist: Manage, and only through `/command`) / View | Chat |
+| `GET/POST /modes` · `PUT/DELETE /modes/{id}` | Member+ (own) / Admin+ (shared) (`POST`, `PUT` with a command off the allowlist: their `/with-commands` twins) | Modes |
+| `GET/POST /server-settings` · `PUT/DELETE /server-settings/{id}` | Admin+ | Each Minecraft server's settings: its conflict texts and chat formats (P11.9) |
 | `POST /server-settings/chat-format-preview` | Admin+ | Which sender unsaved chat formats read from a line; nothing stored (P11.9) |
-| `GET /agents` · `POST /agents/{id}/disable` · `POST /agents/{id}/release` | Admin+ (`disable`, `release`: step-up) | Agents; a disabled agent's bots released (P11.9). *Enrollment tokens have no route since Phase 11's group J ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U76).* |
+| `GET /agents` · `POST /agents/{id}/disable` · `POST /agents/{id}/release` | Admin+ | Agents; a disabled agent's bots released (P11.9). *Enrollment tokens have no route since Phase 11's group J ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U76).* |
 | `GET /audit` | Admin+ | Audit log (cursor-paginated), optionally narrowed to one target by `target_kind` and `target_id` (P11.9) |
 | `POST /events/ticket` · `GET /events?ticket=` | user | WebSocket live events |
 | `GET /health/live` · `GET /health/ready` | public (no prefix) | Health |
@@ -2601,6 +2609,8 @@ All routes are prefixed with `/api/v1`. The required level is checked through `a
 > - `DELETE /invites/{id}`: an Admin invite is the Owner's.
 > - `PATCH /bots/{id}`: the server needs Manage; the mode (`PUT /bots/{id}/mode` since Phase 10, group E) Control, and a mode with a command off the allowlist Manage.
 > - The `user` routes check `Personal`.
+
+> Note (Appendix B, Phase 13, P13.9, the user's decision) ([ADR-0028](docs/adr/0028-a-session-is-enough.md)): **the table's "(step-up)" marks** are down to two, `POST /me/password` and `POST /me/mfa/reset`. The twenty other routes that carried one are plain authed routes; the notes below describe them as built, and wherever one says "step-up" for another route, this note replaces it. `command_needs_step_up` and `mode_needs_step_up` keep their names and still point to `/command` and the `/with-commands` twins, which take the request without a step-up.
 
 > Note (Appendix B, Phase 7, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`POST /auth/step-up`** (user) joins the table in group D. It takes `{password}` and stamps the session's `stepped_up_at`; the "(step-up)" routes need that stamp to be at most 5 min old, otherwise they answer 403 `step_up_required`.
 
