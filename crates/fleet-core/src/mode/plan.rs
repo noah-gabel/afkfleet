@@ -373,6 +373,30 @@ mod tests {
         StdRng::seed_from_u64(seed)
     }
 
+    /// A maximum no validated mode has is never sampled: `random_range`
+    /// would panic on it.
+    #[rstest]
+    #[case::infinite(f32::INFINITY)]
+    #[case::not_a_number(f32::NAN)]
+    #[case::negative(-1.0)]
+    fn an_angle_whose_maximum_isnt_a_positive_number_is_zero(#[case] max: f32) {
+        assert_eq!(symmetric(max, &mut rng(1)).to_bits(), 0.0_f32.to_bits());
+    }
+
+    /// A maximum of 0 draws nothing, so the choices after it are the ones
+    /// the same seed makes without it.
+    #[test]
+    fn an_angle_with_a_maximum_of_zero_is_zero_and_draws_nothing() {
+        use rand::Rng as _;
+        let mut drawn_from = rng(7);
+        let mut untouched = rng(7);
+
+        let angle = symmetric(0.0, &mut drawn_from);
+
+        assert_eq!(angle.to_bits(), 0.0_f32.to_bits());
+        assert_eq!(drawn_from.random::<u64>(), untouched.random::<u64>());
+    }
+
     const fn game(action: GameAction) -> PlannedAction {
         PlannedAction::Game(action)
     }

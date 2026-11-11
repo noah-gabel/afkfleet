@@ -4,3 +4,45 @@
 # nothing a test could see.
 test_tool = "nextest"
 profile = "mutants"
+
+# Mutants that change no result: each is left out by its name, with why. A name is
+# `path:line:column: what changes[ in function]`, so most are matched without their
+# position and stay matched when lines move. Two can't be told from their neighbours
+# without it and are pinned to a line and column: when that line moves, the mutant shows
+# up as missed again, and its entry moves with it.
+exclude_re = [
+    # --- fleet-core -------------------------------------------------------------------
+    # audit/metadata.rs, SLOT_BYTES: the longest value is an ID in quotes, 38 bytes. The
+    # most negative integer (17) and a time in quotes (29) are shorter either way, so
+    # an integer without its sign and a time two bytes shorter leave the maximum at 38.
+    'fleet-core/src/audit/metadata\.rs:\d+:\d+: delete -$',
+    'fleet-core/src/audit/metadata\.rs:77:46: replace \+ with -$',
+    # audit/metadata.rs, max: for equal lengths either one is the larger.
+    'fleet-core/src/audit/metadata\.rs:\d+:\d+: replace > with >= in max$',
+    # backup.rs, to_prune: `others` never holds `written` (it's filtered out first), so
+    # "older than it" and "not newer than it" name the same backups.
+    'fleet-core/src/backup\.rs:\d+:\d+: replace < with <= in BackupPolicy::to_prune$',
+    # backup.rs, parse: the check of the stamp's shape is a shortcut. Whatever passes it
+    # is parsed with `get`, never by index, and the result's own file name is compared
+    # with the input at the end, which refuses everything the shape check does.
+    'fleet-core/src/backup\.rs:\d+:\d+: replace \|\| with && in BackupName::parse$',
+    # chat/format.rs, close_literal: when a literal closes after `{any}`, that step's
+    # text is always still empty (a second placeholder right after it is refused before),
+    # so the guard is always true there; and a literal step of no text matches
+    # everywhere, as leaving it out does.
+    'fleet-core/src/chat/format\.rs:\d+:\d+: replace match guard until\.is_empty\(\) with true in Scan::close_literal$',
+    'fleet-core/src/chat/format\.rs:\d+:\d+: replace match guard literal\.is_empty\(\) with false in Scan::close_literal$',
+    # chat/format.rs, sender_in: a name one character too long is refused by the count,
+    # and without it by the separator, which never starts with a name character.
+    'fleet-core/src/chat/format\.rs:\d+:\d+: replace \+ with \* in Format::sender_in$',
+    # pki.rs, a pair of hex digits as `(high << 4) | low`: the two share no bit, so `^`
+    # gives the same byte.
+    'fleet-core/src/pki\.rs:\d+:\d+: replace \| with \^ in <impl TryFrom<&str> for CertFingerprint>::try_from$',
+    # placement.rs, welcome's sort key: the bots an agent lists and the ones it doesn't
+    # are counted against two rooms of their own, so which group comes first changes no
+    # outcome; inside each group the order stays.
+    "fleet-core/src/placement\\.rs:592:34: delete ! in Planner<'a>::welcome$",
+    # resilience/retry.rs, nth_delay: the fallback is unreachable, since backon's
+    # schedule never ends without a maximum number of attempts.
+    'fleet-core/src/resilience/retry\.rs:\d+:\d+: replace / with \* in RetryPolicy::nth_delay$',
+]

@@ -1095,6 +1095,11 @@ mod tests {
             DetachReason::ALL.map(DetachReason::as_str),
             ["removed", "not_running", "agent_released"]
         );
+        assert_eq!(UndeliveredWhy::NoRoom.as_str(), "no_room");
+        assert_eq!(
+            UndeliveredWhy::Unqualified(Unplaced::Stopped).as_str(),
+            "stopped"
+        );
         assert_eq!(UnassignReason::Capacity.as_str(), "capacity");
         assert_eq!(
             UnassignReason::Unqualified(Unplaced::Pending).as_str(),
@@ -1228,6 +1233,48 @@ mod tests {
         let plan = plan_of(&[], &releases, &[welcomed(1, 5, &[])]);
 
         assert_eq!(plan.detach, [detach(7, 1)]);
+    }
+
+    /// Only its own records of bots it doesn't list: never the record of a
+    /// bot it lists, and never another agent's.
+    #[test]
+    fn a_welcome_closes_no_record_of_a_bot_it_lists_and_none_of_another_agents() {
+        let record = |n, a| ReleaseFacts {
+            bot: bot(n),
+            agent: agent(a),
+            identity: ms(n),
+        };
+        let releases = [record(7, 1), record(8, 1), record(9, 2)];
+
+        let plan = plan_of(&[], &releases, &[welcomed(1, 5, &[(8, false)])]);
+
+        assert_eq!(plan.detach, [detach(7, 1)]);
+    }
+
+    /// A listed bot whose row names another agent is let go, and its fence
+    /// is persisted already when the agent has its own record of it: no
+    /// stray, though the bot is known.
+    #[test]
+    fn a_listed_bot_of_another_agents_row_with_its_own_record_isnt_strayed() {
+        let releases = [ReleaseFacts {
+            bot: bot(1),
+            agent: agent(1),
+            identity: ms(1),
+        }];
+
+        let plan = plan_of(&[on(1, 2)], &releases, &[welcomed(1, 5, &[(1, false)])]);
+
+        assert_eq!(part(&plan, 1).release, [left(1, None, false)]);
+        assert_eq!(plan.stray, []);
+    }
+
+    /// An untouchable bot keeps a slot on the agent it names, and on no
+    /// other.
+    #[test]
+    fn another_agents_untouchable_bot_takes_no_slot_here() {
+        let plan = plan_with(&[waiting(2)], &[frozen(1, Some(2))], &[welcomed(1, 1, &[])]);
+
+        assert_eq!(part(&plan, 1).run, [place(2)]);
     }
 
     #[test]

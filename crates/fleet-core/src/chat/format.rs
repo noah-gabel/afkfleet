@@ -500,6 +500,12 @@ mod tests {
     use rstest::rstest;
     use std::collections::BTreeSet;
 
+    #[test]
+    fn only_a_list_without_formats_is_empty() {
+        assert!(ChatFormats::try_new::<&str>(&[]).unwrap().is_empty());
+        assert!(!ChatFormats::try_new(&["{sender}: "]).unwrap().is_empty());
+    }
+
     /// The user's example (S80): a clan tag that differs per player, and
     /// players without one.
     const USERS: [&str; 2] = ["[{any}] {sender} : ", "{sender} : "];

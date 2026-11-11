@@ -413,6 +413,16 @@ mod tests {
     use proptest::prelude::*;
     use rstest::rstest;
 
+    #[test]
+    fn only_a_list_without_texts_is_empty() {
+        assert!(ConflictTexts::try_new::<&str>(&[]).unwrap().is_empty());
+        assert!(
+            !ConflictTexts::try_new(&["You logged in from another location"])
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     const BANNED: DisconnectClass = DisconnectClass::Permanent {
         kind: PermanentKind::Banned,
     };

@@ -168,6 +168,11 @@ mod tests {
     use proptest::prelude::*;
     use rstest::rstest;
 
+    #[test]
+    fn a_name_is_written_as_it_reads() {
+        assert_eq!(ModeName::try_from("Farm 2").unwrap().to_string(), "Farm 2");
+    }
+
     fn name(text: &str) -> ModeName {
         ModeName::try_from(text).unwrap()
     }
