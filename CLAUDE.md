@@ -168,6 +168,7 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
    - an audit entry, if it changes state
    - tests for 401, 403/404, 422 and 429
    - a place in the route-coverage test
+   - a row in the authorization matrix (fleet-server's `tests/accounts/authz_matrix`, ADR-0029), once more for every case that's answered differently; read its snapshot's new cells before accepting them
 4. **Secrets**
    - Keep them in `SecretString` / `SecretBox` and load them from files.
    - They never appear in logs, errors, panics, URLs, or `Debug` output. The only exception in URLs is the single-use WebSocket ticket.
@@ -244,7 +245,7 @@ The frontend's rules (structure, data and state, safety, quality, and every plac
 - [ ] The tests were written first; they cover the happy path and every error path, and all pass.
 - [ ] `just check` is green, with no new warnings and no unexplained `#[expect]`.
 - [ ] Non-test code has no `unwrap`/`expect`/`panic`/indexing, and no secrets appear in logs or `Debug`.
-- [ ] New endpoints are authorized, rate-limited, audited (if they change state), validated, snapshot-tested and in the route-coverage test.
+- [ ] New endpoints are authorized, rate-limited, audited (if they change state), validated, snapshot-tested, in the route-coverage test and in the authorization matrix.
 - [ ] Public items are documented (`missing_docs` and `cargo doc` are clean).
 - [ ] Generated artifacts are refreshed if their inputs changed (`just gen`, `just db-prepare`).
 - [ ] New or changed snapshots were read before accepting, and are listed in the PR description.

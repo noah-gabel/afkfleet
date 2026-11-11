@@ -2254,7 +2254,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 > | F | `p13/p13.5-chaos` | P13.5, and the user's question whether `serve` should refuse a missing database file in production instead of creating an empty one (an unmounted data volume would otherwise start an empty fleet), without breaking a first install |
 > | G | `p13/p13.7-reviews` | P13.7, P13.8 and the phase's DoD |
 
-- [ ] **P13.1** 🔴 **Authorization matrix test:** every endpoint × {anonymous, Member without grant, View, Control, Manage, Admin, Owner} → the expected status. The table is generated and snapshotted.
+- [x] **P13.1** 🔴 **Authorization matrix test:** every endpoint × {anonymous, Member without grant, View, Control, Manage, Admin, Owner} → the expected status. The table is generated and snapshotted.
 
   > Note (P13.1, from Phase 9, group E) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): the cast steps up first, or every step-up route reads 403 `step_up_required`. The account routes need a pending account (review, grants, re-link) and a grantee with implicit Manage (the grant routes' 422 and 409).
 
@@ -2263,6 +2263,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P13.1, from Phase 12, group B) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S9): the metrics router joins the matrix: `GET /metrics` on its own port for every cast, and on the API's port as 404.
 
   > Note (P13.1, from P13.9) ([ADR-0028](docs/adr/0028-a-session-is-enough.md)): only `POST /me/password` and `POST /me/mfa/reset` are step-up routes now, so the two notes above that have the cast step up first hold for those two alone: every other row of the matrix runs on a session that never stepped up, and `PATCH /bots/{id}` needs none.
+
+  > Note (P13.1, as built) ([ADR-0029](docs/adr/0029-the-authorization-matrix.md)): **the matrix.**
+  > - **Where:** `authz_matrix` in fleet-server's `accounts` test binary, on serve's own app. Its table is the snapshot `accounts__authz_matrix__authorization_matrix.snap`: 88 rows over the 68 registered routes, and a test that fails for a route without a row.
+  > - **Every cell has a world of its own:** a fresh database and app, the same people and things, one request. So each cell's limits start full, and no cell meets another's writes.
+  > - **A second block** asks the 25 rows under a bot or an account again about an Admin's account, as a Member, another Admin and the Owner: the seven casts can't show whose account it is.
+  > - **Rules asserted beyond the snapshot:** no cell is a 400, 422, 429 or 5xx; a public route answers everyone alike; nobody gets anything but 401 elsewhere; a Member without a grant gets 404 under a bot or an account; a higher grant may do what a lower one may; each step-up route asks in one row and not in another; an Admin's account is 404 for a Member and another Admin.
+  > - **What it found:** nothing: every cell reads as fleet-core's matrix and the handlers' docs say.
+  > - **Deviations:** the restart row and the three chat rows end at their 409 (`bot_not_running`, `bot_not_online`) for a caller who may act, since nothing in-process runs a bot; the 409 comes after `authorize()`. The table shows one config: offline accounts on, `/spawn` allowlisted. The second block isn't in P13.1's text.
 - [ ] **P13.2** Fuzz targets:
   - value-object parsers
   - the chat sanitizer

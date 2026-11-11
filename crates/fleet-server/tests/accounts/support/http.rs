@@ -47,6 +47,7 @@ use fleet_server::metrics::{Metrics, MetricsRender};
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord};
 use fleet_server::ports::grants::AccountGrant;
+use fleet_server::ports::passwords::Passwords;
 use fleet_server::ports::store::Store as _;
 use fleet_server::ports::users::{NewUser, PasswordHash};
 use fleet_testkit::system::{ManualClock, SeededRandom};
@@ -130,7 +131,7 @@ fn control_plane() -> GrpcConfig {
 
 /// The server's config with `limits` and `accounts`, and `grpc`; the
 /// database's path and the vault's key file are never read here.
-fn config(
+pub(crate) fn config(
     limits: &RateLimitConfig,
     accounts: AccountsConfig,
     grpc: Option<GrpcConfig>,
@@ -202,6 +203,30 @@ impl Server {
         ports: ServerPorts,
         ca: Option<CertificateAuthority>,
     ) -> Self {
+        let passwords = Argon2Passwords::new(Argon2Params::default(), Arc::clone(&ports.random))
+            .await
+            .unwrap();
+        let grpc = ca.as_ref().map(|_| control_plane());
+        Self::start_from(
+            options,
+            &config(limits, accounts, grpc),
+            key,
+            (ports, Arc::new(passwords)),
+            ca,
+        )
+        .await
+    }
+
+    /// [`Server::start_with`] over `config` as it is, logging in through
+    /// `passwords`: a harness that starts many servers shares one, whose
+    /// start hashes once (the authorization matrix, P13.1).
+    pub(crate) async fn start_from(
+        options: SqliteConnectOptions,
+        config: &ServerConfig,
+        key: &SecretBox<[u8; 32]>,
+        (ports, passwords): (ServerPorts, Arc<dyn Passwords>),
+        ca: Option<CertificateAuthority>,
+    ) -> Self {
         let db = Database::connect(options, DatabaseOptions::default())
             .await
             .unwrap();
@@ -213,20 +238,8 @@ impl Server {
         let lockout_key = keys.derive_key(DerivedKey::LoginAttempts).unwrap();
         let clock: Arc<dyn Clock> = Arc::clone(&ports.clock);
         let random: Arc<dyn SecureRandom> = Arc::clone(&ports.random);
-        let passwords = Argon2Passwords::new(Argon2Params::default(), Arc::clone(&random))
-            .await
-            .unwrap();
-        let grpc = ca.as_ref().map(|_| control_plane());
         let metrics = ports.metrics.render().clone();
-        let app = app_with(
-            &config(limits, accounts, grpc),
-            &db,
-            keys,
-            lockout_key,
-            Arc::new(passwords),
-            ports,
-            ca,
-        );
+        let app = app_with(config, &db, keys, lockout_key, passwords, ports, ca);
         let tokens = TokenService::new(
             clock,
             Arc::clone(&random),
