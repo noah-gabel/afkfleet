@@ -13,7 +13,7 @@ use fleet_api_types::app::CommandErrorCode;
 use fleet_api_types::page::PAGE_MAX;
 use fleet_api_types::{ErrorCode, SecretText};
 
-use crate::support::{Bridge, Server, is_api, is_invalid, step_up_request};
+use crate::support::{Bridge, Server, is_api, is_invalid};
 
 fn offline(name: &str) -> CreateOfflineAccountRequest {
     CreateOfflineAccountRequest {
@@ -46,7 +46,6 @@ async fn without_a_server_every_account_command_is_no_server_and_nothing_opens()
 async fn a_refused_start_holds_no_link_and_the_status_of_an_unknown_flow_is_404() {
     let server = Server::start().await;
     let (owner, _) = server.owner().await;
-    owner.state.step_up(step_up_request()).await.unwrap();
     let (alice, _) = server.member(&owner, "alice").await;
     let kept = alice
         .state
@@ -82,7 +81,7 @@ async fn a_refused_start_holds_no_link_and_the_status_of_an_unknown_flow_is_404(
 }
 
 #[tokio::test]
-async fn an_offline_account_is_created_listed_read_and_deleted_after_a_step_up() {
+async fn an_offline_account_is_created_listed_read_and_deleted() {
     let server = Server::start().await;
     let (owner, _) = server.owner().await;
 
@@ -98,8 +97,6 @@ async fn an_offline_account_is_created_listed_read_and_deleted_after_a_step_up()
         .unwrap_err();
     let listed = owner.state.accounts(None, Some(10)).await.unwrap();
     let read = owner.state.account(created.id).await.unwrap();
-    let unstepped = owner.state.delete_account(created.id).await.unwrap_err();
-    owner.state.step_up(step_up_request()).await.unwrap();
     owner.state.delete_account(created.id).await.unwrap();
     let gone = owner.state.account(created.id).await.unwrap_err();
 
@@ -107,10 +104,6 @@ async fn an_offline_account_is_created_listed_read_and_deleted_after_a_step_up()
     assert!(is_invalid(&bad_name, "name"), "{bad_name:?}");
     assert_eq!(listed.items, std::slice::from_ref(&read));
     assert_eq!(read.name.as_str(), "AfkBot1");
-    assert!(
-        is_api(&unstepped, 403, ErrorCode::StepUpRequired),
-        "{unstepped:?}"
-    );
     assert!(is_api(&gone, 404, ErrorCode::NotFound), "{gone:?}");
     server.stop().await;
 }
@@ -139,10 +132,9 @@ async fn a_page_out_of_range_is_refused_before_any_request() {
 }
 
 #[tokio::test]
-async fn the_owner_reviews_a_members_pending_links_after_a_step_up() {
+async fn the_owner_reviews_a_members_pending_links() {
     let server = Server::start().await;
     let (owner, _) = server.owner().await;
-    owner.state.step_up(step_up_request()).await.unwrap();
     let (alice, alice_id) = server.member(&owner, "alice").await;
     let approved = server.pending_account(alice_id, 1).await;
     let refused = server.pending_account(alice_id, 2).await;
@@ -158,18 +150,12 @@ async fn the_owner_reviews_a_members_pending_links_after_a_step_up() {
         .accounts_awaiting_approval(None, None)
         .await
         .unwrap();
-    let unstepped = owner.state.approve_account(approved).await.unwrap_err();
-    owner.state.step_up(step_up_request()).await.unwrap();
     let active = owner.state.approve_account(approved).await.unwrap();
     owner.state.refuse_account(refused).await.unwrap();
     let again = owner.state.refuse_account(approved).await.unwrap_err();
 
     assert_eq!(awaiting.items.len(), 2);
     assert_eq!(members.items, []);
-    assert!(
-        is_api(&unstepped, 403, ErrorCode::StepUpRequired),
-        "{unstepped:?}"
-    );
     assert_eq!(active.status.known(), Some(AccountStatus::Active));
     assert!(is_api(&again, 409, ErrorCode::Conflict), "{again:?}");
     server.stop().await;
@@ -179,7 +165,6 @@ async fn the_owner_reviews_a_members_pending_links_after_a_step_up() {
 async fn grants_are_created_by_name_changed_listed_and_revoked() {
     let server = Server::start().await;
     let (owner, _) = server.owner().await;
-    owner.state.step_up(step_up_request()).await.unwrap();
     let (_bob, bob_id) = server.member(&owner, "bob").await;
     let account = owner
         .state

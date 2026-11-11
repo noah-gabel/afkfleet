@@ -4,6 +4,8 @@
 - **Date:** 2026-10-15; groups B and C 2026-10-16; groups E, F and G 2026-10-17
 - **Related:** Plan.md Phase 10 (P10.1–P10.10), P11.1, P11.2, P11.3, P11.4, P11.9, P12.1, P12.2, P12.4, P12.6, P13.1, P13.2, P13.4, P13.5, P13.6, §4, §5, §6, §7.2, §7.4, §7.5, Appendices A to D; ADR-0002, ADR-0010, ADR-0011, ADR-0013, ADR-0014, ADR-0015, ADR-0016, ADR-0018
 
+> Superseded in part by [ADR-0028](0028-a-session-is-enough.md) (2026-11-11, the user's decision): setting a bot's server address (S47) and disabling an agent need no step-up. Everything else here stands.
+
 ## Context
 Phase 10 connects agents to the server: enrollment with a server-signed certificate, one gRPC stream per agent over mutual TLS, the scheduler and the reconciler, short-lived session grants, the agent's client and the server's batched ingest. The stream crosses the project's sharpest trust boundary after the public API. An agent host is one of the attackers in the threat model, and the server hands that stream the only Minecraft tokens that ever leave it.
 

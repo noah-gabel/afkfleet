@@ -52,6 +52,8 @@ Before writing any code, the Phase 7 plan listed every question the plan left op
 - **E's wrap-up only checks.** It checks the DoD (auth and vault coverage ≥ 90 %, every P7.12 item green and named with its test), updates the threat model's auth section, and ticks P7.12 and P7.13.
 
 ### Step-up *(the user's choice)*
+> Superseded in part by [ADR-0028](0028-a-session-is-enough.md) (2026-11-11, the user's decision): only `POST /me/password` and `POST /me/mfa/reset` are step-up actions now. The mechanism below is unchanged for those two; every other route named here or in the amendments is a plain authed route.
+
 - `POST /auth/step-up {password}` sets the current session's `stepped_up_at`.
 - A step-up action (§7.2: password change, 2FA reset, role change; later P9's account delete and key rotation through the API) checks that it's at most 5 minutes old. Otherwise it answers 403 with a new code, `step_up_required`. *(Amended in Phase 8, group E: every admin write is one, see the last section of the decision. Amended in Phase 9: key rotation has no API route, it's the command line's only (ADR-0018, group A); group E made deleting an account, approving and refusing a pending link and every grant write step-up actions (ADR-0018).)*
 - A wrong password counts toward the username lockout.

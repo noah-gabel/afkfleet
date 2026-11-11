@@ -1,7 +1,7 @@
 //! Sharing an account (Plan.md P9.1, P9.6, §7.3; ADR-0010, ADR-0018 group
 //! E): `GET` and `POST /api/v1/accounts/{id}/grants`, `PUT` and `DELETE
 //! /api/v1/accounts/{id}/grants/{user}`, through serve's own app. Manage
-//! edits grants, after a step-up; the grantee is named by username, and
+//! edits grants; the grantee is named by username, and
 //! every name that can't be granted gets the same 422, recorded without the
 //! name; creating by name spends its own limit; a pending account takes no
 //! grant; a raise for someone with implicit Manage is refused; every write
@@ -105,7 +105,7 @@ async fn the_owner_shares_an_account_by_name_and_lists_it_audited(
     options: SqliteConnectOptions,
 ) {
     let setup = HttpSetup::new(options).await;
-    let alice = setup.stepped_up(1, Role::Member).await;
+    let alice = setup.person(1, Role::Member).await;
     let bob = setup.person(2, Role::Member).await;
     let id = setup
         .add_account(alice.id, 3, Some(AccountStatus::Active))
@@ -151,7 +151,7 @@ async fn every_name_that_cant_be_granted_gets_the_same_422_recorded_without_the_
     let setup = HttpSetup::new(options).await;
     setup.add_user(1, Role::Owner).await;
     setup.add_user(2, Role::Admin).await;
-    let member = setup.stepped_up(3, Role::Member).await;
+    let member = setup.person(3, Role::Member).await;
     let disabled = setup.add_user(4, Role::Member).await;
     setup.set_disabled(disabled, true).await;
     let id = setup
@@ -212,7 +212,7 @@ async fn a_name_that_isnt_a_username_is_422_and_a_bad_body_400(
     options: SqliteConnectOptions,
 ) {
     let setup = HttpSetup::new(options).await;
-    let alice = setup.stepped_up(1, Role::Member).await;
+    let alice = setup.person(1, Role::Member).await;
     let id = setup.add_account(alice.id, 2, None).await;
 
     let bad_name = create(
@@ -245,7 +245,7 @@ async fn a_second_grant_to_the_same_user_and_any_grant_on_a_pending_account_are_
     options: SqliteConnectOptions,
 ) {
     let setup = HttpSetup::new(options).await;
-    let alice = setup.stepped_up(1, Role::Member).await;
+    let alice = setup.person(1, Role::Member).await;
     let bob = setup.person(2, Role::Member).await;
     let active = setup
         .add_account(alice.id, 3, Some(AccountStatus::Active))
@@ -289,8 +289,8 @@ async fn only_manage_edits_grants_and_an_unseen_account_is_404(
 ) {
     let setup = HttpSetup::new(options).await;
     let alice = setup.person(1, Role::Member).await;
-    let control = setup.stepped_up(2, Role::Member).await;
-    let stranger = setup.stepped_up(3, Role::Member).await;
+    let control = setup.person(2, Role::Member).await;
+    let stranger = setup.person(3, Role::Member).await;
     let bob = setup.person(4, Role::Member).await;
     let id = setup
         .add_account(alice.id, 5, Some(AccountStatus::Active))
@@ -335,7 +335,7 @@ async fn a_manage_grantee_shares_further_but_never_with_themselves(
 ) {
     let setup = HttpSetup::new(options).await;
     let alice = setup.person(1, Role::Member).await;
-    let manager = setup.stepped_up(2, Role::Member).await;
+    let manager = setup.person(2, Role::Member).await;
     setup.add_user(3, Role::Member).await;
     let id = setup
         .add_account(alice.id, 4, Some(AccountStatus::Active))
@@ -369,7 +369,7 @@ async fn changing_a_grant_rewrites_it_and_records_both_levels(
     options: SqliteConnectOptions,
 ) {
     let setup = HttpSetup::new(options).await;
-    let alice = setup.stepped_up(1, Role::Member).await;
+    let alice = setup.person(1, Role::Member).await;
     let bob = setup.person(2, Role::Member).await;
     let id = setup.add_account(alice.id, 3, None).await;
     setup
@@ -400,7 +400,7 @@ async fn a_raise_for_someone_with_implicit_manage_is_409_and_lowering_works(
     options: SqliteConnectOptions,
 ) {
     let setup = HttpSetup::new(options).await;
-    let alice = setup.stepped_up(1, Role::Member).await;
+    let alice = setup.person(1, Role::Member).await;
     let bob = setup.person(2, Role::Member).await;
     let id = setup.add_account(alice.id, 3, None).await;
     setup
@@ -426,7 +426,7 @@ async fn revoking_removes_the_grant_audited_and_a_missing_grant_is_404(
     options: SqliteConnectOptions,
 ) {
     let setup = HttpSetup::new(options).await;
-    let alice = setup.stepped_up(1, Role::Member).await;
+    let alice = setup.person(1, Role::Member).await;
     let bob = setup.person(2, Role::Member).await;
     let id = setup
         .add_account(alice.id, 3, Some(AccountStatus::Pending))
@@ -453,10 +453,7 @@ async fn revoking_removes_the_grant_audited_and_a_missing_grant_is_404(
 }
 
 #[sqlx::test(migrations = false)]
-async fn every_grant_write_needs_a_fresh_step_up(
-    _pool: SqlitePoolOptions,
-    options: SqliteConnectOptions,
-) {
+async fn no_grant_write_needs_a_step_up(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
     let setup = HttpSetup::new(options).await;
     let alice = setup.person(1, Role::Member).await;
     let bob = setup.person(2, Role::Member).await;
@@ -465,28 +462,37 @@ async fn every_grant_write_needs_a_fresh_step_up(
         .add_grant(id, bob.id, GrantLevel::View, alice.id)
         .await;
 
-    let answers = [
-        create(
-            &setup,
-            &alice,
-            id,
-            json!({ "username": "user2", "level": "view" }),
-        )
-        .await,
-        change(&setup, &alice, id, bob.id, "manage").await,
-        revoke(&setup, &alice, id, bob.id).await,
-        leave(&setup, &bob, id).await,
-    ];
+    let carol = setup.person(4, Role::Member).await;
+    setup
+        .add_grant(id, carol.id, GrantLevel::View, alice.id)
+        .await;
+    let dave = setup.person(5, Role::Member).await;
 
-    for seen in answers {
-        assert_eq!(seen.status, 403, "{}", seen.text);
-        assert_eq!(seen.code(), "step_up_required");
+    let created = create(
+        &setup,
+        &alice,
+        id,
+        json!({ "username": "user5", "level": "view" }),
+    )
+    .await;
+    let changed = change(&setup, &alice, id, bob.id, "control").await;
+    let left = leave(&setup, &bob, id).await;
+    let revoked = revoke(&setup, &alice, id, carol.id).await;
+
+    for seen in [&created, &changed, &left, &revoked] {
+        assert!(
+            (200..300).contains(&seen.status),
+            "{} {}",
+            seen.status,
+            seen.text
+        );
     }
     assert_eq!(
-        setup.grant_of(id, bob.id).await.unwrap().level,
+        setup.grant_of(id, dave.id).await.unwrap().level,
         GrantLevel::View
     );
-    assert_eq!(list(&setup, &alice, id).await.status, 200);
+    assert!(setup.grant_of(id, bob.id).await.is_none());
+    assert!(setup.grant_of(id, carol.id).await.is_none());
 }
 
 #[sqlx::test(migrations = false)]
@@ -499,8 +505,8 @@ async fn granting_by_name_spends_its_own_per_user_limit(
         ..RateLimitConfig::default()
     };
     let setup = HttpSetup::with(options, &limits, AccountsConfig::default()).await;
-    let alice = setup.stepped_up(1, Role::Member).await;
-    let carol = setup.stepped_up(2, Role::Member).await;
+    let alice = setup.person(1, Role::Member).await;
+    let carol = setup.person(2, Role::Member).await;
     let id = setup.add_account(alice.id, 3, None).await;
     let carols = setup.add_account(carol.id, 4, None).await;
 
@@ -525,7 +531,6 @@ async fn granting_by_name_spends_its_own_per_user_limit(
     setup.clock.advance(core::time::Duration::from_mins(30));
     // Half an hour later the access token is gone too: a new session.
     let later = setup.session_of(alice.id, Role::Member).await;
-    setup.step_up(&later).await;
     assert_eq!(probe(&setup, &later, id).await.status, 422);
 }
 
@@ -763,7 +768,7 @@ async fn a_grantee_leaves_at_any_level_audited_as_a_revoke_via_leave(
         (4, GrantLevel::Control, "control"),
         (5, GrantLevel::Manage, "manage"),
     ] {
-        let grantee = setup.stepped_up(n, Role::Member).await;
+        let grantee = setup.person(n, Role::Member).await;
         setup.add_grant(id, grantee.id, level, alice.id).await;
 
         let seen = leave(&setup, &grantee, id).await;
@@ -794,9 +799,9 @@ async fn who_has_the_account_through_ownership_or_a_role_cant_leave_it(
     options: SqliteConnectOptions,
 ) {
     let setup = HttpSetup::new(options).await;
-    let alice = setup.stepped_up(1, Role::Member).await;
-    let owner = setup.stepped_up(2, Role::Owner).await;
-    let admin = setup.stepped_up(3, Role::Admin).await;
+    let alice = setup.person(1, Role::Member).await;
+    let owner = setup.person(2, Role::Owner).await;
+    let admin = setup.person(3, Role::Admin).await;
     let id = setup.add_account(alice.id, 4, None).await;
     // A grant from before the Admin's promotion, dormant now.
     setup
@@ -826,7 +831,7 @@ async fn grants_me_takes_only_delete_and_any_other_method_is_405(
 ) {
     let setup = HttpSetup::new(options).await;
     let alice = setup.person(1, Role::Member).await;
-    let bob = setup.stepped_up(2, Role::Member).await;
+    let bob = setup.person(2, Role::Member).await;
     let id = setup.add_account(alice.id, 3, None).await;
     setup
         .add_grant(id, bob.id, GrantLevel::View, alice.id)
@@ -858,7 +863,7 @@ async fn without_a_grant_or_an_account_there_is_nothing_to_leave(
 ) {
     let setup = HttpSetup::new(options).await;
     let alice = setup.person(1, Role::Member).await;
-    let bob = setup.stepped_up(2, Role::Member).await;
+    let bob = setup.person(2, Role::Member).await;
     let id = setup.add_account(alice.id, 3, None).await;
     let unknown = AccountId::new_v7(at(T0), [99; 10]).unwrap();
 
@@ -988,7 +993,7 @@ async fn leaving_spends_the_users_limit(_pool: SqlitePoolOptions, options: Sqlit
     )
     .await;
     let alice = setup.person(1, Role::Member).await;
-    let bob = setup.stepped_up(2, Role::Member).await;
+    let bob = setup.person(2, Role::Member).await;
     let id = setup.add_account(alice.id, 3, None).await;
     setup
         .add_grant(id, bob.id, GrantLevel::View, alice.id)
@@ -1014,7 +1019,7 @@ async fn a_manage_grantee_revokes_their_own_grant_and_loses_the_account(
 ) {
     let setup = HttpSetup::new(options).await;
     let alice = setup.person(1, Role::Member).await;
-    let bob = setup.stepped_up(2, Role::Member).await;
+    let bob = setup.person(2, Role::Member).await;
     let id = setup.add_account(alice.id, 3, None).await;
     setup
         .add_grant(id, bob.id, GrantLevel::Manage, alice.id)

@@ -5,15 +5,14 @@
 //!
 //! - **Listing agents** is Admin+ (`ViewAgents`): every agent, enabled or
 //!   not, newest first, with its status.
-//! - **Disabling an agent** is Admin+ (`DisableAgent`) and needs a step-up,
-//!   authorized before anything is read and again in the service's
-//!   transaction (S31). It's final: every certificate revoked and the live
+//! - **Disabling an agent** is Admin+ (`DisableAgent`), authorized before
+//!   anything is read and again in the service's transaction (S31). It's final: every certificate revoked and the live
 //!   stream ended before the answer. An agent disabled already answers as
 //!   it is. It works with the control plane off too: an agent enrolled
 //!   before can still be disabled.
-//! - **Releasing a disabled agent's bots** is Admin+ (`ReleaseAgent`) and
-//!   needs a step-up, authorized before anything is read and again in the
-//!   service's transaction (ADR-0020, S49). The caller vouches that the
+//! - **Releasing a disabled agent's bots** is Admin+ (`ReleaseAgent`),
+//!   authorized before anything is read and again in the service's
+//!   transaction (ADR-0020, S49). The caller vouches that the
 //!   agent's host and its bots are stopped. An enabled agent is 409
 //!   `agent_not_disabled`; one that holds no bots answers as it is.
 
@@ -27,7 +26,7 @@ use fleet_core::id::AgentId;
 use super::{acting, page, timestamp};
 use crate::app::agents::{AgentView, DisableAgentError, Disabler, ReleaseAgentError, Releaser};
 use crate::http::error::ApiError;
-use crate::http::extractors::{AuthUser, SteppedUpUser, ValidPath, ValidQuery};
+use crate::http::extractors::{AuthUser, ValidPath, ValidQuery};
 use crate::http::rate_limit::ClientIp;
 use crate::http::router::AppState;
 
@@ -88,7 +87,7 @@ pub(crate) async fn list_agents(
 }
 
 /// `POST /api/v1/agents/{id}/disable`: disables an agent for good, revoking
-/// every certificate and ending its stream. Needs a step-up.
+/// every certificate and ending its stream.
 #[utoipa::path(
     post,
     path = "/api/v1/agents/{id}/disable",
@@ -98,7 +97,7 @@ pub(crate) async fn list_agents(
     responses(
         (status = 200, description = "The agent, disabled: every certificate revoked and its stream ended. An agent disabled already answers as it is.", body = AgentResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "Step up first: `POST /auth/step-up`; or only Admins and the Owner disable agents.", body = ErrorResponse),
+        (status = 403, description = "Only Admins and the Owner disable agents.", body = ErrorResponse),
         (status = 404, description = "No such agent.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
             headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
@@ -106,16 +105,15 @@ pub(crate) async fn list_agents(
     ),
 )]
 pub(crate) async fn disable_agent(
-    user: SteppedUpUser,
+    user: AuthUser,
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     ValidPath(id): ValidPath<AgentId>,
 ) -> Result<Json<AgentResponse>, ApiError> {
-    let user = user.user();
     user.require(Permission::DisableAgent, &ResourceContext::Global)?;
     let disabled = state
         .agents
-        .disable(Disabler::Admin(&acting(user, ip)), id)
+        .disable(Disabler::Admin(&acting(&user, ip)), id)
         .await
         .map_err(|error| match error {
             DisableAgentError::NotFound => ApiError::NotFound,
@@ -129,7 +127,7 @@ pub(crate) async fn disable_agent(
 
 /// `POST /api/v1/agents/{id}/release`: releases a disabled agent's bots, on
 /// the caller's word that its host and its bots are stopped, so they can be
-/// placed elsewhere. Needs a step-up.
+/// placed elsewhere.
 #[utoipa::path(
     post,
     path = "/api/v1/agents/{id}/release",
@@ -139,7 +137,7 @@ pub(crate) async fn disable_agent(
     responses(
         (status = 200, description = "The agent, its bots released and placed again as soon as an agent can take them. One that held none answers as it is.", body = AgentResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "Step up first: `POST /auth/step-up`; or only Admins and the Owner release agents.", body = ErrorResponse),
+        (status = 403, description = "Only Admins and the Owner release agents.", body = ErrorResponse),
         (status = 404, description = "No such agent.", body = ErrorResponse),
         (status = 409, description = "`agent_not_disabled`: the agent is enabled; disable it first.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
@@ -148,16 +146,15 @@ pub(crate) async fn disable_agent(
     ),
 )]
 pub(crate) async fn release_agent(
-    user: SteppedUpUser,
+    user: AuthUser,
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     ValidPath(id): ValidPath<AgentId>,
 ) -> Result<Json<AgentResponse>, ApiError> {
-    let user = user.user();
     user.require(Permission::ReleaseAgent, &ResourceContext::Global)?;
     let released = state
         .agents
-        .release(Releaser::Admin(&acting(user, ip)), id)
+        .release(Releaser::Admin(&acting(&user, ip)), id)
         .await
         .map_err(|error| match error {
             ReleaseAgentError::NotFound => ApiError::NotFound,

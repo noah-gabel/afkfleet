@@ -9,7 +9,7 @@
 //!   Manage holders), and which agent runs it only to Admins and the Owner
 //!   (`ViewAgents`).
 //! - **The server address** (`PATCH /api/v1/bots/{id}`) needs Manage
-//!   (`ConfigureBot`) and a step-up (S47). Where it points isn't checked
+//!   (`ConfigureBot`; S47). Where it points isn't checked
 //!   here: the agent checks the address it resolves before it connects
 //!   (S46).
 //! - **The mode** (`PUT /api/v1/bots/{id}/mode`) needs Control, or Manage
@@ -47,7 +47,7 @@ use fleet_core::value::ServerAddress;
 use super::{account_response, acting, page, timestamp};
 use crate::app::bots::{BotAction, BotView, BotWriteError, Controlled, ListBotsError};
 use crate::http::error::ApiError;
-use crate::http::extractors::{AuthUser, SteppedUpUser, ValidJson, ValidPath, ValidQuery};
+use crate::http::extractors::{AuthUser, ValidJson, ValidPath, ValidQuery};
 use crate::http::rate_limit::ClientIp;
 use crate::http::router::AppState;
 use crate::ports::page::Paged;
@@ -118,7 +118,7 @@ pub(crate) async fn get(
 }
 
 /// `PATCH /api/v1/bots/{id}`: the Minecraft server the bot joins. Needs
-/// Manage and a step-up.
+/// Manage.
 #[utoipa::path(
     patch,
     path = "/api/v1/bots/{id}",
@@ -130,7 +130,7 @@ pub(crate) async fn get(
         (status = 200, description = "The bot after the change, or as it was when it had that address already. Where the address points isn't checked here: that's the agent's, on the address it resolves before it connects (ADR-0019, S46).", body = BotResponse),
         (status = 400, description = "A body of the wrong shape.", body = ErrorResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "Step up first: `POST /auth/step-up`; or the caller may see the bot but not configure it (Manage).", body = ErrorResponse),
+        (status = 403, description = "The caller may see the bot but not configure it (Manage).", body = ErrorResponse),
         (status = 404, description = "No such bot, or one the caller may not see.", body = ErrorResponse),
         (status = 422, description = "An address that isn't a host and an optional port.", body = ErrorResponse),
         (status = 429, description = "Too many requests, or too many actions on this bot.", body = ErrorResponse,
@@ -139,13 +139,12 @@ pub(crate) async fn get(
     ),
 )]
 pub(crate) async fn patch(
-    user: SteppedUpUser,
+    user: AuthUser,
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     ValidPath(id): ValidPath<BotId>,
     ValidJson(request): ValidJson<BotPatchRequest>,
 ) -> Result<Json<BotResponse>, ApiError> {
-    let user = user.user();
     let actor = user.actor();
     let server = ServerAddress::try_from(request.server_address.as_str())
         .map_err(|_| ApiError::internal("the rule already holds: garde checked it"))?;
@@ -154,7 +153,7 @@ pub(crate) async fn patch(
     state.limits.check_bot_action(id)?;
     state
         .bots
-        .set_server(&acting(user, ip), id, server)
+        .set_server(&acting(&user, ip), id, server)
         .await
         .map_err(writing)?;
     answered(&state, &actor, id).await

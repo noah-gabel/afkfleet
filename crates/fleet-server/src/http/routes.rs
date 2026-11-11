@@ -10,7 +10,10 @@
 //!   request without a valid access token gets 401;
 //! - [`Routes::step_up_route`]: an authed route that also needs the password
 //!   entered again within 5 minutes; its handler takes `SteppedUpUser`, so
-//!   a session without a fresh stamp gets 403 `step_up_required` (§7.2);
+//!   a session without a fresh stamp gets 403 `step_up_required` (§7.2).
+//!   Only the two routes that replace a login credential register this
+//!   way, a new password and a replaced authenticator: a session is enough
+//!   for everything else (ADR-0028);
 //! - [`Routes::setup_route`]: a route for enrolling a TOTP authenticator,
 //!   whose handler takes `SetupToken`, so anything but a live setup token
 //!   gets 401.

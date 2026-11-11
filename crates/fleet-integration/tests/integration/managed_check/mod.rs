@@ -3,7 +3,7 @@
 //! with the user's real Microsoft account, started through
 //! `POST /bots/{id}/start`, goes Online on a real online-mode Minecraft
 //! server in Docker and goes offline through stop, all through fleet-client:
-//! a link, `patch_bot` after a step-up, `start_bot`, `stop_bot`.
+//! a link, `patch_bot`, `start_bot`, `stop_bot`.
 //!
 //! **It needs the user's real Microsoft account, so only the user runs
 //! it**, with `just test-managed-account`; the AI never runs it or the
@@ -58,7 +58,7 @@ use fleet_agent::managed::link::LinkTimings;
 use fleet_agent::run::{Exit, Managed, Outcome, RunParts, run};
 use fleet_agent::signals::{ShutdownSignals, Signal};
 use fleet_api_types::accounts::{AccountStatus, LinkFlowState};
-use fleet_api_types::auth::{LoginRequest, StepUpRequest};
+use fleet_api_types::auth::LoginRequest;
 use fleet_api_types::bots::{
     BotPatchRequest, BotResponse, BotStateKind, BotStatusKind, UnplacedReason,
 };
@@ -93,8 +93,8 @@ const LINK_WAIT: Duration = Duration::from_mins(4);
 /// healthcheck's [`STARTUP`], and the container's creation and its port's
 /// lookup. The Owner's login and the link's wait run beside it.
 const CONTAINER: Duration = STARTUP.saturating_add(Duration::from_secs(10));
-/// The listing, the step-up, the server's patch, the start and the stop
-/// together: local requests.
+/// The listing, the server's patch, the start and the stop together: local
+/// requests.
 const REQUESTS: Duration = Duration::from_secs(20);
 /// The longest wait for the bot to go Online once started.
 const ONLINE_WAIT: Duration = Duration::from_secs(90);
@@ -354,11 +354,11 @@ async fn check(rig: Arc<Rig>, dir: PathBuf) -> Steps {
         return steps;
     };
 
-    if let Err(why) = configure(&client, &password, bot, &address).await {
-        steps.fail("server set after a step-up", why);
+    if let Err(why) = configure(&client, bot, &address).await {
+        steps.fail("server set", why);
         return steps;
     }
-    Steps::pass("server set after a step-up");
+    Steps::pass("server set");
     if let Err(error) = client.start_bot(bot).await {
         steps.fail("started", describe(&error));
         return steps;
@@ -717,19 +717,8 @@ async fn minecraft_address(rig: &Rig, steps: &mut Steps) -> Option<String> {
     }
 }
 
-/// Steps up, then points the bot at `address`.
-async fn configure(
-    client: &Client<MemoryStore>,
-    password: &SecretString,
-    bot: BotId,
-    address: &str,
-) -> Result<(), String> {
-    client
-        .step_up(&StepUpRequest {
-            password: SecretText::new(password.expose_secret().to_owned()),
-        })
-        .await
-        .map_err(|error| describe(&error))?;
+/// Points the bot at `address`.
+async fn configure(client: &Client<MemoryStore>, bot: BotId, address: &str) -> Result<(), String> {
     client
         .patch_bot(
             bot,

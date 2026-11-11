@@ -11,7 +11,7 @@ import { FormField } from "../../../components/FormField";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import type { ModeResponse } from "../../../generated/ModeResponse";
-import { useStepUpAction } from "../../admin/hooks/useStepUpAction";
+import { useWriteAction } from "../../admin/hooks/useWriteAction";
 import {
   copyValues,
   isKnownMode,
@@ -55,7 +55,7 @@ export function LockedMode({
 }) {
   const formId = useId();
   const form = useForm<ModeValues>({ defaultValues: valuesOf(mode) });
-  const writes = useStepUpAction();
+  const writes = useWriteAction();
   const [gone, setGone] = useState(false);
   const unknown = unknownSteps(mode);
   const elsewhere = unknown.filter((section) => section === null).length;

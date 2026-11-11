@@ -1,6 +1,6 @@
-//! The modes' write commands (Plan.md P11.9; ADR-0020, U62, S16–S18): a
-//! request whose steps send a command off the allowlist goes to its
-//! `_with_commands` twin, after a step-up, and `delete_mode` needs one always.
+//! The modes' write commands (Plan.md P11.9; ADR-0020, U62, S16–S18): a request
+//! whose steps send a command off the allowlist goes to its `_with_commands`
+//! twin; no write needs a step-up (ADR-0028).
 
 use fleet_api_types::ModeId;
 use fleet_api_types::app::CommandError;

@@ -4,6 +4,8 @@
 - **Date:** 2026-10-12 (amended in the review of PR #34; groups B and C added the same day; groups D and E on 2026-10-13)
 - **Related:** Plan.md Phase 8 (P8.1–P8.9), §4, §5, §7.5, §8, Appendix A, P9.3; ADR-0006, ADR-0007, ADR-0015, ADR-0016
 
+> Superseded in part by [ADR-0028](0028-a-session-is-enough.md) (2026-11-11, the user's decision): the app no longer shows "Confirm it's you" at an admin write; only the profile's two flows ask for the password again. Everything else here stands.
+
 ## Context
 Phase 8 builds the desktop app: the Tauri shell, the React UI, and the Rust side that talks to the server (ADR-0007). The Rust side talks to the server only through `fleet-client` (P8.1), a typed client of the API. The server's tests already pin its contract (ADR-0016):
 - a single-flight refresh

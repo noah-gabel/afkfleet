@@ -211,7 +211,7 @@ async fn the_suggestions_spend_their_own_per_user_limit(
         ..limited(2)
     };
     let setup = HttpSetup::with(options, &limits, AccountsConfig::default()).await;
-    let alice = setup.stepped_up(1, Role::Member).await;
+    let alice = setup.person(1, Role::Member).await;
     let carol = setup.person(2, Role::Member).await;
     let first = setup.add_account(alice.id, 3, None).await;
     let second = setup.add_account(alice.id, 4, None).await;
@@ -513,7 +513,7 @@ async fn every_name_it_suggests_can_be_given_a_grant(
     options: SqliteConnectOptions,
 ) {
     let setup = HttpSetup::new(options).await;
-    let owner = setup.stepped_up(1, Role::Admin).await;
+    let owner = setup.person(1, Role::Admin).await;
     setup.add_user(2, Role::Member).await;
     setup.add_user(3, Role::Admin).await;
     let id = setup.add_account(owner.id, 4, None).await;

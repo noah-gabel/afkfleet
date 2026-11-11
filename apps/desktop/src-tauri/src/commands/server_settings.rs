@@ -1,7 +1,6 @@
 //! The servers' settings commands (Plan.md P11.9; ADR-0020, U54, U56, S77):
 //! Admins and the Owner read every server's settings a page at a time, and
-//! after a step-up create, edit and delete them. They try unsaved chat
-//! formats on a line without a step-up (U58).
+//! create, edit and delete them. They try unsaved chat formats on a line (U58).
 
 use fleet_api_types::ServerSettingsId;
 use fleet_api_types::app::CommandError;

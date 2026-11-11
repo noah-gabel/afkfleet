@@ -1,5 +1,6 @@
 // A mode's Delete (Plan.md P11.9; ADR-0020, U66, S16, S17, R162, R169): shown from the server's
-// flag, it asks first, then goes straight through `useStepUpAction`; afterwards, back to the list.
+// flag, it asks first, never for the password (`useWriteAction`, ADR-0028); afterwards, back to
+// the list.
 // A refusal shows in place, and the mode stays. `mode_in_use` also lists the bots the viewer can
 // see that run the mode, from every page of their bots, read then and kept nowhere else. Only that
 // whole read may say the bot is one they can't see, and only the latest attempt's answer shows.
@@ -17,9 +18,7 @@ import { Button } from "../../../components/ui/button";
 import type { BotResponse } from "../../../generated/BotResponse";
 import type { ModeResponse } from "../../../generated/ModeResponse";
 import { useAlive } from "../../../hooks/useStepGuard";
-import { isStepUpRequired } from "../../../lib/stepUp";
-import { StepUpPrompt } from "../../admin/components/StepUpPrompt";
-import type { useStepUpAction } from "../../admin/hooks/useStepUpAction";
+import type { useWriteAction } from "../../admin/hooks/useWriteAction";
 import { forgetMode } from "../cache";
 import {
   A_BOT_YOU_CANT_SEE,
@@ -40,14 +39,14 @@ type UsedBy =
   | { readonly state: "read"; readonly bots: readonly BotResponse[] }
   | { readonly state: "failed"; readonly why: string };
 
-/** Delete, with its question, prompt and failure; `onGone` when the mode isn't there any more. */
+/** Delete, with its question and failure; `onGone` when the mode isn't there any more. */
 export function DeleteMode({
   mode,
   writes,
   onGone,
 }: {
   mode: ModeResponse;
-  writes: ReturnType<typeof useStepUpAction>;
+  writes: ReturnType<typeof useWriteAction>;
   onGone: () => void;
 }) {
   const api = useApiClient();
@@ -59,7 +58,7 @@ export function DeleteMode({
   const [usedBy, setUsedBy] = useState<UsedBy | null>(null);
   // The attempt whose bots may show: an older read's answer is dropped.
   const attempt = useRef(0);
-  const busy = writes.prompt !== null || writes.running !== null;
+  const busy = writes.running !== null;
 
   /** Reads which of the viewer's bots run the mode, for the refusal on the screen. */
   async function readUsers(): Promise<void> {
@@ -89,9 +88,6 @@ export function DeleteMode({
           await api.deleteMode(mode.id);
         } catch (rejection) {
           const error = toApiError(rejection).error;
-          if (isStepUpRequired(error)) {
-            throw rejection;
-          }
           if (!alive.current) {
             return;
           }
@@ -139,19 +135,6 @@ export function DeleteMode({
             </div>
           </AlertDescription>
         </Alert>
-      ) : null}
-      {writes.prompt === DELETE_KEY ? (
-        <StepUpPrompt
-          id="step-up-delete"
-          pending={writes.running !== null}
-          onConfirm={writes.confirm}
-          onCancel={writes.cancel}
-        />
-      ) : null}
-      {writes.failure?.key === DELETE_KEY ? (
-        <p role="alert" className="text-sm text-destructive">
-          {writes.failure.message}
-        </p>
       ) : null}
       {failure === undefined ? null : (
         <p role="alert" className="text-sm text-destructive">

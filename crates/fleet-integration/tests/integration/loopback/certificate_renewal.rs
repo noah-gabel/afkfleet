@@ -51,8 +51,7 @@ async fn an_agent_renews_its_certificate_while_its_bot_runs_on() {
         ..ServerOptions::default()
     })
     .await;
-    // The Owner's last calls: the clock moves past their step-up next, and
-    // past their session after that.
+    // The Owner's last calls: the clock moves past their session next.
     let bot = world.owner.bot("AfkBot1").await;
     world.owner.start(bot).await;
     // The Owner's login moved the clock by its TOTP steps: from here it's

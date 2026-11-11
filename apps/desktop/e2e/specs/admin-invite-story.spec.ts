@@ -1,5 +1,5 @@
-// Phase 8's DoD as one story (Plan.md P8.9): the Owner invites someone (the step-up prompt,
-// the code shown once and copied), logs out; the invitee registers with the copied code,
+// Phase 8's DoD as one story (Plan.md P8.9): the Owner invites someone (no password asked,
+// ADR-0028; the code shown once and copied), logs out; the invitee registers with the copied code,
 // sets up 2FA and logs in; the Owner logs in again and finds them in the user list.
 
 import { OWNER, PASSWORD } from "../fake/backend";
@@ -16,8 +16,6 @@ test("an invite goes from the Owner to a new user who sets up 2FA", async ({ pag
   await page.getByRole("link", { name: "Invites" }).click();
   await page.getByRole("button", { name: "New invite" }).click();
   await page.getByRole("button", { name: "Create invite" }).click();
-  await page.getByLabel("Current password").fill(PASSWORD);
-  await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByText(/Shown only now/)).toBeVisible();
   const code = backend.newestInviteCode() ?? "";
   await expect(page.getByText(code, { exact: true })).toBeVisible();

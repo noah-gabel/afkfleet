@@ -9,8 +9,8 @@
 //   at (S70, R116), only within the sign-in it began in; without a live watch the chat is
 //   read once more (R115).
 // - **A command off the allowlist** (`command_needs_step_up`, S4) goes, as typed, to
-//   `/command` (S8) through the step-up: the box stays locked while the password is asked,
-//   so what's sent is what's shown (R118).
+//   `/command` (S8) within the same send, never asking for the password (ADR-0028): the box
+//   stays locked meanwhile, so what's sent is what's shown (R118).
 // - **A refusal shows by the box, and the text stays** (U45, U48): a 409's or a 403's own
 //   message (`chat_unavailable` offers no "try again"), a 422's at the field, a 429's
 //   countdown on Send; after a 403 or a 404 the bot is read again. The server judges
@@ -37,9 +37,6 @@ import type { CommandError } from "../../../generated/CommandError";
 import { useRetryWait } from "../../../hooks/useRetryWait";
 import { useAlive } from "../../../hooks/useStepGuard";
 import { showFieldErrors } from "../../../lib/formErrors";
-import { isStepUpRequired } from "../../../lib/stepUp";
-import { StepUpPrompt } from "../../admin/components/StepUpPrompt";
-import { useStepUpAction } from "../../admin/hooks/useStepUpAction";
 import { CHAT } from "../texts";
 
 /** When a send began: the loss count for its pending mark, and the sign-in it's of. */
@@ -47,9 +44,6 @@ interface Begun {
   readonly losses: number;
   readonly generation: number;
 }
-
-/** The key of the command that waits for the password. */
-const COMMAND = "command";
 
 /** `bot`'s send box. */
 export function ChatSend({ bot }: { bot: BotResponse }) {
@@ -62,13 +56,11 @@ export function ChatSend({ bot }: { bot: BotResponse }) {
   const errorId = useId();
   const [sending, setSending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const commands = useStepUpAction();
   const form = useForm<ChatSendRequest>({
     resolver: zodResolver(chatSendRequest),
     defaultValues: { message: "" },
   });
-  const asking = commands.prompt === COMMAND;
-  const locked = sending || commands.running !== null || asking;
+  const locked = sending;
 
   /** When a send began: the loss count, and the sign-in's generation. */
   function begin(): Begun {
@@ -112,23 +104,16 @@ export function ChatSend({ bot }: { bot: BotResponse }) {
     }
   }
 
-  /** `message` as a command, after the step-up the server asks for (S4, S8). */
-  function command(message: string): void {
-    void commands.attempt({
-      key: COMMAND,
-      run: async () => {
-        const begun = begin();
-        try {
-          answered(await api.sendCommand(bot.id, { message }), begun);
-        } catch (rejection) {
-          const error = toApiError(rejection).error;
-          if (isStepUpRequired(error)) {
-            throw rejection;
-          }
-          refused(error);
-        }
-      },
-    });
+  /** `message` as chat, or as a command when the server points there (S4, S8). */
+  async function send(message: string): Promise<ChatSendResponse> {
+    try {
+      return await api.sendChat(bot.id, { message });
+    } catch (rejection) {
+      if (toApiError(rejection).error.api?.code !== "command_needs_step_up") {
+        throw rejection;
+      }
+      return await api.sendCommand(bot.id, { message });
+    }
   }
 
   const submit = form.handleSubmit(async ({ message }) => {
@@ -140,14 +125,9 @@ export function ChatSend({ bot }: { bot: BotResponse }) {
     const begun = begin();
     setSending(true);
     try {
-      answered(await api.sendChat(bot.id, { message }), begun);
+      answered(await send(message), begun);
     } catch (rejection) {
-      const error = toApiError(rejection).error;
-      if (error.api?.code === "command_needs_step_up") {
-        command(message);
-      } else {
-        refused(error);
-      }
+      refused(toApiError(rejection).error);
     } finally {
       if (alive.current) {
         setSending(false);
@@ -156,7 +136,6 @@ export function ChatSend({ bot }: { bot: BotResponse }) {
   });
 
   const fieldError = form.formState.errors.message?.message;
-  const busy = sending || commands.running !== null;
   return (
     <div className="flex flex-col gap-2">
       <form
@@ -177,7 +156,7 @@ export function ChatSend({ bot }: { bot: BotResponse }) {
           {...form.register("message")}
         />
         <Button type="submit" disabled={locked || wait.waiting !== null}>
-          {busy ? (
+          {sending ? (
             <LoaderCircleIcon role="img" aria-label={CHAT.sending} className="animate-spin" />
           ) : null}
           {CHAT.send}
@@ -193,21 +172,7 @@ export function ChatSend({ bot }: { bot: BotResponse }) {
           {failure}
         </p>
       )}
-      {commands.failure?.key === COMMAND ? (
-        <p role="alert" className="text-sm text-destructive">
-          {commands.failure.message}
-        </p>
-      ) : null}
       <RetryWaitMessage wait={wait} />
-      {asking ? (
-        <StepUpPrompt
-          id={`step-up-${COMMAND}`}
-          text={CHAT.commandStepUp}
-          pending={commands.running !== null}
-          onConfirm={commands.confirm}
-          onCancel={commands.cancel}
-        />
-      ) : null}
     </div>
   );
 }

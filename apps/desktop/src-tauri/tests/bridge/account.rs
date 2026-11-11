@@ -129,7 +129,6 @@ async fn replacing_the_authenticator_starts_a_setup_step_in_the_session() {
 async fn the_owner_manages_invites_and_users() {
     let server = Server::start().await;
     let (owner, _app) = server.owner().await;
-    owner.state.step_up(step_up_request()).await.unwrap();
     let member = CreateInviteRequest {
         role: UserRole::Member,
     };
@@ -202,7 +201,6 @@ async fn a_patch_without_exactly_one_change_is_invalid_input_before_any_request(
 async fn an_unknown_user_is_not_found() {
     let server = Server::start().await;
     let (owner, _app) = server.owner().await;
-    owner.state.step_up(step_up_request()).await.unwrap();
     let unknown: UserId =
         serde_json::from_value(serde_json::json!("01900000-0000-7000-8000-0000000000ff")).unwrap();
 

@@ -55,7 +55,7 @@ pub(crate) async fn revoke_grant(
     state.revoke_grant(id, user).await
 }
 
-/// Gives up the caller's own grant on a shared account, after a step-up.
+/// Gives up the caller's own grant on a shared account.
 #[tauri::command]
 pub(crate) async fn leave_account(state: Managed<'_>, id: AccountId) -> Result<(), CommandError> {
     state.leave_account(id).await

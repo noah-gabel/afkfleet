@@ -9,10 +9,7 @@
 //!   one is 409, a revoked or expired one 204 again.
 //!
 //! Each write is authorized here and again in the service's transaction.
-//! Creating and revoking need a step-up (`SteppedUpUser`, the handlers'
-//! first extractor; Phase 8 group E, ADR-0016's amendment): the password
-//! again within 5 minutes, checked when the request arrives, before anything
-//! else is read. Listing doesn't.
+//! None needs a step-up: a session is enough (ADR-0028).
 
 use axum::Json;
 use axum::extract::State;
@@ -28,7 +25,7 @@ use fleet_core::id::InviteId;
 use super::{acting, label, page, secret_text, timestamp};
 use crate::app::invites::{CreateInviteError, InviteView, RevokeInviteError};
 use crate::http::error::ApiError;
-use crate::http::extractors::{AuthUser, SteppedUpUser, ValidJson, ValidPath, ValidQuery};
+use crate::http::extractors::{AuthUser, ValidJson, ValidPath, ValidQuery};
 use crate::http::rate_limit::ClientIp;
 use crate::http::router::AppState;
 
@@ -53,7 +50,6 @@ fn invite_response(view: &InviteView) -> Result<InviteResponse, ApiError> {
 }
 
 /// `POST /api/v1/invites`: a new invite and its code, shown this once.
-/// Needs a step-up.
 #[utoipa::path(
     post,
     path = "/api/v1/invites",
@@ -64,7 +60,7 @@ fn invite_response(view: &InviteView) -> Result<InviteResponse, ApiError> {
         (status = 201, description = "The invite and its code: send the code to the invitee.", body = CreatedInviteResponse),
         (status = 400, description = "A body of the wrong shape.", body = ErrorResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "Step up first: `POST /auth/step-up`; or the role isn't the caller's to invite.", body = ErrorResponse),
+        (status = 403, description = "The role isn't the caller's to invite.", body = ErrorResponse),
         (status = 409, description = "The caller already holds 20 pending invites.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
             headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
@@ -72,17 +68,16 @@ fn invite_response(view: &InviteView) -> Result<InviteResponse, ApiError> {
     ),
 )]
 pub(crate) async fn create(
-    user: SteppedUpUser,
+    user: AuthUser,
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     ValidJson(request): ValidJson<CreateInviteRequest>,
 ) -> Result<(StatusCode, Json<CreatedInviteResponse>), ApiError> {
-    let user = user.user();
     let role = Role::from(request.role);
     user.require(Permission::CreateInvite { role }, &ResourceContext::Global)?;
     let created = state
         .invites
-        .create(&acting(user, ip), role)
+        .create(&acting(&user, ip), role)
         .await
         .map_err(|error| match error {
             CreateInviteError::SessionGone => ApiError::Unauthorized,
@@ -138,7 +133,7 @@ pub(crate) async fn list(
     }))
 }
 
-/// `DELETE /api/v1/invites/{id}`: revokes a pending invite. Needs a step-up.
+/// `DELETE /api/v1/invites/{id}`: revokes a pending invite.
 #[utoipa::path(
     delete,
     path = "/api/v1/invites/{id}",
@@ -148,7 +143,7 @@ pub(crate) async fn list(
     responses(
         (status = 204, description = "The invite can't be used any more."),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "Step up first: `POST /auth/step-up`; or the invite isn't the caller's to revoke.", body = ErrorResponse),
+        (status = 403, description = "The invite isn't the caller's to revoke.", body = ErrorResponse),
         (status = 404, description = "No such invite, or one the caller can't see.", body = ErrorResponse),
         (status = 409, description = "The invite was used: it's history.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
@@ -157,17 +152,16 @@ pub(crate) async fn list(
     ),
 )]
 pub(crate) async fn revoke(
-    user: SteppedUpUser,
+    user: AuthUser,
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     ValidPath(id): ValidPath<InviteId>,
 ) -> Result<StatusCode, ApiError> {
-    let user = user.user();
     let role = state.invites.role_of(id).await?.ok_or(ApiError::NotFound)?;
     user.require(Permission::RevokeInvite, &ResourceContext::Invite { role })?;
     state
         .invites
-        .revoke(&acting(user, ip), id)
+        .revoke(&acting(&user, ip), id)
         .await
         .map_err(|error| match error {
             RevokeInviteError::NotFound => ApiError::NotFound,

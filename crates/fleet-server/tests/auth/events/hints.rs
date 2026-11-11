@@ -83,7 +83,6 @@ async fn each_bot_write_hints_its_bot_after_its_commit(
         assert_eq!(seen.status, 200, "{name}: {}", seen.text);
         steps.push((name, heard_after(&setup, only(hinted, &bot))));
     }
-    setup.stamp(member.session).await;
     setup.heard.take();
     for (name, hinted) in [("a server", true), ("the same server", false)] {
         let seen = setup
@@ -133,7 +132,6 @@ async fn disabling_or_enabling_a_user_hints_their_bots_after_its_commit(
     let (_, first) = setup.bot_of(member.id, 10).await;
     let (_, second) = setup.bot_of(member.id, 11).await;
     let bots: Vec<BotId> = BTreeSet::from([first, second]).into_iter().collect();
-    setup.stamp(the_owner.session).await;
     setup.heard.take();
     let path = format!("{USERS}/{}", member.id);
 
@@ -169,7 +167,6 @@ async fn disabling_an_agent_hints_its_bots_after_its_commit(
     let member = setup.person(2, "member", Role::Member).await;
     let (_, bot) = setup.bot_of(member.id, 10).await;
     let agent: AgentId = setup.assigned(bot, 3, None).await;
-    setup.stamp(admin.session).await;
     setup.heard.take();
     let disable = || async {
         setup

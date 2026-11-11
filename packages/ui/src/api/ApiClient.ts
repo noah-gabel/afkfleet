@@ -79,7 +79,7 @@ export interface ApiClient {
   logout(): Promise<LogoutResponse>;
   /** An account from an invite; log in with it next. */
   register(request: RegisterRequest): Promise<RegisterResponse>;
-  /** The password again, for step-up actions. */
+  /** The password again, for the profile's two step-up actions (ADR-0028). */
   stepUp(request: StepUpRequest): Promise<void>;
   /** A new TOTP secret for the pending setup step. */
   mfaEnroll(): Promise<MfaEnrollResponse>;
@@ -97,13 +97,13 @@ export interface ApiClient {
   revokeSession(id: string): Promise<void>;
   /** A page of the users (Admins and the Owner). */
   users(before?: string, limit?: number): Promise<UserPage>;
-  /** One change of a user: a role or `disabled`, after a step-up. */
+  /** One change of a user: a role or `disabled`. */
   patchUser(id: string, request: UserPatchRequest): Promise<UserResponse>;
   /** A page of the invites. */
   invites(before?: string, limit?: number): Promise<InvitePage>;
-  /** A new invite, whose code is answered this once, after a step-up. */
+  /** A new invite, whose code is answered this once. */
   createInvite(request: CreateInviteRequest): Promise<CreatedInviteResponse>;
-  /** Revokes a pending invite, after a step-up. */
+  /** Revokes a pending invite. */
   revokeInvite(id: string): Promise<void>;
   /** Starts linking a Microsoft account; its answer carries the user code, shown this once. */
   startLink(): Promise<LinkStartedResponse>;
@@ -119,23 +119,23 @@ export interface ApiClient {
   accountsAwaitingApproval(before?: string, limit?: number): Promise<AccountPage>;
   /** One account, as the caller sees it. */
   account(id: string): Promise<AccountResponse>;
-  /** Deletes an account with its grants, after a step-up. */
+  /** Deletes an account with its grants. */
   deleteAccount(id: string): Promise<void>;
-  /** Approves a pending link, after a step-up. */
+  /** Approves a pending link. */
   approveAccount(id: string): Promise<AccountResponse>;
-  /** Refuses a pending link, which deletes it, after a step-up. */
+  /** Refuses a pending link, which deletes it. */
   refuseAccount(id: string): Promise<void>;
   /** Starts linking an account again; its answer carries the user code, shown this once. */
   relinkAccount(id: string): Promise<LinkStartedResponse>;
   /** A page of who else has access to an account (Manage). */
   accountGrants(id: string, before?: string, limit?: number): Promise<GrantPage>;
-  /** Gives a user access by their exact username, after a step-up. */
+  /** Gives a user access by their exact username. */
   /** Who could be given a grant on account `id`, by what's typed so far of their name (U110). */
   grantCandidates(id: string, q: string): Promise<GrantCandidates>;
   createGrant(id: string, request: CreateGrantRequest): Promise<GrantResponse>;
-  /** Changes a grant's level, after a step-up. */
+  /** Changes a grant's level. */
   changeGrant(id: string, user: string, request: ChangeGrantRequest): Promise<GrantResponse>;
-  /** Revokes a grant, after a step-up. */
+  /** Revokes a grant. */
   revokeGrant(id: string, user: string): Promise<void>;
   /** Opens Microsoft's sign-in page: the link the newest start answered with, checked in Rust. */
   openVerificationLink(): Promise<void>;
@@ -156,18 +156,15 @@ export interface ApiClient {
   modes(before?: string, limit?: number): Promise<ModePage>;
   /** A new mode of the caller's, whose steps send no command off the allowlist (S16). */
   createMode(request: CreateModeRequest): Promise<ModeResponse>;
-  /** A new mode of the caller's, whatever its steps send, after a step-up (S16). */
+  /** A new mode of the caller's, whatever its steps send (S16). */
   createModeWithCommands(request: CreateModeRequest): Promise<ModeResponse>;
   /** The mode as it should be, at the version read, sending no command off the allowlist. */
   updateMode(id: string, request: UpdateModeRequest): Promise<ModeResponse>;
-  /** The mode as it should be, at the version read, whatever it sends, after a step-up (S16). */
+  /** The mode as it should be, at the version read, whatever it sends (S16). */
   updateModeWithCommands(id: string, request: UpdateModeRequest): Promise<ModeResponse>;
-  /** Deletes a mode no bot uses, after a step-up (S16, S17). */
+  /** Deletes a mode no bot uses (S16, S17). */
   deleteMode(id: string): Promise<void>;
-  /**
-   * Sets the bot's server (Manage, after a step-up, ADR-0019, S47): the bot as it reads
-   * after. A 403 `step_up_required` asks for the password first.
-   */
+  /** Sets the bot's server (Manage; ADR-0019, S47): the bot as it reads after. */
   patchBot(id: string, request: BotPatchRequest): Promise<BotResponse>;
   /** Sets the bot's mode (Control; Manage for a mode with `unlisted_command`, S68). */
   setBotMode(id: string, request: BotModeRequest): Promise<BotResponse>;
@@ -189,25 +186,25 @@ export interface ApiClient {
    * typed command may hold a password, so this is always a direct call (U34).
    */
   sendChat(id: string, request: ChatSendRequest): Promise<ChatSendResponse>;
-  /** Has the bot send any command (Manage for one off the allowlist), after a step-up (S8). */
+  /** Has the bot send any command (Manage for one off the allowlist) (S8). */
   sendCommand(id: string, request: ChatCommandRequest): Promise<ChatSendResponse>;
   /** A page of the servers' settings, newest first, at most 10 (Admins and the Owner). */
   serverSettings(before?: string, limit?: number): Promise<ServerSettingsPage>;
-  /** A Minecraft server's new settings, after a step-up (Admins and the Owner, U54). */
+  /** A Minecraft server's new settings (Admins and the Owner, U54). */
   createServerSettings(request: CreateServerSettingsRequest): Promise<ServerSettingsResponse>;
   /**
-   * The settings as they should be from now on, at the `version` read, after a step-up: 409
+   * The settings as they should be from now on, at the `version` read: 409
    * `server_settings_changed` when they changed since (S77).
    */
   updateServerSettings(
     id: string,
     request: UpdateServerSettingsRequest,
   ): Promise<ServerSettingsResponse>;
-  /** Deletes a server's settings, after a step-up. */
+  /** Deletes a server's settings. */
   deleteServerSettings(id: string): Promise<void>;
   /**
    * Which sender unsaved chat formats read from a line, and which format fitted first, counted
-   * from 0; nothing is stored, and no step-up is needed (Admins and the Owner, U58, R134).
+   * from 0; nothing is stored (Admins and the Owner, U58, R134).
    */
   previewChatFormats(request: PreviewChatFormatsRequest): Promise<PreviewChatFormatsResponse>;
   /**
@@ -222,15 +219,15 @@ export interface ApiClient {
   ): Promise<AuditPage>;
   /** A page of the agents, newest first (Admins and the Owner). */
   agents(before?: string, limit?: number): Promise<AgentPage>;
-  /** Disables an agent for good, after a step-up (Admins and the Owner). */
+  /** Disables an agent for good (Admins and the Owner). */
   disableAgent(id: string): Promise<AgentResponse>;
-  /** Releases a disabled agent's bots, after a step-up (Admins and the Owner; ADR-0020, S49). */
+  /** Releases a disabled agent's bots (Admins and the Owner; ADR-0020, S49). */
   releaseAgent(id: string): Promise<AgentResponse>;
   /** A page of the grants a user holds, dormant ones included (the Owner; ADR-0020, S50). */
   userGrants(id: string, before?: string, limit?: number): Promise<HeldGrantPage>;
   /** A page of a user's accounts that a grant shares (the Owner; ADR-0020, S50). */
   sharedAccounts(id: string, before?: string, limit?: number): Promise<AccountPage>;
-  /** Gives up the caller's own grant on a shared account, after a step-up (ADR-0020, S51). */
+  /** Gives up the caller's own grant on a shared account (ADR-0020, S51). */
   leaveAccount(id: string): Promise<void>;
   /** The native window follows the theme `theme` chose (ADR-0020, U85). Reaches no server. */
   setWindowTheme(theme: WindowTheme): Promise<void>;

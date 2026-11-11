@@ -1,6 +1,6 @@
 //! The servers' settings (Plan.md P11.9, Appendix B; ADR-0020, S74–S80):
 //! what every bot on one Minecraft server shares, whoever's bot it is.
-//! Admins and the Owner read them and, after a step-up, write them (U54).
+//! Admins and the Owner read and write them (U54).
 //!
 //! A request's server is any address a bot could be given; the answer
 //! names it as its key, the host and a port that's always written (S74).

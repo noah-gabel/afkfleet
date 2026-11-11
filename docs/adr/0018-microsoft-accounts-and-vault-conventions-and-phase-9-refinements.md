@@ -4,6 +4,8 @@
 - **Date:** 2026-10-14
 - **Related:** Plan.md Phase 9 (P9.1–P9.8), P10.6, §4, §5, §7.2, §7.4, §7.5, Appendix D; ADR-0002, ADR-0003, ADR-0010, ADR-0011, ADR-0012, ADR-0015, ADR-0016, ADR-0017
 
+> Superseded in part by [ADR-0028](0028-a-session-is-enough.md) (2026-11-11, the user's decision): approving and refusing a link, deleting an account and the grant writes need no step-up. Everything else here stands.
+
 ## Context
 Phase 9 links Microsoft accounts. A user starts Microsoft's device-code flow, the server stores the account's refresh token, sealed by the vault, and only short-lived Minecraft session tokens ever leave the server (security rule 6). The phase also extends the vault: a second purpose, and `vault rotate-key`, which §7.5 promised since Phase 7.
 

@@ -1,7 +1,7 @@
 // A mode's screen (Plan.md P11.9; ADR-0020, U67, U68, U70, U72, U73, S12, S14–S16, S82, S84,
 // R158–R162): the form filled from the row by section, every request built from the form, Save
-// only when something changed, the plain route first and the twin through "Confirm it's you",
-// the server's errors at their fields, and the locked view.
+// only when something changed, the plain route first and then the twin, never asking for the
+// password (ADR-0028), the server's errors at their fields, and the locked view.
 import { act, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -24,7 +24,7 @@ import {
   section,
   shownStep,
 } from "../../test/modes";
-import { PASSWORD, refusal } from "../../test/signIn";
+import { refusal } from "../../test/signIn";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -474,7 +474,7 @@ describe("editing a mode (S14, S18, S84)", () => {
       ownership: "someone_else",
       steps: [shownStep({ type: "send_chat", message: "/warp farm" })],
     });
-    const { app } = await atMode(marked.id, { rows: [marked], stamped: true });
+    const { app } = await atMode(marked.id, { rows: [marked] });
     await screen.findByRole("heading", { name: "Mode 1", level: 1 });
 
     expect(summary()).toEqual({ Owner: "afkadmin", Steps: "1" });
@@ -533,23 +533,16 @@ describe("dragging a step (U68, R167)", () => {
     expect(screen.queryByRole("button", { name: /^Drag step/ })).toBeNull();
   });
 
-  it("disables the handle while Confirm it's you is up", async () => {
+  it("disables the handle while a save is in flight", async () => {
     const { app } = await atMode(TWO.id, {
       rows: [TWO],
-      handlers: {
-        updateMode: async () => {
-          throw refusal(403, "mode_needs_step_up");
-        },
-        updateModeWithCommands: async () => {
-          throw refusal(403, "step_up_required");
-        },
-      },
+      handlers: { updateMode: () => new Promise(() => {}) },
     });
     await screen.findByRole("heading", { name: "Mode 1", level: 1 });
     await fill(app, screen.getByLabelText("Name"), "Renamed");
 
     await app.user.click(saveButton());
-    await screen.findByLabelText("Current password");
+    await vi.waitFor(() => expect(calls(app, "updateMode")).toHaveLength(1));
 
     expect(
       (
@@ -563,7 +556,6 @@ describe("dragging a step (U68, R167)", () => {
 
 describe("a command off the allowlist (S16, R162)", () => {
   const COMMAND = mode(1, { steps: [shownStep({ type: "send_chat", message: "hello" })] });
-  const PROMPT = "Enter your password to save a command off the allowlist. Counts for 5 minutes.";
 
   /** The mode's chat step, changed to a command. */
   async function typed(options: Parameters<typeof atMode>[1] = {}) {
@@ -573,15 +565,12 @@ describe("a command off the allowlist (S16, R162)", () => {
     return found;
   }
 
-  it("resends the same body to the twin after Confirm it's you", async () => {
+  it("sends the same body on to the twin, never asking for the password (ADR-0028)", async () => {
     const { app } = await typed();
 
     await app.user.click(saveButton());
-    expect(await screen.findByText(PROMPT)).toBeDefined();
-    await app.user.type(screen.getByLabelText("Current password"), PASSWORD);
-    await app.user.click(screen.getByRole("button", { name: "Continue" }));
 
-    await vi.waitFor(() => expect(calls(app, "updateModeWithCommands")).toHaveLength(2));
+    await vi.waitFor(() => expect(calls(app, "updateModeWithCommands")).toHaveLength(1));
     const body = calls(app, "updateMode")[0];
     expect(body).toEqual([
       COMMAND.id,
@@ -598,24 +587,19 @@ describe("a command off the allowlist (S16, R162)", () => {
         ],
       },
     ]);
-    expect(calls(app, "updateModeWithCommands")).toEqual([body, body]);
+    expect(calls(app, "updateModeWithCommands")).toEqual([body]);
     expect(await screen.findByText("Saved. Bots using it switch at once.")).toBeDefined();
+    expect(screen.queryByLabelText("Current password")).toBeNull();
+    expect(calls(app, "stepUp")).toEqual([]);
   });
 
-  it("asks nothing while the step-up still holds", async () => {
-    const { app } = await typed({ stamped: true });
+  it("locks the form while the twin answers, so what's sent is what's shown", async () => {
+    const { app } = await typed({
+      handlers: { updateModeWithCommands: () => new Promise(() => {}) },
+    });
 
     await app.user.click(saveButton());
-
     await vi.waitFor(() => expect(calls(app, "updateModeWithCommands")).toHaveLength(1));
-    expect(screen.queryByText(PROMPT)).toBeNull();
-  });
-
-  it("locks the form while Confirm it's you is up, so what's sent is what's shown", async () => {
-    const { app } = await typed();
-
-    await app.user.click(saveButton());
-    await screen.findByText(PROMPT);
 
     expect(screen.getByLabelText("Name").hasAttribute("readonly")).toBe(true);
     expect(within(card("atStart", 1)).getByLabelText("Message").hasAttribute("readonly")).toBe(
@@ -632,20 +616,8 @@ describe("a command off the allowlist (S16, R162)", () => {
     expect(saveButton().disabled).toBe(true);
   });
 
-  it("sends nothing to the twin after Cancel, and the form opens again", async () => {
-    const { app } = await typed();
-
-    await app.user.click(saveButton());
-    await screen.findByText(PROMPT);
-    await app.user.click(within(screen.getByRole("alert")).getByRole("button", { name: "Cancel" }));
-
-    expect(screen.queryByText(PROMPT)).toBeNull();
-    expect(screen.getByLabelText("Name").hasAttribute("readonly")).toBe(false);
-    expect(calls(app, "updateModeWithCommands")).toHaveLength(1);
-  });
-
   it("creates through the twin too", async () => {
-    const { app } = await atMode("new", { stamped: true });
+    const { app } = await atMode("new", {});
     await screen.findByRole("heading", { name: "New mode", level: 1 });
 
     await fill(app, screen.getByLabelText("Name"), "Warp");
@@ -1034,24 +1006,6 @@ describe("a mode that isn't there", () => {
 
 describe("what Save brings, where a stacked editor shows it (PR #92's review)", () => {
   const ROW = mode(1, { steps: [shownStep({ type: "jump" })] });
-
-  it("puts the focus in Confirm it's you's password field", async () => {
-    const { app } = await atMode(ROW.id, {
-      rows: [ROW],
-      handlers: {
-        updateMode: async () => {
-          throw refusal(403, "mode_needs_step_up");
-        },
-      },
-    });
-    await screen.findByRole("heading", { name: "Mode 1", level: 1 });
-    await fill(app, screen.getByLabelText("Name"), "Renamed");
-
-    await app.user.click(saveButton());
-
-    const field = await screen.findByLabelText("Current password");
-    await vi.waitFor(() => expect(document.activeElement).toBe(field));
-  });
 
   const CHANGED = "This mode changed since you opened it. Load it again to see the change.";
 

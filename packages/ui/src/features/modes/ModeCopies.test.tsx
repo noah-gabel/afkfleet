@@ -132,8 +132,8 @@ describe("Make a copy (U63)", () => {
     expect(within(step).queryByText(CUT_IN_COPY)).toBeNull();
   });
 
-  it("sends no answer-only key, and a command through the step-up to the twin", async () => {
-    const { app } = await atMode(CUT.id, { rows: [CUT], stamped: true });
+  it("sends no answer-only key, and a command on to the twin", async () => {
+    const { app } = await atMode(CUT.id, { rows: [CUT] });
     await screen.findByRole("heading", { name: "warp", level: 1 });
     await app.user.click(screen.getByRole("button", { name: COPY }));
     await screen.findByRole("heading", { name: "New mode", level: 1 });
@@ -310,7 +310,7 @@ describe("Save as copy (U63, R168)", () => {
     expect(createdWith(app).name).toBe("Mine");
   });
 
-  it("goes through the step-up for a command off the allowlist", async () => {
+  it("goes on to the twin for a command off the allowlist", async () => {
     const withCommand = mode(3, {
       name: "Fishing",
       steps: [shownStep({ type: "send_chat", message: "/warp home" })],
@@ -318,7 +318,6 @@ describe("Save as copy (U63, R168)", () => {
     });
     const { app } = await atMode(withCommand.id, {
       rows: [withCommand],
-      stamped: true,
       handlers: {
         updateModeWithCommands: async () => {
           throw refusal(409, "mode_changed", { message: "refused: mode_changed" });

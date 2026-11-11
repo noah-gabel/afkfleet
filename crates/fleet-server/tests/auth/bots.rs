@@ -1,5 +1,5 @@
 //! The bot routes (Plan.md P11.2, Appendix B; ADR-0019, S46–S56): what each
-//! viewer sees of a bot, the server address after a step-up, the mode, and
+//! viewer sees of a bot, the server address, the mode, and
 //! the five lifecycle calls; the answers in every state S50's table names,
 //! the audit entries and the reconciler's hints, the re-checks in the
 //! transaction, and the limits.
@@ -331,13 +331,6 @@ impl Setup {
     }
 }
 
-/// `role`'s person `n`, stepped up now.
-async fn stepped_up(setup: &Setup, n: u8, name: &str, role: Role) -> Person {
-    let person = setup.person(n, name, role).await;
-    setup.stamp(person.session).await;
-    person
-}
-
 /// The IDs a bot's answer holds, as snapshots name them.
 fn names(
     account: AccountId,
@@ -580,7 +573,7 @@ async fn a_bot_the_caller_may_not_see_is_404_on_every_route_like_an_unknown_one(
 ) {
     let setup = setup(options).await;
     let owner = setup.person(2, "owner", Role::Member).await;
-    let stranger = stepped_up(&setup, 3, "stranger", Role::Member).await;
+    let stranger = setup.person(3, "stranger", Role::Member).await;
     let (_, bot) = setup.bot_of(owner.id, 10).await;
     let unknown = BotId::new_v7(at(T0), [99; 10]).unwrap();
 
@@ -637,8 +630,8 @@ async fn a_view_holder_may_not_control_and_a_control_holder_may_not_configure(
 ) {
     let setup = setup(options).await;
     let owner = setup.person(2, "owner", Role::Member).await;
-    let viewer = stepped_up(&setup, 3, "viewer", Role::Member).await;
-    let controller = stepped_up(&setup, 4, "controller", Role::Member).await;
+    let viewer = setup.person(3, "viewer", Role::Member).await;
+    let controller = setup.person(4, "controller", Role::Member).await;
     let (account, bot) = setup.bot_of(owner.id, 10).await;
     setup
         .share(account, viewer.id, GrantLevel::View, owner.id)
@@ -664,7 +657,7 @@ async fn a_view_holder_may_not_control_and_a_control_holder_may_not_configure(
 // --- The server address (S47, S53, S55) ---------------------------------------------------
 
 #[sqlx::test(migrations = false)]
-async fn configuring_a_bot_needs_a_fresh_step_up_and_changes_nothing_without_one(
+async fn configuring_a_bot_needs_no_step_up(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
@@ -672,17 +665,11 @@ async fn configuring_a_bot_needs_a_fresh_step_up_and_changes_nothing_without_one
     let owner = setup.person(2, "owner", Role::Member).await;
     let (_, bot) = setup.bot_of(owner.id, 10).await;
 
-    let without = setup.set_server(bot, "mc.example.com", &owner).await;
-    setup.stamp(owner.session).await;
-    setup.clock.advance(TimeDelta::minutes(6).to_std().unwrap());
-    let stale = setup.set_server(bot, "mc.example.com", &owner).await;
+    let seen = setup.set_server(bot, "mc.example.com", &owner).await;
 
-    for answer in [&without, &stale] {
-        assert_eq!(answer.status, 403);
-        assert_eq!(answer.code(), "step_up_required");
-    }
-    assert_eq!(setup.bot_row(bot).await.server, None);
-    assert_eq!(setup.entries(&AuditAction::BOT_SET_SERVER).await.len(), 0);
+    assert_eq!(seen.status, 200, "{}", seen.text);
+    assert!(setup.bot_row(bot).await.server.is_some());
+    assert_eq!(setup.entries(&AuditAction::BOT_SET_SERVER).await.len(), 1);
 }
 
 #[sqlx::test(migrations = false)]
@@ -691,7 +678,7 @@ async fn a_manage_holder_points_a_bot_at_a_server_audited_with_the_previous_one_
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let owner = stepped_up(&setup, 2, "owner", Role::Member).await;
+    let owner = setup.person(2, "owner", Role::Member).await;
     let (_, bot) = setup.bot_of(owner.id, 10).await;
 
     let first = setup.set_server(bot, "MC.Example.com", &owner).await;
@@ -746,7 +733,7 @@ async fn the_longest_address_is_recorded_whole(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let owner = stepped_up(&setup, 2, "owner", Role::Member).await;
+    let owner = setup.person(2, "owner", Role::Member).await;
     let (_, bot) = setup.bot_of(owner.id, 10).await;
     let label = "a".repeat(63);
     let host = format!("{label}.{label}.{label}.{}", "b".repeat(61));
@@ -775,7 +762,7 @@ async fn an_invalid_address_is_422_on_its_field_and_never_echoed(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let owner = stepped_up(&setup, 2, "owner", Role::Member).await;
+    let owner = setup.person(2, "owner", Role::Member).await;
     let (_, bot) = setup.bot_of(owner.id, 10).await;
 
     let answers = [
@@ -1524,7 +1511,7 @@ async fn a_session_revoked_meanwhile_is_401_and_changes_nothing(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let owner = stepped_up(&setup, 2, "owner", Role::Member).await;
+    let owner = setup.person(2, "owner", Role::Member).await;
     let (_, bot) = setup.bot_of(owner.id, 10).await;
 
     setup.hooked.queue(Meanwhile::RevokeSession(owner.session));
@@ -1553,7 +1540,7 @@ async fn every_bot_route_spends_the_users_request_limit(
         },
     )
     .await;
-    let owner = stepped_up(&setup, 2, "owner", Role::Member).await;
+    let owner = setup.person(2, "owner", Role::Member).await;
     let (_, bot) = setup.bot_of(owner.id, 10).await;
 
     for (method, path, body) in [

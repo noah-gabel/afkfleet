@@ -7,7 +7,7 @@
 
 import type { Page } from "@playwright/test";
 
-import { type FakeBackend, MEMBER, NEW_USER, OWNER, PASSWORD } from "../fake/backend";
+import { type FakeBackend, MEMBER, NEW_USER, OWNER } from "../fake/backend";
 import { expect, fakeBackend, shooting, test } from "../fixtures";
 import { NOW } from "../shots";
 import { enterCode, expectHome, logIn, push } from "./steps";
@@ -857,10 +857,7 @@ test("a bot waiting for its agent, as the Owner and as a Member", async ({ page,
   await bothThemes(page, "a bot waiting, as a Member");
 });
 
-test("an account's screen: a row's question, the step-up, and below Manage", async ({
-  page,
-  context,
-}) => {
+test("an account's screen: a row's question, and below Manage", async ({ page, context }) => {
   const backend = await fakeBackend(context);
   const account = backend.addAccount(OWNER);
   backend.share(account, MEMBER, "view");
@@ -895,10 +892,6 @@ test("an account's screen: a row's question, the step-up, and below Manage", asy
   });
   await page.keyboard.press("Escape");
   await shareField.fill("");
-  await table.getByRole("button", { name: `Revoke ${MEMBER}'s access` }).click();
-  await table.getByRole("button", { name: "Revoke", exact: true }).click();
-  await expect(main.getByLabel("Current password")).toBeVisible();
-  await bothThemes(page, "an account, a row's step-up", { height: 800 });
 
   await page.getByRole("button", { name: "Log out" }).click();
   await logIn(page, MEMBER);
@@ -999,6 +992,11 @@ test("the bot screen and the empty lists of someone with nothing yet", async ({
   await nav(page, "Profile");
   await expect(page.getByRole("group", { name: "Theme" })).toBeVisible();
   await bothThemes(page, "profile", { height: 1300 });
+  // The one form that still asks for the password again: the profile's two flows start with
+  // it (ADR-0028).
+  await page.getByRole("link", { name: "Change password" }).click();
+  await expect(page.getByLabel("Current password")).toBeVisible();
+  await bothThemes(page, "profile, a new password, Confirm it's you");
 });
 
 test("modes: the list, the editor, a conflict, and a locked one", async ({ page, context }) => {
@@ -1139,7 +1137,7 @@ test("servers: loading, failed, a long list, and sixteen texts with eight format
   await page.setViewportSize({ width: 1280, height: 720 });
 });
 
-test("stacked editors: Save's step-up and a conflict, where you are", async ({ page, context }) => {
+test("stacked editors: a conflict, where you are", async ({ page, context }) => {
   const backend = await fakeBackend(context);
   backend.addMode(
     OWNER,
@@ -1159,7 +1157,6 @@ test("stacked editors: Save's step-up and a conflict, where you are", async ({ p
   await page.setViewportSize({ width: 800, height: 600 });
   const main = page.getByRole("main");
   const save = main.getByRole("button", { name: "Save", exact: true });
-  const password = page.getByLabel("Current password");
   const toTop = () =>
     page.locator("[data-slot=content]").evaluate((column) => {
       column.scrollTop = 0;
@@ -1176,10 +1173,6 @@ test("stacked editors: Save's step-up and a conflict, where you are", async ({ p
   await step.getByLabel("Message").fill("/warp home");
   await toTop();
   await save.click();
-  await expect(password).toBeFocused();
-  await bothThemes(page, "a mode, stacked, the step-up", { end: "ends" });
-  await password.fill(PASSWORD);
-  await page.getByRole("button", { name: "Continue" }).click();
   await expect(main.getByText("Sends a command off the allowlist.")).toBeVisible();
   await noToasts();
   backend.changeMode("Long", { name: "Elsewhere" });
@@ -1189,7 +1182,7 @@ test("stacked editors: Save's step-up and a conflict, where you are", async ({ p
   await expect(main.getByText(/^This mode changed since you opened it/)).toBeVisible();
   await bothThemes(page, "a mode, stacked, a conflict", { end: "ends" });
 
-  // A new session, as the mode's step-up still holds for 5 minutes in this one.
+  // A new session, which leaves the mode's conflict behind.
   await page.getByRole("button", { name: "Log out" }).click();
   await signIn(page, backend, OWNER);
   await nav(page, "Minecraft servers");
@@ -1200,10 +1193,6 @@ test("stacked editors: Save's step-up and a conflict, where you are", async ({ p
   await main.getByLabel("Conflict text 1", { exact: true }).fill("You logged in from elsewhere");
   await toTop();
   await save.click();
-  await expect(password).toBeFocused();
-  await bothThemes(page, "a server, stacked, the step-up", { end: "ends" });
-  await password.fill(PASSWORD);
-  await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByText("Saved. Bots on it use the change at once.")).toBeVisible();
   await noToasts();
   backend.changeServerSettings("long.example.com");
@@ -1296,8 +1285,6 @@ test("invites: loading, failed, a long list, and a new invite's code", async ({
   // Eighteen more beside the fake's one, under the cap of 20 pending.
   await main.getByRole("button", { name: "New invite" }).click();
   await main.getByRole("button", { name: "Create invite" }).click();
-  await page.getByLabel("Current password").fill(PASSWORD);
-  await page.getByRole("button", { name: "Continue" }).click();
   await expect(main.getByRole("button", { name: "Done" })).toBeVisible();
   for (let n = 2; n <= 18; n += 1) {
     await main.getByRole("button", { name: "Done" }).click();
@@ -1474,10 +1461,6 @@ test("servers, accounts with their grants, and the Owner's admin screens", async
   await main.getByRole("link", { name: "Add server" }).click();
   await page.getByLabel("Server address").fill("MC.example.com");
   await main.getByRole("button", { name: "Save" }).click();
-  await expect(page.getByLabel("Current password")).toBeVisible();
-  await bothThemes(page, "a server's settings, the step-up");
-  await page.getByLabel("Current password").fill(PASSWORD);
-  await page.getByRole("button", { name: "Continue" }).click();
   await expect(main.getByRole("heading", { name: "mc.example.com:25565", level: 1 })).toBeVisible();
   // Its toast goes first, so no row below measures it on its way out, below the window (R261).
   await expect(page.locator("[data-sonner-toast]")).toHaveCount(0, { timeout: 10_000 });

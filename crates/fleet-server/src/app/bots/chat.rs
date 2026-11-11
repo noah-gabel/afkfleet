@@ -50,7 +50,7 @@ use crate::ports::live_agents::CommandRefused;
 pub enum ChatRoute {
     /// `POST /bots/{id}/chat`: plain chat or an allowlisted command.
     Chat,
-    /// `POST /bots/{id}/command`: a command, after a step-up.
+    /// `POST /bots/{id}/command`: a command.
     Command,
 }
 

@@ -1,6 +1,6 @@
 //! The mode routes over HTTP (Plan.md P11.4; ADR-0020, S12–S16, S19):
 //! `GET /api/v1/modes` and what each viewer sees of a mode; `POST
-//! /api/v1/modes` and its step-up twin, with the pointer, the cap, names,
+//! /api/v1/modes` and its twin, with the pointer, the cap, names,
 //! the re-checks and the audit entry. Editing is in [`edits`], deleting in [`deletion`].
 
 use std::collections::BTreeMap;
@@ -461,7 +461,7 @@ async fn the_longest_page_fits_a_clients_answer_cap(
 
 // --- Creating (S12, S13, S16, S19) ----------------------------------------------
 
-/// The step-up twin of `POST /modes`.
+/// The twin of `POST /modes`.
 const WITH_COMMANDS: &str = "/api/v1/modes/with-commands";
 
 /// A new private mode named `name` that swings every 20 s.
@@ -477,13 +477,6 @@ fn commanding_body(name: &str, visibility: &str, command: &str) -> Value {
     json!({ "name": name, "visibility": visibility, "steps": [
         { "action": { "type": "send_chat", "message": command }, "schedule": { "type": "at_start" }, "probability": 100 },
     ] })
-}
-
-/// `role`'s person `n`, stepped up now.
-async fn stepped_up(setup: &Setup, n: u8, name: &str, role: Role) -> Person {
-    let person = setup.person(n, name, role).await;
-    setup.stamp(person.session).await;
-    person
 }
 
 /// The setup with `/spawn` on the allowlist.
@@ -686,7 +679,7 @@ async fn a_member_may_not_create_a_shared_mode(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let member = stepped_up(&setup, 2, "member", Role::Member).await;
+    let member = setup.person(2, "member", Role::Member).await;
     let mut body = swinging_body("Mine");
     body["visibility"] = json!("shared");
 
@@ -709,10 +702,10 @@ async fn a_member_may_not_create_a_shared_mode(
 }
 
 /// A mode whose steps send a command off the allowlist is pointed to the
-/// step-up route and nothing is written; an allowlisted command passes the
-/// plain route (S16).
+/// twin and nothing is written; an allowlisted command passes the plain
+/// route (S16).
 #[sqlx::test(migrations = false)]
-async fn a_command_off_the_allowlist_is_pointed_to_the_step_up_route(
+async fn a_command_off_the_allowlist_is_pointed_to_the_twin(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
@@ -737,11 +730,10 @@ async fn a_command_off_the_allowlist_is_pointed_to_the_step_up_route(
 }
 
 /// The allowlist reads an on-respawn command as any other: one off it is
-/// pointed to the step-up route, which takes it after a step-up and answers
-/// the step on respawn; one on it passes the plain route (S16; ADR-0020,
-/// S20).
+/// pointed to the twin, which takes it and answers the step on respawn; one
+/// on it passes the plain route (S16; ADR-0020, S20).
 #[sqlx::test(migrations = false)]
-async fn an_unlisted_command_on_respawn_is_pointed_to_the_step_up_route(
+async fn an_unlisted_command_on_respawn_is_pointed_to_the_twin(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
@@ -757,7 +749,6 @@ async fn an_unlisted_command_on_respawn_is_pointed_to_the_step_up_route(
         .create(&member, on_respawn("Ops", "/op AfkBot2"))
         .await;
     let written = setup.users_modes().await;
-    setup.stamp(member.session).await;
     let twin = setup
         .create_with_commands(&member, on_respawn("Ops", "/op AfkBot2"))
         .await;
@@ -833,9 +824,9 @@ async fn the_pointer_comes_after_forbidden(
     );
 }
 
-/// The twin needs a fresh step-up, and then takes any valid mode (S16).
+/// The twin needs no step-up, and takes any valid mode (S16; ADR-0028).
 #[sqlx::test(migrations = false)]
-async fn the_step_up_route_needs_a_fresh_step_up_and_then_takes_any_mode(
+async fn the_twin_needs_no_step_up_and_takes_any_mode(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
@@ -843,14 +834,11 @@ async fn the_step_up_route_needs_a_fresh_step_up_and_then_takes_any_mode(
     let member = setup.person(2, "member", Role::Member).await;
     let body = commanding_body("Ops", "private", "/op AfkBot2");
 
-    let without = setup.create_with_commands(&member, body.clone()).await;
-    setup.stamp(member.session).await;
     let with = setup.create_with_commands(&member, body).await;
     let swinging = setup
         .create_with_commands(&member, swinging_body("Swinging"))
         .await;
 
-    assert_eq!(without.code(), "step_up_required", "{}", without.text);
     assert_eq!(with.status, 201, "{}", with.text);
     assert_eq!(swinging.status, 201, "{}", swinging.text);
     assert_eq!(setup.users_modes().await, 2);
@@ -864,7 +852,7 @@ async fn a_create_is_recorded_without_the_name_or_a_steps_text(
     options: SqliteConnectOptions,
 ) {
     let setup = with_spawn(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let cases = [
         (
             MODES,
@@ -1060,7 +1048,7 @@ async fn creating_spends_the_users_request_limit(
         },
     )
     .await;
-    let member = stepped_up(&setup, 2, "member", Role::Member).await;
+    let member = setup.person(2, "member", Role::Member).await;
 
     for (n, path) in [MODES, WITH_COMMANDS].into_iter().enumerate() {
         let body = swinging_body(&format!("Mode {n}"));

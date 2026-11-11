@@ -33,8 +33,8 @@ struct Cast {
     bob: Person,
 }
 
-/// The cast, none of them stepped up.
-async fn unstamped_cast(setup: &Setup) -> Cast {
+/// The cast. No session ever steps up: the writes need none (ADR-0028).
+async fn cast(setup: &Setup) -> Cast {
     Cast {
         owner: setup.person(2, "owner", Role::Owner).await,
         admin: setup.person(3, "admin", Role::Admin).await,
@@ -42,23 +42,6 @@ async fn unstamped_cast(setup: &Setup) -> Cast {
         alice: setup.alice_person().await,
         bob: setup.person(5, "bob", Role::Member).await,
     }
-}
-
-/// The cast, every session stepped up now: the writes are step-up routes,
-/// so a test of what `authorize()` decides starts past the step-up check.
-/// Each test's later clock moves stay well inside the 5 minutes.
-async fn cast(setup: &Setup) -> Cast {
-    let cast = unstamped_cast(setup).await;
-    for person in [
-        &cast.owner,
-        &cast.admin,
-        &cast.other_admin,
-        &cast.alice,
-        &cast.bob,
-    ] {
-        setup.stamp(person.session).await;
-    }
-    cast
 }
 
 fn names(cast: &Cast) -> Vec<(String, &'static str)> {
@@ -553,42 +536,40 @@ async fn a_member_gets_404_for_any_invite(_pool: SqlitePoolOptions, options: Sql
     assert_eq!(malformed.status, 404, "{}", malformed.text);
 }
 
-// --- The step-up -------------------------------------------------------------------
+// --- No step-up (ADR-0028) ------------------------------------------------------------
 
 #[sqlx::test(migrations = false)]
-async fn creating_an_invite_needs_a_fresh_step_up(
+async fn creating_an_invite_needs_no_step_up(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let cast = unstamped_cast(&setup).await;
+    let cast = cast(&setup).await;
 
     let seen = create(&setup, &cast.owner, "member").await;
 
-    assert_eq!(seen.status, 403, "{}", seen.text);
-    assert_eq!(seen.code(), "step_up_required");
-    assert_eq!(stored(&setup).await, 0);
-    assert_eq!(entries(&setup, &AuditAction::INVITE_CREATE).await, 0);
+    assert_eq!(seen.status, 201, "{}", seen.text);
+    assert_eq!(stored(&setup).await, 1);
+    assert_eq!(entries(&setup, &AuditAction::INVITE_CREATE).await, 1);
 }
 
 #[sqlx::test(migrations = false)]
-async fn revoking_an_invite_needs_a_fresh_step_up(
+async fn revoking_an_invite_needs_no_step_up(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let cast = unstamped_cast(&setup).await;
+    let cast = cast(&setup).await;
     let invite = setup.add_invite(10, cast.owner.id, Role::Member, 0).await;
 
     let seen = setup
         .delete(&invite_path(invite), Some(&cast.owner.token))
         .await;
 
-    assert_eq!(seen.status, 403, "{}", seen.text);
-    assert_eq!(seen.code(), "step_up_required");
+    assert_eq!(seen.status, 204, "{}", seen.text);
     let stored = setup.db.invites().find(invite).await.unwrap().unwrap();
-    assert_eq!(stored.revoked_at, None);
-    assert_eq!(entries(&setup, &AuditAction::INVITE_REVOKE).await, 0);
+    assert!(stored.revoked_at.is_some());
+    assert_eq!(entries(&setup, &AuditAction::INVITE_REVOKE).await, 1);
 }
 
 // --- The re-check in the transaction --------------------------------------------------

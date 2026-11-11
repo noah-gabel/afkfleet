@@ -10,7 +10,7 @@
 //!   list users. Every name that can't be granted gets one 422 on
 //!   `username` ([`UNGRANTABLE`]), and the route spends its own per-user
 //!   limit, so names can't be probed fast (ADR-0018, group E).
-//! - **Suggesting** who to share with needs Manage too, no step-up, and spends
+//! - **Suggesting** who to share with needs Manage too, and spends
 //!   its own per-user limit (ADR-0020, U110, S127): at most
 //!   [`GRANT_CANDIDATES_MAX`](crate::ports::grants::GRANT_CANDIDATES_MAX)
 //!   usernames that start with what's typed and could be given a grant.
@@ -19,9 +19,7 @@
 //!   (`LeaveAccount`; ADR-0020, S51). The path's `me` names no one else, so
 //!   it never reaches another user's grant.
 //!
-//! Every write needs a step-up (`SteppedUpUser`, the handlers' first
-//! extractor), and is authorized here and again in the service's
-//! transaction.
+//! Every write is authorized here and again in the service's transaction.
 
 use axum::Json;
 use axum::extract::State;
@@ -41,7 +39,7 @@ use crate::app::grants::{
     CandidatesError, ChangeGrantError, CreateGrantError, LeaveGrantError, RevokeGrantError,
 };
 use crate::http::error::ApiError;
-use crate::http::extractors::{AuthUser, SteppedUpUser, ValidJson, ValidPath, ValidQuery};
+use crate::http::extractors::{AuthUser, ValidJson, ValidPath, ValidQuery};
 use crate::http::rate_limit::ClientIp;
 use crate::http::router::AppState;
 use crate::ports::accounts::ListedAccount;
@@ -151,7 +149,7 @@ pub(crate) async fn candidates(
 }
 
 /// `POST /api/v1/accounts/{id}/grants`: shares the account with the user
-/// named in the body. Needs a step-up.
+/// named in the body.
 #[utoipa::path(
     post,
     path = "/api/v1/accounts/{id}/grants",
@@ -163,7 +161,7 @@ pub(crate) async fn candidates(
         (status = 201, description = "The grant.", body = GrantResponse),
         (status = 400, description = "A body that isn't the request's shape.", body = ErrorResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "Step up first: `POST /auth/step-up`; or the caller may see the account but not share it (Manage), or names themselves.", body = ErrorResponse),
+        (status = 403, description = "The caller may see the account but not share it (Manage), or names themselves.", body = ErrorResponse),
         (status = 404, description = "No such account, or one the caller may not see.", body = ErrorResponse),
         (status = 409, description = "The user holds a grant on the account already (change it instead), or the account is pending.", body = ErrorResponse),
         (status = 415, description = "A body that isn't JSON.", body = ErrorResponse),
@@ -174,13 +172,12 @@ pub(crate) async fn candidates(
     ),
 )]
 pub(crate) async fn create(
-    user: SteppedUpUser,
+    user: AuthUser,
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     ValidPath(id): ValidPath<AccountId>,
     body: Result<ValidJson<CreateGrantRequest>, ApiError>,
 ) -> Result<(StatusCode, Json<GrantResponse>), ApiError> {
-    let user = user.user();
     // Each request tries a name, so it spends its limit before anything is
     // read.
     state.limits.check_grant_by_name(user.actor().id)?;
@@ -191,7 +188,7 @@ pub(crate) async fn create(
     let name = Username::try_from(request.username.expose()).map_err(ApiError::internal)?;
     let grant = state
         .grants
-        .create_by_name(&acting(user, ip), id, &name, request.level.into())
+        .create_by_name(&acting(&user, ip), id, &name, request.level.into())
         .await
         .map_err(|error| match error {
             CreateGrantError::NotFound => ApiError::NotFound,
@@ -208,7 +205,6 @@ pub(crate) async fn create(
 }
 
 /// `PUT /api/v1/accounts/{id}/grants/{user}`: changes the user's grant.
-/// Needs a step-up.
 #[utoipa::path(
     put,
     path = "/api/v1/accounts/{id}/grants/{user}",
@@ -223,7 +219,7 @@ pub(crate) async fn create(
         (status = 200, description = "The grant, changed.", body = GrantResponse),
         (status = 400, description = "A body that isn't the request's shape.", body = ErrorResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "Step up first: `POST /auth/step-up`; or the caller may see the account but not share it (Manage), or names themselves.", body = ErrorResponse),
+        (status = 403, description = "The caller may see the account but not share it (Manage), or names themselves.", body = ErrorResponse),
         (status = 404, description = "No such account, one the caller may not see, or no grant of this user on it.", body = ErrorResponse),
         (status = 409, description = "A raise on a pending account, or for a user who has access through their role by now.", body = ErrorResponse),
         (status = 415, description = "A body that isn't JSON.", body = ErrorResponse),
@@ -233,19 +229,18 @@ pub(crate) async fn create(
     ),
 )]
 pub(crate) async fn change(
-    user: SteppedUpUser,
+    user: AuthUser,
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     ValidPath((id, grantee)): ValidPath<(AccountId, UserId)>,
     ValidJson(request): ValidJson<ChangeGrantRequest>,
 ) -> Result<Json<GrantResponse>, ApiError> {
-    let user = user.user();
     let level: GrantLevel = request.level.into();
     let account = facts(&state, &user.actor(), id).await?;
     user.require(Permission::Grant { level, grantee }, &account.context())?;
     let grant = state
         .grants
-        .set_level(&acting(user, ip), id, grantee, level)
+        .set_level(&acting(&user, ip), id, grantee, level)
         .await
         .map_err(|error| match error {
             ChangeGrantError::NotFound | ChangeGrantError::NoGrant => ApiError::NotFound,
@@ -259,7 +254,6 @@ pub(crate) async fn change(
 }
 
 /// `DELETE /api/v1/accounts/{id}/grants/{user}`: revokes the user's grant.
-/// Needs a step-up.
 #[utoipa::path(
     delete,
     path = "/api/v1/accounts/{id}/grants/{user}",
@@ -272,7 +266,7 @@ pub(crate) async fn change(
     responses(
         (status = 204, description = "The grant is revoked."),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "Step up first: `POST /auth/step-up`; or the caller may see the account but not its grants (Manage).", body = ErrorResponse),
+        (status = 403, description = "The caller may see the account but not its grants (Manage).", body = ErrorResponse),
         (status = 404, description = "No such account, one the caller may not see, or no grant of this user on it.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
             headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
@@ -280,17 +274,16 @@ pub(crate) async fn change(
     ),
 )]
 pub(crate) async fn revoke(
-    user: SteppedUpUser,
+    user: AuthUser,
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     ValidPath((id, grantee)): ValidPath<(AccountId, UserId)>,
 ) -> Result<StatusCode, ApiError> {
-    let user = user.user();
     let account = facts(&state, &user.actor(), id).await?;
     user.require(Permission::ManageGrants, &account.context())?;
     state
         .grants
-        .revoke(&acting(user, ip), id, grantee)
+        .revoke(&acting(&user, ip), id, grantee)
         .await
         .map_err(|error| match error {
             RevokeGrantError::NotFound | RevokeGrantError::NoGrant => ApiError::NotFound,
@@ -303,7 +296,7 @@ pub(crate) async fn revoke(
 }
 
 /// `DELETE /api/v1/accounts/{id}/grants/me`: the caller gives up their own
-/// grant on the account. Needs a step-up.
+/// grant on the account.
 #[utoipa::path(
     delete,
     path = "/api/v1/accounts/{id}/grants/me",
@@ -313,7 +306,7 @@ pub(crate) async fn revoke(
     responses(
         (status = 204, description = "The caller's grant is gone: they left the account."),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "Step up first: `POST /auth/step-up`; or the caller has the account through ownership or their role, not a grant.", body = ErrorResponse),
+        (status = 403, description = "The caller has the account through ownership or their role, not a grant.", body = ErrorResponse),
         (status = 404, description = "No such account, or one the caller holds no grant on.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
             headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
@@ -321,17 +314,16 @@ pub(crate) async fn revoke(
     ),
 )]
 pub(crate) async fn leave(
-    user: SteppedUpUser,
+    user: AuthUser,
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     ValidPath(id): ValidPath<AccountId>,
 ) -> Result<StatusCode, ApiError> {
-    let user = user.user();
     let account = facts(&state, &user.actor(), id).await?;
     user.require(Permission::LeaveAccount, &account.context())?;
     state
         .grants
-        .leave(&acting(user, ip), id)
+        .leave(&acting(&user, ip), id)
         .await
         .map_err(|error| match error {
             LeaveGrantError::NotFound => ApiError::NotFound,

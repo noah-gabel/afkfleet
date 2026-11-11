@@ -3,14 +3,15 @@
 // generated types, the Rust side's fixed `CommandError` messages and the server's error
 // codes. It keeps the state one test needs, fresh per test: users with their passwords and
 // authenticators, invites, the one session the app holds, the pending login or setup step,
-// the session's step-up, the Microsoft accounts with their grants and the one link flow, and
+// the session's step-up (only a new password and a new authenticator need one, ADR-0028), the
+// Microsoft accounts with their grants and the one link flow, and
 // each account's bot, as the server makes one with every account, and the modes: the two
 // built-in ones and another user's shared `warp`, which sends a command off the allowlist.
 // The bot writes follow the server's simplest answers (ADR-0019, S50; ADR-0020, S73), and so
 // does the chat: each bot's lines, a line sent only to an online bot, a command off the
-// allowlist only through `/command` after a step-up (S4, S8), answered `sent` or, by
+// allowlist only through `/command` (S4, S8), answered `sent` or, by
 // `chatOutcome`, `pending` (S5); `addChat` keeps a spec's pushed line in REST too.
-// The servers' settings are an Admin's or the Owner's, each write after the step-up, as the
+// The servers' settings are an Admin's or the Owner's to write, as the
 // server keeps them (ADR-0020, S74, S77, S78): a server keyed lowercase with its port always
 // written (25565 when none is given), its texts sorted and counted once, answered as their
 // lines; a stale version is 409 `server_settings_changed`, a server that has settings 422
@@ -210,11 +211,11 @@ const API_MESSAGES: Partial<Record<ErrorCode, string>> = {
   conflict: "The request conflicts with the current state.",
   validation_failed: "Some fields are invalid.",
   bot_not_online: "Only an online bot can send chat.",
-  command_needs_step_up: "This command needs your password: confirm it's you to send it.",
+  command_needs_step_up: "This command isn't on the server's list: send it as a command.",
   server_settings_changed:
     "These settings changed since you opened them. Load them again to see the change.",
   mode_needs_step_up:
-    "This mode holds a command that needs your password: confirm it's you to save it.",
+    "This mode holds a command that isn't on the server's list: save it with its commands.",
   mode_changed: "This mode changed since you opened it. Load it again to see the change.",
   mode_in_use_by_others: "A bot you can't set this mode on uses it, so this change can't be saved.",
   mode_in_use:
@@ -1013,13 +1014,13 @@ export class FakeBackend {
           value({ items: this.#settings.map(settingsResponse) } satisfies ServerSettingsPage),
         );
       case "create_server_settings":
-        return this.#steppedUp(() => this.#admin(() => this.#createSettings(request)));
+        return this.#signedIn(() => this.#admin(() => this.#createSettings(request)));
       case "update_server_settings":
-        return this.#steppedUp(() =>
+        return this.#signedIn(() =>
           this.#admin(() => this.#updateSettings(String(args.id), request)),
         );
       case "delete_server_settings":
-        return this.#steppedUp(() =>
+        return this.#signedIn(() =>
           this.#admin(() => {
             const kept = this.#settings.filter((one) => one.id !== String(args.id));
             if (kept.length === this.#settings.length) {
@@ -1039,11 +1040,11 @@ export class FakeBackend {
       case "agents":
         return this.#admin(() => value({ items: [...this.#agents] } satisfies AgentPage));
       case "disable_agent":
-        return this.#steppedUp((session) =>
+        return this.#signedIn((session) =>
           this.#admin(() => this.#disableAgent(session, String(args.id))),
         );
       case "release_agent":
-        return this.#steppedUp((session) =>
+        return this.#signedIn((session) =>
           this.#admin(() => this.#releaseAgent(session, String(args.id))),
         );
       case "user_grants":
@@ -1063,7 +1064,7 @@ export class FakeBackend {
           } satisfies AccountPage),
         );
       case "leave_account":
-        return this.#steppedUp((session) => this.#leave(session, String(args.id)));
+        return this.#signedIn((session) => this.#leave(session, String(args.id)));
       default:
         return this.#accountCommand(command as Command, args);
     }
@@ -1456,7 +1457,7 @@ export class FakeBackend {
   }
 
   #patch(target: string, request: Record<string, unknown>): Outcome {
-    return this.#steppedUp((session) => {
+    return this.#signedIn((session) => {
       const user = this.#users.find((one) => one.id === target);
       if (user === undefined) {
         return api(404, "not_found");
@@ -1475,7 +1476,7 @@ export class FakeBackend {
   }
 
   #createInvite(role: string): Outcome {
-    return this.#steppedUp((session) => {
+    return this.#signedIn((session) => {
       if (role !== "member" && role !== "admin") {
         return api(403, "forbidden");
       }
@@ -1551,7 +1552,7 @@ export class FakeBackend {
   }
 
   #revokeInvite(target: string): Outcome {
-    return this.#steppedUp(() => {
+    return this.#signedIn(() => {
       const index = this.#invites.findIndex((one) => one.response.id === target);
       const found = this.#invites[index];
       if (found === undefined) {
@@ -1701,7 +1702,7 @@ export class FakeBackend {
     );
   }
 
-  /** A new mode, in the server's order (R3); `twin` is the step-up route. */
+  /** A new mode, in the server's order (R3); `twin` is the `/with-commands` route. */
   #createMode(user: User, request: Record<string, unknown>, twin: boolean): Outcome {
     const body = modeBodyRefused(request);
     if (body !== undefined) {
@@ -2260,7 +2261,7 @@ export class FakeBackend {
   }
 
   #createGrant(target: unknown, request: Record<string, unknown>): Outcome {
-    return this.#steppedUp((session) =>
+    return this.#signedIn((session) =>
       this.#managed(session, target, (account) => {
         const grantee = this.#users.find(
           (one) => one.username === String(request.username) && !one.disabled,
@@ -2279,7 +2280,7 @@ export class FakeBackend {
   }
 
   #changeGrant(target: unknown, user: unknown, request: Record<string, unknown>): Outcome {
-    return this.#steppedUp((session) =>
+    return this.#signedIn((session) =>
       this.#managed(session, target, (account) => {
         if (String(user) === session.user.id) {
           return api(403, "forbidden");
@@ -2295,7 +2296,7 @@ export class FakeBackend {
   }
 
   #review(target: unknown, approve: boolean): Outcome {
-    return this.#steppedUp((session) => {
+    return this.#signedIn((session) => {
       const seen = this.#seen(session.user, target);
       if (seen === null) {
         return api(404, "not_found");
@@ -2373,7 +2374,7 @@ export class FakeBackend {
             : value(this.#accountResponse(session.user, seen.account));
         });
       case "delete_account":
-        return this.#steppedUp((session) =>
+        return this.#signedIn((session) =>
           this.#managed(session, args.id, (account) => {
             this.#accounts.splice(this.#accounts.indexOf(account), 1);
             return value();
@@ -2406,19 +2407,19 @@ export class FakeBackend {
       case "create_mode":
         return this.#signedIn((session) => this.#createMode(session.user, request, false));
       case "create_mode_with_commands":
-        return this.#steppedUp((session) => this.#createMode(session.user, request, true));
+        return this.#signedIn((session) => this.#createMode(session.user, request, true));
       case "update_mode":
         return this.#signedIn((session) =>
           this.#updateMode(session.user, String(args.id), request, false),
         );
       case "update_mode_with_commands":
-        return this.#steppedUp((session) =>
+        return this.#signedIn((session) =>
           this.#updateMode(session.user, String(args.id), request, true),
         );
       case "delete_mode":
-        return this.#steppedUp((session) => this.#deleteMode(session.user, String(args.id)));
+        return this.#signedIn((session) => this.#deleteMode(session.user, String(args.id)));
       case "patch_bot":
-        return this.#steppedUp((session) =>
+        return this.#signedIn((session) =>
           this.#botWrite(session, args.id, "manage", (account) => {
             account.bot.serverAddress = String(request.server_address);
             return value(this.#botResponse(session.user, account));
@@ -2471,7 +2472,7 @@ export class FakeBackend {
           ),
         );
       case "send_command":
-        return this.#steppedUp((session) =>
+        return this.#signedIn((session) =>
           this.#botWrite(session, args.id, "control", (account, level) =>
             this.#send(session.user, account, level, String(request.message), "command"),
           ),
@@ -2501,7 +2502,7 @@ export class FakeBackend {
       case "change_grant":
         return this.#changeGrant(args.id, args.user, request);
       case "revoke_grant":
-        return this.#steppedUp((session) =>
+        return this.#signedIn((session) =>
           this.#managed(session, args.id, (account) =>
             account.grants.delete(String(args.user)) ? value() : api(404, "not_found"),
           ),

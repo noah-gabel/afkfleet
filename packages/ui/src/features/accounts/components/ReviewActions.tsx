@@ -1,7 +1,7 @@
 // Approving or refusing a pending link (Plan.md P9.8, ADR-0018 groups A and E): offered only
-// for the links the server lists as waiting for this user, each asking first, then "Confirm
-// it's you" when the server wants the password. Refusing deletes the link; a refusal that answers
-// after its screen was left moves no other screen (S126).
+// for the links the server lists as waiting for this user, each asking first, never for the
+// password (ADR-0028). Refusing deletes the link; a refusal that answers after its screen was
+// left moves no other screen (S126).
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -14,7 +14,6 @@ import { Button } from "../../../components/ui/button";
 import type { AccountResponse } from "../../../generated/AccountResponse";
 import type { CommandError } from "../../../generated/CommandError";
 import { useAlive } from "../../../hooks/useStepGuard";
-import { StepUpPrompt } from "../../admin/components/StepUpPrompt";
 import type { AccountWrites } from "../hooks/useAccountWrites";
 import { approved, approveQuestion, NOT_WAITING, refused, refuseQuestion } from "../texts";
 
@@ -111,14 +110,6 @@ export function ReviewActions({
           </AlertDescription>
         </Alert>
       )}
-      {writes.prompt === key ? (
-        <StepUpPrompt
-          id={`step-up-${key}`}
-          pending={writes.running !== null}
-          onConfirm={writes.confirm}
-          onCancel={writes.cancel}
-        />
-      ) : null}
       {writes.failure?.key === key ? (
         <p role="alert" className="text-sm text-destructive">
           {writes.failure.message}

@@ -3,7 +3,7 @@
 // shows it counting down (RetryWaitMessage), keeps its submit disabled until it reaches zero,
 // then says once that the user can try again; a click during the wait would only be refused
 // again. Every form that sends a request uses it: login, the code step, the 2FA setup,
-// registering, the step-up (the profile's and the admin prompt's), the new password and the
+// registering, the profile's step-up, the new password and the
 // server form.
 //
 // The countdown lives in the form: after a reload it's gone, and the next try shows the

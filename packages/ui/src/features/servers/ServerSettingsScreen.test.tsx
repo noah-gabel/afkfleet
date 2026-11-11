@@ -14,7 +14,7 @@ import { deferred, me } from "../../test/fixtures";
 import type { RenderedApp } from "../../test/renderApp";
 import { settings, settingsId } from "../../test/servers";
 import { signedIn } from "../../test/signedIn";
-import { PASSWORD, refusal } from "../../test/signIn";
+import { refusal } from "../../test/signIn";
 import { TEXTS_HINT } from "./texts";
 
 const ADMIN = me("admin", "afkadmin");
@@ -32,30 +32,20 @@ function keyOf(server: string): string {
 
 /**
  * The App on settings `id`'s screen, or a new server's (`"new"`), over a fake that keeps
- * `rows` and asks for the password until `stepUp` ran (unless `stamped`).
+ * `rows`. It has no `stepUp`: a call to it would fail the test (ADR-0028).
  */
 async function atEditor(
   id: string,
   options: {
     readonly rows?: ServerSettingsResponse[];
-    readonly stamped?: boolean;
     readonly handlers?: Partial<ApiClient>;
   } = {},
 ) {
-  const state = { rows: [...(options.rows ?? [])], stamped: options.stamped ?? true };
-  const needs = () => {
-    if (!state.stamped) {
-      throw refusal(403, "step_up_required");
-    }
-  };
+  const state = { rows: [...(options.rows ?? [])] };
   const app = await signedIn(
     {
       serverSettings: async () => ({ items: state.rows }),
-      stepUp: async () => {
-        state.stamped = true;
-      },
       createServerSettings: async (request) => {
-        needs();
         const made = settings(
           9,
           keyOf(request.server),
@@ -67,7 +57,6 @@ async function atEditor(
         return made;
       },
       updateServerSettings: async (rowId, request) => {
-        needs();
         const row = state.rows.find((one) => one.id === rowId);
         if (row === undefined) {
           throw refusal(404, "not_found");
@@ -86,7 +75,6 @@ async function atEditor(
         return edited;
       },
       deleteServerSettings: async (rowId) => {
-        needs();
         if (!state.rows.some((one) => one.id === rowId)) {
           throw refusal(404, "not_found");
         }
@@ -135,18 +123,17 @@ describe("a Minecraft server's settings", () => {
     expect(screen.getByText("Host or host:port, e.g. play.example.com")).toBeDefined();
   });
 
-  it("adds a server after Confirm it's you, then opens its own screen (U61)", async () => {
-    const { app } = await atEditor("new", { stamped: false });
+  it("adds a server, never asking for the password (ADR-0028), then opens its own screen (U61)", async () => {
+    const { app } = await atEditor("new");
 
     expect(await screen.findByRole("heading", { name: "Add server", level: 1 })).toBeDefined();
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
     await app.user.type(screen.getByLabelText("Server address"), "MC.example.com");
     await app.user.type(text(1), "Two{Enter}lines");
     await app.user.click(screen.getByRole("button", { name: "Save" }));
-    await app.user.type(await screen.findByLabelText("Current password"), PASSWORD);
-    await app.user.click(screen.getByRole("button", { name: "Continue" }));
 
     expect(await screen.findByText("Added mc.example.com:25565.")).toBeDefined();
+    expect(screen.queryByLabelText("Current password")).toBeNull();
     await vi.waitFor(() => expect(app.path()).toBe(`/admin/servers/${settingsId(9)}`));
     expect(
       await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 }),
@@ -157,7 +144,8 @@ describe("a Minecraft server's settings", () => {
       conflict_texts: ["Two\nlines"],
       chat_formats: [],
     };
-    expect(calls(app, "createServerSettings")).toEqual([[request], [request]]);
+    expect(calls(app, "createServerSettings")).toEqual([[request]]);
+    expect(calls(app, "stepUp")).toEqual([]);
   });
 
   it("saves and stays, sending the form as it is at the version read, and asks once", async () => {
@@ -387,8 +375,8 @@ describe("a Minecraft server's settings", () => {
     ]);
   });
 
-  it("deletes after asking and Confirm it's you, then goes back to the list", async () => {
-    const { app } = await atEditor(ROW.id, { rows: [ROW], stamped: false });
+  it("deletes after asking, never for the password, then goes back to the list", async () => {
+    const { app } = await atEditor(ROW.id, { rows: [ROW] });
     await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
 
     await app.user.click(screen.getByRole("button", { name: "Delete" }));
@@ -398,13 +386,12 @@ describe("a Minecraft server's settings", () => {
       ),
     ).toBeDefined();
     await app.user.click(screen.getByRole("button", { name: "Delete settings" }));
-    await app.user.type(await screen.findByLabelText("Current password"), PASSWORD);
-    await app.user.click(screen.getByRole("button", { name: "Continue" }));
 
     expect(await screen.findByText("Deleted mc.example.com:25565's settings.")).toBeDefined();
+    expect(screen.queryByLabelText("Current password")).toBeNull();
     await vi.waitFor(() => expect(app.path()).toBe("/admin/servers"));
     expect(await screen.findByText("No servers.")).toBeDefined();
-    expect(calls(app, "deleteServerSettings")).toEqual([[ROW.id], [ROW.id]]);
+    expect(calls(app, "deleteServerSettings")).toEqual([[ROW.id]]);
   });
 
   it("deletes nothing when the question is cancelled", async () => {
@@ -486,12 +473,16 @@ describe("a Minecraft server's settings, PR #80's review", () => {
     expect(text(1).value).toBe("Someone else's");
   });
 
-  it("locks the fields, Remove and Add text while Confirm it's you is up, and the retry sends what's shown", async () => {
-    const { app } = await atEditor(ROW.id, { rows: [ROW], stamped: false });
+  it("locks the fields, Remove and Add text while the save is in flight, so what's sent is what's shown", async () => {
+    const saved = deferred<ServerSettingsResponse>();
+    const { app } = await atEditor(ROW.id, {
+      rows: [ROW],
+      handlers: { updateServerSettings: () => saved.promise },
+    });
     await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
     await app.user.type(text(1), " now");
     await app.user.click(screen.getByRole("button", { name: "Save" }));
-    await screen.findByLabelText("Current password");
+    await vi.waitFor(() => expect(calls(app, "updateServerSettings")).toHaveLength(1));
 
     const address = screen.getByLabelText("Server address") as HTMLInputElement;
     expect(address.readOnly).toBe(true);
@@ -505,8 +496,7 @@ describe("a Minecraft server's settings, PR #80's review", () => {
     );
     await app.user.type(address, "x");
     await app.user.type(text(1), " later");
-    await app.user.type(screen.getByLabelText("Current password"), PASSWORD);
-    await app.user.click(screen.getByRole("button", { name: "Continue" }));
+    saved.resolve({ ...ROW, version: 2 });
     expect(await screen.findByText("Saved. Bots on it use the change at once.")).toBeDefined();
 
     const shown = {
@@ -515,10 +505,7 @@ describe("a Minecraft server's settings, PR #80's review", () => {
       conflict_texts: ["Already connected now", "You logged in\nfrom another location"],
       chat_formats: [],
     };
-    expect(calls(app, "updateServerSettings")).toEqual([
-      [ROW.id, shown],
-      [ROW.id, shown],
-    ]);
+    expect(calls(app, "updateServerSettings")).toEqual([[ROW.id, shown]]);
   });
 
   it("never lets a background read overwrite what's being typed, and saves it at the version read", async () => {
@@ -761,15 +748,17 @@ describe("a Minecraft server's chat formats and Try a line (H8)", () => {
     expect(section().getAttribute("aria-describedby")).toContain(listed.id);
   });
 
-  it("locks the formats, Remove and Add format while Confirm it's you is up, and Try stays usable", async () => {
+  it("locks the formats, Remove and Add format while the save is in flight, and Try stays usable", async () => {
     const { app } = await atEditor(WITH_FORMATS.id, {
       rows: [WITH_FORMATS],
-      stamped: false,
-      handlers: { previewChatFormats: async () => ({ sender: "Notch", format: 0 }) },
+      handlers: {
+        previewChatFormats: async () => ({ sender: "Notch", format: 0 }),
+        updateServerSettings: () => new Promise(() => {}),
+      },
     });
     await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
     await app.user.click(screen.getByRole("button", { name: "Save" }));
-    await screen.findByLabelText("Current password");
+    await vi.waitFor(() => expect(calls(app, "updateServerSettings")).toHaveLength(1));
 
     expect(format(1).readOnly).toBe(true);
     expect(format(2).readOnly).toBe(true);
@@ -996,16 +985,6 @@ describe("a Minecraft server's chat formats and Try a line (H8)", () => {
 });
 
 describe("what Save brings, where a stacked editor shows it (PR #92's review)", () => {
-  it("puts the focus in Confirm it's you's password field", async () => {
-    const { app } = await atEditor(ROW.id, { rows: [ROW], stamped: false });
-    await screen.findByRole("heading", { name: "mc.example.com:25565", level: 1 });
-
-    await app.user.click(screen.getByRole("button", { name: "Save" }));
-
-    const field = await screen.findByLabelText("Current password");
-    await vi.waitFor(() => expect(document.activeElement).toBe(field));
-  });
-
   it.each([
     ["the changed settings", false, null, CHANGED],
     ["the limit", true, refusal(409, "conflict"), /^Server limit reached/],

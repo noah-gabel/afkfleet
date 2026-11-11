@@ -21,11 +21,11 @@
 //!   see is 404, like an unknown one (`ViewBot`). Who owns an account and
 //!   since when shows only to Admins, the Owner and Manage holders.
 //! - **Approving and refusing** a pending link (`ReviewLink`) and
-//!   **deleting** an account (`DeleteAccount`) need a step-up; each is
-//!   authorized here and again in the service's transaction.
+//!   **deleting** an account (`DeleteAccount`) are each authorized here
+//!   and again in the service's transaction.
 //! - **Linking again** (`RelinkAccount`) starts a link flow like
-//!   `POST /accounts/link`, with the same caps; no step-up, since it can't
-//!   move the account to another Minecraft profile.
+//!   `POST /accounts/link`, with the same caps; it can't move the account
+//!   to another Minecraft profile.
 
 use axum::Json;
 use axum::extract::State;
@@ -48,7 +48,7 @@ use crate::app::link_flows::{
     ALL_BUSY_RETRY_AFTER, IN_PROGRESS_RETRY_AFTER, LinkFlowStatus, LinkStartError, StartedFlow,
 };
 use crate::http::error::ApiError;
-use crate::http::extractors::{AuthUser, SteppedUpUser, ValidJson, ValidPath, ValidQuery};
+use crate::http::extractors::{AuthUser, ValidJson, ValidPath, ValidQuery};
 use crate::http::rate_limit::ClientIp;
 use crate::http::router::AppState;
 use crate::ports::accounts::ListedAccount;
@@ -296,7 +296,6 @@ pub(crate) async fn get(
 }
 
 /// `DELETE /api/v1/accounts/{id}`: deletes the account, with its grants.
-/// Needs a step-up.
 #[utoipa::path(
     delete,
     path = "/api/v1/accounts/{id}",
@@ -306,7 +305,7 @@ pub(crate) async fn get(
     responses(
         (status = 204, description = "The account, its refresh token and its grants are deleted."),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "Step up first: `POST /auth/step-up`; or the caller may see the account but not delete it (Manage).", body = ErrorResponse),
+        (status = 403, description = "The caller may see the account but not delete it (Manage).", body = ErrorResponse),
         (status = 404, description = "No such account, or one the caller may not see.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
             headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
@@ -314,17 +313,16 @@ pub(crate) async fn get(
     ),
 )]
 pub(crate) async fn delete(
-    user: SteppedUpUser,
+    user: AuthUser,
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     ValidPath(id): ValidPath<AccountId>,
 ) -> Result<StatusCode, ApiError> {
-    let user = user.user();
     let account = facts(&state, &user.actor(), id).await?;
     user.require(Permission::DeleteAccount, &account.context())?;
     state
         .accounts
-        .delete(&acting(user, ip), id)
+        .delete(&acting(&user, ip), id)
         .await
         .map_err(|error| match error {
             DeleteAccountError::NotFound => ApiError::NotFound,
@@ -337,7 +335,7 @@ pub(crate) async fn delete(
 }
 
 /// `POST /api/v1/accounts/{id}/approve`: approves a pending link, which
-/// makes the account usable. Needs a step-up.
+/// makes the account usable.
 #[utoipa::path(
     post,
     path = "/api/v1/accounts/{id}/approve",
@@ -347,7 +345,7 @@ pub(crate) async fn delete(
     responses(
         (status = 200, description = "The account is active, as the caller sees it now.", body = AccountResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "Step up first: `POST /auth/step-up`; or the caller may see the account but isn't above its owner (the Owner for Admins' links, an Admin for Members').", body = ErrorResponse),
+        (status = 403, description = "The caller may see the account but isn't above its owner (the Owner for Admins' links, an Admin for Members').", body = ErrorResponse),
         (status = 404, description = "No such account, or one the caller may not see.", body = ErrorResponse),
         (status = 409, description = "The account isn't pending.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
@@ -356,25 +354,24 @@ pub(crate) async fn delete(
     ),
 )]
 pub(crate) async fn approve(
-    user: SteppedUpUser,
+    user: AuthUser,
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     ValidPath(id): ValidPath<AccountId>,
 ) -> Result<Json<AccountResponse>, ApiError> {
-    let user = user.user();
     let actor = user.actor();
     let account = facts(&state, &actor, id).await?;
     user.require(Permission::ReviewLink, &account.context())?;
     let approved = state
         .accounts
-        .approve(&acting(user, ip), id)
+        .approve(&acting(&user, ip), id)
         .await
         .map_err(reviewing)?;
     Ok(Json(account_response(&actor, &approved)?))
 }
 
 /// `POST /api/v1/accounts/{id}/refuse`: refuses a pending link, which
-/// deletes the account. Needs a step-up.
+/// deletes the account.
 #[utoipa::path(
     post,
     path = "/api/v1/accounts/{id}/refuse",
@@ -384,7 +381,7 @@ pub(crate) async fn approve(
     responses(
         (status = 204, description = "The link is refused: the account, its refresh token and its grants are deleted."),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "Step up first: `POST /auth/step-up`; or the caller may see the account but isn't above its owner (the Owner for Admins' links, an Admin for Members').", body = ErrorResponse),
+        (status = 403, description = "The caller may see the account but isn't above its owner (the Owner for Admins' links, an Admin for Members').", body = ErrorResponse),
         (status = 404, description = "No such account, or one the caller may not see.", body = ErrorResponse),
         (status = 409, description = "The account isn't pending.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
@@ -393,17 +390,16 @@ pub(crate) async fn approve(
     ),
 )]
 pub(crate) async fn refuse(
-    user: SteppedUpUser,
+    user: AuthUser,
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     ValidPath(id): ValidPath<AccountId>,
 ) -> Result<StatusCode, ApiError> {
-    let user = user.user();
     let account = facts(&state, &user.actor(), id).await?;
     user.require(Permission::ReviewLink, &account.context())?;
     state
         .accounts
-        .refuse(&acting(user, ip), id)
+        .refuse(&acting(&user, ip), id)
         .await
         .map_err(reviewing)?;
     Ok(StatusCode::NO_CONTENT)

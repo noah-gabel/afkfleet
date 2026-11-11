@@ -10,7 +10,7 @@ use fleet_api_types::bots::{
 use fleet_api_types::page::PAGE_MAX;
 use fleet_api_types::{BotId, ErrorCode, ModeId, SecretText};
 
-use crate::support::{Bridge, Server, is_api, is_invalid, step_up_request};
+use crate::support::{Bridge, Server, is_api, is_invalid};
 
 fn offline(name: &str) -> CreateOfflineAccountRequest {
     CreateOfflineAccountRequest {
@@ -135,7 +135,7 @@ async fn a_page_out_of_range_is_refused_before_any_request() {
 }
 
 #[tokio::test]
-async fn a_bots_server_is_set_after_a_step_up_and_an_unparseable_one_never_leaves_the_app() {
+async fn a_bots_server_is_set_and_an_unparseable_one_never_leaves_the_app() {
     let server = Server::start().await;
     let (owner, _) = server.owner().await;
     let account = owner
@@ -150,12 +150,6 @@ async fn a_bots_server_is_set_after_a_step_up_and_an_unparseable_one_never_leave
         .patch_bot(bot, address("https://play.example.com/x"))
         .await
         .unwrap_err();
-    let unstepped = owner
-        .state
-        .patch_bot(bot, address("play.example.com"))
-        .await
-        .unwrap_err();
-    owner.state.step_up(step_up_request()).await.unwrap();
     let set = owner
         .state
         .patch_bot(bot, address("play.example.com:25566"))
@@ -165,10 +159,6 @@ async fn a_bots_server_is_set_after_a_step_up_and_an_unparseable_one_never_leave
     assert!(
         is_invalid(&unparseable, "server_address"),
         "{unparseable:?}"
-    );
-    assert!(
-        is_api(&unstepped, 403, ErrorCode::StepUpRequired),
-        "{unstepped:?}"
     );
     assert_eq!(set.account.id, account.id);
     assert_eq!(
@@ -190,7 +180,6 @@ async fn a_bot_switches_mode_starts_unplaced_and_stops() {
         .await
         .unwrap();
     let bot = owner.state.bots(None, None).await.unwrap().items[0].id;
-    owner.state.step_up(step_up_request()).await.unwrap();
     owner
         .state
         .patch_bot(bot, address("play.example.com"))
@@ -256,7 +245,6 @@ async fn a_view_holder_may_see_a_bot_but_not_start_it() {
         .create_offline_account(offline("AfkBot1"))
         .await
         .unwrap();
-    owner.state.step_up(step_up_request()).await.unwrap();
     let (viewer, _) = server.member(&owner, "viewer").await;
     owner
         .state

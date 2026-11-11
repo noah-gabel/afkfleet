@@ -1,6 +1,7 @@
 //! The dev console (`examples/dev-bots`; ADR-0019, S71) against the
 //! in-process server, its terminal scripted: the login, its refusals, the
-//! commands, the step-up, and that nothing secret or unknown is ever shown.
+//! commands, that the password is never asked again after the login
+//! (ADR-0028), and that nothing secret or unknown is ever shown.
 
 use core::pin::Pin;
 use core::time::Duration;
@@ -21,7 +22,7 @@ use secrecy::{ExposeSecret as _, SecretString};
 use tokio::sync::watch;
 
 use crate::dev_console::{self, DEV_SERVER, Ended, HELP, Terminal};
-use crate::support::{OWNER, PASSWORD, Server, step_up};
+use crate::support::{OWNER, PASSWORD, Server};
 
 /// A line of the script that moves the server's clock on by 31 days, past
 /// the session's 30, before the next line is read.
@@ -282,7 +283,7 @@ async fn offline_adds_an_account_whose_bot_bots_lists_unplaced_without_a_server(
 }
 
 #[tokio::test]
-async fn server_asks_for_the_password_again_once_and_sets_the_address() {
+async fn server_sets_the_address_without_asking_for_the_password_again() {
     let server = Server::start().await;
     let (owner, code) = owner_and_code(&server).await;
     let bot = bot_of(&owner, "AfkBot9").await;
@@ -293,29 +294,16 @@ async fn server_asks_for_the_password_again_once_and_sets_the_address() {
     let ended = dev_console::run(&client, OWNER, &mut terminal).await;
 
     assert_eq!(ended, Ended::LoggedOut);
-    assert_eq!(terminal.secrets.len(), 0, "the step-up asked once");
+    assert_eq!(
+        terminal.secrets.len(),
+        1,
+        "the password was never asked again"
+    );
     let stored = owner.bot(bot).await.unwrap().server_address;
     assert_eq!(
         stored.as_ref().map(fleet_api_types::BoundedText::as_str),
         Some("127.0.0.1:25565")
     );
-    server.stop().await;
-}
-
-#[tokio::test]
-async fn a_refused_step_up_changes_nothing() {
-    let server = Server::start().await;
-    let (owner, code) = owner_and_code(&server).await;
-    let bot = bot_of(&owner, "AfkBot9").await;
-    let (client, _) = server.client();
-    let command = format!("server {bot} 127.0.0.1:25565");
-    let mut terminal = Scripted::new(&[PASSWORD, &code, "a wrong password"], &[&command]);
-
-    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
-
-    assert_eq!(ended, Ended::LoggedOut);
-    assert!(terminal.text().contains("forbidden"), "{}", terminal.text());
-    assert_eq!(owner.bot(bot).await.unwrap().server_address, None);
     server.stop().await;
 }
 
@@ -506,7 +494,7 @@ async fn chat_without_text_is_invalid_input_and_never_sent() {
     let (client, _) = server.client();
     let chat = format!("chat {bot}   ");
     let command = format!("command {bot} ");
-    // A third secret, which a step-up would take.
+    // A third secret, which a question for the password would take.
     let mut terminal = Scripted::new(&[PASSWORD, &code, PASSWORD], &[&chat, &command]);
 
     let ended = dev_console::run(&client, OWNER, &mut terminal).await;
@@ -516,7 +504,11 @@ async fn chat_without_text_is_invalid_input_and_never_sent() {
     assert_eq!(text.matches("not a command").count(), 2, "{text}");
     assert!(!text.contains("must not be empty"), "{text}");
     assert!(!text.contains("step_up_required"), "{text}");
-    assert_eq!(terminal.secrets.len(), 1, "no step-up was asked for");
+    assert_eq!(
+        terminal.secrets.len(),
+        1,
+        "the password was never asked again"
+    );
     server.stop().await;
 }
 
@@ -539,7 +531,7 @@ async fn chat_with_a_command_off_the_allowlist_shows_the_pointer_to_command() {
 }
 
 #[tokio::test]
-async fn command_asks_for_the_password_again_once_and_sends() {
+async fn command_sends_without_asking_for_the_password_again() {
     let server = Server::start().await;
     let (owner, code) = owner_and_code(&server).await;
     let bot = bot_of(&owner, "AfkBot9").await;
@@ -550,9 +542,13 @@ async fn command_asks_for_the_password_again_once_and_sends() {
     let ended = dev_console::run(&client, OWNER, &mut terminal).await;
 
     assert_eq!(ended, Ended::LoggedOut);
-    assert_eq!(terminal.secrets.len(), 0, "the step-up asked once");
+    assert_eq!(
+        terminal.secrets.len(),
+        1,
+        "the password was never asked again"
+    );
     let text = terminal.text();
-    assert!(text.contains("bot_not_online"), "past the step-up: {text}");
+    assert!(text.contains("bot_not_online"), "{text}");
     assert!(!text.contains("step_up_required"), "{text}");
     assert!(
         !text.contains(PASSWORD) && !text.contains("AfkBot2"),
@@ -812,10 +808,10 @@ async fn new_mode_takes_on_respawn_steps() {
     server.stop().await;
 }
 
-/// A mode with a command off the allowlist asks for the password again,
-/// once, and is created through the step-up route.
+/// A mode with a command off the allowlist is created through the twin
+/// route, and the password is never asked again.
 #[tokio::test]
-async fn new_mode_with_a_command_off_the_allowlist_asks_for_the_password_once() {
+async fn new_mode_with_a_command_off_the_allowlist_goes_through_the_twin_route() {
     let server = Server::start().await;
     let (_owner, code) = owner_and_code(&server).await;
     let (client, _) = server.client();
@@ -825,7 +821,11 @@ async fn new_mode_with_a_command_off_the_allowlist_asks_for_the_password_once() 
     let ended = dev_console::run(&client, OWNER, &mut terminal).await;
 
     assert_eq!(ended, Ended::LoggedOut);
-    assert_eq!(terminal.secrets.len(), 0, "the step-up asked once");
+    assert_eq!(
+        terminal.secrets.len(),
+        1,
+        "the password was never asked again"
+    );
     let text = terminal.text();
     assert!(text.contains(" Ops private mine editable"), "{text}");
     assert!(!text.contains("mode_needs_step_up"), "{text}");
@@ -946,10 +946,10 @@ async fn edit_mode_edits_the_mode_and_never_shows_its_steps() {
     server.stop().await;
 }
 
-/// An edit with a command off the allowlist asks for the password again,
-/// once, and goes through the step-up twin.
+/// An edit with a command off the allowlist goes through the twin, and the
+/// password is never asked again.
 #[tokio::test]
-async fn edit_mode_with_a_command_off_the_allowlist_asks_for_the_password_once() {
+async fn edit_mode_with_a_command_off_the_allowlist_goes_through_the_twin_route() {
     let server = Server::start().await;
     let (owner, code) = owner_and_code(&server).await;
     let id = greeter(&owner).await;
@@ -962,7 +962,11 @@ async fn edit_mode_with_a_command_off_the_allowlist_asks_for_the_password_once()
     let ended = dev_console::run(&client, OWNER, &mut terminal).await;
 
     assert_eq!(ended, Ended::LoggedOut);
-    assert_eq!(terminal.secrets.len(), 0, "the step-up asked once");
+    assert_eq!(
+        terminal.secrets.len(),
+        1,
+        "the password was never asked again"
+    );
     let text = terminal.text();
     assert!(
         text.contains(" Greeter private mine editable version 2"),
@@ -998,10 +1002,10 @@ async fn edit_mode_that_isnt_an_edit_is_never_echoed() {
     server.stop().await;
 }
 
-/// `delete-mode` asks for the password again and deletes the mode; one a
-/// bot uses shows `mode_in_use`'s text and stays.
+/// `delete-mode` deletes the mode; one a bot uses shows `mode_in_use`'s
+/// text and stays.
 #[tokio::test]
-async fn delete_mode_asks_for_the_password_and_deletes_the_mode() {
+async fn delete_mode_deletes_the_mode() {
     let server = Server::start().await;
     let (owner, code) = owner_and_code(&server).await;
     let id = greeter(&owner).await;
@@ -1028,7 +1032,11 @@ async fn delete_mode_asks_for_the_password_and_deletes_the_mode() {
     let ended = dev_console::run(&client, OWNER, &mut terminal).await;
 
     assert_eq!(ended, Ended::LoggedOut);
-    assert_eq!(terminal.secrets.len(), 0, "the step-up asked once");
+    assert_eq!(
+        terminal.secrets.len(),
+        1,
+        "the password was never asked again"
+    );
     let text = terminal.text();
     assert!(text.contains(&format!("mode {id} deleted")), "{text}");
     assert!(
@@ -1442,7 +1450,6 @@ fn a_mode_event_never_prints_its_steps() {
 async fn users_lists_every_user_and_audit_the_newest_entries_oldest_first() {
     let server = Server::start().await;
     let (owner, _, app) = server.owner().await;
-    step_up(&owner).await;
     let (_bob, bob) = server.member(&owner, "bob").await;
     // A code of the step the Member's login moved the clock to.
     server.next_step();
@@ -1474,10 +1481,10 @@ async fn users_lists_every_user_and_audit_the_newest_entries_oldest_first() {
     server.stop().await;
 }
 
-/// `agents` lists every agent with its bots; `release` asks for the
-/// password again, as the server wants, and releases a disabled one's bot.
+/// `agents` lists every agent with its bots; `release` releases a
+/// disabled one's bot.
 #[tokio::test]
-async fn release_asks_for_the_password_again_and_releases_a_disabled_agents_bots() {
+async fn release_releases_a_disabled_agents_bots() {
     let server = Server::start().await;
     let (owner, code) = owner_and_code(&server).await;
     let bot = bot_of(&owner, "AfkBot9").await;
@@ -1501,9 +1508,10 @@ async fn release_asks_for_the_password_again_and_releases_a_disabled_agents_bots
     assert!(listed[0].ends_with(" agent-1 disabled bots=1"), "{said:?}");
     assert!(listed[1].ends_with(" agent-1 disabled bots=0"), "{said:?}");
     assert!(listed[2].ends_with(" agent-1 disabled bots=0"), "{said:?}");
-    assert!(
-        terminal.secrets.is_empty(),
-        "the password was asked for again"
+    assert_eq!(
+        terminal.secrets.len(),
+        1,
+        "the password was never asked again"
     );
     server.stop().await;
 }
@@ -1514,7 +1522,6 @@ async fn release_asks_for_the_password_again_and_releases_a_disabled_agents_bots
 async fn held_and_shared_show_the_review_of_a_users_grants() {
     let server = Server::start().await;
     let (owner, _, app) = server.owner().await;
-    step_up(&owner).await;
     let (alice, _) = server.member(&owner, "alice").await;
     let (_bob, bob) = server.member(&owner, "bob").await;
     let account = alice
@@ -1524,7 +1531,6 @@ async fn held_and_shared_show_the_review_of_a_users_grants() {
         .await
         .unwrap()
         .id;
-    step_up(&alice).await;
     alice
         .create_grant(
             account,
@@ -1582,13 +1588,12 @@ async fn held_and_shared_show_the_review_of_a_users_grants() {
     server.stop().await;
 }
 
-/// `leave` asks for the password again, as the server wants, and gives up
-/// the user's grant; a second `leave` shows the server's 404.
+/// `leave` gives up the user's grant; a second `leave` shows the
+/// server's 404.
 #[tokio::test]
-async fn leave_asks_for_the_password_again_and_gives_up_the_grant() {
+async fn leave_gives_up_the_grant() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
-    step_up(&owner).await;
     let (alice, _) = server.member(&owner, "alice").await;
     let (_bob, _, app) = server.member_with_app(&owner, "bob").await;
     let account = alice
@@ -1598,7 +1603,6 @@ async fn leave_asks_for_the_password_again_and_gives_up_the_grant() {
         .await
         .unwrap()
         .id;
-    step_up(&alice).await;
     alice
         .create_grant(
             account,
@@ -1625,20 +1629,21 @@ async fn leave_asks_for_the_password_again_and_gives_up_the_grant() {
     let text = terminal.text();
     assert!(text.contains("not_found"), "{text}");
     assert!(!text.contains(PASSWORD), "{text}");
-    assert!(
-        terminal.secrets.is_empty(),
-        "the password was asked for again"
+    assert_eq!(
+        terminal.secrets.len(),
+        1,
+        "the password was never asked again"
     );
     server.stop().await;
 }
 
 // --- The servers' settings (P11.9; ADR-0020, S77) ---------------------------------------------
 
-/// `new-server` asks for the password again once and creates the settings;
+/// `new-server` creates the settings;
 /// `servers` lists them as a line, the server as its key and the texts as a
 /// count, never a text.
 #[tokio::test]
-async fn new_server_asks_for_the_password_again_once_and_servers_lists_it() {
+async fn new_server_creates_the_settings_and_servers_lists_it() {
     let server = Server::start().await;
     let (owner, code) = owner_and_code(&server).await;
     let (client, _) = server.client();
@@ -1653,7 +1658,11 @@ async fn new_server_asks_for_the_password_again_once_and_servers_lists_it() {
     let ended = dev_console::run(&client, OWNER, &mut terminal).await;
 
     assert_eq!(ended, Ended::LoggedOut);
-    assert_eq!(terminal.secrets.len(), 0, "the step-up asked once");
+    assert_eq!(
+        terminal.secrets.len(),
+        1,
+        "the password was never asked again"
+    );
     let stored = owner
         .server_settings(&ServerSettingsPageQuery {
             before: None,
@@ -1682,7 +1691,6 @@ async fn new_server_asks_for_the_password_again_once_and_servers_lists_it() {
 async fn servers_lists_every_page_of_the_servers_settings() {
     let server = Server::start().await;
     let (owner, code) = owner_and_code(&server).await;
-    step_up(&owner).await;
     for n in 0..11 {
         owner
             .create_server_settings(
@@ -1716,13 +1724,12 @@ async fn servers_lists_every_page_of_the_servers_settings() {
     server.stop().await;
 }
 
-/// `edit-server` and `delete-server` write after one step-up, and JSON that
-/// isn't server settings is said so, never repeated.
+/// `edit-server` and `delete-server` write, and JSON that isn't server
+/// settings is said so, never repeated.
 #[tokio::test]
 async fn edit_server_and_delete_server_write_and_bad_json_is_never_repeated() {
     let server = Server::start().await;
     let (owner, code) = owner_and_code(&server).await;
-    step_up(&owner).await;
     let created = owner
         .create_server_settings(
             &serde_json::from_value(serde_json::json!({
@@ -1752,7 +1759,11 @@ async fn edit_server_and_delete_server_write_and_bad_json_is_never_repeated() {
     let ended = dev_console::run(&client, OWNER, &mut terminal).await;
 
     assert_eq!(ended, Ended::LoggedOut);
-    assert_eq!(terminal.secrets.len(), 0, "the step-up asked once");
+    assert_eq!(
+        terminal.secrets.len(),
+        1,
+        "the password was never asked again"
+    );
     let text = terminal.text();
     assert!(text.contains("not server settings' JSON"), "{text}");
     assert!(!text.contains("secret-looking"), "{text}");
@@ -1778,7 +1789,7 @@ async fn edit_server_and_delete_server_write_and_bad_json_is_never_repeated() {
 }
 
 /// `preview-formats` says which format reads which sender, counted from 1,
-/// or that none fits, without a step-up; it never prints the line back, and
+/// or that none fits; it never prints the line back, and
 /// JSON that isn't a preview's is said so (P11.9; ADR-0020, R143).
 #[tokio::test]
 async fn preview_formats_says_which_format_reads_which_sender_and_never_repeats_the_line() {
@@ -1797,7 +1808,11 @@ async fn preview_formats_says_which_format_reads_which_sender_and_never_repeats_
     let ended = dev_console::run(&client, OWNER, &mut terminal).await;
 
     assert_eq!(ended, Ended::LoggedOut);
-    assert_eq!(terminal.secrets.len(), 0, "no step-up was asked");
+    assert_eq!(
+        terminal.secrets.len(),
+        0,
+        "the password was never asked again"
+    );
     let text = terminal.text();
     assert!(
         terminal

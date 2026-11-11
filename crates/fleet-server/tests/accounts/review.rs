@@ -1,7 +1,7 @@
 //! Approving and refusing a pending link (Plan.md P9.6; ADR-0018, group
 //! E): `POST /api/v1/accounts/{id}/approve` and `/refuse`, through serve's
 //! own app. Someone above the owner reviews it, by the owner's current
-//! role, after a step-up; only a pending account is reviewed; approving
+//! role; only a pending account is reviewed; approving
 //! makes it active and refusing deletes it with its grants; each is
 //! audited, and the service re-checks everything in its transaction. Each
 //! review tells the reconciler to look again after its commit (P10.5).
@@ -58,7 +58,7 @@ async fn an_admin_approves_a_members_pending_link_which_is_active_from_then_on(
     options: SqliteConnectOptions,
 ) {
     let setup = HttpSetup::new(options).await;
-    let admin = setup.stepped_up(1, Role::Admin).await;
+    let admin = setup.person(1, Role::Admin).await;
     let member = setup.person(2, Role::Member).await;
     let id = setup
         .add_account(member.id, 3, Some(AccountStatus::Pending))
@@ -95,7 +95,7 @@ async fn the_owner_reviews_admins_and_members_links(
     options: SqliteConnectOptions,
 ) {
     let setup = HttpSetup::new(options).await;
-    let owner = setup.stepped_up(1, Role::Owner).await;
+    let owner = setup.person(1, Role::Owner).await;
     let admin = setup.person(2, Role::Admin).await;
     let member = setup.person(3, Role::Member).await;
     let admins = setup
@@ -123,10 +123,10 @@ async fn only_someone_above_the_owner_reviews_whatever_grant_anyone_holds(
     options: SqliteConnectOptions,
 ) {
     let setup = HttpSetup::new(options).await;
-    let admin = setup.stepped_up(1, Role::Admin).await;
+    let admin = setup.person(1, Role::Admin).await;
     let other_admin = setup.person(2, Role::Admin).await;
-    let member = setup.stepped_up(3, Role::Member).await;
-    let other_member = setup.stepped_up(4, Role::Member).await;
+    let member = setup.person(3, Role::Member).await;
+    let other_member = setup.person(4, Role::Member).await;
     let admins = setup
         .add_account(other_admin.id, 5, Some(AccountStatus::Pending))
         .await;
@@ -178,37 +178,43 @@ async fn only_someone_above_the_owner_reviews_whatever_grant_anyone_holds(
 }
 
 #[sqlx::test(migrations = false)]
-async fn reviewing_needs_a_fresh_step_up_and_changes_nothing_without_one(
-    _pool: SqlitePoolOptions,
-    options: SqliteConnectOptions,
-) {
+async fn reviewing_needs_no_step_up(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
     let setup = HttpSetup::new(options).await;
     let admin = setup.person(1, Role::Admin).await;
     let member = setup.person(2, Role::Member).await;
-    let id = setup
+    let approving = setup
         .add_account(member.id, 3, Some(AccountStatus::Pending))
         .await;
+    let refusing = setup
+        .add_account(member.id, 4, Some(AccountStatus::Pending))
+        .await;
 
-    let approved = approve(&setup, &admin, id).await;
-    let refused = refuse(&setup, &admin, id).await;
-    setup.step_up(&admin).await;
-    setup.clock.advance(core::time::Duration::from_secs(301));
-    let stale = approve(&setup, &admin, id).await;
+    let approved = approve(&setup, &admin, approving).await;
+    let refused = refuse(&setup, &admin, refusing).await;
 
-    for seen in [approved, refused, stale] {
-        assert_eq!(seen.status, 403, "{}", seen.text);
-        assert_eq!(seen.code(), "step_up_required");
-    }
-    assert_eq!(
-        setup.stored(id).await.unwrap().status(),
-        AccountStatus::Pending
+    assert!(
+        (200..300).contains(&approved.status),
+        "{} {}",
+        approved.status,
+        approved.text
     );
+    assert!(
+        (200..300).contains(&refused.status),
+        "{} {}",
+        refused.status,
+        refused.text
+    );
+    assert_eq!(
+        setup.stored(approving).await.unwrap().status(),
+        AccountStatus::Active
+    );
+    assert!(setup.stored(refusing).await.is_none());
 }
 
 #[sqlx::test(migrations = false)]
 async fn only_a_pending_link_is_reviewed(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
     let setup = HttpSetup::new(options).await;
-    let owner = setup.stepped_up(1, Role::Owner).await;
+    let owner = setup.person(1, Role::Owner).await;
     let member = setup.person(2, Role::Member).await;
     let statuses = [
         Some(AccountStatus::Active),
@@ -238,7 +244,7 @@ async fn refusing_deletes_the_link_with_its_grants_and_frees_the_slot_and_the_uu
     options: SqliteConnectOptions,
 ) {
     let setup = HttpSetup::new(options).await;
-    let admin = setup.stepped_up(1, Role::Admin).await;
+    let admin = setup.person(1, Role::Admin).await;
     let member = setup.person(2, Role::Member).await;
     let friend = setup.person(3, Role::Member).await;
     let id = setup
@@ -300,7 +306,7 @@ async fn an_unknown_account_is_404_and_a_review_spends_the_users_limit(
         fleet_server::config::AccountsConfig::default(),
     )
     .await;
-    let owner = setup.stepped_up(1, Role::Owner).await;
+    let owner = setup.person(1, Role::Owner).await;
     let unknown = AccountId::new_v7(at(T0), [99; 10]).unwrap();
 
     let first = approve(&setup, &owner, unknown).await;

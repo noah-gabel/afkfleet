@@ -475,7 +475,7 @@ expression: document
       },
       "BotPatchRequest": {
         "additionalProperties": false,
-        "description": "`PATCH /bots/{id}`: the Minecraft server the bot joins. Needs Manage on\nthe bot and a step-up. Where the address points isn't checked here:\nthat's the agent's, on the address it resolves before it connects\n(ADR-0019, S46).",
+        "description": "`PATCH /bots/{id}`: the Minecraft server the bot joins. Needs Manage on\nthe bot. Where the address points isn't checked here:\nthat's the agent's, on the address it resolves before it connects\n(ADR-0019, S46).",
         "properties": {
           "server_address": {
             "maxLength": 259,
@@ -633,7 +633,7 @@ expression: document
       },
       "ChatCommandRequest": {
         "additionalProperties": false,
-        "description": "`POST /bots/{id}/command`: a command for the bot to send, after a\nstep-up.",
+        "description": "`POST /bots/{id}/command`: a command for the bot to send.",
         "properties": {
           "message": {
             "maxLength": 256,
@@ -2336,7 +2336,7 @@ expression: document
       },
       "StepUpRequest": {
         "additionalProperties": false,
-        "description": "`POST /auth/step-up`: the password again, which allows step-up actions\nin this session for 5 minutes.",
+        "description": "`POST /auth/step-up`: the password again, which allows the two step-up\nactions in this session for 5 minutes: a new password and a replaced\nauthenticator (ADR-0028).",
         "properties": {
           "password": {
             "maxLength": 1024,
@@ -3151,7 +3151,7 @@ expression: document
                 }
               }
             },
-            "description": "Step up first: `POST /auth/step-up`; or the caller may see the account but not delete it (Manage)."
+            "description": "The caller may see the account but not delete it (Manage)."
           },
           "404": {
             "content": {
@@ -3199,11 +3199,10 @@ expression: document
             "access_token": []
           }
         ],
-        "summary": "`DELETE /api/v1/accounts/{id}`: deletes the account, with its grants.\nNeeds a step-up.",
+        "summary": "`DELETE /api/v1/accounts/{id}`: deletes the account, with its grants.",
         "tags": [
           "accounts"
-        ],
-        "x-step-up": true
+        ]
       },
       "get": {
         "operationId": "get_account",
@@ -3334,7 +3333,7 @@ expression: document
                 }
               }
             },
-            "description": "Step up first: `POST /auth/step-up`; or the caller may see the account but isn't above its owner (the Owner for Admins' links, an Admin for Members')."
+            "description": "The caller may see the account but isn't above its owner (the Owner for Admins' links, an Admin for Members')."
           },
           "404": {
             "content": {
@@ -3392,11 +3391,10 @@ expression: document
             "access_token": []
           }
         ],
-        "summary": "`POST /api/v1/accounts/{id}/approve`: approves a pending link, which\nmakes the account usable. Needs a step-up.",
+        "summary": "`POST /api/v1/accounts/{id}/approve`: approves a pending link, which\nmakes the account usable.",
         "tags": [
           "accounts"
-        ],
-        "x-step-up": true
+        ]
       }
     },
     "/api/v1/accounts/{id}/grant-candidates": {
@@ -3734,7 +3732,7 @@ expression: document
                 }
               }
             },
-            "description": "Step up first: `POST /auth/step-up`; or the caller may see the account but not share it (Manage), or names themselves."
+            "description": "The caller may see the account but not share it (Manage), or names themselves."
           },
           "404": {
             "content": {
@@ -3812,11 +3810,10 @@ expression: document
             "access_token": []
           }
         ],
-        "summary": "`POST /api/v1/accounts/{id}/grants`: shares the account with the user\nnamed in the body. Needs a step-up.",
+        "summary": "`POST /api/v1/accounts/{id}/grants`: shares the account with the user\nnamed in the body.",
         "tags": [
           "accounts"
-        ],
-        "x-step-up": true
+        ]
       }
     },
     "/api/v1/accounts/{id}/grants/me": {
@@ -3855,7 +3852,7 @@ expression: document
                 }
               }
             },
-            "description": "Step up first: `POST /auth/step-up`; or the caller has the account through ownership or their role, not a grant."
+            "description": "The caller has the account through ownership or their role, not a grant."
           },
           "404": {
             "content": {
@@ -3903,11 +3900,10 @@ expression: document
             "access_token": []
           }
         ],
-        "summary": "`DELETE /api/v1/accounts/{id}/grants/me`: the caller gives up their own\ngrant on the account. Needs a step-up.",
+        "summary": "`DELETE /api/v1/accounts/{id}/grants/me`: the caller gives up their own\ngrant on the account.",
         "tags": [
           "accounts"
-        ],
-        "x-step-up": true
+        ]
       }
     },
     "/api/v1/accounts/{id}/grants/{user}": {
@@ -3955,7 +3951,7 @@ expression: document
                 }
               }
             },
-            "description": "Step up first: `POST /auth/step-up`; or the caller may see the account but not its grants (Manage)."
+            "description": "The caller may see the account but not its grants (Manage)."
           },
           "404": {
             "content": {
@@ -4003,11 +3999,10 @@ expression: document
             "access_token": []
           }
         ],
-        "summary": "`DELETE /api/v1/accounts/{id}/grants/{user}`: revokes the user's grant.\nNeeds a step-up.",
+        "summary": "`DELETE /api/v1/accounts/{id}/grants/{user}`: revokes the user's grant.",
         "tags": [
           "accounts"
-        ],
-        "x-step-up": true
+        ]
       },
       "put": {
         "operationId": "change_grant",
@@ -4080,7 +4075,7 @@ expression: document
                 }
               }
             },
-            "description": "Step up first: `POST /auth/step-up`; or the caller may see the account but not share it (Manage), or names themselves."
+            "description": "The caller may see the account but not share it (Manage), or names themselves."
           },
           "404": {
             "content": {
@@ -4148,11 +4143,10 @@ expression: document
             "access_token": []
           }
         ],
-        "summary": "`PUT /api/v1/accounts/{id}/grants/{user}`: changes the user's grant.\nNeeds a step-up.",
+        "summary": "`PUT /api/v1/accounts/{id}/grants/{user}`: changes the user's grant.",
         "tags": [
           "accounts"
-        ],
-        "x-step-up": true
+        ]
       }
     },
     "/api/v1/accounts/{id}/refuse": {
@@ -4191,7 +4185,7 @@ expression: document
                 }
               }
             },
-            "description": "Step up first: `POST /auth/step-up`; or the caller may see the account but isn't above its owner (the Owner for Admins' links, an Admin for Members')."
+            "description": "The caller may see the account but isn't above its owner (the Owner for Admins' links, an Admin for Members')."
           },
           "404": {
             "content": {
@@ -4249,11 +4243,10 @@ expression: document
             "access_token": []
           }
         ],
-        "summary": "`POST /api/v1/accounts/{id}/refuse`: refuses a pending link, which\ndeletes the account. Needs a step-up.",
+        "summary": "`POST /api/v1/accounts/{id}/refuse`: refuses a pending link, which\ndeletes the account.",
         "tags": [
           "accounts"
-        ],
-        "x-step-up": true
+        ]
       }
     },
     "/api/v1/accounts/{id}/relink": {
@@ -4545,7 +4538,7 @@ expression: document
                 }
               }
             },
-            "description": "Step up first: `POST /auth/step-up`; or only Admins and the Owner disable agents."
+            "description": "Only Admins and the Owner disable agents."
           },
           "404": {
             "content": {
@@ -4593,11 +4586,10 @@ expression: document
             "access_token": []
           }
         ],
-        "summary": "`POST /api/v1/agents/{id}/disable`: disables an agent for good, revoking\nevery certificate and ending its stream. Needs a step-up.",
+        "summary": "`POST /api/v1/agents/{id}/disable`: disables an agent for good, revoking\nevery certificate and ending its stream.",
         "tags": [
           "agents"
-        ],
-        "x-step-up": true
+        ]
       }
     },
     "/api/v1/agents/{id}/release": {
@@ -4643,7 +4635,7 @@ expression: document
                 }
               }
             },
-            "description": "Step up first: `POST /auth/step-up`; or only Admins and the Owner release agents."
+            "description": "Only Admins and the Owner release agents."
           },
           "404": {
             "content": {
@@ -4701,11 +4693,10 @@ expression: document
             "access_token": []
           }
         ],
-        "summary": "`POST /api/v1/agents/{id}/release`: releases a disabled agent's bots, on\nthe caller's word that its host and its bots are stopped, so they can be\nplaced elsewhere. Needs a step-up.",
+        "summary": "`POST /api/v1/agents/{id}/release`: releases a disabled agent's bots, on\nthe caller's word that its host and its bots are stopped, so they can be\nplaced elsewhere.",
         "tags": [
           "agents"
-        ],
-        "x-step-up": true
+        ]
       }
     },
     "/api/v1/audit": {
@@ -5557,7 +5548,7 @@ expression: document
                 }
               }
             },
-            "description": "Step up first: `POST /auth/step-up`; or the caller may see the bot but not configure it (Manage)."
+            "description": "The caller may see the bot but not configure it (Manage)."
           },
           "404": {
             "content": {
@@ -5615,11 +5606,10 @@ expression: document
             "access_token": []
           }
         ],
-        "summary": "`PATCH /api/v1/bots/{id}`: the Minecraft server the bot joins. Needs\nManage and a step-up.",
+        "summary": "`PATCH /api/v1/bots/{id}`: the Minecraft server the bot joins. Needs\nManage.",
         "tags": [
           "bots"
-        ],
-        "x-step-up": true
+        ]
       }
     },
     "/api/v1/bots/{id}/chat": {
@@ -5822,7 +5812,7 @@ expression: document
                 }
               }
             },
-            "description": "`command_needs_step_up`: a command off the allowlist, which only `POST /bots/{id}/command` sends, after a step-up; `forbidden`: the caller may see the bot but not chat through it (Control), or not send that command (Manage)."
+            "description": "`command_needs_step_up`: a command off the allowlist, which only `POST /bots/{id}/command` sends; `forbidden`: the caller may see the bot but not chat through it (Control), or not send that command (Manage)."
           },
           "404": {
             "content": {
@@ -5969,7 +5959,7 @@ expression: document
                 }
               }
             },
-            "description": "Step up first: `POST /auth/step-up`; or the caller may see the bot but not send this command: Control for one on the allowlist, Manage for any other."
+            "description": "The caller may see the bot but not send this command: Control for one on the allowlist, Manage for any other."
           },
           "404": {
             "content": {
@@ -6037,11 +6027,10 @@ expression: document
             "access_token": []
           }
         ],
-        "summary": "`POST /api/v1/bots/{id}/command`: a command for the bot to send, after a\nstep-up.",
+        "summary": "`POST /api/v1/bots/{id}/command`: a command for the bot to send.",
         "tags": [
           "bots"
-        ],
-        "x-step-up": true
+        ]
       }
     },
     "/api/v1/bots/{id}/mode": {
@@ -7055,7 +7044,7 @@ expression: document
                 }
               }
             },
-            "description": "Step up first: `POST /auth/step-up`; or the role isn't the caller's to invite."
+            "description": "The role isn't the caller's to invite."
           },
           "409": {
             "content": {
@@ -7103,11 +7092,10 @@ expression: document
             "access_token": []
           }
         ],
-        "summary": "`POST /api/v1/invites`: a new invite and its code, shown this once.\nNeeds a step-up.",
+        "summary": "`POST /api/v1/invites`: a new invite and its code, shown this once.",
         "tags": [
           "invites"
-        ],
-        "x-step-up": true
+        ]
       }
     },
     "/api/v1/invites/{id}": {
@@ -7146,7 +7134,7 @@ expression: document
                 }
               }
             },
-            "description": "Step up first: `POST /auth/step-up`; or the invite isn't the caller's to revoke."
+            "description": "The invite isn't the caller's to revoke."
           },
           "404": {
             "content": {
@@ -7204,11 +7192,10 @@ expression: document
             "access_token": []
           }
         ],
-        "summary": "`DELETE /api/v1/invites/{id}`: revokes a pending invite. Needs a step-up.",
+        "summary": "`DELETE /api/v1/invites/{id}`: revokes a pending invite.",
         "tags": [
           "invites"
-        ],
-        "x-step-up": true
+        ]
       }
     },
     "/api/v1/me": {
@@ -7954,7 +7941,7 @@ expression: document
                 }
               }
             },
-            "description": "`mode_needs_step_up`: the steps send a command off the allowlist, which only `POST /modes/with-commands` takes, after a step-up; `forbidden`: a shared mode, which needs an Admin or the Owner."
+            "description": "`mode_needs_step_up`: the steps send a command off the allowlist, which only `POST /modes/with-commands` takes; `forbidden`: a shared mode, which needs an Admin or the Owner."
           },
           "409": {
             "content": {
@@ -8070,7 +8057,7 @@ expression: document
                 }
               }
             },
-            "description": "Step up first: `POST /auth/step-up`; or a shared mode, which needs an Admin or the Owner."
+            "description": "A shared mode, which needs an Admin or the Owner."
           },
           "409": {
             "content": {
@@ -8128,11 +8115,10 @@ expression: document
             "access_token": []
           }
         ],
-        "summary": "`POST /api/v1/modes/with-commands`: a new mode of the caller's, after a\nstep-up, whatever commands its steps send.",
+        "summary": "`POST /api/v1/modes/with-commands`: a new mode of the caller's,\nwhatever commands its steps send.",
         "tags": [
           "modes"
-        ],
-        "x-step-up": true
+        ]
       }
     },
     "/api/v1/modes/{id}": {
@@ -8171,7 +8157,7 @@ expression: document
                 }
               }
             },
-            "description": "Step up first: `POST /auth/step-up`; or the caller may see the mode but not delete it. A built-in mode is read-only."
+            "description": "The caller may see the mode but not delete it. A built-in mode is read-only."
           },
           "404": {
             "content": {
@@ -8229,11 +8215,10 @@ expression: document
             "access_token": []
           }
         ],
-        "summary": "`DELETE /api/v1/modes/{id}`: deletes a mode no bot uses, after a\nstep-up.",
+        "summary": "`DELETE /api/v1/modes/{id}`: deletes a mode no bot uses.",
         "tags": [
           "modes"
-        ],
-        "x-step-up": true
+        ]
       },
       "put": {
         "operationId": "update_mode",
@@ -8297,7 +8282,7 @@ expression: document
                 }
               }
             },
-            "description": "`mode_needs_step_up`: the steps send a command off the allowlist, which only `PUT /modes/{id}/with-commands` takes, after a step-up; `forbidden`: the caller may see the mode but not edit it, or not with this visibility. A built-in mode is read-only."
+            "description": "`mode_needs_step_up`: the steps send a command off the allowlist, which only `PUT /modes/{id}/with-commands` takes; `forbidden`: the caller may see the mode but not edit it, or not with this visibility. A built-in mode is read-only."
           },
           "404": {
             "content": {
@@ -8434,7 +8419,7 @@ expression: document
                 }
               }
             },
-            "description": "Step up first: `POST /auth/step-up`; or the caller may see the mode but not edit it, or not with this visibility. A built-in mode is read-only."
+            "description": "The caller may see the mode but not edit it, or not with this visibility. A built-in mode is read-only."
           },
           "404": {
             "content": {
@@ -8502,11 +8487,10 @@ expression: document
             "access_token": []
           }
         ],
-        "summary": "`PUT /api/v1/modes/{id}/with-commands`: the mode as it should be, after\na step-up, whatever commands its steps send.",
+        "summary": "`PUT /api/v1/modes/{id}/with-commands`: the mode as it should be,\nwhatever commands its steps send.",
         "tags": [
           "modes"
-        ],
-        "x-step-up": true
+        ]
       }
     },
     "/api/v1/server-settings": {
@@ -8678,7 +8662,7 @@ expression: document
                 }
               }
             },
-            "description": "Step up first: `POST /auth/step-up`; or the caller isn't an Admin or the Owner."
+            "description": "The caller isn't an Admin or the Owner."
           },
           "409": {
             "content": {
@@ -8736,11 +8720,10 @@ expression: document
             "access_token": []
           }
         ],
-        "summary": "`POST /api/v1/server-settings`: a server's new settings, after a\nstep-up.",
+        "summary": "`POST /api/v1/server-settings`: a server's new settings.",
         "tags": [
           "server-settings"
-        ],
-        "x-step-up": true
+        ]
       }
     },
     "/api/v1/server-settings/chat-format-preview": {
@@ -8885,7 +8868,7 @@ expression: document
                 }
               }
             },
-            "description": "Step up first: `POST /auth/step-up`; or the caller isn't an Admin or the Owner."
+            "description": "The caller isn't an Admin or the Owner."
           },
           "404": {
             "content": {
@@ -8933,11 +8916,10 @@ expression: document
             "access_token": []
           }
         ],
-        "summary": "`DELETE /api/v1/server-settings/{id}`: deletes a server's settings,\nafter a step-up.",
+        "summary": "`DELETE /api/v1/server-settings/{id}`: deletes a server's settings.",
         "tags": [
           "server-settings"
-        ],
-        "x-step-up": true
+        ]
       },
       "put": {
         "operationId": "update_server_settings",
@@ -9001,7 +8983,7 @@ expression: document
                 }
               }
             },
-            "description": "Step up first: `POST /auth/step-up`; or the caller isn't an Admin or the Owner."
+            "description": "The caller isn't an Admin or the Owner."
           },
           "404": {
             "content": {
@@ -9069,11 +9051,10 @@ expression: document
             "access_token": []
           }
         ],
-        "summary": "`PUT /api/v1/server-settings/{id}`: the settings as they should be,\nafter a step-up.",
+        "summary": "`PUT /api/v1/server-settings/{id}`: the settings as they should be.",
         "tags": [
           "server-settings"
-        ],
-        "x-step-up": true
+        ]
       }
     },
     "/api/v1/users": {
@@ -9258,7 +9239,7 @@ expression: document
                 }
               }
             },
-            "description": "Step up first: `POST /auth/step-up`; or the change isn't the caller's to make."
+            "description": "The change isn't the caller's to make."
           },
           "404": {
             "content": {
@@ -9316,11 +9297,10 @@ expression: document
             "access_token": []
           }
         ],
-        "summary": "`PATCH /api/v1/users/{id}`: one change, a role or `disabled`; either\nends every session of the user. Needs a step-up.",
+        "summary": "`PATCH /api/v1/users/{id}`: one change, a role or `disabled`; either\nends every session of the user.",
         "tags": [
           "users"
-        ],
-        "x-step-up": true
+        ]
       }
     },
     "/api/v1/users/{id}/grants": {

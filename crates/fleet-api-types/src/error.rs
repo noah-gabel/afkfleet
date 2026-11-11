@@ -47,7 +47,8 @@ pub enum ErrorCode {
     /// The caller may see the resource, but not do this (403).
     Forbidden,
     /// The action needs the password entered again within the last 5
-    /// minutes: `POST /auth/step-up`, then retry (403).
+    /// minutes: `POST /auth/step-up`, then retry (403). Only a new password
+    /// and a replaced authenticator do (ADR-0028).
     StepUpRequired,
     /// The resource doesn't exist, or the caller may not see it (404).
     NotFound,
@@ -89,12 +90,13 @@ pub enum ErrorCode {
     /// (409).
     ChatUnavailable,
     /// A command off the server's allowlist, sent to `/chat` by someone who
-    /// may send it: send it again to `/command`, after a step-up (403).
+    /// may send it: send it again to `/command` (403). Named from when that
+    /// route needed a step-up; it needs none (ADR-0028).
     CommandNeedsStepUp,
     /// A mode whose steps send a command off the server's allowlist, sent
     /// to `POST /modes` or `PUT /modes/{id}` by someone who may write it:
-    /// send it again to the route's `/with-commands` twin, after a step-up
-    /// (403).
+    /// send it again to the route's `/with-commands` twin (403). Named from
+    /// when the twin needed a step-up; it needs none (ADR-0028).
     ModeNeedsStepUp,
     /// An edit of a mode that changed since the caller read it: its
     /// `version` is stale. Load the mode again (409).
@@ -148,10 +150,10 @@ impl ErrorCode {
                 "This Minecraft server only accepts signed chat, and the bot can't sign this message. Commands with a message, such as /msg or /me, can't be signed."
             }
             Self::CommandNeedsStepUp => {
-                "This command needs your password: confirm it's you to send it."
+                "This command isn't on the server's list: send it as a command."
             }
             Self::ModeNeedsStepUp => {
-                "This mode holds a command that needs your password: confirm it's you to save it."
+                "This mode holds a command that isn't on the server's list: save it with its commands."
             }
             Self::ModeChanged => {
                 "This mode changed since you opened it. Load it again to see the change."
@@ -468,12 +470,12 @@ mod tests {
     #[case(
         ErrorCode::CommandNeedsStepUp,
         "command_needs_step_up",
-        "This command needs your password: confirm it's you to send it."
+        "This command isn't on the server's list: send it as a command."
     )]
     #[case(
         ErrorCode::ModeNeedsStepUp,
         "mode_needs_step_up",
-        "This mode holds a command that needs your password: confirm it's you to save it."
+        "This mode holds a command that isn't on the server's list: save it with its commands."
     )]
     #[case(
         ErrorCode::ModeChanged,

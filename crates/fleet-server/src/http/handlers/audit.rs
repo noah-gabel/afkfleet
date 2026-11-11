@@ -2,8 +2,7 @@
 //! S89, R64–R66): `GET /api/v1/audit`.
 //!
 //! - **Who:** Admins and the Owner (`ViewAuditLog`); a Member gets 403, as
-//!   for the other admin lists. A plain authed route of class Standard: a
-//!   read neither loses data nor widens access, so it takes no step-up
+//!   for the other admin lists. A plain authed route of class Standard
 //!   (S47).
 //! - **What:** every entry, newest first by ID, in keyset pages with a
 //!   `SafeInt` cursor, optionally narrowed to one target's entries (U78,

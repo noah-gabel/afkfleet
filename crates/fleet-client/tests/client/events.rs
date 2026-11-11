@@ -25,7 +25,7 @@ use tokio::time::timeout;
 
 use crate::bots::bot_of;
 use crate::relay::Relay;
-use crate::support::{OWNER, PASSWORD, Server, is_api, register, step_up};
+use crate::support::{OWNER, PASSWORD, Server, is_api, register};
 
 /// A viewer by name, their client, and their socket.
 type Viewing<'a> = (&'a str, &'a Client<MemoryStore>, LiveEvents<MemoryStore>);
@@ -223,7 +223,7 @@ async fn as_get_reads(client: &Client<MemoryStore>, bot: BotId) -> Value {
     json!({ "type": "bot", "bot_id": bot.to_string(), "bot": read })
 }
 
-/// A user of `role` named `username`, invited by `owner` (stepped up) and
+/// A user of `role` named `username`, invited by `owner` and
 /// logged in with 2FA.
 async fn invited(
     server: &Server,
@@ -270,7 +270,6 @@ async fn each_sees(
 async fn after_each_action_every_viewers_next_bot_frame_equals_their_get() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
-    step_up(&owner).await;
     let admin = invited(&server, &owner, "admin", UserRole::Admin).await;
     let (alice, _) = server.member(&owner, "alice").await;
     let (viewer, viewer_id) = server.member(&owner, "viewer").await;
@@ -278,7 +277,6 @@ async fn after_each_action_every_viewers_next_bot_frame_equals_their_get() {
     let (stranger, _) = server.member(&owner, "stranger").await;
     let (account, bot) = bot_of(&alice, "AfkBot1").await;
     let (_, own) = bot_of(&stranger, "AfkBot2").await;
-    step_up(&alice).await;
     for (username, level) in [
         ("viewer", GrantLevel::View),
         ("controller", GrantLevel::Control),
@@ -350,7 +348,6 @@ async fn after_each_action_every_viewers_next_bot_frame_equals_their_get() {
         Some("controller"),
     )
     .await;
-    step_up(&stranger).await;
     stranger
         .patch_bot(
             own,

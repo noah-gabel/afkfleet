@@ -395,7 +395,6 @@ export const CHAT = {
   placeholder: "Message or /command",
   send: "Send",
   sending: "Sending…",
-  commandStepUp: "Enter your password to send this command. Counts for 5 minutes.",
 } as const;
 
 /** The chat's history that couldn't be read. */

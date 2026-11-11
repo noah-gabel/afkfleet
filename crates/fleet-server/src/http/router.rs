@@ -10,7 +10,7 @@
 //! | `POST /api/v1/auth/login/mfa` | public (Login) | the code step: the session's tokens |
 //! | `POST /api/v1/auth/refresh` | public (Refresh) | a new token pair |
 //! | `POST /api/v1/auth/logout` | user | ends this session |
-//! | `POST /api/v1/auth/step-up` | user (Login) | the password again: step-up actions for 5 minutes |
+//! | `POST /api/v1/auth/step-up` | user (Login) | the password again: the two step-up actions (a new password, a replaced authenticator) for 5 minutes |
 //! | `POST /api/v1/auth/register` | public (Register) | an account from an invite; no tokens |
 //! | `POST /api/v1/me/mfa/enroll` | setup token | a new TOTP secret, waiting for confirm |
 //! | `POST /api/v1/me/mfa/confirm` | setup token | confirms it; answers the recovery codes |
@@ -20,35 +20,35 @@
 //! | `GET /api/v1/me/sessions` | user | one page of the user's live sessions |
 //! | `DELETE /api/v1/me/sessions/{id}` | user | ends another of the user's sessions |
 //! | `GET /api/v1/users` | user (Admin+) | one page of users |
-//! | `PATCH /api/v1/users/{id}` | user + step-up (the Owner; Admins for a Member's `disabled`) | one change: a role or `disabled` |
+//! | `PATCH /api/v1/users/{id}` | user (the Owner; Admins for a Member's `disabled`) | one change: a role or `disabled` |
 //! | `GET /api/v1/users/{id}/grants` | user (the Owner) | one page of the grants the user holds, each saying whether it's dormant |
 //! | `GET /api/v1/users/{id}/shared-accounts` | user (the Owner) | one page of the user's accounts that a grant shares |
-//! | `POST /api/v1/invites` | user + step-up (Admin+; Admin invites the Owner) | a new invite and its code |
+//! | `POST /api/v1/invites` | user (Admin+; Admin invites the Owner) | a new invite and its code |
 //! | `GET /api/v1/invites` | user (Admin+) | one page of invites |
-//! | `DELETE /api/v1/invites/{id}` | user + step-up (as creating) | revokes a pending invite |
+//! | `DELETE /api/v1/invites/{id}` | user (as creating) | revokes a pending invite |
 //! | `POST /api/v1/accounts/link` | user | starts a Microsoft link flow; its code, shown this once |
 //! | `GET /api/v1/accounts/link/{flow_id}` | user (the flow's creator) | where the flow stands |
 //! | `POST /api/v1/accounts/offline` | user (while `[accounts] allow_offline` is on) | a new offline account |
 //! | `GET /api/v1/accounts` | user | one page of the accounts the user may see |
 //! | `GET /api/v1/accounts/awaiting-approval` | user | one page of the pending links the user may review |
 //! | `GET /api/v1/accounts/{id}` | user (View) | one account |
-//! | `DELETE /api/v1/accounts/{id}` | user + step-up (Manage) | deletes the account and its grants |
-//! | `POST /api/v1/accounts/{id}/approve` | user + step-up (above the owner) | approves a pending link |
-//! | `POST /api/v1/accounts/{id}/refuse` | user + step-up (above the owner) | refuses a pending link, deleting it |
+//! | `DELETE /api/v1/accounts/{id}` | user (Manage) | deletes the account and its grants |
+//! | `POST /api/v1/accounts/{id}/approve` | user (above the owner) | approves a pending link |
+//! | `POST /api/v1/accounts/{id}/refuse` | user (above the owner) | refuses a pending link, deleting it |
 //! | `POST /api/v1/accounts/{id}/relink` | user (Manage) | starts a link flow that links the account again |
 //! | `GET /api/v1/accounts/{id}/grants` | user (Manage) | one page of the account's grants |
 //! | `GET /api/v1/accounts/{id}/grant-candidates` | user (Manage) | at most [`GRANT_CANDIDATES_MAX`](crate::ports::grants::GRANT_CANDIDATES_MAX) usernames that start with `q` and could be given a grant |
-//! | `POST /api/v1/accounts/{id}/grants` | user + step-up (Manage) | shares the account with a user named in the body |
-//! | `PUT /api/v1/accounts/{id}/grants/{user}` | user + step-up (Manage) | changes a grant |
-//! | `DELETE /api/v1/accounts/{id}/grants/{user}` | user + step-up (Manage) | revokes a grant |
-//! | `DELETE /api/v1/accounts/{id}/grants/me` | user + step-up (a grantee without implicit Manage) | gives up the caller's own grant: they leave the account |
+//! | `POST /api/v1/accounts/{id}/grants` | user (Manage) | shares the account with a user named in the body |
+//! | `PUT /api/v1/accounts/{id}/grants/{user}` | user (Manage) | changes a grant |
+//! | `DELETE /api/v1/accounts/{id}/grants/{user}` | user (Manage) | revokes a grant |
+//! | `DELETE /api/v1/accounts/{id}/grants/me` | user (a grantee without implicit Manage) | gives up the caller's own grant: they leave the account |
 //! | `GET /api/v1/agents` | user (Admin+) | one page of agents, with their status |
-//! | `POST /api/v1/agents/{id}/disable` | user + step-up (Admin+) | disables an agent for good: every certificate revoked, its stream ended |
-//! | `POST /api/v1/agents/{id}/release` | user + step-up (Admin+) | releases a disabled agent's bots, on the caller's word that its host is stopped |
+//! | `POST /api/v1/agents/{id}/disable` | user (Admin+) | disables an agent for good: every certificate revoked, its stream ended |
+//! | `POST /api/v1/agents/{id}/release` | user (Admin+) | releases a disabled agent's bots, on the caller's word that its host is stopped |
 //! | `GET /api/v1/audit` | user (Admin+) | one page of the audit log, newest first, each entry as stored |
 //! | `GET /api/v1/bots` | user | one page of the bots the user may see, each under its account's field rule |
 //! | `GET /api/v1/bots/{id}` | user (View) | one bot, with what the server knows of its state |
-//! | `PATCH /api/v1/bots/{id}` | user + step-up (Manage) | the Minecraft server the bot joins |
+//! | `PATCH /api/v1/bots/{id}` | user (Manage) | the Minecraft server the bot joins |
 //! | `PUT /api/v1/bots/{id}/mode` | user (Control; a mode with a command off the allowlist: Manage) | the bot's mode |
 //! | `POST /api/v1/bots/{id}/start` | user (Control) | the bot should run: 200 |
 //! | `POST /api/v1/bots/{id}/stop` | user (Control) | the bot should stop: 200 |
@@ -57,17 +57,17 @@
 //! | `POST /api/v1/bots/{id}/resume` | user (Control) | a paused bot resumed: 202 sent to its agent, 200 cleared |
 //! | `GET /api/v1/bots/{id}/chat` | user (View) | one page of the bot's chat, newest first, each line under its field rules |
 //! | `POST /api/v1/bots/{id}/chat` | user (Control; a command off the allowlist: pointed to `/command`) | a line for the bot to send: 200 sent, 202 pending |
-//! | `POST /api/v1/bots/{id}/command` | user + step-up (Control for an allowlisted command, Manage for any other) | a command for the bot to send: 200 sent, 202 pending |
+//! | `POST /api/v1/bots/{id}/command` | user (Control for an allowlisted command, Manage for any other) | a command for the bot to send: 200 sent, 202 pending |
 //! | `GET /api/v1/modes` | user | one page of the modes the user may see, each under its field rules |
 //! | `POST /api/v1/modes` | user (a shared mode: Admin+; steps sending a command off the allowlist: pointed to `/with-commands`) | a new mode of the user's: 201 |
-//! | `POST /api/v1/modes/with-commands` | user + step-up (a shared mode: Admin+) | a new mode of the user's, whatever its steps send: 201 |
+//! | `POST /api/v1/modes/with-commands` | user (a shared mode: Admin+) | a new mode of the user's, whatever its steps send: 201 |
 //! | `PUT /api/v1/modes/{id}` | user (the right to edit it, both as it is and as it will be; steps sending a command off the allowlist: pointed to `/with-commands`) | the mode as it should be, at the version read: 200 |
-//! | `PUT /api/v1/modes/{id}/with-commands` | user + step-up (the right to edit it, both ways) | the mode as it should be, whatever its steps send: 200 |
-//! | `DELETE /api/v1/modes/{id}` | user + step-up (the right to delete it) | deletes a mode no bot uses: 204 |
+//! | `PUT /api/v1/modes/{id}/with-commands` | user (the right to edit it, both ways) | the mode as it should be, whatever its steps send: 200 |
+//! | `DELETE /api/v1/modes/{id}` | user (the right to delete it) | deletes a mode no bot uses: 204 |
 //! | `GET /api/v1/server-settings` | user (Admin+) | one page of the servers' settings |
-//! | `POST /api/v1/server-settings` | user + step-up (Admin+) | a server's new settings: 201 |
-//! | `PUT /api/v1/server-settings/{id}` | user + step-up (Admin+) | the settings as they should be, at the version read |
-//! | `DELETE /api/v1/server-settings/{id}` | user + step-up (Admin+) | deletes a server's settings: 204 |
+//! | `POST /api/v1/server-settings` | user (Admin+) | a server's new settings: 201 |
+//! | `PUT /api/v1/server-settings/{id}` | user (Admin+) | the settings as they should be, at the version read |
+//! | `DELETE /api/v1/server-settings/{id}` | user (Admin+) | deletes a server's settings: 204 |
 //! | `POST /api/v1/server-settings/chat-format-preview` | user (Admin+) | which sender unsaved chat formats read from a line; nothing stored |
 //! | `POST /api/v1/events/ticket` | user | a single-use ticket for one live events socket of this session, 30 s |
 //! | `GET /api/v1/events` | user, with a ticket of this session | the live events socket (101); any other ticket 404, the user's sockets all open 429 |
@@ -258,35 +258,35 @@ pub fn api_routes(routes: Routes) -> Routes {
         .authed_route(RateClass::Standard, routes!(me::list_sessions))
         .authed_route(RateClass::Standard, routes!(me::revoke_session))
         .authed_route(RateClass::Standard, routes!(users::list))
-        .step_up_route(RateClass::Standard, routes!(users::patch))
+        .authed_route(RateClass::Standard, routes!(users::patch))
         .authed_route(RateClass::Standard, routes!(users::held_grants))
         .authed_route(RateClass::Standard, routes!(users::shared_accounts))
-        .step_up_route(RateClass::Standard, routes!(invites::create))
+        .authed_route(RateClass::Standard, routes!(invites::create))
         .authed_route(RateClass::Standard, routes!(invites::list))
-        .step_up_route(RateClass::Standard, routes!(invites::revoke))
+        .authed_route(RateClass::Standard, routes!(invites::revoke))
         .authed_route(RateClass::Standard, routes!(accounts::start_link))
         .authed_route(RateClass::Standard, routes!(accounts::link_status))
         .authed_route(RateClass::Standard, routes!(accounts::create_offline))
         .authed_route(RateClass::Standard, routes!(accounts::list))
         .authed_route(RateClass::Standard, routes!(accounts::awaiting_approval))
         .authed_route(RateClass::Standard, routes!(accounts::get))
-        .step_up_route(RateClass::Standard, routes!(accounts::delete))
-        .step_up_route(RateClass::Standard, routes!(accounts::approve))
-        .step_up_route(RateClass::Standard, routes!(accounts::refuse))
+        .authed_route(RateClass::Standard, routes!(accounts::delete))
+        .authed_route(RateClass::Standard, routes!(accounts::approve))
+        .authed_route(RateClass::Standard, routes!(accounts::refuse))
         .authed_route(RateClass::Standard, routes!(accounts::relink))
         .authed_route(RateClass::Standard, routes!(grants::list))
         .authed_route(RateClass::Standard, routes!(grants::candidates))
-        .step_up_route(RateClass::Standard, routes!(grants::create))
-        .step_up_route(RateClass::Standard, routes!(grants::change))
-        .step_up_route(RateClass::Standard, routes!(grants::revoke))
-        .step_up_route(RateClass::Standard, routes!(grants::leave))
+        .authed_route(RateClass::Standard, routes!(grants::create))
+        .authed_route(RateClass::Standard, routes!(grants::change))
+        .authed_route(RateClass::Standard, routes!(grants::revoke))
+        .authed_route(RateClass::Standard, routes!(grants::leave))
         .authed_route(RateClass::Standard, routes!(agents::list_agents))
-        .step_up_route(RateClass::Standard, routes!(agents::disable_agent))
-        .step_up_route(RateClass::Standard, routes!(agents::release_agent))
+        .authed_route(RateClass::Standard, routes!(agents::disable_agent))
+        .authed_route(RateClass::Standard, routes!(agents::release_agent))
         .authed_route(RateClass::Standard, routes!(audit::list))
         .authed_route(RateClass::Standard, routes!(bots::list))
         .authed_route(RateClass::Standard, routes!(bots::get))
-        .step_up_route(RateClass::Standard, routes!(bots::patch))
+        .authed_route(RateClass::Standard, routes!(bots::patch))
         .authed_route(RateClass::Standard, routes!(bots::set_mode))
         .authed_route(RateClass::Standard, routes!(bots::start))
         .authed_route(RateClass::Standard, routes!(bots::stop))
@@ -295,17 +295,17 @@ pub fn api_routes(routes: Routes) -> Routes {
         .authed_route(RateClass::Standard, routes!(bots::resume))
         .authed_route(RateClass::Standard, routes!(chat::history))
         .authed_route(RateClass::Standard, routes!(chat::send))
-        .step_up_route(RateClass::Standard, routes!(chat::command))
+        .authed_route(RateClass::Standard, routes!(chat::command))
         .authed_route(RateClass::Standard, routes!(modes::list))
         .authed_route(RateClass::Standard, routes!(modes::create))
-        .step_up_route(RateClass::Standard, routes!(modes::create_with_commands))
+        .authed_route(RateClass::Standard, routes!(modes::create_with_commands))
         .authed_route(RateClass::Standard, routes!(modes::update))
-        .step_up_route(RateClass::Standard, routes!(modes::update_with_commands))
-        .step_up_route(RateClass::Standard, routes!(modes::delete))
+        .authed_route(RateClass::Standard, routes!(modes::update_with_commands))
+        .authed_route(RateClass::Standard, routes!(modes::delete))
         .authed_route(RateClass::Standard, routes!(server_settings::list))
-        .step_up_route(RateClass::Standard, routes!(server_settings::create))
-        .step_up_route(RateClass::Standard, routes!(server_settings::update))
-        .step_up_route(RateClass::Standard, routes!(server_settings::delete))
+        .authed_route(RateClass::Standard, routes!(server_settings::create))
+        .authed_route(RateClass::Standard, routes!(server_settings::update))
+        .authed_route(RateClass::Standard, routes!(server_settings::delete))
         .authed_route(RateClass::Standard, routes!(server_settings::preview))
         .authed_route(RateClass::Standard, routes!(events::ticket))
         .authed_route(RateClass::Standard, routes!(events::connect))

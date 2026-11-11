@@ -4,16 +4,14 @@
 // enables them; an Admin disables or enables Members.
 // - A role change and disabling ask first, naming what they end: every session of the user,
 //   and with a demotion or a disabling their pending invites. Enabling runs at once.
-// - Each change needs a step-up: the row asks for the password when the server wants it
-//   (useStepUpAction), and the change goes once more.
+// - No change asks for the password: a session is enough (useWriteAction, ADR-0028).
 // - An account whose 2FA isn't set up was registered but never logged in: whoever first
 //   logs in with its password sets it up, so an Admin can disable it (ADR-0016).
 // - The Owner reviews a user's grants on a screen of its own: from the row, and offered once a
 //   role changed, staying here (ADR-0020, U79). "Audit" opens the log narrowed to the user (U81).
 // - In a small window the table drops Created, then Last seen, then 2FA (U122), at widths that
 //   never show a column, hide it and show it again as the window widens (R228).
-// Nothing here carries a secret but the step-up's password, which StepUpForm holds: the list
-// is a query and each change a mutation.
+// Nothing here carries a secret: the list is a query and each change a mutation.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Fragment, useState } from "react";
@@ -40,9 +38,8 @@ import type { UserPatchRequest } from "../../../generated/UserPatchRequest";
 import type { UserResponse } from "../../../generated/UserResponse";
 import { formatTime } from "../../../lib/time";
 import { roleLabel } from "../../shell/nav";
-import { useStepUpAction } from "../hooks/useStepUpAction";
+import { useWriteAction } from "../hooks/useWriteAction";
 import { type Actor, userActions } from "../permissions";
-import { StepUpPrompt } from "./StepUpPrompt";
 
 /** What the screen says first (U96). */
 const USERS_INTRO =
@@ -120,7 +117,7 @@ export function UsersScreen() {
   const { data: actor } = useMe();
   const users = useUsers();
   const refetch = () => void queryClient.invalidateQueries({ queryKey: USERS_KEY });
-  const writes = useStepUpAction({ onRefused: refetch });
+  const writes = useWriteAction({ onRefused: refetch });
   const patch = useMutation({
     mutationFn: ({ id, request }: { id: string; request: UserPatchRequest }) =>
       api.patchUser(id, request),
@@ -129,7 +126,7 @@ export function UsersScreen() {
   const [asking, setAsking] = useState<{ id: string; change: Change } | null>(null);
   const [offer, setOffer] = useState<{ id: string; role: "member" | "admin" } | null>(null);
   const rows = users.data?.pages.flatMap((page) => page.items) ?? [];
-  const busy = writes.running !== null || writes.prompt !== null;
+  const busy = writes.running !== null;
 
   function run(user: UserResponse, change: Change): void {
     setAsking(null);
@@ -245,10 +242,7 @@ export function UsersScreen() {
                       </div>
                     </TableCell>
                   </TableRow>
-                  {pending === null &&
-                  writes.prompt !== user.id &&
-                  failure === undefined &&
-                  offered === null ? null : (
+                  {pending === null && failure === undefined && offered === null ? null : (
                     <TableSpanRow span={COLUMNS} className="pb-3">
                       <div className="flex flex-col gap-2">
                         {pending === null ? null : (
@@ -275,14 +269,6 @@ export function UsersScreen() {
                             </AlertDescription>
                           </Alert>
                         )}
-                        {writes.prompt === user.id ? (
-                          <StepUpPrompt
-                            id={`step-up-${user.id}`}
-                            pending={writes.running !== null}
-                            onConfirm={writes.confirm}
-                            onCancel={writes.cancel}
-                          />
-                        ) : null}
                         {failure === undefined ? null : (
                           <p role="alert" className="text-sm text-destructive">
                             {failure}

@@ -32,8 +32,8 @@ const UNGRANTABLE_TEXT =
   "can't be given a grant: unknown, disabled, or already has access; check the name";
 
 /**
- * Account 1's screen over `handlers`, where every write needs a step-up the server stamps
- * once `stepUp` ran (unless `stamped`), and the grants start as `grants`.
+ * Account 1's screen over `handlers`, the grants starting as `grants`. It has no `stepUp`: a
+ * call to it would fail the test (ADR-0028).
  */
 async function accountScreen(
   options: {
@@ -41,43 +41,28 @@ async function accountScreen(
     readonly grants?: GrantResponse[];
     readonly handlers?: Partial<ApiClient>;
     readonly user?: ReturnType<typeof me>;
-    readonly stamped?: boolean;
     readonly advanceTimers?: (ms: number) => unknown;
   } = {},
 ) {
-  let stamped = options.stamped ?? true;
   let grants = options.grants ?? [];
-  const needs = () => {
-    if (!stamped) {
-      throw refusal(403, "step_up_required");
-    }
-  };
   const app = await atAccount(
     ID,
     {
       account: async () => options.account ?? account(1),
       accountGrants: async () => ({ items: grants }),
-      stepUp: async () => {
-        stamped = true;
-      },
       createGrant: async (_id, request) => {
-        needs();
         const made = grant(request.level, { id: BOB_ID, username: request.username });
         grants = [made];
         return made;
       },
       changeGrant: async (_id, _user, request) => {
-        needs();
         grants = [grant(request.level)];
         return grant(request.level);
       },
       revokeGrant: async () => {
-        needs();
         grants = [];
       },
-      deleteAccount: async () => {
-        needs();
-      },
+      deleteAccount: async () => {},
       ...options.handlers,
     },
     {
@@ -269,21 +254,16 @@ describe("an account's screen", () => {
       expect(await screen.findByText(NOBODY_ELSE)).toBeDefined();
     });
 
-    it("shares by exact username after Confirm it's you", async () => {
-      const app = await accountScreen({ stamped: false });
+    it("shares by exact username, never asking for the password (ADR-0028)", async () => {
+      const app = await accountScreen();
 
       await app.user.type(await screen.findByLabelText("Username"), "bob");
       await app.user.click(screen.getByRole("radio", { name: /^Control/ }));
       await app.user.click(screen.getByRole("button", { name: "Share" }));
-      const password = await screen.findByLabelText("Current password");
-      // A form inside a form would submit the outer one natively, reloading the app.
-      expect(password.closest("form")?.parentElement?.closest("form")).toBeNull();
-      await app.user.type(password, "placeholder password");
-      await app.user.click(screen.getByRole("button", { name: "Continue" }));
 
       expect(await screen.findByText("AfkBot1 shared with bob.")).toBeDefined();
+      expect(screen.queryByLabelText("Current password")).toBeNull();
       expect(called(app, "createGrant").map((call) => call.args)).toEqual([
-        [ID, { username: "bob", level: "control" }],
         [ID, { username: "bob", level: "control" }],
       ]);
       expect(await screen.findByLabelText("Access of bob")).toBeDefined();
@@ -461,34 +441,25 @@ describe("an account's screen", () => {
       expect(leaveAccount).not.toHaveBeenCalled();
     });
 
-    it("leaves after Confirm it's you, then goes back and reads the accounts and bots again", async () => {
-      let stamped = false;
-      const leaveAccount = vi.fn(async () => {
-        if (!stamped) {
-          throw refusal(403, "step_up_required");
-        }
-      });
+    it("leaves once confirmed, never asking for the password, then goes back and reads the accounts and bots again", async () => {
+      const leaveAccount = vi.fn(async () => {});
       const app = await accountScreen({
         account: seenBelowManage(1, "control"),
         handlers: {
           leaveAccount,
-          stepUp: async () => {
-            stamped = true;
-          },
           accounts: async () => ({ items: [] }),
         },
       });
       const accountReads = () => called(app, "account").length;
 
       await app.user.click(screen.getByRole("button", { name: "Leave" }));
-      await app.user.click(screen.getByRole("button", { name: "Leave account" }));
-      await app.user.type(await screen.findByLabelText("Current password"), "placeholder password");
       const before = accountReads();
-      await app.user.click(screen.getByRole("button", { name: "Continue" }));
+      await app.user.click(screen.getByRole("button", { name: "Leave account" }));
 
       expect(await screen.findByText("You left AfkBot1.")).toBeDefined();
+      expect(screen.queryByLabelText("Current password")).toBeNull();
       await vi.waitFor(() => expect(app.path()).toBe("/accounts"));
-      expect(leaveAccount).toHaveBeenCalledTimes(2);
+      expect(leaveAccount).toHaveBeenCalledTimes(1);
       expect(leaveAccount).toHaveBeenLastCalledWith(ID);
       // It went back before anything read the account again, so its 404 never flashed.
       expect(accountReads()).toBe(before);
@@ -583,9 +554,8 @@ describe("an account's screen", () => {
     });
   });
 
-  it("deletes after asking and Confirm it's you, then goes back to the list", async () => {
+  it("deletes after asking, never for the password, then goes back to the list", async () => {
     const app = await accountScreen({
-      stamped: false,
       handlers: { accounts: async () => ({ items: [] }) },
     });
 
@@ -596,11 +566,10 @@ describe("an account's screen", () => {
       ),
     ).toBeDefined();
     await app.user.click(screen.getByRole("button", { name: "Delete account" }));
-    await app.user.type(await screen.findByLabelText("Current password"), "placeholder password");
-    await app.user.click(screen.getByRole("button", { name: "Continue" }));
 
     expect(await screen.findByText("AfkBot1 deleted.")).toBeDefined();
+    expect(screen.queryByLabelText("Current password")).toBeNull();
     await vi.waitFor(() => expect(app.path()).toBe("/accounts"));
-    expect(called(app, "deleteAccount")).toHaveLength(2);
+    expect(called(app, "deleteAccount")).toHaveLength(1);
   });
 });

@@ -1,7 +1,7 @@
 // One account on the Accounts screen (Plan.md P9.8, P11.11; ADR-0020, U106, R209): its name, status
 // line and labelled facts, the whole card opening its screen, as a bot's on Home. The re-auth prompt
 // where one is needed, and Approve and Refuse on a link waiting for the user, sit above the card's
-// link, so they never open the account, their text can be selected and a step-up's field works.
+// link, so they never open the account and their text can be selected.
 import { Link } from "@tanstack/react-router";
 
 import { type Fact, Facts } from "../../../components/Facts";

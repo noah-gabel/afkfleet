@@ -31,8 +31,9 @@ export function every(seconds: number, jitter = 0): ModeSchedule {
 /** The on-respawn schedule. */
 export const ON_RESPAWN: ModeSchedule = { type: "on_respawn" };
 
-const NEEDS_STEP_UP =
-  "This mode holds a command that needs your password: confirm it's you to save it.";
+/** The server's pointer to the twin; its code keeps its old name (ADR-0028). */
+const POINTED_TO_TWIN =
+  "This mode holds a command that isn't on the server's list: save it with its commands.";
 export const SECTION = {
   atStart: "When it joins",
   repeating: "While it's online",
@@ -40,31 +41,25 @@ export const SECTION = {
 } as const;
 
 /**
- * The App on mode `id`'s screen, or a new mode's (`"new"`), over a fake that keeps `rows`, points
- * a command at its twin, and asks for the password there until `stepUp` ran (unless `stamped`).
+ * The App on mode `id`'s screen, or a new mode's (`"new"`), over a fake that keeps `rows` and
+ * points a command at its twin, which takes it. It has no `stepUp`: a call to it would fail the
+ * test (ADR-0028).
  */
 export async function atMode(
   id: string,
   options: {
     readonly rows?: ModeResponse[];
-    readonly stamped?: boolean;
     readonly handlers?: Partial<ApiClient>;
   } = {},
 ) {
   const state = {
     rows: [...(options.rows ?? [])],
-    stamped: options.stamped ?? false,
     readFails: false,
     /** While set, the modes' reads wait for it. */
     hold: null as Promise<void> | null,
   };
   const holdsCommand = (request: CreateModeRequest) =>
     request.steps.some((step) => step.action.message?.startsWith("/") === true);
-  const twin = () => {
-    if (!state.stamped) {
-      throw refusal(403, "step_up_required");
-    }
-  };
   const saved = (request: CreateModeRequest): ModeResponse =>
     mode(9, {
       name: request.name.trim(),
@@ -98,29 +93,20 @@ export async function atMode(
       }
       return { items: state.rows };
     },
-    stepUp: async () => {
-      state.stamped = true;
-    },
     createMode: async (request) => {
       if (holdsCommand(request)) {
-        throw refusal(403, "mode_needs_step_up", { message: NEEDS_STEP_UP });
+        throw refusal(403, "mode_needs_step_up", { message: POINTED_TO_TWIN });
       }
       return created(request);
     },
-    createModeWithCommands: async (request) => {
-      twin();
-      return created(request);
-    },
+    createModeWithCommands: async (request) => created(request),
     updateMode: async (target, request) => {
       if (holdsCommand(request)) {
-        throw refusal(403, "mode_needs_step_up", { message: NEEDS_STEP_UP });
+        throw refusal(403, "mode_needs_step_up", { message: POINTED_TO_TWIN });
       }
       return updated(target, request);
     },
-    updateModeWithCommands: async (target, request) => {
-      twin();
-      return updated(target, request);
-    },
+    updateModeWithCommands: async (target, request) => updated(target, request),
     ...options.handlers,
   });
   await act(() =>

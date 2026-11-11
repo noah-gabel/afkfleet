@@ -240,9 +240,8 @@ impl Server {
         self.clock.advance(by);
     }
 
-    /// A Member named `username`, invited by `owner` (stepped up within 5
-    /// minutes) and logged in through a bridge of their own: the bridge and
-    /// the user's ID.
+    /// A Member named `username`, invited by `owner` and logged in through
+    /// a bridge of their own: the bridge and the user's ID.
     pub(crate) async fn member(&self, owner: &Bridge, username: &str) -> (Bridge, UserId) {
         let invite = owner
             .state
@@ -545,9 +544,8 @@ pub(crate) fn login(username: &str, password: &str) -> LoginRequest {
     }
 }
 
-/// The step-up with the shared password: the admins' writes need it
-/// (ADR-0016's amendment in Phase 8 group E), and so do the password change
-/// and the 2FA replacement.
+/// The step-up with the shared password: the password change and the 2FA
+/// replacement need it, and nothing else (ADR-0028).
 pub(crate) fn step_up_request() -> StepUpRequest {
     StepUpRequest {
         password: SecretText::new(PASSWORD.to_owned()),

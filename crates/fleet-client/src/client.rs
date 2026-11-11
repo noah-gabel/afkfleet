@@ -330,28 +330,26 @@ impl<S: SessionStore> Client<S> {
     }
 
     /// `POST /agents/{id}/disable`: disables an agent for good, its
-    /// certificates revoked and its stream ended (Admins and the Owner, after
-    /// a step-up). It answers the agent as `GET /agents` lists it; an agent
-    /// disabled already answers as it is.
+    /// certificates revoked and its stream ended (Admins and the Owner). It
+    /// answers the agent as `GET /agents` lists it; an agent disabled already
+    /// answers as it is.
     ///
     /// # Errors
-    /// [`ClientError::Api`] with 403 (`step_up_required` first, then
-    /// `forbidden` for a Member), 404 or 429 as the server answers, and the
-    /// transport's and the session's errors.
+    /// [`ClientError::Api`] with 403 (`forbidden` for a Member), 404 or 429 as
+    /// the server answers, and the transport's and the session's errors.
     pub async fn disable_agent(&self, id: AgentId) -> Result<AgentResponse, ClientError> {
         self.core.disable_agent(id).await
     }
 
     /// `POST /agents/{id}/release`: releases a disabled agent's bots, on the
     /// caller's word that its host and its bots are stopped, so they can be
-    /// placed elsewhere (Admins and the Owner, after a step-up). The agent
-    /// as the list shows it after.
+    /// placed elsewhere (Admins and the Owner). The agent as the list shows it
+    /// after.
     ///
     /// # Errors
-    /// The server's 403 (`step_up_required` without a fresh step-up;
-    /// `forbidden` for a Member), 404, 409 (`agent_not_disabled`) or 429 as
-    /// [`ClientError::Api`]; any other error as for every authenticated
-    /// call.
+    /// The server's 403 (`forbidden` for a Member), 404, 409
+    /// (`agent_not_disabled`) or 429 as [`ClientError::Api`]; any other error
+    /// as for every authenticated call.
     pub async fn release_agent(&self, id: AgentId) -> Result<AgentResponse, ClientError> {
         self.core.release_agent(id).await
     }
@@ -395,13 +393,12 @@ impl<S: SessionStore> Client<S> {
         self.core.users(query).await
     }
 
-    /// `PATCH /users/{id}`: one change of a user, a role or `disabled`,
-    /// after [`Client::step_up`] within 5 minutes.
+    /// `PATCH /users/{id}`: one change of a user, a role or `disabled`.
     ///
     /// # Errors
-    /// The server's 403 (`step_up_required` without a fresh step-up,
-    /// `forbidden` for a change that isn't the caller's), 404 or 422 as
-    /// [`ClientError::Api`]; any other error as for every authenticated call.
+    /// The server's 403 (`forbidden` for a change that isn't the caller's), 404
+    /// or 422 as [`ClientError::Api`]; any other error as for every
+    /// authenticated call.
     pub async fn patch_user(
         &self,
         id: UserId,
@@ -410,14 +407,12 @@ impl<S: SessionStore> Client<S> {
         self.core.patch_user(id, request).await
     }
 
-    /// `POST /invites`: a new invite, whose code is answered this once,
-    /// after [`Client::step_up`] within 5 minutes.
+    /// `POST /invites`: a new invite, whose code is answered this once.
     ///
     /// # Errors
-    /// The server's 403 (`step_up_required` without a fresh step-up,
-    /// `forbidden` for a role that isn't the caller's to invite), 404 or 409
-    /// (too many pending invites) as [`ClientError::Api`]; any other error as
-    /// for every authenticated call.
+    /// The server's 403 (`forbidden` for a role that isn't the caller's to
+    /// invite), 404 or 409 (too many pending invites) as [`ClientError::Api`];
+    /// any other error as for every authenticated call.
     pub async fn create_invite(
         &self,
         request: &CreateInviteRequest,
@@ -434,14 +429,12 @@ impl<S: SessionStore> Client<S> {
         self.core.invites(query).await
     }
 
-    /// `DELETE /invites/{id}`: revokes a pending invite, after
-    /// [`Client::step_up`] within 5 minutes.
+    /// `DELETE /invites/{id}`: revokes a pending invite.
     ///
     /// # Errors
-    /// The server's 409 for a used invite, or 403 (`step_up_required`
-    /// without a fresh step-up, `forbidden` for an invite that isn't the
-    /// caller's to revoke) or 404, as [`ClientError::Api`]; any other error
-    /// as for every authenticated call.
+    /// The server's 409 for a used invite, or 403 (`forbidden` for an invite
+    /// that isn't the caller's to revoke) or 404, as [`ClientError::Api`]; any
+    /// other error as for every authenticated call.
     pub async fn revoke_invite(&self, id: InviteId) -> Result<(), ClientError> {
         self.core.revoke_invite(id).await
     }
@@ -521,30 +514,27 @@ impl<S: SessionStore> Client<S> {
     }
 
     /// `DELETE /accounts/{id}`: deletes an account with its grants and its
-    /// stored sign-in, after [`Client::step_up`] within 5 minutes.
+    /// stored sign-in.
     ///
     /// # Errors
-    /// The server's 403 (`step_up_required` without a fresh step-up,
-    /// `forbidden` below Manage) or 404, as [`ClientError::Api`]; any other
-    /// error as for every authenticated call.
+    /// The server's 403 (`forbidden` below Manage) or 404, as
+    /// [`ClientError::Api`]; any other error as for every authenticated call.
     pub async fn delete_account(&self, id: AccountId) -> Result<(), ClientError> {
         self.core.delete_account(id).await
     }
 
-    /// `POST /accounts/{id}/approve`: approves a pending link, after
-    /// [`Client::step_up`] within 5 minutes; bots may use it from then on.
+    /// `POST /accounts/{id}/approve`: approves a pending link; bots may use it
+    /// from then on.
     ///
     /// # Errors
-    /// The server's 403 (`step_up_required` without a fresh step-up,
-    /// `forbidden` when the caller isn't above the owner), 404, or 409 for
-    /// an account that isn't pending, as [`ClientError::Api`]; any other
-    /// error as for every authenticated call.
+    /// The server's 403 (`forbidden` when the caller isn't above the owner),
+    /// 404, or 409 for an account that isn't pending, as [`ClientError::Api`];
+    /// any other error as for every authenticated call.
     pub async fn approve_account(&self, id: AccountId) -> Result<AccountResponse, ClientError> {
         self.core.approve_account(id).await
     }
 
-    /// `POST /accounts/{id}/refuse`: refuses a pending link, which deletes
-    /// it, after [`Client::step_up`] within 5 minutes.
+    /// `POST /accounts/{id}/refuse`: refuses a pending link, which deletes it.
     ///
     /// # Errors
     /// As [`Client::approve_account`].
@@ -593,14 +583,13 @@ impl<S: SessionStore> Client<S> {
     }
 
     /// `POST /accounts/{id}/grants`: gives a user access by their exact
-    /// username, after [`Client::step_up`] within 5 minutes.
+    /// username.
     ///
     /// # Errors
-    /// The server's 403 (`step_up_required` without a fresh step-up,
-    /// `forbidden` below Manage), 404, 409 (a grant that exists, or a
-    /// pending account), 422 (a name that can't be given a grant) or 429
-    /// (the by-name limit), as [`ClientError::Api`]; any other error as for
-    /// every authenticated call.
+    /// The server's 403 (`forbidden` below Manage), 404, 409 (a grant that
+    /// exists, or a pending account), 422 (a name that can't be given a grant)
+    /// or 429 (the by-name limit), as [`ClientError::Api`]; any other error as
+    /// for every authenticated call.
     pub async fn create_grant(
         &self,
         id: AccountId,
@@ -609,15 +598,12 @@ impl<S: SessionStore> Client<S> {
         self.core.create_grant(id, request).await
     }
 
-    /// `PUT /accounts/{id}/grants/{user}`: changes a grant's level, after
-    /// [`Client::step_up`] within 5 minutes.
+    /// `PUT /accounts/{id}/grants/{user}`: changes a grant's level.
     ///
     /// # Errors
-    /// The server's 403 (`step_up_required` without a fresh step-up,
-    /// `forbidden` below Manage), 404 (no such grant), or 409 (a raise on a
-    /// pending account, or for someone with implicit Manage), as
-    /// [`ClientError::Api`]; any other error as for every authenticated
-    /// call.
+    /// The server's 403 (`forbidden` below Manage), 404 (no such grant), or 409
+    /// (a raise on a pending account, or for someone with implicit Manage), as
+    /// [`ClientError::Api`]; any other error as for every authenticated call.
     pub async fn change_grant(
         &self,
         id: AccountId,
@@ -627,27 +613,22 @@ impl<S: SessionStore> Client<S> {
         self.core.change_grant(id, user, request).await
     }
 
-    /// `DELETE /accounts/{id}/grants/{user}`: revokes a grant, after
-    /// [`Client::step_up`] within 5 minutes.
+    /// `DELETE /accounts/{id}/grants/{user}`: revokes a grant.
     ///
     /// # Errors
-    /// The server's 403 (`step_up_required` without a fresh step-up,
-    /// `forbidden` below Manage) or 404 (no such grant), as
-    /// [`ClientError::Api`]; any other error as for every authenticated
-    /// call.
+    /// The server's 403 (`forbidden` below Manage) or 404 (no such grant), as
+    /// [`ClientError::Api`]; any other error as for every authenticated call.
     pub async fn revoke_grant(&self, id: AccountId, user: UserId) -> Result<(), ClientError> {
         self.core.revoke_grant(id, user).await
     }
 
     /// `DELETE /accounts/{id}/grants/me`: gives up the caller's own grant,
-    /// leaving the shared account, after [`Client::step_up`] within 5
-    /// minutes.
+    /// leaving the shared account.
     ///
     /// # Errors
-    /// The server's 403 (`step_up_required` without a fresh step-up,
-    /// `forbidden` for the account's owner, the Owner, or an Admin on a
-    /// Member's account) or 404 (no such account, or no grant on it), as
-    /// [`ClientError::Api`]; any other error as for every authenticated
+    /// The server's 403 (`forbidden` for the account's owner, the Owner, or an
+    /// Admin on a Member's account) or 404 (no such account, or no grant on
+    /// it), as [`ClientError::Api`]; any other error as for every authenticated
     /// call.
     pub async fn leave_account(&self, id: AccountId) -> Result<(), ClientError> {
         self.core.leave_account(id).await
@@ -672,14 +653,13 @@ impl<S: SessionStore> Client<S> {
         self.core.bot(id).await
     }
 
-    /// `PATCH /bots/{id}`: sets the bot's server address (Manage), after
-    /// [`Client::step_up`] within 5 minutes. A running bot moves to it.
+    /// `PATCH /bots/{id}`: sets the bot's server address (Manage). A running
+    /// bot moves to it.
     ///
     /// # Errors
-    /// The server's 403 (`step_up_required` without a fresh step-up,
-    /// `forbidden` below Manage), 404, 422 (an address that doesn't parse)
-    /// or 429 (the bot's own limit), as [`ClientError::Api`]; any other
-    /// error as for every authenticated call.
+    /// The server's 403 (`forbidden` below Manage), 404, 422 (an address that
+    /// doesn't parse) or 429 (the bot's own limit), as [`ClientError::Api`];
+    /// any other error as for every authenticated call.
     pub async fn patch_bot(
         &self,
         id: BotId,
@@ -794,16 +774,14 @@ impl<S: SessionStore> Client<S> {
         self.core.send_chat(id, request).await
     }
 
-    /// `POST /bots/{id}/command`: an online bot sends a command, after
-    /// [`Client::step_up`] within 5 minutes: Control for one on the
-    /// allowlist, Manage for any other. It answers as
+    /// `POST /bots/{id}/command`: an online bot sends a command: Control for
+    /// one on the allowlist, Manage for any other. It answers as
     /// [`Client::send_chat`] does.
     ///
     /// # Errors
-    /// The server's 403 (`step_up_required` without a fresh step-up,
-    /// `forbidden` below the level the command needs), 404, 409, 422 (a line
-    /// that isn't a command) or 429 as [`ClientError::Api`]; any other error
-    /// as for every authenticated call.
+    /// The server's 403 (`forbidden` below the level the command needs), 404,
+    /// 409, 422 (a line that isn't a command) or 429 as [`ClientError::Api`];
+    /// any other error as for every authenticated call.
     pub async fn send_command(
         &self,
         id: BotId,
@@ -842,11 +820,10 @@ impl<S: SessionStore> Client<S> {
     }
 
     /// `POST /modes/with-commands`: a new mode of the caller's (201), whatever
-    /// commands its steps send, after [`Client::step_up`] within 5 minutes.
+    /// commands its steps send.
     ///
     /// # Errors
-    /// As [`Client::create_mode`], and 403 `step_up_required` without a
-    /// fresh step-up instead of the pointer.
+    /// As [`Client::create_mode`], without the pointer.
     pub async fn create_mode_with_commands(
         &self,
         request: &CreateModeRequest,
@@ -876,11 +853,10 @@ impl<S: SessionStore> Client<S> {
     }
 
     /// `PUT /modes/{id}/with-commands`: the mode as it should be, whatever
-    /// commands its steps send, after [`Client::step_up`] within 5 minutes.
+    /// commands its steps send.
     ///
     /// # Errors
-    /// As [`Client::update_mode`], and 403 `step_up_required` without a
-    /// fresh step-up instead of the pointer.
+    /// As [`Client::update_mode`], without the pointer.
     pub async fn update_mode_with_commands(
         &self,
         id: ModeId,
@@ -889,13 +865,11 @@ impl<S: SessionStore> Client<S> {
         self.core.update_mode(id, request, true).await
     }
 
-    /// `DELETE /modes/{id}`: deletes a mode no bot uses, after
-    /// [`Client::step_up`] within 5 minutes.
+    /// `DELETE /modes/{id}`: deletes a mode no bot uses.
     ///
     /// # Errors
-    /// The server's 403 (`step_up_required` without a fresh step-up,
-    /// `forbidden` without the right to delete it), 404 or 409
-    /// (`mode_in_use`: a bot uses it), as [`ClientError::Api`]; any other
+    /// The server's 403 (`forbidden` without the right to delete it), 404 or
+    /// 409 (`mode_in_use`: a bot uses it), as [`ClientError::Api`]; any other
     /// error as for every authenticated call.
     pub async fn delete_mode(&self, id: ModeId) -> Result<(), ClientError> {
         self.core.delete_mode(id).await
@@ -915,15 +889,15 @@ impl<S: SessionStore> Client<S> {
         self.core.server_settings(query).await
     }
 
-    /// `POST /server-settings`: a server's new settings (201), after
-    /// [`Client::step_up`] within 5 minutes (P11.9; ADR-0020, U54).
+    /// `POST /server-settings`: a server's new settings (201) (P11.9; ADR-0020,
+    /// U54).
     ///
     /// # Errors
-    /// The server's 403 (`step_up_required`, or `forbidden`: not an Admin
-    /// or the Owner), 409 (`conflict`: 100 servers have settings already)
-    /// or 422 (a field that breaks its rule, at its path; a server that has
-    /// settings already at `server`), as [`ClientError::Api`]; any other
-    /// error as for every authenticated call.
+    /// The server's 403 (`forbidden`: not an Admin or the Owner), 409
+    /// (`conflict`: 100 servers have settings already) or 422 (a field that
+    /// breaks its rule, at its path; a server that has settings already at
+    /// `server`), as [`ClientError::Api`]; any other error as for every
+    /// authenticated call.
     pub async fn create_server_settings(
         &self,
         request: &CreateServerSettingsRequest,
@@ -932,14 +906,13 @@ impl<S: SessionStore> Client<S> {
     }
 
     /// `PUT /server-settings/{id}`: the settings as they should be, at the
-    /// `version` the caller read (200: as they now are, unchanged when the
-    /// edit asks for what's stored), after [`Client::step_up`] within 5
-    /// minutes (S77).
+    /// `version` the caller read (200: as they now are, unchanged when the edit
+    /// asks for what's stored) (S77).
     ///
     /// # Errors
-    /// The server's 403 (`step_up_required`, or `forbidden`), 404, 409
-    /// (`server_settings_changed`: they changed since `version`) or 422, as
-    /// [`ClientError::Api`]; any other error as for every authenticated call.
+    /// The server's 403 (`forbidden`), 404, 409 (`server_settings_changed`:
+    /// they changed since `version`) or 422, as [`ClientError::Api`]; any other
+    /// error as for every authenticated call.
     pub async fn update_server_settings(
         &self,
         id: ServerSettingsId,
@@ -948,20 +921,18 @@ impl<S: SessionStore> Client<S> {
         self.core.update_server_settings(id, request).await
     }
 
-    /// `DELETE /server-settings/{id}`: deletes a server's settings, after
-    /// [`Client::step_up`] within 5 minutes.
+    /// `DELETE /server-settings/{id}`: deletes a server's settings.
     ///
     /// # Errors
-    /// The server's 403 (`step_up_required`, or `forbidden`) or 404, as
-    /// [`ClientError::Api`]; any other error as for every authenticated call.
+    /// The server's 403 (`forbidden`) or 404, as [`ClientError::Api`]; any
+    /// other error as for every authenticated call.
     pub async fn delete_server_settings(&self, id: ServerSettingsId) -> Result<(), ClientError> {
         self.core.delete_server_settings(id).await
     }
 
     /// `POST /server-settings/chat-format-preview`: which sender unsaved chat
-    /// formats read from a line, and which format fitted first, counted from
-    /// 0; nothing is stored. Admins and the Owner, no step-up (P11.9;
-    /// ADR-0020, U58, R134).
+    /// formats read from a line, and which format fitted first, counted from 0;
+    /// nothing is stored. Admins and the Owner (P11.9; ADR-0020, U58, R134).
     ///
     /// # Errors
     /// The server's 403 (`forbidden`: not an Admin or the Owner) or 422 (a

@@ -1,7 +1,7 @@
 //! The servers' settings over HTTP (Plan.md P11.9; ADR-0020, U54,
 //! S74–S78): `GET` and `POST /api/v1/server-settings`, `PUT` and `DELETE
 //! /api/v1/server-settings/{id}`. Admins and the Owner only, every write
-//! after a step-up; the server keyed; the texts refused at their entry,
+//! authorized; the server keyed; the texts refused at their entry,
 //! never repaired; the cap, a taken server, the version, the no-op, the
 //! re-checks in the transaction, the audit entries and the hint.
 
@@ -109,13 +109,6 @@ fn preview_body(formats: &[&str], line: &str) -> Value {
 
 fn key(address: &str) -> ServerKey {
     ServerKey::from(&address.parse::<ServerAddress>().unwrap())
-}
-
-/// `role`'s person `n`, stepped up now.
-async fn stepped_up(setup: &Setup, n: u8, name: &str, role: Role) -> Person {
-    let person = setup.person(n, name, role).await;
-    setup.stamp(person.session).await;
-    person
 }
 
 /// An entry's metadata as text values by key.
@@ -285,7 +278,7 @@ async fn a_member_is_refused_every_route_whatever_the_id(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let member = stepped_up(&setup, 2, "member", Role::Member).await;
+    let member = setup.person(2, "member", Role::Member).await;
     let existing = setup.add_settings(1, "mc.example.com").await;
     let unknown = ServerSettingsId::new_v7(at(T0), [0xEE; 10]).unwrap();
     let before = setup.stored_settings(existing).await;
@@ -320,45 +313,35 @@ async fn a_member_is_refused_every_route_whatever_the_id(
     assert_eq!(setup.settings_entries().await, 0);
 }
 
-/// Every write needs a fresh step-up and changes nothing without one;
-/// reading and the preview don't (R134).
+/// No write needs a step-up, nor do reading and the preview (R134;
+/// ADR-0028).
 #[sqlx::test(migrations = false)]
-async fn writes_need_a_fresh_step_up_and_reads_dont(
+async fn neither_writes_nor_reads_need_a_step_up(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
     let admin = setup.person(2, "admin", Role::Admin).await;
     let id = setup.add_settings(1, "mc.example.com").await;
-    let before = setup.stored_settings(id).await;
 
     let read = setup.list_settings(&admin, "").await;
     let previewed = setup
         .preview_formats(&admin, preview_body(&FORMATS, "Notch : hi"))
         .await;
-    let refused = [
-        setup
-            .create_settings(&admin, create_body("play.example.com", &["One"]))
-            .await,
-        setup
-            .edit_settings(&admin, id, edit_body(1, "mc.example.com", &["Two"]))
-            .await,
-        setup.delete_settings(&admin, id).await,
-    ];
+    let created = setup
+        .create_settings(&admin, create_body("play.example.com", &["One"]))
+        .await;
+    let edited = setup
+        .edit_settings(&admin, id, edit_body(1, "mc.example.com", &["Two"]))
+        .await;
+    let deleted = setup.delete_settings(&admin, id).await;
 
     assert_eq!(read.status, 200, "{}", read.text);
     assert_eq!(previewed.status, 200, "{}", previewed.text);
-    for seen in &refused {
-        assert_eq!(
-            (seen.status, seen.code()),
-            (403, "step_up_required"),
-            "{}",
-            seen.text
-        );
-    }
-    assert_eq!(setup.stored_settings(id).await, before);
-    assert_eq!(setup.settings_entries().await, 0);
-    assert_eq!(setup.hints.take(), []);
+    assert_eq!(created.status, 201, "{}", created.text);
+    assert_eq!(edited.status, 200, "{}", edited.text);
+    assert_eq!(deleted.status, 204, "{}", deleted.text);
+    assert_eq!(setup.settings_entries().await, 3);
 }
 
 /// An Admin creates a server's settings, the server answered as its key and
@@ -370,7 +353,7 @@ async fn an_admin_creates_lists_edits_and_deletes_a_servers_settings(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
 
     let created = setup
         .create_settings(
@@ -429,7 +412,7 @@ async fn an_admin_creates_lists_edits_and_deletes_a_servers_settings(
 #[sqlx::test(migrations = false)]
 async fn the_owner_writes_them_too(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
     let setup = setup(options).await;
-    let owner = stepped_up(&setup, 2, "theowner", Role::Owner).await;
+    let owner = setup.person(2, "theowner", Role::Owner).await;
 
     let created = setup
         .create_settings(&owner, create_body("192.0.2.10", &["Already connected"]))
@@ -532,7 +515,7 @@ async fn the_longest_page_fits_a_clients_answer_cap(
 #[sqlx::test(migrations = false)]
 async fn a_malformed_or_unknown_id_is_404(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let unknown = ServerSettingsId::new_v7(at(T0), [0xEE; 10]).unwrap();
     let edit = edit_body(1, "mc.example.com", &["One"]);
 
@@ -566,7 +549,7 @@ async fn a_body_that_doesnt_parse_is_400_and_a_broken_rule_422(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let id = setup.add_settings(1, "mc.example.com").await;
     let before = setup.stored_settings(id).await;
     let mut unknown_field = create_body("play.example.com", &["One"]);
@@ -672,7 +655,7 @@ async fn a_server_that_has_settings_already_is_422_on_server(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     setup.add_settings(1, "mc.example.com").await;
     let other = setup.add_settings(2, "play.example.com").await;
     let before = setup.stored_settings(other).await;
@@ -702,7 +685,7 @@ async fn the_hundred_and_first_server_is_409_and_nothing_is_written(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     for n in 0..u8::try_from(MAX_SERVER_SETTINGS).unwrap() {
         setup.add_settings(n, &format!("s{n}.example.com")).await;
     }
@@ -729,7 +712,7 @@ async fn an_edit_at_a_stale_version_is_409(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let id = setup.add_settings(1, "mc.example.com").await;
     let first = setup
         .edit_settings(&admin, id, edit_body(1, "mc.example.com", &["Two"]))
@@ -761,7 +744,7 @@ async fn an_edit_that_changes_nothing_writes_nothing(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let created = setup
         .create_settings(&admin, create_body("mc.example.com", &["One", "Two"]))
         .await;
@@ -791,7 +774,7 @@ async fn the_answers_lines_sent_back_change_nothing(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let created = setup
         .create_settings(
             &admin,
@@ -835,7 +818,7 @@ async fn each_write_is_recorded_without_a_text(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let secret = "a kick text no entry may hold";
     let format = "{sender} says a kick text: ";
 
@@ -945,7 +928,7 @@ async fn a_delete_records_how_many_formats_the_row_held(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let created = setup
         .create_settings(
             &admin,
@@ -978,7 +961,9 @@ async fn the_writes_recheck_the_actor_in_their_transaction(
     let mut seen = Vec::new();
     for write in 0..3_u8 {
         // An Admin of their own for each write, demoted right before it.
-        let admin = stepped_up(&setup, 2 + write, &format!("admin{write}"), Role::Admin).await;
+        let admin = setup
+            .person(2 + write, &format!("admin{write}"), Role::Admin)
+            .await;
         setup
             .hooked
             .queue(Meanwhile::SetRole(admin.id, Role::Member));
@@ -996,7 +981,7 @@ async fn the_writes_recheck_the_actor_in_their_transaction(
             _ => setup.delete_settings(&admin, id).await,
         });
     }
-    let admin = stepped_up(&setup, 9, "admin", Role::Admin).await;
+    let admin = setup.person(9, "admin", Role::Admin).await;
     for seen in &seen {
         assert_eq!(
             (seen.status, seen.code()),
@@ -1023,7 +1008,7 @@ async fn a_lost_write_is_500_never_a_success(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let id = setup.add_settings(1, "mc.example.com").await;
 
     setup.hooked.lose_next_mode_write();
@@ -1056,7 +1041,7 @@ async fn every_route_spends_the_users_request_limit(
         },
     )
     .await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let id = setup.add_settings(1, "mc.example.com").await;
 
     for route in 0..5 {
@@ -1117,7 +1102,9 @@ async fn a_demoted_admin_is_403_before_any_row_is_read(
     let mut seen = Vec::new();
     for write in 0..4_u8 {
         // An Admin of their own for each write, demoted right before it.
-        let admin = stepped_up(&setup, 3 + write, &format!("admin{write}"), Role::Admin).await;
+        let admin = setup
+            .person(3 + write, &format!("admin{write}"), Role::Admin)
+            .await;
         setup
             .hooked
             .queue(Meanwhile::SetRole(admin.id, Role::Member));
@@ -1161,7 +1148,7 @@ async fn the_largest_valid_request_fits_the_body_limit(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let server = longest_server(0);
     let create = json!({
         "server": server,
@@ -1204,7 +1191,7 @@ async fn sixteen_texts_of_four_byte_characters_are_413(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let body = json!({
         "server": "mc.example.com",
         "conflict_texts": widest_texts(4, 0),
@@ -1233,7 +1220,7 @@ async fn an_edits_broken_texts_are_422_at_their_paths(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let id = setup.add_settings(1, "mc.example.com").await;
     let before = setup.stored_settings(id).await;
     let seventeen: Vec<String> = (0..17).map(|n| format!("Text {n}")).collect();
@@ -1274,7 +1261,7 @@ async fn a_row_holds_a_text_unless_it_holds_a_format(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
 
     let created = setup
         .create_settings(&admin, create_with("mc.example.com", &[], &FORMATS))
@@ -1317,7 +1304,7 @@ async fn a_formats_only_edit_is_a_real_write(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let created = setup
         .create_settings(&admin, create_with("mc.example.com", &["One"], &FORMATS))
         .await;
@@ -1353,7 +1340,7 @@ async fn the_answers_formats_sent_back_change_nothing(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let formats = ["{{{sender}}} : ", "[{any}] {sender} : ", "{{{sender}}} : "];
     let created = setup
         .create_settings(&admin, create_with("mc.example.com", &["One"], &formats))
@@ -1397,8 +1384,8 @@ async fn the_answers_formats_sent_back_change_nothing(
 }
 
 /// The preview answers which sender the first fitting format reads, and
-/// that format's place counted from 0, for an Admin and the Owner without a
-/// step-up; the line is cleaned as received chat is; nothing is stored,
+/// that format's place counted from 0, for an Admin and the Owner;
+/// the line is cleaned as received chat is; nothing is stored,
 /// recorded or hinted (U58, R134).
 #[sqlx::test(migrations = false)]
 async fn the_preview_reads_the_sender_the_first_fitting_format_reads(

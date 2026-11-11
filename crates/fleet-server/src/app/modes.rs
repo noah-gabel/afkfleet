@@ -7,7 +7,7 @@
 //!   each viewer sees of a mode (its owner, the rights, a command's
 //!   arguments) is the HTTP layer's field rule (S14, S15).
 //! - **Creating** ([`ModeService::create`]): a mode whose steps send a
-//!   command off the allowlist only through the step-up route (S16); its
+//!   command off the allowlist only through the twin route (S16); its
 //!   route is checked before anything is read, a mismatch being a bug the
 //!   handler should have caught (`WrongRoute`, as S10 does for chat). Then
 //!   one write transaction re-reads the acting user, asks `authorize()` for
@@ -25,7 +25,7 @@
 //!   S17), writes the next version only over the version it read, records
 //!   `mode.update` and tells the reconciler (`Change::Store`), so the bots
 //!   get the edit.
-//! - **Deleting** ([`ModeService::delete`]), after a step-up: one write
+//! - **Deleting** ([`ModeService::delete`]): one write
 //!   transaction re-reads the acting user and the mode, asks `authorize()`
 //!   for `DeleteMode`, refuses a mode any bot uses, whoever's (S17), deletes
 //!   it and records `mode.delete` with the version and the visibility. No
@@ -53,14 +53,13 @@ use crate::ports::reconcile::{Change, NoReconcile, Reconcile};
 use crate::ports::store::{Store, StoreError, WriteTx};
 
 /// Which route a mode write came through (S16): the plain one takes only
-/// steps that send no command off the allowlist; the step-up twin
+/// steps that send no command off the allowlist; its twin
 /// (`/with-commands`) takes any. Creating and editing each have both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModeRoute {
     /// `POST /modes` or `PUT /modes/{id}`.
     Plain,
-    /// `POST /modes/with-commands` or `PUT /modes/{id}/with-commands`,
-    /// after a step-up.
+    /// `POST /modes/with-commands` or `PUT /modes/{id}/with-commands`.
     WithCommands,
 }
 
@@ -86,7 +85,7 @@ impl ModeRoute {
 /// Why a mode wasn't created.
 #[derive(Debug, thiserror::Error)]
 pub enum CreateModeError {
-    /// The steps send a command off the allowlist, which only the step-up
+    /// The steps send a command off the allowlist, which only the twin
     /// route takes: the handler should have pointed there first, so this is
     /// a bug (S16).
     #[error("the {route:?} route doesn't take these steps")]
@@ -154,7 +153,7 @@ impl Edited {
 /// Why a mode wasn't edited.
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateModeError {
-    /// The steps send a command off the allowlist, which only the step-up
+    /// The steps send a command off the allowlist, which only the twin
     /// route takes: the handler should have pointed there first (S16).
     #[error("the {route:?} route doesn't take these steps")]
     WrongRoute {
@@ -415,7 +414,7 @@ impl ModeService {
     }
 
     /// What the allowlist says of the commands `definition`'s steps send:
-    /// whether one is off it, which only the step-up route takes (S16).
+    /// whether one is off it, which only the twin route takes (S16).
     #[must_use]
     pub fn command_check(&self, definition: &ModeDefinition) -> CommandCheck {
         self.allowlist.check_mode(definition)

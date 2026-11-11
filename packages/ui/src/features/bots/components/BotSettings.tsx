@@ -8,10 +8,9 @@
 //   never sent. A 403 says only a manager may choose that mode and reads the bot and the
 //   modes again; a 422 shows its field text and reads the modes again; a 404 reads the bot
 //   again, as the controls do. A link beside it leads to the modes (U74).
-// - **The server** (Manage): the address with Change, which opens a field in place; Save asks
-//   for the password when the server wants it (useStepUpAction), and spends the bot's limit,
-//   whose 429 counts down on Save. While a save runs or the password is asked, the field and
-//   Save are locked, and while a save runs, Cancel is.
+// - **The server** (Manage): the address with Change, which opens a field in place; Save never
+//   asks for the password (useWriteAction, ADR-0028), and spends the bot's limit, whose 429
+//   counts down on Save. While a save runs, the field, Save and Cancel are locked.
 // Every answer reads the bot again rather than writing over the cache (R102).
 
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -36,9 +35,7 @@ import type { CommandError } from "../../../generated/CommandError";
 import { useRetryWait } from "../../../hooks/useRetryWait";
 import { useAlive } from "../../../hooks/useStepGuard";
 import { fieldErrorsOf, showFieldErrors } from "../../../lib/formErrors";
-import { isStepUpRequired } from "../../../lib/stepUp";
-import { StepUpPrompt } from "../../admin/components/StepUpPrompt";
-import { useStepUpAction } from "../../admin/hooks/useStepUpAction";
+import { useWriteAction } from "../../admin/hooks/useWriteAction";
 import { MODES_HEADING } from "../../modes/texts";
 import { modeLabel, modesOf } from "../facts";
 import { type BotActions, botActions, mayChoose } from "../permissions";
@@ -177,7 +174,7 @@ function ModeSetting({ bot, actions }: { bot: BotResponse; actions: BotActions }
   );
 }
 
-/** The bot's server: its address, changed in place after the password (Manage). */
+/** The bot's server: its address, changed in place (Manage). */
 function ServerSetting({ bot }: { bot: BotResponse }) {
   const api = useApiClient();
   const queryClient = useQueryClient();
@@ -186,7 +183,7 @@ function ServerSetting({ bot }: { bot: BotResponse }) {
   const fieldId = useId();
   const [editing, setEditing] = useState(false);
   const [formError, setFormError] = useState<string>();
-  const writes = useStepUpAction({
+  const writes = useWriteAction({
     onRefused: () => {
       void queryClient.invalidateQueries({ queryKey: botKey(bot.id), exact: true });
     },
@@ -196,7 +193,7 @@ function ServerSetting({ bot }: { bot: BotResponse }) {
     defaultValues: { server_address: bot.server_address ?? "" },
   });
 
-  /** What a refusal other than the step-up's shows: a wait, a field's text, or a line. */
+  /** What a refusal shows: a wait, a field's text, or a line. */
   function show(error: CommandError): void {
     if (wait.start(error)) {
       return;
@@ -221,11 +218,7 @@ function ServerSetting({ bot }: { bot: BotResponse }) {
         try {
           await api.patchBot(bot.id, values);
         } catch (rejection) {
-          const error = toApiError(rejection).error;
-          if (isStepUpRequired(error)) {
-            throw rejection;
-          }
-          show(error);
+          show(toApiError(rejection).error);
           return;
         }
         setEditing(false);
@@ -263,66 +256,45 @@ function ServerSetting({ bot }: { bot: BotResponse }) {
     );
   }
 
-  // While a save runs or the password is asked, the write that waits is the one shown: the
-  // field and Save are locked, so what's sent after the step-up is what's on the screen.
-  const asking = writes.prompt === key;
-  const locked = asking || writes.running !== null;
+  // While a save runs, the field and Save are locked: what's sent is what's on the screen.
+  const locked = writes.running !== null;
   return (
-    <div className="flex flex-col gap-3">
-      <form className="flex flex-col gap-3" noValidate onSubmit={(event) => void submit(event)}>
-        <FormField
-          id={fieldId}
-          label={SETTINGS.address}
-          hint={SETTINGS.addressHint}
-          error={form.formState.errors.server_address?.message}
-        >
-          {(control) => (
-            <Input
-              {...control}
-              autoComplete="off"
-              readOnly={locked}
-              {...form.register("server_address")}
-            />
-          )}
-        </FormField>
-        {formError === undefined ? null : (
-          <p role="alert" className="text-sm text-destructive">
-            {formError}
-          </p>
+    <form className="flex flex-col gap-3" noValidate onSubmit={(event) => void submit(event)}>
+      <FormField
+        id={fieldId}
+        label={SETTINGS.address}
+        hint={SETTINGS.addressHint}
+        error={form.formState.errors.server_address?.message}
+      >
+        {(control) => (
+          <Input
+            {...control}
+            autoComplete="off"
+            readOnly={locked}
+            {...form.register("server_address")}
+          />
         )}
-        <RetryWaitMessage wait={wait} />
-        <div className="flex gap-2">
-          <Button type="submit" size="sm" disabled={locked || wait.waiting !== null}>
-            {SETTINGS.save}
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={writes.running !== null}
-            onClick={() => {
-              writes.cancel();
-              setEditing(false);
-            }}
-          >
-            {SETTINGS.cancel}
-          </Button>
-        </div>
-      </form>
-      {/* Outside the form: "Confirm it's you" is a form of its own. */}
-      {writes.prompt === key ? (
-        <StepUpPrompt
-          id={`step-up-${key}`}
-          pending={writes.running !== null}
-          onConfirm={writes.confirm}
-          onCancel={writes.cancel}
-        />
-      ) : null}
-      {writes.failure?.key === key ? (
+      </FormField>
+      {formError === undefined ? null : (
         <p role="alert" className="text-sm text-destructive">
-          {writes.failure.message}
+          {formError}
         </p>
-      ) : null}
-    </div>
+      )}
+      <RetryWaitMessage wait={wait} />
+      <div className="flex gap-2">
+        <Button type="submit" size="sm" disabled={locked || wait.waiting !== null}>
+          {SETTINGS.save}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={locked}
+          onClick={() => setEditing(false)}
+        >
+          {SETTINGS.cancel}
+        </Button>
+      </div>
+    </form>
   );
 }

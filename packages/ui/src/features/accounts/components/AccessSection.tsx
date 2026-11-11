@@ -1,9 +1,9 @@
 // "Who has access" (Plan.md P9.8, P11.11, the user's U11 at group F's plan review): for a Manage
 // holder, the account's grants with a level picker and Revoke, a page at a time, then
-// "Share with" by exact username. Every write may ask for the password first (ADR-0018
-// group E); a level changes as soon as it's picked, a revoke asks first. The caller's own row
+// "Share with" by exact username. No write asks for the password (ADR-0028);
+// a level changes as soon as it's picked, a revoke asks first. The caller's own row
 // offers neither: nobody grants to themselves, and Leave is their way out (ADR-0020, U83). The table
-// never cuts text: narrow, it drops "When" first, then "Given by" (U109). A row's question, prompt
+// never cuts text: narrow, it drops "When" first, then "Given by" (U109). A row's question
 // and failure take a row of their own under it, only while there's one.
 
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -39,9 +39,7 @@ import type { GrantLevel } from "../../../generated/GrantLevel";
 import type { GrantResponse } from "../../../generated/GrantResponse";
 import { useRetryWait } from "../../../hooks/useRetryWait";
 import { showFieldErrors } from "../../../lib/formErrors";
-import { isStepUpRequired } from "../../../lib/stepUp";
 import { formatTime } from "../../../lib/time";
-import { StepUpPrompt } from "../../admin/components/StepUpPrompt";
 import type { AccountWrites } from "../hooks/useAccountWrites";
 import {
   ACCESS_HINTS,
@@ -169,7 +167,6 @@ function GrantRow({
     });
   }
 
-  const asked = writes.prompt === key;
   const failed = writes.failure?.key === key;
   return (
     <Fragment>
@@ -213,7 +210,7 @@ function GrantRow({
           ) : null}
         </TableCell>
       </TableRow>
-      {asking || asked || failed ? (
+      {asking || failed ? (
         <TableSpanRow span={5}>
           <div className="flex flex-col gap-2">
             {asking ? (
@@ -241,14 +238,6 @@ function GrantRow({
                   </div>
                 </AlertDescription>
               </Alert>
-            ) : null}
-            {asked ? (
-              <StepUpPrompt
-                id={`step-up-${key}`}
-                pending={writes.running !== null}
-                onConfirm={writes.confirm}
-                onCancel={writes.cancel}
-              />
             ) : null}
             {failed ? (
               <p role="alert" className="text-sm text-destructive">
@@ -287,7 +276,7 @@ function ShareForm({ account, writes }: { account: AccountResponse; writes: Acco
   const username = form.register("username");
   const typed = form.watch("username");
 
-  /** What a refusal other than the step-up's says, at the form. */
+  /** What a refusal says, at the form. */
   function show(error: CommandError, user: string): void {
     const status = error.api?.status;
     const seconds = error.api?.retry_after_secs;
@@ -310,11 +299,7 @@ function ShareForm({ account, writes }: { account: AccountResponse; writes: Acco
       try {
         await api.createGrant(account.id, values);
       } catch (rejection) {
-        const error = toApiError(rejection).error;
-        if (isStepUpRequired(error)) {
-          throw rejection;
-        }
-        show(error, values.username);
+        show(toApiError(rejection).error, values.username);
         return;
       }
       toast.success(shared(account.name, values.username));
@@ -376,21 +361,6 @@ function ShareForm({ account, writes }: { account: AccountResponse; writes: Acco
             Share
           </Button>
         </form>
-        {/* Outside the form: "Confirm it's you" is a form of its own, and a form inside a form
-          submits the outer one natively, which reloads the app. */}
-        {writes.prompt === key ? (
-          <StepUpPrompt
-            id={`step-up-${key}`}
-            pending={writes.running !== null}
-            onConfirm={writes.confirm}
-            onCancel={writes.cancel}
-          />
-        ) : null}
-        {writes.failure?.key === key ? (
-          <p role="alert" className="text-sm text-destructive">
-            {writes.failure.message}
-          </p>
-        ) : null}
       </Card>
     </section>
   );

@@ -1,6 +1,6 @@
 //! Linking an account again (Plan.md P9.6; ADR-0018, group E): `POST
 //! /api/v1/accounts/{id}/relink`, a second kind of link flow through
-//! serve's own app. Manage starts it, without a step-up, for a Microsoft
+//! serve's own app. Manage starts it, for a Microsoft
 //! account that isn't pending; it shares the user's one flow, the daily
 //! count and the caps, without a quota; its commit re-checks the account
 //! and the grant, refuses another profile, and otherwise replaces the token

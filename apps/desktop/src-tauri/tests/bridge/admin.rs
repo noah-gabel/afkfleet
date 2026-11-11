@@ -7,7 +7,7 @@ use fleet_api_types::agents::AgentStatus;
 use fleet_api_types::app::CommandErrorCode;
 use fleet_api_types::{ErrorCode, SecretText};
 
-use crate::support::{Server, is_api, is_invalid, step_up_request};
+use crate::support::{Server, is_api, is_invalid};
 
 fn offline(name: &str) -> CreateOfflineAccountRequest {
     CreateOfflineAccountRequest {
@@ -19,7 +19,6 @@ fn offline(name: &str) -> CreateOfflineAccountRequest {
 async fn the_audit_log_pages_and_narrows_to_a_target_for_admins_only() {
     let server = Server::start().await;
     let (owner, _) = server.owner().await;
-    owner.state.step_up(step_up_request()).await.unwrap();
     let (bob, bob_id) = server.member(&owner, "bob").await;
     let bob_text = bob_id.to_string();
 
@@ -59,18 +58,12 @@ async fn an_agent_lists_is_disabled_and_its_bots_released() {
     let bot = owner.state.bots(None, None).await.unwrap().items[0].id;
     let agent = server.agent_holding(bot, 1).await;
 
-    let unstepped = owner.state.disable_agent(agent).await.unwrap_err();
-    owner.state.step_up(step_up_request()).await.unwrap();
     let not_yet = owner.state.release_agent(agent).await.unwrap_err();
     let listed = owner.state.agents(None, None).await.unwrap();
     let disabled = owner.state.disable_agent(agent).await.unwrap();
     let released = owner.state.release_agent(agent).await.unwrap();
     let bad_limit = owner.state.agents(None, Some(0)).await.unwrap_err();
 
-    assert!(
-        is_api(&unstepped, 403, ErrorCode::StepUpRequired),
-        "{unstepped:?}"
-    );
     assert!(
         is_api(&not_yet, 409, ErrorCode::AgentNotDisabled),
         "{not_yet:?}"
@@ -88,10 +81,8 @@ async fn an_agent_lists_is_disabled_and_its_bots_released() {
 async fn the_owner_reviews_a_users_grants_and_a_grantee_leaves() {
     let server = Server::start().await;
     let (owner, _) = server.owner().await;
-    owner.state.step_up(step_up_request()).await.unwrap();
     let (bob, bob_id) = server.member(&owner, "bob").await;
     let (carol, carol_id) = server.member(&owner, "carol").await;
-    bob.state.step_up(step_up_request()).await.unwrap();
     let bobs = bob
         .state
         .create_offline_account(offline("AfkBot1"))
@@ -120,8 +111,6 @@ async fn the_owner_reviews_a_users_grants_and_a_grantee_leaves() {
         .user_grants(bob_id, None, None)
         .await
         .unwrap_err();
-    let unstepped = carol.state.leave_account(bobs).await.unwrap_err();
-    carol.state.step_up(step_up_request()).await.unwrap();
     carol.state.leave_account(bobs).await.unwrap();
     let again = carol.state.leave_account(bobs).await.unwrap_err();
     let held_after = owner.state.user_grants(carol_id, None, None).await.unwrap();
@@ -132,10 +121,6 @@ async fn the_owner_reviews_a_users_grants_and_a_grantee_leaves() {
     assert_eq!(shared.items.len(), 1);
     assert_eq!(shared.items[0].id, bobs);
     assert!(is_api(&refused, 404, ErrorCode::NotFound), "{refused:?}");
-    assert!(
-        is_api(&unstepped, 403, ErrorCode::StepUpRequired),
-        "{unstepped:?}"
-    );
     assert!(is_api(&again, 404, ErrorCode::NotFound), "{again:?}");
     assert_eq!(held_after.items.len(), 0);
     server.stop().await;

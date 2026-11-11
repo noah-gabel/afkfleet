@@ -1,5 +1,5 @@
 //! Deleting a mode over HTTP (Plan.md P11.4; ADR-0020, S16, S17):
-//! `DELETE /api/v1/modes/{id}`, a step-up route, with the right to delete,
+//! `DELETE /api/v1/modes/{id}`, with the right to delete,
 //! the bots that use the mode, the re-checks in the transaction and the
 //! audit entry.
 
@@ -13,7 +13,7 @@ use fleet_testkit::log_capture;
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
-use super::{MODES, metadata, stepped_up, swinging, swinging_body};
+use super::{MODES, metadata, swinging, swinging_body};
 use crate::support::{Meanwhile, Options, Person, Seen, Setup, T0, at, setup, setup_with};
 
 /// The mode `id`'s route.
@@ -85,7 +85,7 @@ async fn deleting_spends_the_users_request_limit(
         },
     )
     .await;
-    let member = stepped_up(&setup, 2, "member", Role::Member).await;
+    let member = setup.person(2, "member", Role::Member).await;
     let first = setup
         .add_mode(1, member.id, "One", "private", &swinging())
         .await;
@@ -102,31 +102,17 @@ async fn deleting_spends_the_users_request_limit(
     assert!(setup.kept(second).await);
 }
 
-/// Deleting needs the password entered again: without a fresh step-up it's
-/// 403 and deletes nothing (S16).
+/// Deleting needs no step-up (ADR-0028).
 #[sqlx::test(migrations = false)]
-async fn deleting_needs_a_fresh_step_up_and_deletes_nothing_without_one(
-    _pool: SqlitePoolOptions,
-    options: SqliteConnectOptions,
-) {
+async fn deleting_needs_no_step_up(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
     let setup = setup(options).await;
     let member = setup.person(2, "member", Role::Member).await;
     let id = setup
         .add_mode(1, member.id, "Mine", "private", &swinging())
         .await;
 
-    let refused = setup.delete_mode(&member, id).await;
-    let kept = setup.kept(id).await;
-    setup.stamp(member.session).await;
     let deleted = setup.delete_mode(&member, id).await;
 
-    assert_eq!(
-        (refused.status, refused.code()),
-        (403, "step_up_required"),
-        "{}",
-        refused.text
-    );
-    assert!(kept);
     assert_eq!(deleted.status, 204, "{}", deleted.text);
     assert!(!setup.kept(id).await);
 }
@@ -139,7 +125,7 @@ async fn a_malformed_unknown_or_unseen_mode_is_the_same_404(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let member = stepped_up(&setup, 2, "member", Role::Member).await;
+    let member = setup.person(2, "member", Role::Member).await;
     let other = setup.person(3, "other", Role::Member).await;
     let hidden = setup
         .add_mode(1, other.id, "Theirs", "private", &swinging())
@@ -169,9 +155,9 @@ async fn a_built_in_mode_is_403_for_everyone(
 ) {
     let setup = setup(options).await;
     let people = [
-        stepped_up(&setup, 2, "theowner", Role::Owner).await,
-        stepped_up(&setup, 3, "admin", Role::Admin).await,
-        stepped_up(&setup, 4, "member", Role::Member).await,
+        setup.person(2, "theowner", Role::Owner).await,
+        setup.person(3, "admin", Role::Admin).await,
+        setup.person(4, "member", Role::Member).await,
     ];
 
     for person in &people {
@@ -199,10 +185,10 @@ async fn deleting_needs_the_right_to_delete_the_mode(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let owner = stepped_up(&setup, 2, "theowner", Role::Owner).await;
-    let admin = stepped_up(&setup, 3, "admin", Role::Admin).await;
+    let owner = setup.person(2, "theowner", Role::Owner).await;
+    let admin = setup.person(3, "admin", Role::Admin).await;
     let other_admin = setup.person(4, "admin2", Role::Admin).await;
-    let member = stepped_up(&setup, 5, "member", Role::Member).await;
+    let member = setup.person(5, "member", Role::Member).await;
     let cases = [
         (&member, other_admin.id, "shared", 403),
         (&admin, other_admin.id, "shared", 403),
@@ -229,7 +215,7 @@ async fn a_mode_a_bot_uses_is_409_whoever_runs_it(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let other = setup.person(3, "admin2", Role::Admin).await;
     let id = setup
         .add_mode(1, admin.id, "Shared farm", "shared", &swinging())
@@ -267,7 +253,7 @@ async fn a_change_right_before_the_transaction_is_seen_in_it(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
     let other = setup.person(3, "admin2", Role::Admin).await;
     let (_, hidden) = setup.bot_of(other.id, 9).await;
 
@@ -310,7 +296,7 @@ async fn a_delete_is_204_recorded_without_the_name_and_frees_it(
 ) {
     log_capture::install().unwrap();
     let setup = setup(options).await;
-    let member = stepped_up(&setup, 2, "member", Role::Member).await;
+    let member = setup.person(2, "member", Role::Member).await;
     let id = setup
         .add_mode(1, member.id, "Fishing hunter2", "private", &swinging())
         .await;
@@ -370,7 +356,7 @@ async fn a_delete_that_matches_no_row_is_the_internal_error_never_a_success(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    let member = stepped_up(&setup, 2, "member", Role::Member).await;
+    let member = setup.person(2, "member", Role::Member).await;
     let id = setup
         .add_mode(1, member.id, "Mine", "private", &swinging())
         .await;

@@ -20,7 +20,6 @@ import { refusal } from "../../test/signIn";
 const ID = botId(1);
 const NOW = new Date("2026-10-27T15:00:00.000Z");
 const REQUEST = "01900000-0000-7000-8000-0000000004a1";
-const PASSWORD = "a password";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -59,7 +58,6 @@ async function sendBox(handlers: Partial<ApiClient> = {}, level: GrantLevel = "m
     {
       bot: async () => seen(level),
       botChat: async () => ({ items: [...chat.lines] }),
-      stepUp: async () => {},
       watchEvents: watch.handler,
       ...handlers,
     },
@@ -139,41 +137,50 @@ describe("the send box (U45, S70)", () => {
     expect(marksOf("hello")).toBe("sent");
   });
 
-  it("sends a command off the allowlist to /command after the password, locked meanwhile", async () => {
-    let asked = 0;
+  it("sends a command off the allowlist on to /command, never asking for the password (ADR-0028), locked meanwhile", async () => {
+    const sent = deferred<ChatSendResponse>();
+    const commands = () =>
+      app.fake.calls.filter((call) => call.method === "sendCommand").map((call) => call.args);
     const { app, chat } = await sendBox({
       sendChat: async () => {
         throw refusal(403, "command_needs_step_up");
       },
       sendCommand: async (_id, request) => {
-        asked += 1;
-        if (asked === 1) {
-          throw refusal(403, "step_up_required");
-        }
         chat.lines = [own(9, request.message)];
-        return answer(9);
+        return sent.promise;
       },
     });
 
     await app.user.type(field(), "/op AfkBot2");
     await app.user.click(screen.getByRole("button", { name: "Send" }));
-    expect(
-      await screen.findByText("Enter your password to send this command. Counts for 5 minutes."),
-    ).toBeDefined();
+    await vi.waitFor(() => expect(commands()).toHaveLength(1));
     await app.user.type(field(), "3");
     expect(field().value).toBe("/op AfkBot2");
-    expect(screen.getByRole("button", { name: "Send" })).toHaveProperty("disabled", true);
-    await app.user.type(screen.getByLabelText("Current password"), PASSWORD);
-    await app.user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(field().readOnly).toBe(true);
+    expect(screen.getByRole("img", { name: "Sending…" })).toBeDefined();
+    expect(screen.queryByLabelText("Current password")).toBeNull();
+    sent.resolve(answer(9));
 
     expect(await screen.findByText("/op AfkBot2")).toBeDefined();
-    expect(field().value).toBe("");
-    expect(
-      app.fake.calls.filter((call) => call.method === "sendCommand").map((call) => call.args),
-    ).toEqual([
-      [ID, { message: "/op AfkBot2" }],
-      [ID, { message: "/op AfkBot2" }],
-    ]);
+    await vi.waitFor(() => expect(field().value).toBe(""));
+    expect(commands()).toEqual([[ID, { message: "/op AfkBot2" }]]);
+  });
+
+  it("shows the command route's refusal by the box, and the text stays", async () => {
+    const { app } = await sendBox({
+      sendChat: async () => {
+        throw refusal(403, "command_needs_step_up");
+      },
+      sendCommand: async () => {
+        throw refusal(409, "bot_not_online");
+      },
+    });
+
+    await app.user.type(field(), "/op AfkBot2");
+    await app.user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect((await screen.findByRole("alert")).textContent).toBe("refused: bot_not_online");
+    expect(field().value).toBe("/op AfkBot2");
   });
 
   it("keeps the text and shows the server's message on a 409", async () => {
@@ -315,25 +322,16 @@ describe("the send box (U45, S70)", () => {
 });
 
 describe("the send box and the secret rule (U34)", () => {
-  it("leaves no line and no password in the cache after a send and a step-up", async () => {
-    let asked = 0;
+  it("leaves no line in the cache after a send that went on to /command", async () => {
     const { app } = await sendBox({
       sendChat: async () => {
         throw refusal(403, "command_needs_step_up");
       },
-      sendCommand: async () => {
-        asked += 1;
-        if (asked === 1) {
-          throw refusal(403, "step_up_required");
-        }
-        return answer(9);
-      },
+      sendCommand: async () => answer(9),
     });
 
     await app.user.type(field(), "/login hunter2");
     await app.user.click(screen.getByRole("button", { name: "Send" }));
-    await app.user.type(await screen.findByLabelText("Current password"), PASSWORD);
-    await app.user.click(screen.getByRole("button", { name: "Continue" }));
     await vi.waitFor(() => expect(field().value).toBe(""));
 
     const cached = JSON.stringify([
@@ -348,7 +346,6 @@ describe("the send box and the secret rule (U34)", () => {
     ]);
     expect(cached).not.toContain("hunter2");
     expect(cached).not.toContain("/login");
-    expect(cached).not.toContain(PASSWORD);
     expect(app.runtime.queryClient.getQueryData(chatOutcomesKey(ID))).toEqual({
       [REQUEST]: { line: 9, final: { kind: "sent" } },
     });

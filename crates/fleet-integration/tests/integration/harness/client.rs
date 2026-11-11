@@ -1,14 +1,14 @@
 //! The Owner (ADR-0019, S72): fleet-client over the server's real HTTP
-//! listener, logged in with 2FA as the app does it, stepped up once, and
-//! changing bots only through the API, so every change hints the
-//! reconciler as a user's does. The server's clock is frozen between the
-//! case's own moves, so the session and the step-up never expire.
+//! listener, logged in with 2FA as the app does it, never stepped up
+//! (ADR-0028), and changing bots only through the API, so every change
+//! hints the reconciler as a user's does. The server's clock is frozen
+//! between the case's own moves, so the session never expires.
 
 use core::time::Duration;
 
 use fleet_api_types::accounts::CreateOfflineAccountRequest;
 use fleet_api_types::agents::AgentResponse;
-use fleet_api_types::auth::{LoginRequest, StepUpRequest};
+use fleet_api_types::auth::LoginRequest;
 use fleet_api_types::bots::{BotModeRequest, BotPatchRequest, BotResponse};
 use fleet_api_types::chat::{ChatPage, ChatPageQuery, ChatSendRequest, ChatSendResponse};
 use fleet_api_types::mfa::CODE_MAX_CHARS;
@@ -93,7 +93,7 @@ pub(crate) struct Owner {
 
 impl Owner {
     /// The Owner's first login on `server`: the setup step, the
-    /// authenticator, the login with the next step's code, and a step-up.
+    /// authenticator, and the login with the next step's code.
     pub(crate) async fn log_in(server: &Server) -> Self {
         let client = Client::new(
             ClientConfig {
@@ -113,12 +113,6 @@ impl Owner {
         let step = client.login(&login()).await.unwrap();
         assert!(matches!(step, LoginStep::MfaRequired { .. }), "{step:?}");
         client.login_mfa(code(server, &app)).await.unwrap();
-        client
-            .step_up(&StepUpRequest {
-                password: SecretText::new(PASSWORD.to_owned()),
-            })
-            .await
-            .unwrap();
         Self { client }
     }
 
@@ -226,7 +220,7 @@ impl Owner {
     }
 
     /// Gives the Minecraft server `server` the conflict texts `texts`, as an
-    /// Admin or the Owner does after a step-up (P11.9; ADR-0020, S77).
+    /// Admin or the Owner does (P11.9; ADR-0020, S77).
     pub(crate) async fn server_settings(
         &self,
         server: &str,

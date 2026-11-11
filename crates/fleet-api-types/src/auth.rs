@@ -151,8 +151,9 @@ pub struct RefreshRequest {
     pub refresh_token: SecretText<TOKEN_MAX_CHARS>,
 }
 
-/// `POST /auth/step-up`: the password again, which allows step-up actions
-/// in this session for 5 minutes.
+/// `POST /auth/step-up`: the password again, which allows the two step-up
+/// actions in this session for 5 minutes: a new password and a replaced
+/// authenticator (ADR-0028).
 #[derive(Debug, Serialize, Deserialize, Validate, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StepUpRequest {

@@ -1,29 +1,29 @@
 //! The servers' settings routes (Plan.md P11.9, Appendix B; ADR-0020, U54,
-//! U58, S74–S80, R134, R135): Admins and the Owner read them, after a
-//! step-up write them, and try unsaved chat formats on a line.
+//! U58, S74–S80, R134, R135): Admins and the Owner read them, write them,
+//! and try unsaved chat formats on a line.
 //!
 //! - **Reading** (`GET /api/v1/server-settings`): `authorize()` asks
 //!   `ViewServerSettings` first (403 for a Member), then one page, newest
 //!   first, of at most 10 rows, so a page of rows at their caps fits a
 //!   client's answer cap (`ServerSettingsPageQuery`).
-//! - **Creating** (`POST /api/v1/server-settings`, after a step-up): a
+//! - **Creating** (`POST /api/v1/server-settings`): a
 //!   `CreateServerSettingsRequest`, whose every rule garde checked, at
 //!   least one text unless a chat format is set (R140); the server is keyed
 //!   (S74) and the texts and formats built by fleet-core.
 //!   `ConfigureServerSettings` first (403), then the service checks it all
 //!   again in its transaction: the cap (409 `conflict`, S78) and a server
 //!   that has settings already (422 on `server`).
-//! - **Editing** (`PUT /api/v1/server-settings/{id}`, after a step-up): an
+//! - **Editing** (`PUT /api/v1/server-settings/{id}`): an
 //!   `UpdateServerSettingsRequest`, the whole settings and the `version`
 //!   read. `ConfigureServerSettings` first (403), so a Member's answer never
 //!   depends on whether the row exists (S75); then a missing row is 404, an
 //!   edit that changes nothing answers the row as it is, a stale `version`
 //!   is 409 `server_settings_changed`, and another row's server 422 on
 //!   `server`.
-//! - **Deleting** (`DELETE /api/v1/server-settings/{id}`, after a step-up):
+//! - **Deleting** (`DELETE /api/v1/server-settings/{id}`):
 //!   `ConfigureServerSettings` first, then 404 for a missing row. 204.
-//! - **Previewing** (`POST /api/v1/server-settings/chat-format-preview`, no
-//!   step-up, U58): `ConfigureServerSettings` (403), then which of the
+//! - **Previewing** (`POST /api/v1/server-settings/chat-format-preview`,
+//!   U58): `ConfigureServerSettings` (403), then which of the
 //!   request's formats, validated as on save, fits its line first, cleaned
 //!   as received chat is (R134). Nothing is read, written or recorded.
 
@@ -50,7 +50,7 @@ use crate::app::server_settings::{
     UpdateServerSettingsError,
 };
 use crate::http::error::ApiError;
-use crate::http::extractors::{AuthUser, SteppedUpUser, ValidJson, ValidPath, ValidQuery};
+use crate::http::extractors::{AuthUser, ValidJson, ValidPath, ValidQuery};
 use crate::http::rate_limit::ClientIp;
 use crate::http::router::AppState;
 use crate::ports::page::{Page, PageLimit};
@@ -92,8 +92,7 @@ pub(crate) async fn list(
     }))
 }
 
-/// `POST /api/v1/server-settings`: a server's new settings, after a
-/// step-up.
+/// `POST /api/v1/server-settings`: a server's new settings.
 #[utoipa::path(
     post,
     path = "/api/v1/server-settings",
@@ -104,7 +103,7 @@ pub(crate) async fn list(
         (status = 201, description = "The new settings, their server as its key.", body = ServerSettingsResponse),
         (status = 400, description = "A body of the wrong shape: an unknown field, a missing one, or a value of the wrong type. The answer never repeats what it read.", body = ErrorResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "Step up first: `POST /auth/step-up`; or the caller isn't an Admin or the Owner.", body = ErrorResponse),
+        (status = 403, description = "The caller isn't an Admin or the Owner.", body = ErrorResponse),
         (status = 409, description = "`conflict`: 100 servers have settings already.", body = ErrorResponse),
         (status = 422, description = "A field breaks its rule, named at its own path (`server`, `conflict_texts`, `conflict_texts[3]`, `chat_formats`, `chat_formats[3]`): one error per field, a list's first; a server that has settings already is `server`'s.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
@@ -113,12 +112,11 @@ pub(crate) async fn list(
     ),
 )]
 pub(crate) async fn create(
-    user: SteppedUpUser,
+    user: AuthUser,
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     ValidJson(request): ValidJson<CreateServerSettingsRequest>,
 ) -> Result<(StatusCode, Json<ServerSettingsResponse>), ApiError> {
-    let user = user.user();
     let (server, texts, formats) = checked(
         &request.server,
         &request.conflict_texts,
@@ -130,7 +128,7 @@ pub(crate) async fn create(
     )?;
     let created = state
         .server_settings
-        .create(&acting(user, ip), server, texts, formats)
+        .create(&acting(&user, ip), server, texts, formats)
         .await
         .map_err(|error| match error {
             CreateServerSettingsError::SessionGone => ApiError::Unauthorized,
@@ -145,8 +143,7 @@ pub(crate) async fn create(
     Ok((StatusCode::CREATED, Json(settings_response(&created)?)))
 }
 
-/// `PUT /api/v1/server-settings/{id}`: the settings as they should be,
-/// after a step-up.
+/// `PUT /api/v1/server-settings/{id}`: the settings as they should be.
 #[utoipa::path(
     put,
     path = "/api/v1/server-settings/{id}",
@@ -158,7 +155,7 @@ pub(crate) async fn create(
         (status = 200, description = "The settings as they now are: at the next version, or unchanged when the edit asks for what's stored.", body = ServerSettingsResponse),
         (status = 400, description = "A body of the wrong shape: an unknown field, a missing one, or a value of the wrong type. The answer never repeats what it read.", body = ErrorResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "Step up first: `POST /auth/step-up`; or the caller isn't an Admin or the Owner.", body = ErrorResponse),
+        (status = 403, description = "The caller isn't an Admin or the Owner.", body = ErrorResponse),
         (status = 404, description = "No such settings.", body = ErrorResponse),
         (status = 409, description = "`server_settings_changed`: the settings changed since the caller read `version`.", body = ErrorResponse),
         (status = 422, description = "A field breaks its rule, named at its own path (`version`, `server`, `conflict_texts`, `conflict_texts[3]`, `chat_formats`, `chat_formats[3]`): one error per field, a list's first; a server another row has is `server`'s.", body = ErrorResponse),
@@ -168,13 +165,12 @@ pub(crate) async fn create(
     ),
 )]
 pub(crate) async fn update(
-    user: SteppedUpUser,
+    user: AuthUser,
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     ValidPath(id): ValidPath<ServerSettingsId>,
     ValidJson(request): ValidJson<UpdateServerSettingsRequest>,
 ) -> Result<Json<ServerSettingsResponse>, ApiError> {
-    let user = user.user();
     let (server, texts, formats) = checked(
         &request.server,
         &request.conflict_texts,
@@ -194,7 +190,7 @@ pub(crate) async fn update(
     };
     let edited = state
         .server_settings
-        .update(&acting(user, ip), id, edit)
+        .update(&acting(&user, ip), id, edit)
         .await
         .map_err(|error| match error {
             UpdateServerSettingsError::SessionGone => ApiError::Unauthorized,
@@ -210,8 +206,7 @@ pub(crate) async fn update(
     Ok(Json(settings_response(edited.settings())?))
 }
 
-/// `DELETE /api/v1/server-settings/{id}`: deletes a server's settings,
-/// after a step-up.
+/// `DELETE /api/v1/server-settings/{id}`: deletes a server's settings.
 #[utoipa::path(
     delete,
     path = "/api/v1/server-settings/{id}",
@@ -221,7 +216,7 @@ pub(crate) async fn update(
     responses(
         (status = 204, description = "The settings are deleted: the server's bots count no kick text as a login any more."),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "Step up first: `POST /auth/step-up`; or the caller isn't an Admin or the Owner.", body = ErrorResponse),
+        (status = 403, description = "The caller isn't an Admin or the Owner.", body = ErrorResponse),
         (status = 404, description = "No such settings.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
             headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
@@ -229,19 +224,18 @@ pub(crate) async fn update(
     ),
 )]
 pub(crate) async fn delete(
-    user: SteppedUpUser,
+    user: AuthUser,
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     ValidPath(id): ValidPath<ServerSettingsId>,
 ) -> Result<StatusCode, ApiError> {
-    let user = user.user();
     user.require(
         Permission::ConfigureServerSettings,
         &ResourceContext::Global,
     )?;
     state
         .server_settings
-        .delete(&acting(user, ip), id)
+        .delete(&acting(&user, ip), id)
         .await
         .map_err(|error| match error {
             DeleteServerSettingsError::SessionGone => ApiError::Unauthorized,

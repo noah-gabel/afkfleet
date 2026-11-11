@@ -4,6 +4,8 @@
 - **Date:** 2026-10-19
 - **Related:** Plan.md Phase 11 (P11.3–P11.11), §6, §7.2, §7.3, §7.4, Appendices A to E; ADR-0003, ADR-0010, ADR-0011, ADR-0013, ADR-0015, ADR-0016, ADR-0017, ADR-0018, ADR-0019
 
+> Superseded in part by [ADR-0028](0028-a-session-is-enough.md) (2026-11-11, the user's decision): the step-up in S4, S8, S16, S17, S49, S51 and U54 is gone: `/command`, the modes' `/with-commands` twins, deleting a mode, the servers' settings, releasing an agent's bots and leaving a shared account are plain authed routes, and the app follows the two pointers without a prompt. Everything else here stands.
+
 ## Context
 Phase 11 makes the fleet usable from the app day to day: chat, modes, live events, retention, the Tauri side of the events, the screens, dark mode and a design pass. Phase 10 built P11.1 and P11.2 already (ADR-0019, U1), and left one follow-up for Phase 11's first group: U24, a refused login's next session request stays fresh.
 

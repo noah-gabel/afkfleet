@@ -3,9 +3,9 @@
 // or review, the re-auth prompt and Link again, and at its foot, set apart, Delete, and Leave where the
 // server says the viewer may (U23, S51, U83); on the right, for a Manage holder, "Who has access". Two
 // columns as a bot's screen has, stacking at the same width; one below Manage, never an empty right
-// half. Deleting and leaving ask first, then "Confirm it's you" when the
-// server wants it, and go back to the list, replacing this screen's entry, as it's gone (U111); a late
-// answer moves nothing once the user has gone elsewhere.
+// half. Deleting and leaving ask first, never for the password (ADR-0028), and go back to the list,
+// replacing this screen's entry, as it's gone (U111); a late answer moves nothing once the user has
+// gone elsewhere.
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { cn } from "cn";
@@ -23,9 +23,7 @@ import { Alert, AlertDescription } from "../../../components/ui/alert";
 import { Button } from "../../../components/ui/button";
 import { Card } from "../../../components/ui/card";
 import { useAlive } from "../../../hooks/useStepGuard";
-import { isStepUpRequired } from "../../../lib/stepUp";
 import { formatTime } from "../../../lib/time";
-import { StepUpPrompt } from "../../admin/components/StepUpPrompt";
 import { useAccountWrites } from "../hooks/useAccountWrites";
 import { useAwaitingApproval } from "../hooks/useAwaitingApproval";
 import { accountActions } from "../permissions";
@@ -144,7 +142,7 @@ export function AccountScreen({ id }: { id: string }) {
   );
 }
 
-/** Delete, with its question, prompt and failure. */
+/** Delete, with its question and failure. */
 function DeleteAction({
   id,
   name,
@@ -200,14 +198,6 @@ function DeleteAction({
           </AlertDescription>
         </Alert>
       ) : null}
-      {writes.prompt === key ? (
-        <StepUpPrompt
-          id="step-up-delete"
-          pending={writes.running !== null}
-          onConfirm={writes.confirm}
-          onCancel={writes.cancel}
-        />
-      ) : null}
       {writes.failure?.key === key ? (
         <p role="alert" className="text-sm text-destructive">
           {writes.failure.message}
@@ -217,7 +207,7 @@ function DeleteAction({
   );
 }
 
-/** Leave, with its question, prompt and failure. */
+/** Leave, with its question and failure. */
 function LeaveAction({
   id,
   name,
@@ -250,7 +240,7 @@ function LeaveAction({
         await api.leaveAccount(id);
       } catch (rejection) {
         const error = toApiError(rejection).error;
-        if (isStepUpRequired(error) || error.api?.status !== 404) {
+        if (error.api?.status !== 404) {
           throw rejection;
         }
         toast.info(alreadyGone(name));
@@ -288,14 +278,6 @@ function LeaveAction({
             </div>
           </AlertDescription>
         </Alert>
-      ) : null}
-      {writes.prompt === key ? (
-        <StepUpPrompt
-          id="step-up-leave"
-          pending={writes.running !== null}
-          onConfirm={writes.confirm}
-          onCancel={writes.cancel}
-        />
       ) : null}
       {writes.failure?.key === key ? (
         <p role="alert" className="text-sm text-destructive">

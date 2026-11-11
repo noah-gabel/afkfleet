@@ -270,7 +270,7 @@ dev-managed-agent dir=(justfile_directory() / "target" / "dev-agent") $AFKFLEET_
 
 # No exit message: the console prints its own errors, and on Windows Ctrl+C reaches just
 # and PowerShell too. It needs a terminal, so the AI never runs it.
-# The password, the 2FA code and a step-up are typed hidden, never an argument (ADR-0019,
+# The password and the 2FA code are typed hidden, never an argument (ADR-0019,
 # S71); a user without 2FA sets it up in `just dev-app` first. `server` is dev-server's API.
 # A console for dev-server's bot, mode and admin endpoints: bots, bot, offline, server, mode,
 # start, stop, chat, command, history, modes, new-mode, edit-mode, delete-mode, events, users,

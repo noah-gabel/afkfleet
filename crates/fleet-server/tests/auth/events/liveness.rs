@@ -166,7 +166,6 @@ async fn disabling_the_user_closes_their_socket(
     let owner = setup.person(2, "AfkOwner", Role::Owner).await;
     let served = Served::start(&setup).await;
     let mut socket = ready(&setup, &served, &alice.token).await;
-    setup.stamp(owner.session).await;
 
     let disabled = setup
         .patch(
@@ -193,7 +192,6 @@ async fn a_role_change_closes_the_users_socket(
     let owner = setup.person(2, "AfkOwner", Role::Owner).await;
     let served = Served::start(&setup).await;
     let mut socket = ready(&setup, &served, &alice.token).await;
-    setup.stamp(owner.session).await;
 
     let promoted = setup
         .patch(
