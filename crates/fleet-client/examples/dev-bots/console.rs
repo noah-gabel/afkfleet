@@ -6,22 +6,21 @@
 //! the password or a code, never a line it didn't understand, and never a
 //! chat line typed into it back, nor a mode's steps: `new-mode` and
 //! `edit-mode` take a mode's JSON and show only its line, and JSON that
-//! isn't a mode is said so, never repeated. `delete-mode` asks for the
-//! password again when the server wants it. `history` shows a bot's chat
+//! isn't a mode is said so, never repeated. After the login it never asks
+//! for the password again (ADR-0028). `history` shows a bot's chat
 //! as the server sends it to this user: cleaned, a line break as ` | `, a
 //! command's arguments only for Manage holders (ADR-0020, S9, S11, U3).
 //! `events` prints the live events, one line each, until Enter, over
 //! fleet-client's own socket, which reconnects by itself and keeps its
 //! ticket and token (P11.5, P11.8; ADR-0020, S37, S53). `audit` shows a page
 //! of the audit log, `users` every user and `agents` every agent, for Admins
-//! and the Owner; `release` releases a disabled agent's bots, asking for the
-//! password again when the server wants it; `held` and `shared` show the
-//! review of a user's grants at a role change, the Owner's; `leave` gives up
-//! the user's own grant on a shared account, asking for the password again
-//! when the server wants it (P11.9; ADR-0020, R67, S51). `servers` shows
+//! and the Owner; `release` releases a disabled agent's bots; `held` and
+//! `shared` show the review of a user's grants at a role change, the
+//! Owner's; `leave` gives up the user's own grant on a shared account
+//! (P11.9; ADR-0020, R67, S51). `servers` shows
 //! every server's settings, a line each, for Admins and the Owner;
-//! `new-server` and `edit-server` take their JSON, `delete-server` an ID,
-//! each asking for the password again when the server wants it; a line
+//! `new-server` and `edit-server` take their JSON, `delete-server` an ID;
+//! a line
 //! shows a server's key and how many conflict texts and chat formats it
 //! has, never a text or a format, and JSON that isn't server settings is
 //! said so, never repeated (P11.9; ADR-0020, S77). `preview-formats` takes
@@ -35,7 +34,7 @@ use std::io;
 use fleet_api_types::accounts::{CreateOfflineAccountRequest, HeldGrantResponse};
 use fleet_api_types::agents::AgentResponse;
 use fleet_api_types::audit::{AuditEntryResponse, AuditPage, AuditPageQuery};
-use fleet_api_types::auth::{LoginRequest, StepUpRequest};
+use fleet_api_types::auth::LoginRequest;
 use fleet_api_types::bots::{BotModeRequest, BotPatchRequest, BotResponse, BotStatus};
 use fleet_api_types::chat::{
     ChatCommandRequest, ChatLine, ChatPageQuery, ChatSendOutcome, ChatSendRequest, ChatSendResponse,
@@ -534,42 +533,24 @@ fn agent_line_of(agent: &AgentResponse) -> String {
     )
 }
 
-/// Releases the disabled agent `id`'s bots, with a step-up when the server
-/// asks, once.
+/// Releases the disabled agent `id`'s bots.
 async fn release<S: SessionStore>(
     client: &Client<S>,
     id: AgentId,
     terminal: &mut impl Terminal,
 ) -> Result<(), ClientError> {
-    let agent = match client.release_agent(id).await {
-        Err(ClientError::Api(failure)) if failure.is(ErrorCode::StepUpRequired) => {
-            if !stepped_up(client, terminal).await? {
-                return Ok(());
-            }
-            client.release_agent(id).await?
-        }
-        other => other?,
-    };
+    let agent = client.release_agent(id).await?;
     terminal.say(&agent_line_of(&agent));
     Ok(())
 }
 
-/// Gives up the user's own grant on account `id`, with a step-up when the
-/// server asks, once.
+/// Gives up the user's own grant on account `id`.
 async fn leave<S: SessionStore>(
     client: &Client<S>,
     id: AccountId,
     terminal: &mut impl Terminal,
 ) -> Result<(), ClientError> {
-    match client.leave_account(id).await {
-        Err(ClientError::Api(failure)) if failure.is(ErrorCode::StepUpRequired) => {
-            if !stepped_up(client, terminal).await? {
-                return Ok(());
-            }
-            client.leave_account(id).await?;
-        }
-        other => other?,
-    }
+    client.leave_account(id).await?;
     terminal.say(&format!("left account {id}"));
     Ok(())
 }
@@ -858,9 +839,8 @@ async fn modes<S: SessionStore>(
     Ok(())
 }
 
-/// Creates the mode `json` holds, through the step-up route after the
-/// password again when its steps send a command off the allowlist, once.
-/// JSON that isn't a mode is said so, never repeated: serde's message would
+/// Creates the mode `json` holds, through the twin route when its steps
+/// send a command off the allowlist. JSON that isn't a mode is said so, never repeated: serde's message would
 /// quote it, and its chat lines with it.
 async fn new_mode<S: SessionStore>(
     client: &Client<S>,
@@ -875,9 +855,6 @@ async fn new_mode<S: SessionStore>(
     };
     let mode = match client.create_mode(&request).await {
         Err(ClientError::Api(failure)) if failure.is(ErrorCode::ModeNeedsStepUp) => {
-            if !stepped_up(client, terminal).await? {
-                return Ok(());
-            }
             client.create_mode_with_commands(&request).await?
         }
         other => other?,
@@ -901,9 +878,6 @@ async fn edit_mode<S: SessionStore>(
     };
     let mode = match client.update_mode(id, &request).await {
         Err(ClientError::Api(failure)) if failure.is(ErrorCode::ModeNeedsStepUp) => {
-            if !stepped_up(client, terminal).await? {
-                return Ok(());
-            }
             client.update_mode_with_commands(id, &request).await?
         }
         other => other?,
@@ -912,21 +886,13 @@ async fn edit_mode<S: SessionStore>(
     Ok(())
 }
 
-/// Deletes the mode `id`, with a step-up when the server asks, once.
+/// Deletes the mode `id`.
 async fn delete_mode<S: SessionStore>(
     client: &Client<S>,
     id: ModeId,
     terminal: &mut impl Terminal,
 ) -> Result<(), ClientError> {
-    match client.delete_mode(id).await {
-        Err(ClientError::Api(failure)) if failure.is(ErrorCode::StepUpRequired) => {
-            if !stepped_up(client, terminal).await? {
-                return Ok(());
-            }
-            client.delete_mode(id).await?;
-        }
-        other => other?,
-    }
+    client.delete_mode(id).await?;
     terminal.say(&format!("mode {id} deleted"));
     Ok(())
 }
@@ -956,9 +922,8 @@ async fn servers<S: SessionStore>(
     Ok(())
 }
 
-/// Creates the server settings `json` holds, with a step-up when the
-/// server asks, once. JSON that isn't server settings is said so, never
-/// repeated: serde's message would quote it.
+/// Creates the server settings `json` holds. JSON that isn't server
+/// settings is said so, never repeated: serde's message would quote it.
 async fn new_server<S: SessionStore>(
     client: &Client<S>,
     json: &str,
@@ -970,15 +935,7 @@ async fn new_server<S: SessionStore>(
         );
         return Ok(());
     };
-    let settings = match client.create_server_settings(&request).await {
-        Err(ClientError::Api(failure)) if failure.is(ErrorCode::StepUpRequired) => {
-            if !stepped_up(client, terminal).await? {
-                return Ok(());
-            }
-            client.create_server_settings(&request).await?
-        }
-        other => other?,
-    };
+    let settings = client.create_server_settings(&request).await?;
     terminal.say(&server_line_of(&settings));
     Ok(())
 }
@@ -996,35 +953,18 @@ async fn edit_server<S: SessionStore>(
         );
         return Ok(());
     };
-    let settings = match client.update_server_settings(id, &request).await {
-        Err(ClientError::Api(failure)) if failure.is(ErrorCode::StepUpRequired) => {
-            if !stepped_up(client, terminal).await? {
-                return Ok(());
-            }
-            client.update_server_settings(id, &request).await?
-        }
-        other => other?,
-    };
+    let settings = client.update_server_settings(id, &request).await?;
     terminal.say(&server_line_of(&settings));
     Ok(())
 }
 
-/// Deletes the server settings `id`, with a step-up when the server asks,
-/// once.
+/// Deletes the server settings `id`.
 async fn delete_server<S: SessionStore>(
     client: &Client<S>,
     id: ServerSettingsId,
     terminal: &mut impl Terminal,
 ) -> Result<(), ClientError> {
-    match client.delete_server_settings(id).await {
-        Err(ClientError::Api(failure)) if failure.is(ErrorCode::StepUpRequired) => {
-            if !stepped_up(client, terminal).await? {
-                return Ok(());
-            }
-            client.delete_server_settings(id).await?;
-        }
-        other => other?,
-    }
+    client.delete_server_settings(id).await?;
     terminal.say(&format!("server settings {id} deleted"));
     Ok(())
 }
@@ -1088,8 +1028,7 @@ fn mode_line_of(mode: &ModeResponse) -> String {
     shown
 }
 
-/// Sends bot `id` the command `text`, with a step-up when the server asks,
-/// once.
+/// Sends bot `id` the command `text`.
 async fn send_command<S: SessionStore>(
     client: &Client<S>,
     id: BotId,
@@ -1097,42 +1036,12 @@ async fn send_command<S: SessionStore>(
     terminal: &mut impl Terminal,
 ) -> Result<(), ClientError> {
     let request = ChatCommandRequest { message: text };
-    let answer = match client.send_command(id, &request).await {
-        Err(ClientError::Api(failure)) if failure.is(ErrorCode::StepUpRequired) => {
-            if !stepped_up(client, terminal).await? {
-                return Ok(());
-            }
-            client.send_command(id, &request).await?
-        }
-        other => other?,
-    };
+    let answer = client.send_command(id, &request).await?;
     terminal.say(&answer_of(&answer));
     Ok(())
 }
 
-/// Asks for the password again and steps up: false when it can't be read.
-async fn stepped_up<S: SessionStore>(
-    client: &Client<S>,
-    terminal: &mut impl Terminal,
-) -> Result<bool, ClientError> {
-    let password = match terminal.secret("password again: ") {
-        Ok(password) => password,
-        Err(error) => {
-            terminal.say(&format!("the password can't be read: {error}"));
-            return Ok(false);
-        }
-    };
-    let stepped = client
-        .step_up(&StepUpRequest {
-            password: secret_text(&password),
-        })
-        .await;
-    drop(password);
-    stepped?;
-    Ok(true)
-}
-
-/// Sets bot `id`'s server, with a step-up when the server asks, once.
+/// Sets bot `id`'s server.
 async fn server<S: SessionStore>(
     client: &Client<S>,
     id: BotId,
@@ -1142,15 +1051,7 @@ async fn server<S: SessionStore>(
     let request = BotPatchRequest {
         server_address: address,
     };
-    let bot = match client.patch_bot(id, &request).await {
-        Err(ClientError::Api(failure)) if failure.is(ErrorCode::StepUpRequired) => {
-            if !stepped_up(client, terminal).await? {
-                return Ok(());
-            }
-            client.patch_bot(id, &request).await?
-        }
-        other => other?,
-    };
+    let bot = client.patch_bot(id, &request).await?;
     terminal.say(&line_of(&bot));
     Ok(())
 }

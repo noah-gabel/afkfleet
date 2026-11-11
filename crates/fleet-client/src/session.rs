@@ -1065,7 +1065,7 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         expect_json(answer, 200)
     }
 
-    /// A new mode through `POST /modes`, or its step-up twin when
+    /// A new mode through `POST /modes`, or its twin when
     /// `with_commands` (201).
     pub(crate) async fn create_mode(
         self: &Arc<Self>,
@@ -1081,7 +1081,7 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         expect_json(answer, 201)
     }
 
-    /// The mode `id` edited through `PUT /modes/{id}`, or its step-up twin
+    /// The mode `id` edited through `PUT /modes/{id}`, or its twin
     /// when `with_commands` (200).
     pub(crate) async fn update_mode(
         self: &Arc<Self>,

@@ -2,7 +2,7 @@
 //! console for `just dev-server`'s bot endpoints over the real client, so
 //! the hands-on check needs neither curl nor a password on a command line.
 //!
-//! The password, the 2FA code and the step-up's password are typed hidden
+//! The password and the 2FA code are typed hidden
 //! through fleet-server's `TerminalPrompt` (rpassword, as `just dev-owner`
 //! asks), never an argument, a variable or stdin; without a terminal it
 //! refuses to start. The session lives in memory and ends with the console.

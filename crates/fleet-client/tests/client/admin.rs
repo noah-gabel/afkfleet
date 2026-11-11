@@ -11,7 +11,7 @@ use fleet_api_types::{ErrorCode, PageQuery, SecretText, UserId};
 use fleet_client::ClientError;
 use rstest::rstest;
 
-use crate::support::{PASSWORD, Server, is_api, register, step_up};
+use crate::support::{PASSWORD, Server, is_api, register};
 
 fn all<I>() -> PageQuery<I> {
     PageQuery {
@@ -24,7 +24,6 @@ fn all<I>() -> PageQuery<I> {
 async fn the_owner_manages_invites_and_users() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
-    step_up(&owner).await;
     let member = CreateInviteRequest {
         role: UserRole::Member,
     };
@@ -84,7 +83,6 @@ async fn the_owner_manages_invites_and_users() {
 async fn an_unknown_user_is_not_found_and_a_member_cant_list_users() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
-    step_up(&owner).await;
     let code = owner
         .create_invite(&CreateInviteRequest {
             role: UserRole::Member,
@@ -125,7 +123,6 @@ async fn an_unknown_user_is_not_found_and_a_member_cant_list_users() {
 async fn the_owner_pages_through_the_audit_log_and_a_member_is_refused() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
-    step_up(&owner).await;
     let (bob, _) = server.member(&owner, "bob").await;
 
     let mut actions = Vec::new();
@@ -170,10 +167,10 @@ async fn the_owner_pages_through_the_audit_log_and_a_member_is_refused() {
     server.stop().await;
 }
 
-/// An Admin's disabling asks for the step-up, then ends the agent for good;
-/// a Member is refused, and disabling again answers it as it is.
+/// The Owner's disabling ends the agent for good; a Member is refused, and
+/// disabling again answers it as it is.
 #[tokio::test]
-async fn the_owner_disables_an_agent_after_a_step_up_and_a_member_is_refused() {
+async fn the_owner_disables_an_agent_and_a_member_is_refused() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
     owner
@@ -185,18 +182,11 @@ async fn the_owner_disables_an_agent_after_a_step_up_and_a_member_is_refused() {
     let bot = owner.bots(&all()).await.unwrap().items[0].id;
     let agent = server.agent_holding(bot, 1, false).await;
 
-    let unstepped = owner.disable_agent(agent).await.unwrap_err();
-    step_up(&owner).await;
     let (bob, _) = server.member(&owner, "bob").await;
     let disabled = owner.disable_agent(agent).await.unwrap();
     let again = owner.disable_agent(agent).await.unwrap();
-    step_up(&bob).await;
     let refused = bob.disable_agent(agent).await.unwrap_err();
 
-    assert!(
-        is_api(&unstepped, 403, ErrorCode::StepUpRequired),
-        "{unstepped:?}"
-    );
     assert_eq!(disabled.id, agent);
     assert!(!disabled.enabled);
     assert_eq!(disabled.status.known(), Some(AgentStatus::Disabled));
@@ -212,7 +202,6 @@ async fn the_owner_disables_an_agent_after_a_step_up_and_a_member_is_refused() {
 async fn a_filtered_audit_page_reaches_the_server() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
-    step_up(&owner).await;
     let (bob, _) = server.member(&owner, "bob").await;
     let bob_id = bob.me().await.unwrap().id.to_string();
 
@@ -266,7 +255,7 @@ async fn half_a_target_is_refused_as_the_server_refuses_it(
 }
 
 /// The Owner lists the agents with their bots, releases a disabled one's
-/// bot after a step-up, and an enabled one is refused with its code.
+/// bot, and an enabled one is refused with its code.
 #[tokio::test]
 async fn the_owner_releases_a_disabled_agents_bots_and_an_enabled_one_is_refused() {
     let server = Server::start().await;
@@ -285,7 +274,6 @@ async fn the_owner_releases_a_disabled_agents_bots_and_an_enabled_one_is_refused
     }
     let disabled = server.agent_holding(bots[0], 1, true).await;
     let enabled = server.agent_holding(bots[1], 2, false).await;
-    step_up(&owner).await;
 
     let before = owner.agents(&all()).await.unwrap();
     let released = owner.release_agent(disabled).await.unwrap();

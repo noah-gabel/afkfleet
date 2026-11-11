@@ -246,12 +246,11 @@ impl<F: StoreFactory> AppState<F> {
         conn.client()?.users(&query).await.map_err(error::client)
     }
 
-    /// The `patch_user` command: one change of a user, after `step_up`
-    /// within 5 minutes.
+    /// The `patch_user` command: one change of a user.
     ///
     /// # Errors
-    /// `invalid_input` unless exactly one change, `no_server`, `no_session`,
-    /// or `api` 403 (`step_up_required`, or `forbidden`), 404 or 422.
+    /// `invalid_input` unless exactly one change, `no_server`, `no_session`, or
+    /// `api` 403 (`forbidden`), 404 or 422.
     pub async fn patch_user(
         &self,
         id: UserId,
@@ -279,12 +278,11 @@ impl<F: StoreFactory> AppState<F> {
         conn.client()?.invites(&query).await.map_err(error::client)
     }
 
-    /// The `create_invite` command: a new invite, whose code is answered
-    /// this once, after `step_up` within 5 minutes.
+    /// The `create_invite` command: a new invite, whose code is answered this
+    /// once.
     ///
     /// # Errors
-    /// `no_server`, `no_session`, or `api` 403 (`step_up_required`, or
-    /// `forbidden`), 404 or 409.
+    /// `no_server`, `no_session`, or `api` 403 (`forbidden`), 404 or 409.
     pub async fn create_invite(
         &self,
         request: CreateInviteRequest,
@@ -297,12 +295,10 @@ impl<F: StoreFactory> AppState<F> {
             .map_err(error::client)
     }
 
-    /// The `revoke_invite` command: revokes a pending invite, after
-    /// `step_up` within 5 minutes.
+    /// The `revoke_invite` command: revokes a pending invite.
     ///
     /// # Errors
-    /// `no_server`, `no_session`, or `api` 403 (`step_up_required`, or
-    /// `forbidden`), 404 or 409.
+    /// `no_server`, `no_session`, or `api` 403 (`forbidden`), 404 or 409.
     pub async fn revoke_invite(&self, id: InviteId) -> Result<(), CommandError> {
         let conn = self.conn.read().await;
         conn.client()?
@@ -408,12 +404,10 @@ impl<F: StoreFactory> AppState<F> {
         conn.client()?.account(id).await.map_err(error::client)
     }
 
-    /// The `delete_account` command: deletes an account, after `step_up`
-    /// within 5 minutes.
+    /// The `delete_account` command: deletes an account.
     ///
     /// # Errors
-    /// `no_server`, `no_session`, or `api` 403 (`step_up_required`, or
-    /// `forbidden`) or 404.
+    /// `no_server`, `no_session`, or `api` 403 (`forbidden`) or 404.
     pub async fn delete_account(&self, id: AccountId) -> Result<(), CommandError> {
         let conn = self.conn.read().await;
         conn.client()?
@@ -422,12 +416,10 @@ impl<F: StoreFactory> AppState<F> {
             .map_err(error::client)
     }
 
-    /// The `approve_account` command: approves a pending link, after
-    /// `step_up` within 5 minutes.
+    /// The `approve_account` command: approves a pending link.
     ///
     /// # Errors
-    /// `no_server`, `no_session`, or `api` 403 (`step_up_required`, or
-    /// `forbidden`), 404 or 409.
+    /// `no_server`, `no_session`, or `api` 403 (`forbidden`), 404 or 409.
     pub async fn approve_account(&self, id: AccountId) -> Result<AccountResponse, CommandError> {
         let conn = self.conn.read().await;
         conn.client()?
@@ -436,8 +428,7 @@ impl<F: StoreFactory> AppState<F> {
             .map_err(error::client)
     }
 
-    /// The `refuse_account` command: refuses a pending link, which deletes
-    /// it, after `step_up` within 5 minutes.
+    /// The `refuse_account` command: refuses a pending link, which deletes it.
     ///
     /// # Errors
     /// As `approve_account`.
@@ -492,8 +483,7 @@ impl<F: StoreFactory> AppState<F> {
             .map_err(error::client)
     }
 
-    /// The `create_grant` command: gives a user access by their exact
-    /// username, after `step_up` within 5 minutes.
+    /// The `create_grant` command: gives a user access by their exact username.
     ///
     /// # Errors
     /// `invalid_input`, `no_server`, `no_session`, or `api` 403, 404, 409,
@@ -511,8 +501,7 @@ impl<F: StoreFactory> AppState<F> {
             .map_err(error::client)
     }
 
-    /// The `change_grant` command: changes a grant's level, after `step_up`
-    /// within 5 minutes.
+    /// The `change_grant` command: changes a grant's level.
     ///
     /// # Errors
     /// `no_server`, `no_session`, or `api` 403, 404 or 409.
@@ -530,8 +519,7 @@ impl<F: StoreFactory> AppState<F> {
             .map_err(error::client)
     }
 
-    /// The `revoke_grant` command: revokes a grant, after `step_up` within 5
-    /// minutes.
+    /// The `revoke_grant` command: revokes a grant.
     ///
     /// # Errors
     /// `no_server`, `no_session`, or `api` 403 or 404.
@@ -543,8 +531,8 @@ impl<F: StoreFactory> AppState<F> {
             .map_err(error::client)
     }
 
-    /// The `leave_account` command: gives up the caller's own grant on a
-    /// shared account, after `step_up` within 5 minutes (ADR-0020, S51).
+    /// The `leave_account` command: gives up the caller's own grant on a shared
+    /// account (ADR-0020, S51).
     ///
     /// # Errors
     /// `no_server`, `no_session`, or `api` 403 or 404.
@@ -597,8 +585,7 @@ impl<F: StoreFactory> AppState<F> {
         conn.client()?.agents(&query).await.map_err(error::client)
     }
 
-    /// The `disable_agent` command: disables an agent for good, after
-    /// `step_up` within 5 minutes.
+    /// The `disable_agent` command: disables an agent for good.
     ///
     /// # Errors
     /// `no_server`, `no_session`, or `api` 403, 404 or 429.
@@ -610,8 +597,8 @@ impl<F: StoreFactory> AppState<F> {
             .map_err(error::client)
     }
 
-    /// The `release_agent` command: releases a disabled agent's bots, after
-    /// `step_up` within 5 minutes (ADR-0020, S49).
+    /// The `release_agent` command: releases a disabled agent's bots (ADR-0020,
+    /// S49).
     ///
     /// # Errors
     /// `no_server`, `no_session`, or `api` 403, 404, 409
@@ -723,12 +710,10 @@ impl<F: StoreFactory> AppState<F> {
     }
 
     /// The `create_mode_with_commands` command: a new mode of the caller's,
-    /// whatever its steps send, after `step_up` within 5 minutes (ADR-0020,
-    /// S16).
+    /// whatever its steps send (ADR-0020, S16).
     ///
     /// # Errors
-    /// As `create_mode`, with 403 `step_up_required` in place of
-    /// `mode_needs_step_up`.
+    /// As `create_mode`, without `mode_needs_step_up`.
     pub async fn create_mode_with_commands(
         &self,
         request: CreateModeRequest,
@@ -762,12 +747,11 @@ impl<F: StoreFactory> AppState<F> {
             .map_err(error::client)
     }
 
-    /// The `update_mode_with_commands` command: as `update_mode`, whatever
-    /// its steps send, after `step_up` within 5 minutes (ADR-0020, S16).
+    /// The `update_mode_with_commands` command: as `update_mode`, whatever its
+    /// steps send (ADR-0020, S16).
     ///
     /// # Errors
-    /// As `update_mode`, with 403 `step_up_required` in place of
-    /// `mode_needs_step_up`.
+    /// As `update_mode`, without `mode_needs_step_up`.
     pub async fn update_mode_with_commands(
         &self,
         id: ModeId,
@@ -781,24 +765,21 @@ impl<F: StoreFactory> AppState<F> {
             .map_err(error::client)
     }
 
-    /// The `delete_mode` command: the mode `id` removed, after `step_up`
-    /// within 5 minutes (ADR-0020, S16, S17).
+    /// The `delete_mode` command: the mode `id` removed (ADR-0020, S16, S17).
     ///
     /// # Errors
-    /// `no_server`, `no_session`, or `api` 403 (`step_up_required`, or
-    /// `forbidden`), 404, 409 (`mode_in_use`) or 429.
+    /// `no_server`, `no_session`, or `api` 403 (`forbidden`), 404, 409
+    /// (`mode_in_use`) or 429.
     pub async fn delete_mode(&self, id: ModeId) -> Result<(), CommandError> {
         let conn = self.conn.read().await;
         conn.client()?.delete_mode(id).await.map_err(error::client)
     }
 
-    /// The `patch_bot` command: the bot's server, after `step_up` within 5
-    /// minutes (ADR-0019, S47).
+    /// The `patch_bot` command: the bot's server (ADR-0019, S47).
     ///
     /// # Errors
     /// `invalid_input` for an address the server would refuse, `no_server`,
-    /// `no_session`, or `api` 403 (`step_up_required`, or `forbidden`
-    /// below Manage), 404, 422 or 429.
+    /// `no_session`, or `api` 403 (`forbidden` below Manage), 404, 422 or 429.
     pub async fn patch_bot(
         &self,
         id: BotId,
@@ -927,14 +908,12 @@ impl<F: StoreFactory> AppState<F> {
             .map_err(error::client)
     }
 
-    /// The `send_command` command: any command, after `step_up` within 5
-    /// minutes (ADR-0020, S4, S8).
+    /// The `send_command` command: any command (ADR-0020, S4, S8).
     ///
     /// # Errors
-    /// `invalid_input` for a line that isn't a command or that the server
-    /// would refuse, `no_server`, `no_session`, or `api` 403
-    /// (`step_up_required`, or `forbidden` below Manage), 404, 409, 422 or
-    /// 429.
+    /// `invalid_input` for a line that isn't a command or that the server would
+    /// refuse, `no_server`, `no_session`, or `api` 403 (`forbidden` below
+    /// Manage), 404, 409, 422 or 429.
     pub async fn send_command(
         &self,
         id: BotId,
@@ -968,14 +947,13 @@ impl<F: StoreFactory> AppState<F> {
             .map_err(error::client)
     }
 
-    /// The `create_server_settings` command: a server's new settings, after
-    /// `step_up` within 5 minutes (ADR-0020, U54).
+    /// The `create_server_settings` command: a server's new settings (ADR-0020,
+    /// U54).
     ///
     /// # Errors
     /// `invalid_input` for a field the server would refuse, `no_server`,
-    /// `no_session`, or `api` 403 (`step_up_required`, or `forbidden`),
-    /// 409 (`conflict`: the most servers have settings), 422 (a server that
-    /// has settings already) or 429.
+    /// `no_session`, or `api` 403 (`forbidden`), 409 (`conflict`: the most
+    /// servers have settings), 422 (a server that has settings already) or 429.
     pub async fn create_server_settings(
         &self,
         request: CreateServerSettingsRequest,
@@ -988,14 +966,13 @@ impl<F: StoreFactory> AppState<F> {
             .map_err(error::client)
     }
 
-    /// The `update_server_settings` command: the settings `id` as they
-    /// should be from now on, at the `version` read, after `step_up`
-    /// within 5 minutes (ADR-0020, S77).
+    /// The `update_server_settings` command: the settings `id` as they should
+    /// be from now on, at the `version` read (ADR-0020, S77).
     ///
     /// # Errors
     /// `invalid_input` for a field the server would refuse, `no_server`,
-    /// `no_session`, or `api` 403 (`step_up_required`, or `forbidden`),
-    /// 404, 409 (`server_settings_changed`), 422 or 429.
+    /// `no_session`, or `api` 403 (`forbidden`), 404, 409
+    /// (`server_settings_changed`), 422 or 429.
     pub async fn update_server_settings(
         &self,
         id: ServerSettingsId,
@@ -1009,12 +986,11 @@ impl<F: StoreFactory> AppState<F> {
             .map_err(error::client)
     }
 
-    /// The `delete_server_settings` command: the settings `id` removed,
-    /// after `step_up` within 5 minutes (ADR-0020, S78).
+    /// The `delete_server_settings` command: the settings `id` removed
+    /// (ADR-0020, S78).
     ///
     /// # Errors
-    /// `no_server`, `no_session`, or `api` 403 (`step_up_required`, or
-    /// `forbidden`), 404 or 429.
+    /// `no_server`, `no_session`, or `api` 403 (`forbidden`), 404 or 429.
     pub async fn delete_server_settings(&self, id: ServerSettingsId) -> Result<(), CommandError> {
         let conn = self.conn.read().await;
         conn.client()?
@@ -1024,8 +1000,8 @@ impl<F: StoreFactory> AppState<F> {
     }
 
     /// The `preview_chat_formats` command: which sender unsaved chat formats
-    /// read from a line, and which format fitted first, counted from 0;
-    /// nothing is stored, and no step-up is needed (ADR-0020, U58, R134).
+    /// read from a line, and which format fitted first, counted from 0; nothing
+    /// is stored (ADR-0020, U58, R134).
     ///
     /// # Errors
     /// `invalid_input` for a format the server would refuse or a line past

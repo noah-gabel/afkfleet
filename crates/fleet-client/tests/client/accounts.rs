@@ -11,7 +11,7 @@ use fleet_api_types::accounts::{
 use fleet_api_types::{AccountId, ErrorCode, LinkFlowId, PageQuery, SecretText};
 use fleet_client::{Client, MemoryStore};
 
-use crate::support::{Server, is_api, step_up};
+use crate::support::{Server, is_api};
 
 fn all<I>() -> PageQuery<I> {
     PageQuery {
@@ -38,7 +38,6 @@ async fn create(client: &Client<MemoryStore>, name: &str) -> AccountId {
 async fn a_members_starts_are_refused_before_microsoft_is_asked() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
-    step_up(&owner).await;
     let (alice, _) = server.member(&owner, "alice").await;
     let kept = create(&alice, "AfkBot1").await;
     create(&alice, "AfkBot2").await;
@@ -68,10 +67,9 @@ async fn a_members_starts_are_refused_before_microsoft_is_asked() {
 }
 
 #[tokio::test]
-async fn an_offline_account_is_created_listed_read_and_deleted_after_a_step_up() {
+async fn an_offline_account_is_created_listed_read_and_deleted() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
-    step_up(&owner).await;
     let (alice, _) = server.member(&owner, "alice").await;
 
     let created = alice
@@ -84,8 +82,6 @@ async fn an_offline_account_is_created_listed_read_and_deleted_after_a_step_up()
         .unwrap_err();
     let listed = alice.accounts(&all()).await.unwrap();
     let read = alice.account(created.id).await.unwrap();
-    let unstepped = alice.delete_account(created.id).await.unwrap_err();
-    step_up(&alice).await;
     alice.delete_account(created.id).await.unwrap();
     let gone = alice.account(created.id).await.unwrap_err();
 
@@ -97,10 +93,6 @@ async fn an_offline_account_is_created_listed_read_and_deleted_after_a_step_up()
     assert_eq!(listed.items.first(), Some(&read));
     assert_eq!(read.id, created.id);
     assert_eq!(read.level.known(), Some(GrantLevel::Manage));
-    assert!(
-        is_api(&unstepped, 403, ErrorCode::StepUpRequired),
-        "{unstepped:?}"
-    );
     assert!(is_api(&gone, 404, ErrorCode::NotFound), "{gone:?}");
     server.stop().await;
 }
@@ -146,19 +138,15 @@ async fn the_list_pages_with_before_and_limit() {
 }
 
 #[tokio::test]
-async fn the_owner_reviews_a_members_pending_links_after_a_step_up() {
+async fn the_owner_reviews_a_members_pending_links() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
-    step_up(&owner).await;
     let (alice, alice_id) = server.member(&owner, "alice").await;
     let approved = server.pending_account(alice_id, 1).await;
     let refused = server.pending_account(alice_id, 2).await;
-    server.advance(core::time::Duration::from_secs(301));
 
     let awaiting = owner.accounts_awaiting_approval(&all()).await.unwrap();
     let members = alice.accounts_awaiting_approval(&all()).await.unwrap();
-    let unstepped = owner.approve_account(approved).await.unwrap_err();
-    step_up(&owner).await;
     let active = owner.approve_account(approved).await.unwrap();
     owner.refuse_account(refused).await.unwrap();
     let again = owner.approve_account(approved).await.unwrap_err();
@@ -170,10 +158,6 @@ async fn the_owner_reviews_a_members_pending_links_after_a_step_up() {
     expected.sort();
     assert_eq!(waiting, expected);
     assert_eq!(members.items, []);
-    assert!(
-        is_api(&unstepped, 403, ErrorCode::StepUpRequired),
-        "{unstepped:?}"
-    );
     assert_eq!(active.id, approved);
     assert_eq!(active.status.known(), Some(AccountStatus::Active));
     assert!(is_api(&again, 409, ErrorCode::Conflict), "{again:?}");
@@ -185,11 +169,9 @@ async fn the_owner_reviews_a_members_pending_links_after_a_step_up() {
 async fn grants_are_created_by_name_changed_listed_and_revoked() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
-    step_up(&owner).await;
     let (alice, _) = server.member(&owner, "alice").await;
     let (_bob, bob_id) = server.member(&owner, "bob").await;
     let account = create(&alice, "AfkBot1").await;
-    step_up(&alice).await;
     let to_bob = CreateGrantRequest {
         username: SecretText::new("bob".to_owned()),
         level: GrantLevel::View,
@@ -236,14 +218,12 @@ async fn grants_are_created_by_name_changed_listed_and_revoked() {
 }
 
 #[tokio::test]
-async fn a_grantee_leaves_a_shared_account_after_a_step_up() {
+async fn a_grantee_leaves_a_shared_account() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
-    step_up(&owner).await;
     let (alice, _) = server.member(&owner, "alice").await;
     let (bob, _) = server.member(&owner, "bob").await;
     let account = create(&alice, "AfkBot1").await;
-    step_up(&alice).await;
     alice
         .create_grant(
             account,
@@ -255,17 +235,11 @@ async fn a_grantee_leaves_a_shared_account_after_a_step_up() {
         .await
         .unwrap();
 
-    let unstepped = bob.leave_account(account).await.unwrap_err();
-    step_up(&bob).await;
     bob.leave_account(account).await.unwrap();
     let listed = bob.accounts(&all()).await.unwrap();
     let again = bob.leave_account(account).await.unwrap_err();
     let by_owner = alice.leave_account(account).await.unwrap_err();
 
-    assert!(
-        is_api(&unstepped, 403, ErrorCode::StepUpRequired),
-        "{unstepped:?}"
-    );
     assert_eq!(listed.items, []);
     assert!(is_api(&again, 404, ErrorCode::NotFound), "{again:?}");
     assert!(is_api(&by_owner, 403, ErrorCode::Forbidden), "{by_owner:?}");

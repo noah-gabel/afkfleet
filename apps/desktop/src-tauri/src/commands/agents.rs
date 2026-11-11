@@ -17,7 +17,7 @@ pub(crate) async fn agents(
     state.agents(before, limit).await
 }
 
-/// Disables an agent for good, after a step-up.
+/// Disables an agent for good.
 #[tauri::command]
 pub(crate) async fn disable_agent(
     state: Managed<'_>,
@@ -26,7 +26,7 @@ pub(crate) async fn disable_agent(
     state.disable_agent(id).await
 }
 
-/// Releases a disabled agent's bots, after a step-up.
+/// Releases a disabled agent's bots.
 #[tauri::command]
 pub(crate) async fn release_agent(
     state: Managed<'_>,

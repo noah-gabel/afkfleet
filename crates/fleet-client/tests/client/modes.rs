@@ -1,6 +1,6 @@
 //! The mode routes (Plan.md P11.4; ADR-0020, S12–S19) through the real
 //! server: listing, creating, editing and deleting, the pointer to the
-//! step-up route, a stale version and a field error's path. What each
+//! twin route, a stale version and a field error's path. What each
 //! viewer sees of a mode is fleet-server's to test.
 
 use fleet_api_types::modes::{
@@ -9,7 +9,7 @@ use fleet_api_types::modes::{
 use fleet_api_types::{ErrorCode, PageQuery};
 use serde_json::json;
 
-use crate::support::{Server, is_api, step_up};
+use crate::support::{Server, is_api};
 
 /// A new private mode named `name` that sends `message` every minute.
 fn chatting(name: &str, message: &str) -> CreateModeRequest {
@@ -35,7 +35,6 @@ fn names(page: &ModePage) -> Vec<&str> {
 async fn a_member_lists_the_built_in_modes_and_then_their_own() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
-    step_up(&owner).await;
     let (alice, _) = server.member(&owner, "alice").await;
 
     let before = alice.modes(&first_page()).await.unwrap();
@@ -84,26 +83,20 @@ async fn a_mode_with_on_respawn_steps_reads_back_as_itself() {
     server.stop().await;
 }
 
-/// A mode that sends a command off the allowlist is pointed to the step-up
-/// route, which needs a fresh step-up, and then takes it (S16).
+/// A mode that sends a command off the allowlist is pointed to the twin
+/// route, which takes it without a step-up (S16; ADR-0028).
 #[tokio::test]
-async fn a_command_off_the_allowlist_needs_the_step_up_route() {
+async fn a_command_off_the_allowlist_goes_through_the_twin_route() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
     let mode = chatting("Ops", "/op AfkBot2");
 
     let pointed = owner.create_mode(&mode).await.unwrap_err();
-    let without = owner.create_mode_with_commands(&mode).await.unwrap_err();
-    step_up(&owner).await;
     let created = owner.create_mode_with_commands(&mode).await.unwrap();
 
     assert!(
         is_api(&pointed, 403, ErrorCode::ModeNeedsStepUp),
         "{pointed:?}"
-    );
-    assert!(
-        is_api(&without, 403, ErrorCode::StepUpRequired),
-        "{without:?}"
     );
     assert_eq!(created.name.as_str(), "Ops");
     server.stop().await;
@@ -176,10 +169,10 @@ async fn an_edit_carries_the_version_it_read() {
     server.stop().await;
 }
 
-/// An edit with a command off the allowlist is pointed to the step-up
-/// twin, which then takes it (S16).
+/// An edit with a command off the allowlist is pointed to the twin, which
+/// takes it (S16).
 #[tokio::test]
-async fn an_edit_with_a_command_off_the_allowlist_needs_the_step_up_route() {
+async fn an_edit_with_a_command_off_the_allowlist_goes_through_the_twin_route() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
     let created = owner
@@ -189,7 +182,6 @@ async fn an_edit_with_a_command_off_the_allowlist_needs_the_step_up_route() {
     let ops = edited(&created, "Greeter", "/op AfkBot2");
 
     let pointed = owner.update_mode(created.id, &ops).await.unwrap_err();
-    step_up(&owner).await;
     let taken = owner
         .update_mode_with_commands(created.id, &ops)
         .await
@@ -203,9 +195,9 @@ async fn an_edit_with_a_command_off_the_allowlist_needs_the_step_up_route() {
     server.stop().await;
 }
 
-/// A delete needs a fresh step-up, then answers 204, and the mode is gone.
+/// A delete answers 204, and the mode is gone.
 #[tokio::test]
-async fn a_delete_needs_the_step_up_and_then_the_mode_is_gone() {
+async fn a_delete_answers_and_then_the_mode_is_gone() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
     let created = owner
@@ -213,15 +205,9 @@ async fn a_delete_needs_the_step_up_and_then_the_mode_is_gone() {
         .await
         .unwrap();
 
-    let without = owner.delete_mode(created.id).await.unwrap_err();
-    step_up(&owner).await;
     owner.delete_mode(created.id).await.unwrap();
     let after = owner.modes(&first_page()).await.unwrap();
 
-    assert!(
-        is_api(&without, 403, ErrorCode::StepUpRequired),
-        "{without:?}"
-    );
     assert_eq!(names(&after), ["farm", "afk"]);
     server.stop().await;
 }

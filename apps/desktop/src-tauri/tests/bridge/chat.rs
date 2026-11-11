@@ -9,7 +9,7 @@ use fleet_api_types::chat::{CHAT_MESSAGE_MAX_UNITS, ChatCommandRequest, ChatSend
 use fleet_api_types::page::PAGE_MAX;
 use fleet_api_types::{BotId, ErrorCode, SafeInt, SecretText};
 
-use crate::support::{Bridge, Server, is_api, is_invalid, step_up_request};
+use crate::support::{Bridge, Server, is_api, is_invalid};
 
 fn unknown_bot() -> BotId {
     "01900000-0000-7000-8000-00000000000b".parse().unwrap()
@@ -114,7 +114,7 @@ async fn a_line_to_a_bot_with_no_agent_is_bot_not_online() {
 }
 
 #[tokio::test]
-async fn a_command_off_the_allowlist_goes_to_the_command_route_after_a_step_up() {
+async fn a_command_off_the_allowlist_goes_to_the_command_route() {
     let server = Server::start().await;
     let (owner, _) = server.owner().await;
     let bot = a_bot(&owner).await;
@@ -124,12 +124,6 @@ async fn a_command_off_the_allowlist_goes_to_the_command_route_after_a_step_up()
         .send_chat(bot, line("/op AfkBot2"))
         .await
         .unwrap_err();
-    let asked = owner
-        .state
-        .send_command(bot, command("/op AfkBot2"))
-        .await
-        .unwrap_err();
-    owner.state.step_up(step_up_request()).await.unwrap();
     let sent = owner
         .state
         .send_command(bot, command("/op AfkBot2"))
@@ -140,7 +134,6 @@ async fn a_command_off_the_allowlist_goes_to_the_command_route_after_a_step_up()
         is_api(&pointed, 403, ErrorCode::CommandNeedsStepUp),
         "{pointed:?}"
     );
-    assert!(is_api(&asked, 403, ErrorCode::StepUpRequired), "{asked:?}");
     assert!(is_api(&sent, 409, ErrorCode::BotNotOnline), "{sent:?}");
     server.stop().await;
 }

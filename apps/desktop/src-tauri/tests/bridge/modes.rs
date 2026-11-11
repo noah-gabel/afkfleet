@@ -1,6 +1,6 @@
 //! The modes' write commands (Plan.md P11.9; ADR-0020, U62, S16–S18): a create
-//! and an edit, each with a step-up twin for a command off the allowlist, and
-//! a delete after a step-up, against the real server.
+//! and an edit, each with a twin for a command off the allowlist, and a
+//! delete, against the real server.
 
 use fleet_api_types::app::CommandErrorCode;
 use fleet_api_types::modes::{
@@ -9,7 +9,7 @@ use fleet_api_types::modes::{
 };
 use fleet_api_types::{ErrorCode, ModeId};
 
-use crate::support::{Bridge, Server, is_api, is_invalid, step_up_request};
+use crate::support::{Bridge, Server, is_api, is_invalid};
 
 /// A step at the mode's start that sends `message`, or jumps without one.
 fn step(message: Option<&str>) -> ModeStepRequest {
@@ -107,7 +107,7 @@ async fn a_broken_request_is_refused_before_any_request() {
 }
 
 #[tokio::test]
-async fn a_user_creates_edits_and_deletes_a_mode_with_the_step_ups_it_needs() {
+async fn a_user_creates_edits_and_deletes_a_mode() {
     let server = Server::start().await;
     let (owner, _) = server.owner().await;
     let state = &owner.state;
@@ -121,8 +121,6 @@ async fn a_user_creates_edits_and_deletes_a_mode_with_the_step_ups_it_needs() {
         .update_mode(created.id, update(1, "Fishing 3", None))
         .await
         .unwrap_err();
-    let unstepped = state.delete_mode(created.id).await.unwrap_err();
-    state.step_up(step_up_request()).await.unwrap();
     state.delete_mode(created.id).await.unwrap();
     let gone = state.delete_mode(created.id).await.unwrap_err();
 
@@ -133,15 +131,11 @@ async fn a_user_creates_edits_and_deletes_a_mode_with_the_step_ups_it_needs() {
         is_api(&old_version, 409, ErrorCode::ModeChanged),
         "{old_version:?}"
     );
-    assert!(
-        is_api(&unstepped, 403, ErrorCode::StepUpRequired),
-        "{unstepped:?}"
-    );
     assert!(is_api(&gone, 404, ErrorCode::NotFound), "{gone:?}");
 }
 
 #[tokio::test]
-async fn a_command_off_the_allowlist_goes_through_each_twin_after_a_step_up() {
+async fn a_command_off_the_allowlist_goes_through_each_twin() {
     let server = Server::start().await;
     let (owner, _) = server.owner().await;
     let state = &owner.state;
@@ -155,15 +149,6 @@ async fn a_command_off_the_allowlist_goes_through_each_twin_after_a_step_up() {
         .update_mode(plain.id, update(1, "Plain", Some("/warp home")))
         .await
         .unwrap_err();
-    let create_unstepped = state
-        .create_mode_with_commands(create("Warp", Some("/warp home")))
-        .await
-        .unwrap_err();
-    let update_unstepped = state
-        .update_mode_with_commands(plain.id, update(1, "Plain", Some("/warp home")))
-        .await
-        .unwrap_err();
-    state.step_up(step_up_request()).await.unwrap();
     let created = state
         .create_mode_with_commands(create("Warp", Some("/warp home")))
         .await
@@ -180,14 +165,6 @@ async fn a_command_off_the_allowlist_goes_through_each_twin_after_a_step_up() {
     assert!(
         is_api(&update_pointer, 403, ErrorCode::ModeNeedsStepUp),
         "{update_pointer:?}"
-    );
-    assert!(
-        is_api(&create_unstepped, 403, ErrorCode::StepUpRequired),
-        "{create_unstepped:?}"
-    );
-    assert!(
-        is_api(&update_unstepped, 403, ErrorCode::StepUpRequired),
-        "{update_unstepped:?}"
     );
     assert!(created.unlisted_command);
     assert!(edited.unlisted_command);

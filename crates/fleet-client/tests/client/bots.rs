@@ -11,7 +11,7 @@ use fleet_api_types::{AccountId, BotId, BoundedText, ErrorCode, Open, PageQuery,
 use fleet_client::{Client, MemoryStore};
 use fleet_core::mode::ModePreset;
 
-use crate::support::{Server, is_api, step_up};
+use crate::support::{Server, is_api};
 
 fn all() -> PageQuery<BotId> {
     PageQuery {
@@ -57,7 +57,6 @@ fn why(bot: &BotResponse) -> Option<UnplacedReason> {
 async fn a_new_accounts_bot_is_listed_and_read_stopped_without_a_server() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
-    step_up(&owner).await;
     let (alice, _) = server.member(&owner, "alice").await;
     let (account, _) = bot_of(&alice, "AfkBot1").await;
 
@@ -77,18 +76,12 @@ async fn a_new_accounts_bot_is_listed_and_read_stopped_without_a_server() {
 }
 
 #[tokio::test]
-async fn a_bots_server_needs_a_step_up_and_once_started_it_waits_for_an_agent() {
+async fn a_bots_server_is_set_and_once_started_it_waits_for_an_agent() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
-    step_up(&owner).await;
     let (alice, _) = server.member(&owner, "alice").await;
     let (_, bot) = bot_of(&alice, "AfkBot1").await;
 
-    let without = alice
-        .patch_bot(bot, &address("play.example.com"))
-        .await
-        .unwrap_err();
-    step_up(&alice).await;
     let unparsed = alice
         .patch_bot(bot, &address("play.example.com:0"))
         .await
@@ -100,10 +93,6 @@ async fn a_bots_server_needs_a_step_up_and_once_started_it_waits_for_an_agent() 
     let started = alice.start_bot(bot).await.unwrap();
     let stopped = alice.stop_bot(bot).await.unwrap();
 
-    assert!(
-        is_api(&without, 403, ErrorCode::StepUpRequired),
-        "{without:?}"
-    );
     assert!(
         is_api(&unparsed, 422, ErrorCode::ValidationFailed),
         "{unparsed:?}"
@@ -124,7 +113,6 @@ async fn a_bots_server_needs_a_step_up_and_once_started_it_waits_for_an_agent() 
 async fn a_bots_mode_is_set_by_its_id_and_an_unknown_one_is_refused() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
-    step_up(&owner).await;
     let (alice, _) = server.member(&owner, "alice").await;
     let (_, bot) = bot_of(&alice, "AfkBot1").await;
 
@@ -160,7 +148,6 @@ async fn a_bots_mode_is_set_by_its_id_and_an_unknown_one_is_refused() {
 async fn a_command_for_a_bot_that_runs_nowhere_is_refused_with_its_409_code() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
-    step_up(&owner).await;
     let (alice, _) = server.member(&owner, "alice").await;
     let (_, bot) = bot_of(&alice, "AfkBot1").await;
     alice.start_bot(bot).await.unwrap();
@@ -185,11 +172,9 @@ async fn a_command_for_a_bot_that_runs_nowhere_is_refused_with_its_409_code() {
 async fn another_members_bot_is_missing_from_their_list_and_404_to_every_call() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
-    step_up(&owner).await;
     let (alice, _) = server.member(&owner, "alice").await;
     let (bob, _) = server.member(&owner, "bob").await;
     let (_, bot) = bot_of(&alice, "AfkBot1").await;
-    step_up(&bob).await;
 
     let listed = bob.bots(&all()).await.unwrap();
     let errors = [

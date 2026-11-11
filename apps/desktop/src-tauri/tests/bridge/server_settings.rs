@@ -1,6 +1,6 @@
 //! The servers' settings commands (Plan.md P11.9; ADR-0020, U54, U56, S77): a
 //! page of the servers' settings, and a create, an edit and a delete, each
-//! after a step-up, against the real server.
+//! against the real server.
 
 use fleet_api_types::app::CommandErrorCode;
 use fleet_api_types::server_settings::{
@@ -9,7 +9,7 @@ use fleet_api_types::server_settings::{
 };
 use fleet_api_types::{BoundedText, ErrorCode, ServerSettingsId};
 
-use crate::support::{Bridge, Server, is_api, is_invalid, step_up_request};
+use crate::support::{Bridge, Server, is_api, is_invalid};
 
 fn create(server: &str, texts: &[&str]) -> CreateServerSettingsRequest {
     CreateServerSettingsRequest {
@@ -84,16 +84,10 @@ async fn a_page_past_ten_or_a_broken_request_is_refused_before_any_request() {
 }
 
 #[tokio::test]
-async fn the_owner_adds_lists_edits_and_deletes_a_servers_settings_after_a_step_up() {
+async fn the_owner_adds_lists_edits_and_deletes_a_servers_settings() {
     let server = Server::start().await;
     let (owner, _) = server.owner().await;
 
-    let unstepped = owner
-        .state
-        .create_server_settings(create("MC.example.com", &["Already connected"]))
-        .await
-        .unwrap_err();
-    owner.state.step_up(step_up_request()).await.unwrap();
     let created = owner
         .state
         .create_server_settings(create("MC.example.com", &["Already connected"]))
@@ -122,10 +116,6 @@ async fn the_owner_adds_lists_edits_and_deletes_a_servers_settings_after_a_step_
         .unwrap_err();
     let after = owner.state.server_settings(None, None).await.unwrap();
 
-    assert!(
-        is_api(&unstepped, 403, ErrorCode::StepUpRequired),
-        "{unstepped:?}"
-    );
     assert_eq!(created.server.as_str(), "mc.example.com:25565");
     assert_eq!(
         listed.items.iter().map(|row| row.id).collect::<Vec<_>>(),
@@ -197,11 +187,11 @@ async fn a_preview_with_a_broken_format_or_a_long_line_is_refused_before_any_req
     );
 }
 
-/// The Owner tries unsaved formats on lines, without a step-up: the first
+/// The Owner tries unsaved formats on lines: the first
 /// format that fits names the sender, counted from 0, and a line none fits
 /// answers nothing (ADR-0020, U58, R142).
 #[tokio::test]
-async fn the_owner_tries_chat_formats_on_a_line_without_a_step_up() {
+async fn the_owner_tries_chat_formats_on_a_line() {
     let server = Server::start().await;
     let (owner, _) = server.owner().await;
     let formats = ["<{sender}> ", "[{any}] {sender} : "];

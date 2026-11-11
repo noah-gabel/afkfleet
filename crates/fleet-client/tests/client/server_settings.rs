@@ -1,6 +1,6 @@
 //! The servers' settings routes (Plan.md P11.9; ADR-0020, U54, U58, S77,
 //! S78, R134) through the real server: listing, creating, editing and
-//! deleting, the step-up every write needs, a stale version, a missing row
+//! deleting, a stale version, a missing row
 //! and a field error's path, and the chat formats' preview. Who may do what
 //! is fleet-server's to test.
 
@@ -11,7 +11,7 @@ use fleet_api_types::server_settings::{
     UpdateServerSettingsRequest,
 };
 
-use crate::support::{Server, is_api, step_up};
+use crate::support::{Server, is_api};
 
 fn create(server: &str, texts: &[&str]) -> CreateServerSettingsRequest {
     CreateServerSettingsRequest {
@@ -37,18 +37,13 @@ fn first_page() -> ServerSettingsPageQuery {
     }
 }
 
-/// The Owner creates a server's settings after a step-up, lists them, edits
-/// them and deletes them; each write without a fresh step-up is refused.
+/// The Owner creates a server's settings, lists them, edits them and
+/// deletes them, without a step-up (ADR-0028).
 #[tokio::test]
 async fn the_owner_creates_lists_edits_and_deletes_a_servers_settings() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
 
-    let without = owner
-        .create_server_settings(&create("mc.example.com", &["Already connected"]))
-        .await
-        .unwrap_err();
-    step_up(&owner).await;
     let created = owner
         .create_server_settings(&create("mc.example.com", &["Already connected"]))
         .await
@@ -61,10 +56,6 @@ async fn the_owner_creates_lists_edits_and_deletes_a_servers_settings() {
     owner.delete_server_settings(created.id).await.unwrap();
     let after = owner.server_settings(&first_page()).await.unwrap();
 
-    assert!(
-        is_api(&without, 403, ErrorCode::StepUpRequired),
-        "{without:?}"
-    );
     assert_eq!(created.server.as_str(), "mc.example.com:25565");
     assert_eq!(created.version, 1);
     assert_eq!(listed.items, core::slice::from_ref(&created));
@@ -80,7 +71,6 @@ async fn the_owner_creates_lists_edits_and_deletes_a_servers_settings() {
 async fn a_stale_version_a_missing_row_and_a_broken_rule_come_back_as_api_errors() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
-    step_up(&owner).await;
     let created = owner
         .create_server_settings(&create("mc.example.com", &["One"]))
         .await
@@ -126,7 +116,6 @@ async fn a_stale_version_a_missing_row_and_a_broken_rule_come_back_as_api_errors
 async fn a_member_is_refused_the_list() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
-    step_up(&owner).await;
     let (alice, _) = server.member(&owner, "alice").await;
 
     let refused = alice.server_settings(&first_page()).await.unwrap_err();
@@ -142,10 +131,10 @@ fn preview(formats: &[&str], line: &str) -> PreviewChatFormatsRequest {
     }
 }
 
-/// The Owner previews unsaved formats without a step-up: the sender the
+/// The Owner previews unsaved formats: the sender the
 /// first fitting one reads and its place, or nothing; nothing is stored.
 #[tokio::test]
-async fn the_owner_previews_chat_formats_without_a_step_up() {
+async fn the_owner_previews_chat_formats() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
     let formats = ["[{any}] {sender} : ", "{sender} : "];
@@ -183,7 +172,6 @@ async fn the_owner_previews_chat_formats_without_a_step_up() {
 async fn a_members_preview_and_a_broken_format_come_back_as_api_errors() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
-    step_up(&owner).await;
     let (alice, _) = server.member(&owner, "alice").await;
 
     let refused = alice

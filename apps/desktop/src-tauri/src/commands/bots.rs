@@ -1,7 +1,6 @@
-//! The bots' and modes' commands (Plan.md P11.9; ADR-0020, U32, U34, S73):
-//! the reads the bot screens show, the bot's writes (its server after a
-//! step-up, its mode, its lifecycle calls), and its chat: the history, a
-//! line, and a command after a step-up.
+//! The bots' and modes' commands (Plan.md P11.9; ADR-0020, U32, U34, S73): the
+//! reads the bot screens show, the bot's writes (its server, its mode, its
+//! lifecycle calls), and its chat: the history, a line, and a command.
 
 use fleet_api_types::app::{BotCommandResponse, CommandError};
 use fleet_api_types::bots::{BotModeRequest, BotPage, BotPatchRequest, BotResponse};
