@@ -25,12 +25,17 @@ yanked = "deny"
 # removed when its trigger comes (ADR-0024). The desktop crate's pass allows it: its graph
 # holds none of the crates below (justfile, `deny`).
 unused-ignored-advisory = "deny"
-# azalea's advisories, accepted by the user (ADR-0011, ADR-0012). Every azalea bump
-# re-checks them.
+# azalea's advisories: the first three accepted by the user (ADR-0011, ADR-0012), the four
+# of 2026-11-11 decided under ADR-0025 and recorded in ADR-0012's amendment. Every azalea
+# bump re-checks them.
 ignore = [
     { id = "RUSTSEC-2023-0071", reason = "rsa via azalea: we never decrypt with RSA; chat signing uses the blinded sign_with_rng, the handshake only encrypts with the server's public key. No fix exists; re-check at every azalea bump (ADR-0012)" },
     { id = "RUSTSEC-2026-0118", reason = "hickory-proto 0.25 via azalea: the NSEC3 code needs hickory's DNSSEC features, which aren't compiled. Remove at the next azalea bump (ADR-0012)" },
     { id = "RUSTSEC-2026-0119", reason = "hickory-proto 0.25 via azalea: only encoding is quadratic, and we encode only our own one-question queries for a validated ServerAddress. Remove at the next azalea bump (ADR-0012)" },
+    { id = "RUSTSEC-2026-0487", reason = "hickory-proto 0.25 via azalea: the SVCB text parser is serialize::txt, compiled only with hickory-proto's text-parsing feature, which nothing here enables. Remove once azalea uses hickory-proto >= 0.26.2 (ADR-0012)" },
+    { id = "RUSTSEC-2026-0489", reason = "hickory-proto 0.25 via azalea: the SVCB text parser is serialize::txt, compiled only with hickory-proto's text-parsing feature, which nothing here enables. Remove once azalea uses hickory-proto >= 0.26.2 (ADR-0012)" },
+    { id = "RUSTSEC-2026-0490", reason = "hickory-proto 0.25 via azalea: the zone file lexer is serialize::txt, compiled only with hickory-proto's text-parsing feature, which nothing here enables. Remove once azalea uses hickory-proto >= 0.26.2 (ADR-0012)" },
+    { id = "RUSTSEC-2026-0491", reason = "hickory-proto 0.25 via azalea: reachable only by whoever answers the agent's own DNS queries (its resolver, or a spoofer on that path); each crafted answer reserves memory once and the lookup fails, bounded by the connect timeout and the bots' backoff. No 0.25 fix exists. Remove once azalea uses hickory-proto >= 0.26.2 (ADR-0012)" },
     # testcontainers' advisory, accepted by the user (ADR-0021): it reaches only the
     # container tests, never a shipped binary.
     { id = "RUSTSEC-2026-0440", reason = "astral-tokio-tar via testcontainers 0.28.0, a dev-dependency of fleet-mc's and fleet-integration's container tests, never built into a shipped binary: unmaintained, not vulnerable, no fix. Remove once a testcontainers release drops it (ADR-0021)" },
