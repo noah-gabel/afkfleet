@@ -143,9 +143,23 @@ pub fn chat_sanitizer(data: &[u8]) {
     );
 }
 
-/// How long an entry must be before its absence from an error is checked:
-/// shorter ones show up in any message by chance ("a", "format").
-const TELLING_CHARS: usize = 12;
+/// The longest a chat formats' error may show, written and debugged
+/// together, in bytes: its longest message with every number at its largest.
+const ERROR_MAX_BYTES: usize = 400;
+
+/// What must hold of a chat formats' error as shown, so that it can't hold
+/// an entry's text: plain ASCII, as its own wording is, and no longer than
+/// that wording with its numbers, whatever was entered.
+///
+/// It doesn't look for the entries in the error: an entry may spell a piece
+/// of the wording itself ("chat format "), which the fuzzer's first long
+/// run wrote within a minute (ADR-0030).
+fn holds_no_text(shown: &str) {
+    assert!(
+        shown.is_ascii() && shown.len() <= ERROR_MAX_BYTES,
+        "a chat format's error grows with its text, or shows a character of it"
+    );
+}
 
 /// [`ChatFormats::try_new`] over any list of strings, a line each (ADR-0020,
 /// S80, R138): no panic; an error never holds an entry's text; and the
@@ -165,15 +179,7 @@ pub fn chat_formats(data: &[u8]) {
                 "accepted chat formats don't read back as themselves"
             );
         }
-        Err(error) => {
-            let shown = format!("{error} {error:?}");
-            for entry in entries {
-                assert!(
-                    entry.chars().count() < TELLING_CHARS || !shown.contains(entry),
-                    "a chat format's error holds its text"
-                );
-            }
-        }
+        Err(error) => holds_no_text(&format!("{error} {error:?}")),
     }
 }
 
@@ -276,6 +282,33 @@ mod tests {
     #[should_panic(expected = "doesn't read back from what it writes")]
     fn a_value_that_reads_back_as_another_fails() {
         reads_back("7", |text| text.parse().map(Drifting));
+    }
+
+    #[test]
+    fn an_error_of_fixed_wording_and_numbers_holds_no_text() {
+        holds_no_text(
+            "chat format 18446744073709551615 is empty Empty { index: 18446744073709551615 }",
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "a chat format's error grows with its text")]
+    fn an_error_as_long_as_its_input_fails() {
+        holds_no_text(&"x".repeat(ERROR_MAX_BYTES + 1));
+    }
+
+    #[test]
+    #[should_panic(expected = "shows a character of it")]
+    fn an_error_with_a_character_no_message_has_fails() {
+        holds_no_text("chat format 0 holds \u{fc}");
+    }
+
+    /// What the first long run found (ADR-0030): entries that spell the
+    /// error's own wording.
+    #[test]
+    fn entries_that_spell_the_errors_own_wording_pass() {
+        chat_formats(b"chat format \nthe limit is ");
+        chat_formats(b"holds a brace that isn't part of a placeholder");
     }
 
     #[test]

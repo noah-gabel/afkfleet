@@ -1,4 +1,9 @@
 //! The `server_message` target: its body is in crates/fleet-fuzz.
 #![no_main]
 
-libfuzzer_sys::fuzz_target!(|data: &[u8]| fleet_fuzz::wire::server_message(data));
+use fleet_fuzz::kept::{keep_failing_input, run};
+
+libfuzzer_sys::fuzz_target!(init: keep_failing_input(), |data: &[u8]| run(
+    fleet_fuzz::wire::server_message,
+    data
+));

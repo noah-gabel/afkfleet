@@ -41,3 +41,5 @@ uuid.workspace = true
 [dev-dependencies]
 # Every target over arbitrary bytes and text.
 proptest = { workspace = true, features = ["std"] }
+# The folder the kept failing input's test writes into.
+tempfile.workspace = true

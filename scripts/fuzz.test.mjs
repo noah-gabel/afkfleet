@@ -10,6 +10,8 @@ import {
   asanFolder,
   cargoArgs,
   DEFAULT_SECONDS,
+  failingInput,
+  KEEP_AT,
   MAX_SECONDS,
   parseArgs,
   TARGETS_FOLDER,
@@ -75,6 +77,21 @@ describe("cargoArgs", () => {
   });
 });
 
+describe("failingInput", () => {
+  it("is a file in the target's own artifacts folder", () => {
+    assert.equal(
+      failingInput("chat_sender"),
+      join("fuzz", "artifacts", "chat_sender", "failing-input"),
+    );
+  });
+
+  it("is handed over under the name fleet-fuzz reads", () => {
+    const kept = readFileSync(join(root, "crates", "fleet-fuzz", "src", "kept.rs"), "utf8");
+
+    assert.ok(kept.includes(`pub const KEEP_AT: &str = "${KEEP_AT}";`));
+  });
+});
+
 describe("asanFolder", () => {
   it("is the folder of the newest toolset's runtime", () => {
     const output = [
@@ -127,8 +144,12 @@ describe("the repository's targets", () => {
       assert.equal(body, name);
       const target = readFileSync(join(root, TARGETS_FOLDER, `${name}.rs`), "utf8");
       assert.ok(
-        target.includes(`fleet_fuzz::${module}::${name}(data)`),
-        `${name}.rs calls fleet_fuzz::${module}::${name}`,
+        target.includes(`run(\n    fleet_fuzz::${module}::${name},\n    data\n)`),
+        `${name}.rs runs fleet_fuzz::${module}::${name}`,
+      );
+      assert.ok(
+        target.includes("init: keep_failing_input()"),
+        `${name}.rs keeps its failing input`,
       );
     }
   });

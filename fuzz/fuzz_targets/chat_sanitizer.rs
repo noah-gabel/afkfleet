@@ -1,4 +1,9 @@
 //! The `chat_sanitizer` target: its body is in crates/fleet-fuzz.
 #![no_main]
 
-libfuzzer_sys::fuzz_target!(|data: &[u8]| fleet_fuzz::text::chat_sanitizer(data));
+use fleet_fuzz::kept::{keep_failing_input, run};
+
+libfuzzer_sys::fuzz_target!(init: keep_failing_input(), |data: &[u8]| run(
+    fleet_fuzz::text::chat_sanitizer,
+    data
+));

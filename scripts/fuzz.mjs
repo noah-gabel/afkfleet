@@ -4,8 +4,11 @@
 //
 // The targets are fuzz/fuzz_targets/*.rs, run with cargo-fuzz 0.13.2 (Plan.md P13.2,
 // ADR-0030): `cargo fuzz run <target> -- -max_total_time=<seconds>`, one after the other,
-// stopping at the first that fails. libFuzzer saves a failing input under
-// fuzz/artifacts/<target>/. `just fuzz` writes the seeds first.
+// stopping at the first that fails. A failing input is kept in fuzz/artifacts/<target>/:
+// by libFuzzer as `crash-<hash>` where a panic reaches it, and always as `failing-input`,
+// which the target writes itself at a panic, to the path this script hands it (on Windows
+// a panic ends the target before libFuzzer saves anything). `just fuzz` writes the seeds
+// first.
 //
 // On Windows the targets need MSVC's AddressSanitizer runtime at run time
 // (clang_rt.asan_dynamic-x86_64.dll, Visual Studio's "C++ AddressSanitizer" component):
@@ -13,7 +16,7 @@
 // where it is and puts that folder first on the target's PATH; nothing else changes.
 // Tests: scripts/fuzz.test.mjs.
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -26,6 +29,14 @@ export const DEFAULT_SECONDS = 60;
 
 /** The longest run of one target: a day. */
 export const MAX_SECONDS = 86_400;
+
+/** The variable that tells a target where to write the input it fails on (fleet-fuzz's `kept`). */
+export const KEEP_AT = "AFKFLEET_FUZZ_KEEP_AT";
+
+/** The file a target's failing input is kept in, from the repository's root. */
+export function failingInput(target) {
+  return join("fuzz", "artifacts", target, "failing-input");
+}
 
 /** MSVC's AddressSanitizer runtime, which a fuzz target loads on Windows. */
 export const ASAN_DLL = "clang_rt.asan_dynamic-x86_64.dll";
@@ -124,13 +135,15 @@ function main() {
   }
   for (const target of parsed.targets) {
     console.log(`fuzzing ${target} for ${parsed.seconds} s`);
+    const kept = join(root, failingInput(target));
+    mkdirSync(dirname(kept), { recursive: true });
     const run = spawnSync("cargo", cargoArgs(target, parsed.seconds), {
       cwd: root,
-      env: environment.env,
+      env: { ...environment.env, [KEEP_AT]: kept },
       stdio: "inherit",
     });
     if (run.status !== 0) {
-      console.error(`${target} failed: its input is in fuzz/artifacts/${target}/`);
+      console.error(`${target} failed: its input is ${failingInput(target)}`);
       process.exit(run.status ?? 1);
     }
   }

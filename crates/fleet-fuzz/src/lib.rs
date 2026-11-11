@@ -17,9 +17,11 @@
 //! - [`vault`]: the vault's envelopes;
 //! - [`metrics`]: the agent's metrics responder.
 //!
-//! [`TARGETS`] names them all; `fuzz/`'s targets and the CI job are checked
-//! against it.
+//! [`TARGETS`] names them all; `fuzz/`'s targets are checked against it
+//! (`just scripts-test`). [`kept`] keeps the input a target fails on, which
+//! libFuzzer alone doesn't on Windows.
 
+pub mod kept;
 pub mod metrics;
 pub mod mode;
 pub mod seeds;
