@@ -1,9 +1,9 @@
 // The Minecraft servers' settings as one story (Plan.md P11.9; ADR-0020, U57, U61, R136): the
-// Owner adds a server with a two-line conflict text after "Confirm it's you" and lands on its
-// screen, finds it listed, adds a second text and saves without being asked again, then
+// Owner adds a server with a two-line conflict text and lands on its screen, finds it listed,
+// adds a second text and saves, never asked for the password (ADR-0028), then
 // deletes it, answering the question, and the list is empty again.
 
-import { OWNER, PASSWORD } from "../fake/backend";
+import { OWNER } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
 import { enterCode, expectHome, logIn } from "./steps";
 
@@ -30,8 +30,6 @@ test("the Owner adds a server's conflict texts, edits them and deletes them", as
   await page.getByLabel("Server address").fill("MC.example.com");
   await page.getByLabel("Conflict text 1").fill("You logged in\nfrom another location");
   await main.getByRole("button", { name: "Save" }).click();
-  await page.getByLabel("Current password").fill(PASSWORD);
-  await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByText(`Added ${SERVER}.`)).toBeVisible();
   await expect(main.getByRole("heading", { name: SERVER, level: 1 })).toBeVisible();
   await expect(page.getByLabel("Conflict text 1")).toHaveValue(
@@ -45,7 +43,7 @@ test("the Owner adds a server's conflict texts, edits them and deletes them", as
   await page.getByLabel("Conflict text 2").fill("Already connected");
   await main.getByRole("button", { name: "Save" }).click();
   await expect(page.getByText("Saved. Bots on it use the change at once.")).toBeVisible();
-  // The step-up still holds, and the server answers its texts in its own order.
+  // No password was asked, and the server answers its texts in its own order.
   await expect(page.getByLabel("Current password")).toHaveCount(0);
   await expect(page.getByLabel("Conflict text 1")).toHaveValue("Already connected");
   await expect(page.getByLabel("Conflict text 2")).toHaveValue(

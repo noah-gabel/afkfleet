@@ -1,10 +1,10 @@
 // The mode editor as one story (Plan.md P11.9; ADR-0020, U62–U75, S82–S84): the Owner creates a
-// mode with steps in two sections, drags one, saves, adds a command off the allowlist through the
-// step-up, meets each 409, keeps edits as a copy, and deletes after the in-use refusal. A Member
+// mode with steps in two sections, drags one, saves, adds a command off the allowlist, which
+// asks for no password (ADR-0028), meets each 409, keeps edits as a copy, and deletes after the in-use refusal. A Member
 // sees a shared mode locked, its command cut, and copies it. Every spec here runs under the
 // release CSP, so the drag proves its library adds no runtime style.
 
-import { MEMBER, OWNER, PASSWORD } from "../fake/backend";
+import { MEMBER, OWNER } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
 import { enterCode, expectHome, logIn } from "./steps";
 
@@ -75,21 +75,15 @@ test("the Owner creates a mode, drags a step, and meets each conflict", async ({
   await step(online, 1).getByLabel("Chance (%)").fill("100");
   await expect(save).toBeDisabled();
 
-  // A command off the allowlist, through the step-up.
+  // A command off the allowlist: on to the twin route, no password asked.
   await section(joining).getByRole("button", { name: "Add step" }).click();
   await step(joining, 2)
     .getByLabel("What it does")
     .selectOption({ label: "Send chat or a command" });
   await step(joining, 2).getByLabel("Message").fill("/warp home");
   await save.click();
-  await expect(
-    page.getByText(
-      "Enter your password to save a command off the allowlist. Counts for 5 minutes.",
-    ),
-  ).toBeVisible();
-  await page.getByLabel("Current password").fill(PASSWORD);
-  await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByText(SAVED)).toBeVisible();
+  await expect(page.getByLabel("Current password")).toHaveCount(0);
   await expect(main.getByText("Sends a command off the allowlist.")).toBeVisible();
 
   // Another device changed it meanwhile: Save's 409, then the newest version.

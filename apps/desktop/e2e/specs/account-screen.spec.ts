@@ -4,7 +4,7 @@
 
 import type { Page } from "@playwright/test";
 
-import { MEMBER, NEW_USER, OWNER, PASSWORD } from "../fake/backend";
+import { MEMBER, NEW_USER, OWNER } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
 import { enterCode, expectHome, logIn } from "./steps";
 
@@ -170,11 +170,11 @@ test("the owner's own row says You where a Manage grantee's does", async ({ page
   await expect(mine.getByRole("button", { name: /Revoke/ })).toHaveCount(0);
 });
 
-test("Share with suggests a name by the keyboard, and sharing it still takes the password", async ({
+test("Share with suggests a name by the keyboard, and picking one sends nothing until Share", async ({
   page,
   context,
 }) => {
-  await atAccount(page, context, OWNER);
+  const backend = await atAccount(page, context, OWNER);
   const field = main(page).getByRole("combobox", { name: "Username" });
 
   // All of it but the last letter, so it matches this name alone.
@@ -188,11 +188,10 @@ test("Share with suggests a name by the keyboard, and sharing it still takes the
 
   await expect(field).toHaveValue(MEMBER);
   await expect(main(page).getByRole("listbox")).toHaveCount(0);
-  await expect(main(page).getByLabel("Current password")).toHaveCount(0);
+  expect(backend.timesCalled("create_grant")).toBe(0);
 
   await main(page).getByRole("button", { name: "Share" }).click();
-  await main(page).getByLabel("Current password").fill(PASSWORD);
-  await main(page).getByRole("button", { name: "Continue" }).click();
+  await expect(main(page).getByLabel("Current password")).toHaveCount(0);
   await expect(access(page).getByRole("table", { name: "Who has access" })).toContainText(MEMBER);
 });
 
@@ -224,5 +223,5 @@ test("Share with still takes an exact name when the suggestions are limited", as
 
   await expect(main(page).getByRole("alert")).toHaveCount(0);
   await main(page).getByRole("button", { name: "Share" }).click();
-  await expect(main(page).getByLabel("Current password")).toBeVisible();
+  await expect(access(page).getByRole("table", { name: "Who has access" })).toContainText(MEMBER);
 });

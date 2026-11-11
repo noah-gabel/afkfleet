@@ -52,7 +52,7 @@ test("lists each account's bot, newest first, and the built-in modes", async () 
   expect(modes.value.items.map((mode) => mode.name).sort()).toEqual(["afk", "farm", "warp"]);
 });
 
-test("drives a bot: its server after a step-up, its mode, and each lifecycle call", async () => {
+test("drives a bot: its server, its mode, and each lifecycle call", async () => {
   const backend = new FakeBackend();
   backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
   backend.handle("login_mfa", { code: backend.code(OWNER) });
@@ -60,8 +60,6 @@ test("drives a bot: its server after a step-up, its mode, and each lifecycle cal
   const id = backend.bot("AfkBot1").id;
   const address = { server_address: "127.0.0.1:25565" };
 
-  const unstepped = await backend.handle("patch_bot", { id, request: address });
-  backend.handle("step_up", { request: { password: PASSWORD } });
   const set = await backend.handle("patch_bot", { id, request: address });
   const farm = await backend.handle("set_bot_mode", { id, request: { mode_id: FARM } });
   const started = await backend.handle("start_bot", { id });
@@ -74,7 +72,6 @@ test("drives a bot: its server after a step-up, its mode, and each lifecycle cal
   });
   const reset = await backend.handle("reset_bot", { id });
 
-  expect(unstepped).toMatchObject({ ok: false, error: { api: { status: 403 } } });
   expect(set).toMatchObject({ ok: true, value: { server_address: "127.0.0.1:25565" } });
   expect(farm).toMatchObject({ ok: true, value: { mode_id: FARM } });
   expect(started).toMatchObject({
@@ -114,7 +111,6 @@ test("refuses a Control holder that mode, and lets them choose a listed one", as
   backend.handle("login_mfa", { code: backend.code(OWNER) });
   backend.addAccount(OWNER);
   const shared = backend.bot("AfkBot1");
-  backend.handle("step_up", { request: { password: PASSWORD } });
   const granted = await backend.handle("create_grant", {
     id: shared.account.id,
     request: { username: MEMBER, level: "control" },
@@ -139,7 +135,7 @@ test("refuses a Control holder that mode, and lets them choose a listed one", as
   expect(listed).toMatchObject({ ok: true, value: { mode_id: FARM } });
 });
 
-test("keeps each bot's chat: lines a page at a time, a line sent online, a command after a step-up", async () => {
+test("keeps each bot's chat: lines a page at a time, a line sent online, a command through /command", async () => {
   const backend = new FakeBackend();
   backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
   backend.handle("login_mfa", { code: backend.code(OWNER) });
@@ -167,8 +163,6 @@ test("keeps each bot's chat: lines a page at a time, a line sent online, a comma
   backend.chatOutcome = "pending";
   const sent = await backend.handle("send_chat", { id, request: { message: " hello " } });
   const pointed = await backend.handle("send_chat", { id, request: { message: "/op AfkBot2" } });
-  const asked = await backend.handle("send_command", { id, request: { message: "/op AfkBot2" } });
-  backend.handle("step_up", { request: { password: PASSWORD } });
   const command = await backend.handle("send_command", { id, request: { message: "/op AfkBot2" } });
 
   expect(first.value.items.map((line) => line.text)).toEqual(["three", "two"]);
@@ -184,14 +178,10 @@ test("keeps each bot's chat: lines a page at a time, a line sent online, a comma
     ok: false,
     error: { api: { status: 403, code: "command_needs_step_up" } },
   });
-  expect(asked).toMatchObject({
-    ok: false,
-    error: { api: { status: 403, code: "step_up_required" } },
-  });
   expect(command).toMatchObject({ ok: true, value: { request_id: backend.lastSend?.request } });
 });
 
-test("keeps the servers' settings: writes after a step-up, the key, the version, and 404", async () => {
+test("keeps the servers' settings: the key, the version, and 404", async () => {
   const backend = new FakeBackend();
   backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
   backend.handle("login_mfa", { code: backend.code(OWNER) });
@@ -201,8 +191,6 @@ test("keeps the servers' settings: writes after a step-up, the key, the version,
     chat_formats: ["{sender} : ", "[{any}] {sender} : ", "{sender} : "],
   };
 
-  const unstepped = await backend.handle("create_server_settings", { request });
-  backend.handle("step_up", { request: { password: PASSWORD } });
   const created = (await backend.handle("create_server_settings", { request })) as {
     ok: true;
     value: ServerSettingsResponse;
@@ -226,10 +214,6 @@ test("keeps the servers' settings: writes after a step-up, the key, the version,
   const removed = await backend.handle("delete_server_settings", { id });
   const gone = await backend.handle("delete_server_settings", { id });
 
-  expect(unstepped).toMatchObject({
-    ok: false,
-    error: { api: { status: 403, code: "step_up_required" } },
-  });
   expect(created.value).toMatchObject({
     server: "mc.example.com:25565",
     conflict_texts: [{ lines: ["a", "lines"] }, { lines: ["b"] }],
@@ -257,7 +241,6 @@ test("checks the cap before a taken server, as the server does", async () => {
   const backend = new FakeBackend();
   backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
   backend.handle("login_mfa", { code: backend.code(OWNER) });
-  backend.handle("step_up", { request: { password: PASSWORD } });
   for (let n = 0; n < 100; n += 1) {
     await backend.handle("create_server_settings", {
       request: { server: `mc${n}.example.com`, conflict_texts: ["a"], chat_formats: [] },
@@ -275,7 +258,6 @@ test("refuses settings that hold neither a text nor a chat format", async () => 
   const backend = new FakeBackend();
   backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
   backend.handle("login_mfa", { code: backend.code(OWNER) });
-  backend.handle("step_up", { request: { password: PASSWORD } });
   const empty = { server: "mc.example.com", conflict_texts: [], chat_formats: [] };
 
   const refused = await backend.handle("create_server_settings", { request: empty });
@@ -300,7 +282,6 @@ test("checks an edit's cross-field rule before its lookup and version, as the se
   const backend = new FakeBackend();
   backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
   backend.handle("login_mfa", { code: backend.code(OWNER) });
-  backend.handle("step_up", { request: { password: PASSWORD } });
   const created = (await backend.handle("create_server_settings", {
     request: { server: "mc.example.com", conflict_texts: ["a"], chat_formats: [] },
   })) as { ok: true; value: ServerSettingsResponse };
@@ -359,7 +340,6 @@ test("reads a bot's system lines with its server's formats at each read, so a de
   const backend = new FakeBackend();
   backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
   backend.handle("login_mfa", { code: backend.code(OWNER) });
-  backend.handle("step_up", { request: { password: PASSWORD } });
   backend.addAccount(OWNER);
   backend.setBot("AfkBot1", { serverAddress: "MC.example.com:25565" });
   const id = backend.bot("AfkBot1").id;
@@ -542,9 +522,6 @@ test("a mode write refuses in the server's order", async () => {
   expect(await refused("create_mode", newMode("Fishing", [WARP]))).toMatchObject({
     error: { api: { status: 403, code: "mode_needs_step_up" } },
   });
-  expect(await refused("create_mode_with_commands", newMode("Fishing", [WARP]))).toMatchObject({
-    error: { api: { status: 403, code: "step_up_required" } },
-  });
   await refused("create_mode", newMode("Fishing"));
   expect(await refused("create_mode", newMode("FISHING"))).toMatchObject({
     error: {
@@ -587,8 +564,9 @@ test("a mode's edit is a no-op, stale, in use or written, and its version moves"
   expect(await edit({ version: 3, name: "Mine" })).toMatchObject({
     error: { api: { status: 409, code: "mode_in_use_by_others" } },
   });
+  // A bot uses it, whoever's: the delete is refused on that alone, no password asked.
   expect(await backend.handle("delete_mode", { id: mode.id })).toMatchObject({
-    error: { api: { status: 403, code: "step_up_required" } },
+    error: { api: { status: 409, code: "mode_in_use" } },
   });
 });
 
@@ -597,7 +575,6 @@ test("a bot on a mode keeps it from being deleted, and a command off the list ne
   backend.addAccount(OWNER);
   const bot = backend.bot("AfkBot1");
   const mode = answered(await backend.handle("create_mode", { request: newMode("Fishing") }));
-  await backend.handle("step_up", { request: { password: PASSWORD } });
   answered(await backend.handle("set_bot_mode", { id: bot.id, request: { mode_id: mode.id } }));
 
   expect(await backend.handle("delete_mode", { id: mode.id })).toMatchObject({
@@ -641,7 +618,6 @@ test("a viewer who can't edit a shared mode sees its command cut, and may not ch
 
 test("cuts only a command with arguments, as the server's without_arguments does", async () => {
   const backend = signedIn(OWNER);
-  await backend.handle("step_up", { request: { password: PASSWORD } });
   const shared = (name: string, message: string) => ({
     name,
     visibility: "shared",
@@ -730,14 +706,11 @@ test("disables and releases an agent as the server does", () => {
   backend.handle("login_mfa", { code: backend.code(OWNER) });
   const agent = backend.addAgent("agent-1", { bots: 2 });
 
-  const unstepped = backend.handle("disable_agent", { id: agent });
-  backend.handle("step_up", { request: { password: PASSWORD } });
   const early = backend.handle("release_agent", { id: agent });
   const disabled = backend.handle("disable_agent", { id: agent });
   const released = backend.handle("release_agent", { id: agent });
   const missing = backend.handle("release_agent", { id: "01900000-0000-7000-8000-0000000000b2" });
 
-  expect(unstepped).toMatchObject({ ok: false, error: { api: { code: "step_up_required" } } });
   expect(early).toMatchObject({ ok: false, error: { api: { code: "agent_not_disabled" } } });
   expect(disabled).toMatchObject({
     ok: true,
@@ -747,11 +720,10 @@ test("disables and releases an agent as the server does", () => {
   expect(missing).toMatchObject({ ok: false, error: { api: { status: 404 } } });
 });
 
-/** `backend` signed in as `username`, stepped up. */
+/** `backend` signed in as `username`. */
 function signedInAs(backend: FakeBackend, username: string) {
   backend.handle("login", { request: { username, password: PASSWORD } });
   backend.handle("login_mfa", { code: backend.code(username) });
-  backend.handle("step_up", { request: { password: PASSWORD } });
 }
 
 test("answers the review as the server does: an unknown user first, then the matrix (S50)", () => {

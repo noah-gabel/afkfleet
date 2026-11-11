@@ -1,10 +1,10 @@
 // A parsed sender as one story (Plan.md P11.9; ADR-0020, U55, U58, S79, R147, R148): the Owner
-// adds a server with a chat format and no conflict text, tries a line on it, and saves after
-// "Confirm it's you"; a bot on that server shows its server's line under the name the format
+// adds a server with a chat format and no conflict text, tries a line on it, and saves;
+// a bot on that server shows its server's line under the name the format
 // read, with the mark, in the normal style. Deleting the settings shows the line as the
 // server's again, muted, at the bot's next read: nothing parsed is stored.
 
-import { OWNER, PASSWORD } from "../fake/backend";
+import { OWNER } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
 import { enterCode, expectHome, logIn } from "./steps";
 
@@ -56,8 +56,6 @@ test("a format read from the server's line marks its sender until the format is 
   await formats.getByRole("button", { name: "Try" }).click();
   await expect(formats.getByRole("status")).toHaveText("Format 1: sender Notch.");
   await main.getByRole("button", { name: "Save" }).click();
-  await page.getByLabel("Current password").fill(PASSWORD);
-  await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByText(`Added ${SERVER}.`)).toBeVisible();
 
   await nav.getByRole("link", { name: "Home" }).click();

@@ -3,7 +3,7 @@
 // it Online with its running controls.
 import type { LiveUpdateMessage } from "@afkfleet/ui/generated/LiveUpdateMessage";
 
-import { type FakeBackend, OWNER, PASSWORD } from "../fake/backend";
+import { type FakeBackend, OWNER } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
 import { enterCode, expectHome, logIn, push } from "./steps";
 
@@ -36,8 +36,6 @@ test("the Owner sets a bot's server after the password, switches its mode and st
   await settings.getByRole("button", { name: "Set" }).click();
   await settings.getByLabel("Server address").fill("127.0.0.1:25565");
   await settings.getByRole("button", { name: "Save" }).click();
-  await settings.getByLabel("Current password").fill(PASSWORD);
-  await settings.getByRole("button", { name: "Continue" }).click();
   await expect(settings.getByText("127.0.0.1:25565")).toBeVisible();
 
   await settings.getByLabel("Mode").selectOption({ label: "farm (built in)" });

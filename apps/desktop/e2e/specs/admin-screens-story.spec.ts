@@ -3,7 +3,7 @@
 // that agent; the log shows the server's own entry and an unreadable row; the Owner promotes a
 // Member and reviews their grants, revoking one; and a Member leaves a shared account.
 
-import { MEMBER, OWNER, PASSWORD } from "../fake/backend";
+import { MEMBER, OWNER } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
 import { enterCode, expectHome, logIn } from "./steps";
 
@@ -39,8 +39,6 @@ test("the Owner disables an agent, releases its bots and reads it in the audit l
   await row.getByRole("button", { name: "Disable" }).click();
   await expect(main.getByText(/Disable agent-throwaway for good/)).toBeVisible();
   await main.getByRole("button", { name: "Disable for good" }).click();
-  await page.getByLabel("Current password").fill(PASSWORD);
-  await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByText("agent-throwaway disabled.")).toBeVisible();
   await expect(row.getByText("2 bots held until released.")).toBeVisible();
 
@@ -91,8 +89,6 @@ test("the Owner promotes a Member and reviews their grants, revoking one", async
     .locator("..")
     .getByRole("button", { name: "Make admin" })
     .click();
-  await page.getByLabel("Current password").fill(PASSWORD);
-  await page.getByRole("button", { name: "Continue" }).click();
 
   const offer = main.getByText(`${MEMBER} now an Admin. Earlier grants stay.`);
   await expect(offer).toBeVisible();
@@ -129,8 +125,6 @@ test("a Manage grantee's own row says You, and Leave is their way out", async ({
   await expect(mine.getByRole("button", { name: /Revoke/ })).toBeHidden();
   await main.getByRole("button", { name: "Leave", exact: true }).click();
   await main.getByRole("button", { name: "Leave account" }).click();
-  await page.getByLabel("Current password").fill(PASSWORD);
-  await page.getByRole("button", { name: "Continue" }).click();
 
   await expect(page.getByText("You left AfkBot1.")).toBeVisible();
   await expect(main.getByRole("link", { name: "AfkBot1", exact: true })).toBeHidden();
@@ -153,8 +147,6 @@ test("a Member leaves a shared account after the password", async ({ page, conte
   await main.getByRole("button", { name: "Leave", exact: true }).click();
   await expect(main.getByText(/You lose access to it and its bot/)).toBeVisible();
   await main.getByRole("button", { name: "Leave account" }).click();
-  await page.getByLabel("Current password").fill(PASSWORD);
-  await page.getByRole("button", { name: "Continue" }).click();
 
   await expect(page.getByText("You left AfkBot1.")).toBeVisible();
   await expect(main.getByRole("link", { name: "AfkBot1", exact: true })).toBeHidden();

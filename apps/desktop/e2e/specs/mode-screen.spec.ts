@@ -5,7 +5,7 @@
 // screen. The scrollbars show, as WebView2 shows them.
 import type { Locator, Page } from "@playwright/test";
 
-import { type FakeBackend, OWNER, PASSWORD } from "../fake/backend";
+import { type FakeBackend, OWNER } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
 import { enterCode, expectHome, logIn } from "./steps";
 import { frameHolds } from "./theme";
@@ -188,7 +188,7 @@ const where = (target: Locator) =>
     };
   });
 
-test("stacked, Save's password prompt takes the focus in view, and a conflict shows where you are", async ({
+test("stacked, a save with a command asks for no password, and a conflict shows where you are", async ({
   page,
   context,
 }) => {
@@ -208,13 +208,8 @@ test("stacked, Save's password prompt takes the focus in view, and a conflict sh
 
   await toTop();
   await save.click();
-  const password = page.getByLabel("Current password");
-  await expect(password).toBeFocused();
-  expect(await where(password)).toEqual({ inColumn: true, underBar: false });
-
-  await password.fill(PASSWORD);
-  await page.getByRole("button", { name: "Continue" }).click();
   await expect(main.getByText("Sends a command off the allowlist.")).toBeVisible();
+  await expect(page.getByLabel("Current password")).toHaveCount(0);
   // The toast slides in from below the window: it must be gone before the frame is checked.
   await expect(page.locator("[data-sonner-toast]")).toHaveCount(0, { timeout: 15_000 });
   backend.changeMode("Long", { name: "Elsewhere" });

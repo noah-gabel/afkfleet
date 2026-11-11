@@ -137,9 +137,6 @@ test("after Leave, Back skips the gone account", async ({ page, context }) => {
   await main.getByRole("link", { name: /^(Open )?AfkBot1$/ }).click();
   await main.getByRole("button", { name: "Leave" }).click();
   await main.getByRole("button", { name: "Leave account" }).click();
-  const password = main.getByLabel("Current password");
-  await password.fill(PASSWORD);
-  await main.getByRole("button", { name: "Continue" }).click();
   await expect(main.getByRole("heading", { name: "Accounts", level: 1 })).toBeVisible();
 
   await back(page).click();
