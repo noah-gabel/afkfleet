@@ -35,6 +35,9 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use fleet_core::id::AgentId;
 
+use crate::config::ServerConfig;
+use crate::infra::sqlite::{self, Database, DatabaseOptions, OpenError};
+
 pub mod agent;
 pub mod backup;
 pub mod healthcheck;
@@ -50,6 +53,23 @@ pub mod vault;
 /// the pools' acquire timeout: `migrate` waits this long, and `serve` at
 /// least this long within its shutdown deadline.
 pub const DATABASE_CLOSE: Duration = Duration::from_secs(5);
+
+/// Opens `config`'s database for `serve` and `user create-owner` (Plan.md
+/// P13.5, ADR-0033), running every pending migration. Outside dev mode the
+/// file must exist: only `migrate` creates one, so a data volume that isn't
+/// mounted where it was stops the command instead of starting an empty
+/// fleet. Dev mode creates a missing file, so `just dev-server` needs no step
+/// before it.
+///
+/// # Errors
+/// [`sqlite::open_existing`]'s outside dev mode, [`sqlite::open`]'s in it.
+pub async fn open_database(config: &ServerConfig) -> Result<Database, OpenError> {
+    if config.dev_mode {
+        sqlite::open(&config.database, DatabaseOptions::default()).await
+    } else {
+        sqlite::open_existing(&config.database, DatabaseOptions::default()).await
+    }
+}
 
 /// The exit codes of `afkfleet-server serve`, shown in its help.
 pub const SERVE_EXIT_CODES: &str = "\

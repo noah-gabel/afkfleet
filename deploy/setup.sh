@@ -609,6 +609,11 @@ init() {
 		set -- $(pki_names)
 		docker compose run --rm -T setup pki init --config "$SERVER_CONFIG" "$@" || refuse "the PKI couldn't be created"
 		ok "the CA and the server's certificate"
+		# The one step that creates the database: the server refuses to start
+		# without its file, so a data volume that isn't mounted later can never
+		# start an empty fleet (ADR-0033). A restored state has its database.
+		docker compose run --rm -T maintenance migrate --config "$SERVER_CONFIG" || refuse "the database couldn't be created"
+		ok "the database, in the data volume"
 	fi
 	docker compose up --detach --wait server || refuse "the server didn't become healthy: docker compose logs server says why"
 	ok "the server is healthy"

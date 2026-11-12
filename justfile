@@ -459,7 +459,9 @@ dod-build:
 
 # As dev-server, with deploy/dod/server.toml: Node creates the folder, the vault key when
 # it's missing (never overwritten, never printed) and the PKI with `pki init` when its files
-# are missing, for localhost, 127.0.0.1 and ::1 (never overwritten). [grpc] is on, on
+# are missing, for localhost, 127.0.0.1 and ::1 (never overwritten). Then `migrate` creates
+# the database when it's missing: this server isn't in dev mode, so serve refuses to start
+# without the file (ADR-0033). [grpc] is on, on
 # 127.0.0.1:7453. It logs JSON at info through scripts/dod-log.mjs, which keeps each start's
 # lines in `logs` for just dod-log-check and shows them readable in the terminal (S134, U132).
 # No exit message: on Windows, Ctrl+C reaches just and PowerShell too.
@@ -469,6 +471,7 @@ dod-server logs=(justfile_directory() / "target" / "dod-run" / "logs") $AFKFLEET
     node -e "require('node:fs').mkdirSync(require('node:path').dirname(process.argv[1]), { recursive: true })" "{{ AFKFLEET_SERVER__DATABASE__PATH }}"
     node scripts/dev-vault-key.mjs "{{ AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1 }}"
     node scripts/dev-pki.mjs --release deploy/dod/server.toml "{{ AFKFLEET_SERVER__GRPC__CA_CERT_FILE }}" "{{ AFKFLEET_SERVER__GRPC__CA_KEY_FILE }}" "{{ AFKFLEET_SERVER__GRPC__SERVER_CERT_FILE }}" "{{ AFKFLEET_SERVER__GRPC__SERVER_KEY_FILE }}"
+    cargo run --release -p fleet-server --bin afkfleet-server -- migrate --config deploy/dod/server.toml
     node scripts/dod-log.mjs "{{ logs }}" server cargo run --release -p fleet-server --bin afkfleet-server -- serve --config deploy/dod/server.toml
 
 # `user create-owner` with the password typed twice at the terminal, hidden; never an

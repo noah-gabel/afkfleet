@@ -112,6 +112,8 @@ fn backup_without_backup_dir_writes_nothing() {
 fn backup_never_creates_the_database() {
     let dir = test_dir("backup_no_database");
     let config = with_backups(&dir, "");
+    // The config's helper made one, as `migrate` does on a first install.
+    std::fs::remove_file(dir.join("afkfleet.db")).unwrap();
 
     let finished = finish(&["backup", "--config", path_arg(&config)]);
 

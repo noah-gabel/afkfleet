@@ -385,6 +385,20 @@ impl Stack {
                         pki.extend(["--dns", name]);
                     }
                     self.ok(&pki, SLOW);
+                    // The one step that creates the database: serve refuses
+                    // a missing one (ADR-0033).
+                    self.ok(
+                        &[
+                            "run",
+                            "--rm",
+                            "-T",
+                            "maintenance",
+                            "migrate",
+                            "--config",
+                            SERVER_CONFIG,
+                        ],
+                        SLOW,
+                    );
                 }
                 self.ok(
                     &[

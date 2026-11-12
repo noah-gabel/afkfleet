@@ -21,7 +21,7 @@ use fleet_core::value::Username;
 use fleet_server::config::DatabaseConfig;
 use fleet_server::infra::sqlite::{
     CloseTimedOut, Database, DatabaseOptions, MIGRATOR, OpenError, PoolRole, READ_CONNECTIONS,
-    connect_options, open, open_migrated,
+    connect_options, open, open_existing, open_migrated,
 };
 use fleet_server::ports::audit::{AuditLimit, AuditPage, NewAuditEntry};
 use fleet_server::ports::store::Store;
@@ -230,6 +230,71 @@ async fn closing_checkpoints_and_removes_the_wal() {
     let path = config_in(&dir).path;
     assert!(!sibling(&path, "-wal").exists());
     assert!(!sibling(&path, "-shm").exists());
+}
+
+// --- Opening without creating (`serve` outside dev mode, P13.5) --------------------------
+
+#[tokio::test]
+async fn open_existing_never_creates_a_missing_file() {
+    let dir = TempDir::new().unwrap();
+    let path = config_in(&dir).path;
+
+    let result = open_existing(&config_in(&dir), DatabaseOptions::default()).await;
+
+    assert!(
+        matches!(&result, Err(OpenError::MissingFile { file }) if *file == path),
+        "{result:?}"
+    );
+    assert!(!path.exists(), "nothing was created");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn open_existing_refuses_a_missing_folder() {
+    let dir = TempDir::new().unwrap();
+    let folder = dir.path().join("typo");
+    let config = DatabaseConfig {
+        path: folder.join("afkfleet.db"),
+        backups: None,
+    };
+
+    let result = open_existing(&config, DatabaseOptions::default()).await;
+
+    assert!(
+        matches!(&result, Err(OpenError::MissingFolder { folder: missing }) if *missing == folder),
+        "{result:?}"
+    );
+    assert!(!folder.exists());
+}
+
+#[tokio::test]
+async fn open_existing_migrates_a_file_that_is_there() {
+    let dir = TempDir::new().unwrap();
+    // What `migrate` leaves when it's stopped right after creating the file.
+    empty_database(&config_in(&dir).path);
+
+    let db = open_existing(&config_in(&dir), DatabaseOptions::default())
+        .await
+        .unwrap();
+
+    let expected = i64::try_from(MIGRATOR.iter().count()).unwrap();
+    assert_eq!(applied_migrations(db.read_pool()).await, expected);
+    db.close().await;
+}
+
+#[tokio::test]
+async fn open_existing_keeps_what_an_earlier_server_stored() {
+    let dir = TempDir::new().unwrap();
+    let db = open_in(&dir).await;
+    create_probe_table(db.write_pool()).await.unwrap();
+    db.close().await;
+
+    let db = open_existing(&config_in(&dir), DatabaseOptions::default())
+        .await
+        .unwrap();
+
+    assert!(has_table(db.read_pool(), "probe").await);
+    db.close().await;
 }
 
 // --- Opening without migrating (the vault commands, P9.2) -------------------------------

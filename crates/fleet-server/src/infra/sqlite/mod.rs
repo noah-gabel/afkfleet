@@ -2,19 +2,23 @@
 //! (Plan.md P6.3, ADR-0005, ADR-0015).
 //!
 //! # Opening
-//! [`open`] is what the server calls at startup (and the `migrate` command,
-//! P6.11): it prepares the file, then [`Database::connect`] builds both pools
+//! [`open`] is the `migrate` command's (P6.11), and the server's own in dev
+//! mode: it prepares the file, then [`Database::connect`] builds both pools
 //! and runs every pending migration before anything else touches the
-//! database. [`open_migrated`] is the vault commands' (P9.2): it opens only
-//! an existing database whose migrations are all applied, and never creates
-//! or migrates one.
+//! database. [`open_existing`] is what the server calls at startup outside
+//! dev mode (P13.5, ADR-0033): the same, but the file must be there already.
+//! [`open_migrated`] is the vault commands' (P9.2): it opens only an existing
+//! database whose migrations are all applied, and never creates or migrates
+//! one.
 //! - **The folder must exist.** A typo in `[database] path` or a missing
 //!   volume stops startup instead of creating a fresh, empty database
 //!   somewhere unexpected.
-//! - **[`open`] creates a missing file itself**, `0600` on Unix, and the pools
+//! - **Only [`open`] creates a missing file**, `0600` on Unix, and the pools
 //!   never create one, so sqlx never makes a database file with default
 //!   permissions. SQLite gives the `-wal` and `-shm` files the database's
-//!   mode.
+//!   mode. Outside dev mode nothing but `migrate` calls it: a data volume
+//!   that isn't mounted where it was is a missing file, and a server that
+//!   created one there would run as an empty fleet.
 //! - **On Unix, a database, `-wal` or `-shm` file that other users can read or
 //!   write stops startup** (the Phase 6 security list: only the service user
 //!   reads the database). On Windows, where permissions are ACLs, there's no
@@ -157,8 +161,14 @@ pub enum OpenError {
     /// records a migration that failed halfway (`Dirty`).
     #[error("couldn't migrate the database")]
     Migrate(#[source] MigrateError),
-    /// ([`open_migrated`]) The database file doesn't exist.
-    #[error("the database {} doesn't exist, and this command never creates one", file.display())]
+    /// ([`open_existing`], [`open_migrated`]) The database file doesn't
+    /// exist. The message says both ways there: a first install without
+    /// `migrate`, or a volume that isn't mounted where it was (ADR-0033).
+    #[error(
+        "the database {} doesn't exist, and this command never creates one: on a first install, `afkfleet-server migrate` creates it (`setup.sh init` runs it); on a server that ran before, the volume that holds it isn't mounted at {}",
+        file.display(),
+        file.parent().unwrap_or(file).display()
+    )]
     MissingFile {
         /// The missing file.
         file: PathBuf,
@@ -277,6 +287,29 @@ pub async fn open(
     options: DatabaseOptions,
 ) -> Result<Database, OpenError> {
     file::prepare(&config.path).await?;
+    Database::connect(SqliteConnectOptions::new().filename(&config.path), options).await
+}
+
+/// Opens the database at the configured path as [`open`] does, running
+/// every pending migration, but never creates the file: what `serve` and
+/// `user create-owner` call outside dev mode (Plan.md P13.5, ADR-0033). A
+/// data volume that isn't mounted where it was shows as a missing file, and a
+/// server that created one there would run as an empty fleet: no user, and
+/// every agent refused.
+///
+/// A file that exists is taken as it is, an empty one too (what `migrate`
+/// leaves when it's stopped right after creating it), and migrated forward.
+///
+/// # Errors
+/// [`OpenError::MissingFolder`], [`OpenError::MissingFile`],
+/// [`OpenError::Inspect`] or, on Unix, [`OpenError::Permissions`] when the
+/// file isn't there or is open to others, and every error of
+/// [`Database::connect`].
+pub async fn open_existing(
+    config: &DatabaseConfig,
+    options: DatabaseOptions,
+) -> Result<Database, OpenError> {
+    file::check_existing(&config.path).await?;
     Database::connect(SqliteConnectOptions::new().filename(&config.path), options).await
 }
 
@@ -535,8 +568,9 @@ mod tests {
         assert_eq!(
             missing.to_string(),
             format!(
-                "the database {} doesn't exist, and this command never creates one",
-                PathBuf::from("/data/afkfleet.db").display()
+                "the database {} doesn't exist, and this command never creates one: on a first install, `afkfleet-server migrate` creates it (`setup.sh init` runs it); on a server that ran before, the volume that holds it isn't mounted at {}",
+                PathBuf::from("/data/afkfleet.db").display(),
+                PathBuf::from("/data").display()
             )
         );
         assert_eq!(

@@ -97,9 +97,46 @@ pub(crate) fn vault_section(dir: &Path) -> String {
     )
 }
 
+/// Creates `dir`'s database as `afkfleet-server migrate` leaves it, every
+/// migration applied: outside dev mode, `serve` never creates one (Plan.md
+/// P13.5, ADR-0033). On a thread with a runtime of its own, since its callers
+/// run inside one already.
+pub(crate) fn database(dir: &Path) -> PathBuf {
+    let path = dir.join("afkfleet.db");
+    let config = DatabaseConfig {
+        path: path.clone(),
+        backups: None,
+    };
+    std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let database = fleet_server::infra::sqlite::open(
+                    &config,
+                    fleet_server::infra::sqlite::DatabaseOptions::default(),
+                )
+                .await
+                .unwrap();
+                database.close().await;
+            });
+    })
+    .join()
+    .unwrap();
+    path
+}
+
 /// A config for a server bound to `bind` with its database and vault key in
-/// `dir`, JSON logs at `info`.
+/// `dir`, JSON logs at `info`; the database is there, migrated
+/// ([`database`]).
 pub(crate) fn config_body(dir: &Path, bind: SocketAddr) -> String {
+    database(dir);
+    config_body_without_database(dir, bind)
+}
+
+/// [`config_body`], with no database file in `dir` yet.
+pub(crate) fn config_body_without_database(dir: &Path, bind: SocketAddr) -> String {
     format!(
         "[http]\nbind = \"{bind}\"\n[database]\npath = {}\n[log]\nformat = \"json\"\n{}",
         toml_path(&dir.join("afkfleet.db")),
@@ -113,8 +150,19 @@ pub(crate) fn vault_keys(config: &ServerConfig) -> VaultKeys {
 }
 
 /// The in-process equivalent of [`config_body`]: `bind` is only what the
-/// healthcheck would ask, since tests hand `run` a bound listener.
+/// healthcheck would ask, since tests hand `run` a bound listener. The
+/// database is there, migrated ([`database`]).
 pub(crate) fn server_config(dir: &Path, bind: SocketAddr, dev_mode: bool) -> ServerConfig {
+    database(dir);
+    server_config_without_database(dir, bind, dev_mode)
+}
+
+/// [`server_config`], with no database file in `dir` yet.
+pub(crate) fn server_config_without_database(
+    dir: &Path,
+    bind: SocketAddr,
+    dev_mode: bool,
+) -> ServerConfig {
     ServerConfig {
         dev_mode,
         http: HttpConfig {

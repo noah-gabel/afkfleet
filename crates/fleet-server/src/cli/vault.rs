@@ -756,7 +756,7 @@ mod tests {
                 .starts_with("afkfleet-server: the database can't be opened: the database ")
                 && run
                     .err
-                    .ends_with(" doesn't exist, and this command never creates one\n"),
+                    .contains(" doesn't exist, and this command never creates one: "),
             "{}",
             run.err
         );
