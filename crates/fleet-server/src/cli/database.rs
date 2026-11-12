@@ -224,7 +224,7 @@ mod tests {
         let mut lines = run.err.lines();
         let first = lines.next().unwrap();
         let findings: Vec<&str> = lines.collect();
-        assert!(!findings.is_empty(), "{}", run.err);
+        assert_ne!(findings.len(), 0, "{}", run.err);
         assert_eq!(
             first,
             format!(

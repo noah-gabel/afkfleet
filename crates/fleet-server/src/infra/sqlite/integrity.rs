@@ -126,7 +126,7 @@ fn unreadable(error: sqlx::Error) -> Result<Integrity, IntegrityError> {
 fn is_damage(error: &sqlx::Error) -> bool {
     error
         .as_database_error()
-        .and_then(|database| database.code())
+        .and_then(sqlx::error::DatabaseError::code)
         .and_then(|code| code.parse::<u32>().ok())
         .is_some_and(|code| DAMAGE_CODES.contains(&(code & 0xFF)))
 }

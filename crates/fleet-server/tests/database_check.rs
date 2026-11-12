@@ -136,7 +136,7 @@ async fn a_page_overwritten_with_garbage_is_damage_with_sqlite_s_findings() {
     let Ok(Integrity::Damaged(findings)) = &found else {
         panic!("not damage: {found:?}");
     };
-    assert!(!findings.is_empty());
+    assert_ne!(findings.len(), 0);
     assert!(
         findings.iter().all(|finding| finding != "ok"),
         "{findings:?}"
