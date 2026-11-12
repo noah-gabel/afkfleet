@@ -15,7 +15,8 @@ use core::time::Duration;
 use std::sync::OnceLock;
 
 use fleet_server::config::{DatabaseConfig, LogConfig, LogFormat};
-use fleet_server::infra::sqlite::{Database, DatabaseOptions, open};
+use fleet_server::infra::sqlite::{Database, DatabaseOptions, WRITE_CONNECTION_REPLACED, open};
+use fleet_server::ports::store::Store as _;
 use fleet_startup::telemetry::{NoRules, layer_with};
 use fleet_testkit::log_buffer::LogBuffer;
 use tempfile::TempDir;
@@ -131,4 +132,36 @@ async fn a_slow_statement_is_logged_at_warn() {
     for (level, target) in &levels {
         assert_eq!((level.as_str(), target.as_str()), ("WARN", "sqlx::query"));
     }
+}
+
+/// A write connection whose transaction SQLite ended by itself is replaced
+/// (P13.5, ADR-0033), and the server says so once, at `warn`: a fault it
+/// recovered from. SQLite's commit hook refuses one commit here, which fails
+/// that `COMMIT` and rolls its transaction back, as a full disk does.
+#[tokio::test]
+async fn a_replaced_write_connection_is_one_warning() {
+    let logs = buffers();
+    let dir = TempDir::new().unwrap();
+    let db = open_with(&dir, DatabaseOptions::default()).await;
+    {
+        let mut connection = db.write_pool().acquire().await.unwrap();
+        let mut handle = connection.lock_handle().await.unwrap();
+        let mut refused = false;
+        handle.set_commit_hook(move || core::mem::replace(&mut refused, true));
+    }
+
+    let refused = db.retention_batch().await.unwrap().commit().await;
+    // The next write gets the new connection, once the old one is settled.
+    let next = db.retention_batch().await.unwrap().commit().await;
+
+    assert!(refused.is_err(), "{refused:?}");
+    assert!(next.is_ok(), "{next:?}");
+    assert_eq!(
+        levels_of(&logs.info, WRITE_CONNECTION_REPLACED),
+        [(
+            "WARN".to_owned(),
+            "fleet_server::infra::sqlite::commits".to_owned()
+        )]
+    );
+    db.close().await;
 }

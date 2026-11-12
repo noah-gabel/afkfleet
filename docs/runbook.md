@@ -192,7 +192,7 @@ About eleven commands from a host with Docker, each with what success looks like
    cp env.example .env
    ```
 4. **Fill in `.env`** with an editor: the proxy path ([Choosing a proxy path](#choosing-a-proxy-path)), `AFKFLEET_DOMAIN`, `AFKFLEET_ACME_EMAIL` for Let's Encrypt, and anything else you change ([Settings](#settings)). The images need no line: `RELEASE` names this release's, pinned by digest. Success: no line of `env.example`'s placeholders (`example.com`) is left.
-5. **Check, then install.** `check` changes nothing and says which proxy path fits. `init` (as root, to make the backups' folder for the server's user) checks Docker, `.env` and the files, makes the vault key and the PKI inside the server's image, starts the server, enrolls the local agent and starts the rest; it prints the CA's fingerprint, never a key, and never overwrites anything. Success: `check` ends with `the project afkfleet isn't installed yet`, and `init` with `ok: afkfleet is running` and the next steps. On a failure, it names what it created.
+5. **Check, then install.** `check` changes nothing and says which proxy path fits. `init` (as root, to make the backups' folder for the server's user) checks Docker, `.env` and the files, makes the vault key and the PKI inside the server's image, creates the database, starts the server, enrolls the local agent and starts the rest; it prints the CA's fingerprint, never a key, and never overwrites anything. Success: `check` ends with `the project afkfleet isn't installed yet`, and `init` with `ok: afkfleet is running` and the next steps. On a failure, it names what it created.
    ```sh
    sh setup.sh check
    sudo sh setup.sh init
@@ -704,6 +704,22 @@ Key 1 stays configured and on the volume (`prod/server.toml` names it, and `.env
 - **On a new host** whose keys' copy predates the rotation, `restore` refuses a newer backup at its vault check (it needs key 2): bring the newer keys' copy instead.
 - **Every username's lockout streak** starts again with a new active key, since the lockout's key derives from it.
 
+## After a crash or a full disk
+
+afkfleet needs no repair after either. To be sure of the database, ask SQLite itself: the check reads every page and changes nothing, beside the running server. Success: `the database passes SQLite's integrity check`.
+
+```sh
+docker compose exec server /usr/local/bin/afkfleet-server database check --config /etc/afkfleet/server.toml
+```
+
+- **With the server stopped,** the same through the `maintenance` service:
+  ```sh
+  docker compose run --rm maintenance database check --config /etc/afkfleet/server.toml
+  ```
+- **"the database is damaged"** (exit 3), with SQLite's findings below it: stop afkfleet and restore the newest backup ([Restoring a backup](#restoring-a-backup)). The findings name tables, pages and row numbers, never a row's content.
+- **While the disk is full,** the app still shows everything, and whatever would change something fails with the server's generic error and a request ID, which the server's log names at `error`. The bots stay online. Retention and the backups fail, and say so in their metrics: `afkfleet_retention_runs_total` with `outcome="failed"`, and `afkfleet_backup_failures_total` ([Metrics](#metrics)). Free some room, and everything goes on by itself: nothing needs a restart or a repair. The log then says once, at `warn`, "the database's write connection was replaced"; the schedule tries a failed backup again within the hour.
+- **After a kill** (the host lost power, the kernel ran out of memory, a container was killed): start afkfleet as usual. A backup that was being written is left as its dot file ending in `.partial`, which never counts as a backup and is removed a day later. An agent that was renewing its certificate comes back on its old one or its new one.
+
 ## When a service won't start or keeps restarting
 
 The first shows each service's state, the second a service's last lines, which say why:
@@ -720,6 +736,7 @@ docker compose logs --tail 50 agent
 - **The agent exits 1 at the start:** its config or its identity's files (its key, its certificate, the CA): the log line names the file and what's wrong.
 - **An agent whose certificate expired** enrolls again: disable it first, which frees its name, and release its bots ([Incident response](#incident-response) has both commands). It expires only if it never renewed ([Agents' certificates](#agents-certificates)).
 - **The server exits 1 at the start:** its config, the vault's keys, the PKI, an address or the database, named in the log. Exit 4: it, or the reconciler placing the bots, ended unasked; the log before it says why.
+- **The server exits 1 with "the database /data/afkfleet.db doesn't exist, and this command never creates one":** its data volume isn't the one it ran on: a changed `COMPOSE_PROJECT_NAME`, a removed volume, or a new host without a restore. The server never creates a database, since an empty one would run as a fleet that knows no user and refuses every agent. Don't run `migrate` to get past it: that makes exactly that empty database. If `.env` changed, put its project name back; otherwise restore the newest backup ([Restoring a backup](#restoring-a-backup)).
 - **The server's certificate expired** (after 365 days, every agent fails to connect): [Renewing the server certificate](#renewing-the-server-certificate).
 
 ## Bots that don't come online

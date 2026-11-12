@@ -23,6 +23,7 @@ pub(crate) mod client;
 pub(crate) mod ledger;
 pub(crate) mod live;
 pub(crate) mod logs;
+pub(crate) mod microsoft;
 pub(crate) mod proxy;
 pub(crate) mod server;
 pub(crate) mod world;

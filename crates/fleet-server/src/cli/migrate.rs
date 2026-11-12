@@ -1,12 +1,14 @@
 //! `afkfleet-server migrate` (Plan.md P6.11, ADR-0005, ADR-0015): applies
 //! every pending migration and exits.
 //!
-//! It opens the database the way `serve` does, through
-//! [`sqlite::open`]: the folder must exist, a
+//! It opens the database through [`sqlite::open`]: the folder must exist, a
 //! missing file is created with owner-only permissions, and every pending
 //! migration runs. Then it closes the database within
-//! [`DATABASE_CLOSE`]. `serve` migrates at startup
-//! too; this command lets an operator migrate before starting a new version.
+//! [`DATABASE_CLOSE`]. It's the one command that creates a database outside
+//! dev mode (Plan.md P13.5, ADR-0033): a first install runs it before the
+//! server starts (`setup.sh init`), and `serve` refuses a missing file.
+//! `serve` migrates an existing database at startup too; this command also
+//! lets an operator migrate before starting a new version.
 //!
 //! It logs like `serve`: "the database is migrated" at `info`, or one
 //! `error`, "the database can't be migrated", with the error's whole chain.

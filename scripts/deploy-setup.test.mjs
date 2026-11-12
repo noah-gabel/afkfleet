@@ -579,11 +579,14 @@ describe("setup.sh, run against stubs", { skip: SH }, () => {
     assert.deepEqual(steps, [
       "compose run --rm -T setup vault create-key --config /etc/afkfleet/server.toml",
       "compose run --rm -T setup pki init --config /etc/afkfleet/server.toml --dns server --dns fleet.afkfleet.test --ip 192.0.2.10",
+      // The database, created here and nowhere else: serve refuses a missing one (ADR-0033).
+      "compose run --rm -T maintenance migrate --config /etc/afkfleet/server.toml",
       "compose up --detach --wait server",
       "compose exec -T server /usr/local/bin/afkfleet-server agent create-enrollment-token --config /etc/afkfleet/server.toml",
       "compose run --rm -T --no-deps agent enroll --config /etc/afkfleet/agent.toml",
       "compose up --detach --wait",
     ]);
+    assert.match(result.stdout, /ok: the database, in the data volume/);
     const enroll = result.calls.find((call) => call.args.includes("enroll"));
     assert.equal(enroll.stdin, `${BUNDLE}\n`);
     for (const call of result.calls) {
@@ -603,6 +606,17 @@ describe("setup.sh, run against stubs", { skip: SH }, () => {
     }
     assert.match(result.stdout, /afkfleet is running/);
     assert.match(result.stdout, /create-owner/);
+  });
+
+  it("init stops when the database can't be created, before the server starts", () => {
+    const result = run(["init"], {
+      responses: [{ when: "compose run --rm -T maintenance migrate", code: 1 }],
+    });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /the database couldn't be created/);
+    assert.match(result.stderr, /this run created/);
+    assert.ok(!joined(result.calls).some((call) => call.startsWith("compose up")));
   });
 
   it("init stops at enroll's exit 3 with the disable step, and names what it created", () => {

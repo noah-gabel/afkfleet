@@ -17,8 +17,9 @@
 //!   `spawn_blocking`; each moves its source onto the blocking thread and
 //!   gets it back.
 //!
-//! It opens the database like `migrate` (pending migrations run), never
-//! loads the vault's keys, and builds the real clock and randomness itself,
+//! It opens the database like `serve` ([`super::open_database`]: pending
+//! migrations run, and outside dev mode a missing file is refused, never
+//! created; ADR-0033), never loads the vault's keys, and builds the real clock and randomness itself,
 //! like `serve`. It logs per `[log]`: "the Owner is created" at `info`, and a
 //! failure of the database or the password service at `error`. The outcome
 //! is one plain line: on stdout when the Owner is created, on stderr
@@ -39,7 +40,6 @@ use crate::app::users::{CreateOwnerError, UserService};
 use crate::config::ServerConfig;
 use crate::http::error::chain;
 use crate::infra::crypto::passwords::Argon2Passwords;
-use crate::infra::sqlite::{self, DatabaseOptions};
 use crate::infra::system::{OsRandom, SystemClock};
 use crate::ports::passwords::HashError;
 
@@ -236,7 +236,7 @@ pub async fn create_owner(
         Ok(username) => username,
         Err(error) => return refuse(err, &format!("the username is invalid: {error}")),
     };
-    let database = match sqlite::open(&config.database, DatabaseOptions::default()).await {
+    let database = match super::open_database(config).await {
         Ok(database) => database,
         Err(error) => return fail(err, "the database can't be opened", &error),
     };
@@ -498,15 +498,68 @@ mod tests {
         err: String,
     }
 
+    /// `create-owner` on `dir`'s database, which `migrate` made first:
+    /// outside dev mode the command never creates one (ADR-0033).
     async fn run(dir: &Path, username: &str, input: PasswordInput) -> Run {
+        sqlite::open(&config(dir).database, DatabaseOptions::default())
+            .await
+            .unwrap()
+            .close()
+            .await;
+        run_with(&config(dir), username, input).await
+    }
+
+    /// `create-owner` with `config`, on whatever its folder holds.
+    async fn run_with(config: &ServerConfig, username: &str, input: PasswordInput) -> Run {
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let exit = create_owner(&config(dir), username, input, &mut out, &mut err).await;
+        let exit = create_owner(config, username, input, &mut out, &mut err).await;
         Run {
             exit,
             out: String::from_utf8(out).unwrap(),
             err: String::from_utf8(err).unwrap(),
         }
+    }
+
+    fn typed(passwords: &[&'static str]) -> PasswordInput {
+        PasswordInput::Prompt(Box::new(Typed::new(passwords)))
+    }
+
+    // --- The database (ADR-0033) -------------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn outside_dev_mode_a_missing_database_is_refused_and_nothing_is_created() {
+        let dir = TempDir::new().unwrap();
+        let config = config(dir.path());
+
+        // No password is typed: asking for one would fail the test.
+        let run = run_with(&config, "alice", typed(&[])).await;
+
+        assert_eq!(run.exit, Exit::Failed);
+        assert_eq!(run.out, "");
+        assert_eq!(
+            run.err,
+            format!(
+                "afkfleet-server: the database can't be opened: the database {} doesn't exist, and this command never creates one: on a first install, `afkfleet-server migrate` creates it (`setup.sh init` runs it); on a server that ran before, the volume that holds it isn't mounted at {}\n",
+                config.database.path.display(),
+                dir.path().display()
+            )
+        );
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn in_dev_mode_a_missing_database_is_created_with_its_owner() {
+        let dir = TempDir::new().unwrap();
+        let config = ServerConfig {
+            dev_mode: true,
+            ..config(dir.path())
+        };
+
+        let run = run_with(&config, "alice", typed(&[STRONG, STRONG])).await;
+
+        assert_eq!(run.exit, Exit::Created, "{}", run.err);
+        assert_eq!(owner(dir.path(), STRONG).await, Some((Role::Owner, true)));
     }
 
     async fn prompted(dir: &Path, typed: &[&'static str]) -> Run {
@@ -811,13 +864,14 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn an_invalid_username_is_refused_before_anything_else() {
         let dir = TempDir::new().unwrap();
+        // Dev mode, where opening the database would create it: the file
+        // staying away shows that nothing was opened (ADR-0033).
+        let config = ServerConfig {
+            dev_mode: true,
+            ..config(dir.path())
+        };
 
-        let run = run(
-            dir.path(),
-            "a!",
-            PasswordInput::Prompt(Box::new(NeverAsked)),
-        )
-        .await;
+        let run = run_with(&config, "a!", PasswordInput::Prompt(Box::new(NeverAsked))).await;
 
         assert_eq!(run.exit, Exit::Failed);
         assert!(

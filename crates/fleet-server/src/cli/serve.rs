@@ -5,7 +5,8 @@
 //! loads the vault's keys (plain file reads, before any runtime exists),
 //! builds a multi-threaded runtime, installs the stop signals and binds
 //! `[http] bind`; [`run`] derives the lockout's key from the vault's, opens
-//! the database (running every pending migration), builds the app over the
+//! the database (running every pending migration; outside dev mode the file
+//! must exist, since only `migrate` creates one, ADR-0033), builds the app over the
 //! real clock, the OS's randomness, the vault, the database and Microsoft's
 //! client (after main.rs installed the TLS provider), and serves.
 //! Every startup failure is one `error` event, "the server can't start",
@@ -138,7 +139,7 @@ use crate::infra::pki::X509AgentNames;
 use crate::infra::pki::{AgentIssuer, CertificateAuthority, LoadedPki, PkiLoadError};
 use crate::infra::qr::SvgQr;
 use crate::infra::sqlite::backup::BackupError;
-use crate::infra::sqlite::{self, Database, DatabaseOptions, OpenError};
+use crate::infra::sqlite::{Database, DatabaseOptions, OpenError};
 use crate::infra::system::{MonotonicClock, OsRandom, SystemClock, TokioPace};
 use crate::metrics::{Metrics, MetricsRender, ServerMetrics};
 use crate::ports::agent_connections::AgentConnections;
@@ -1180,7 +1181,7 @@ pub async fn run<S: ShutdownSignals>(
         Ok(key) => key,
         Err(error) => return cant_start(&StartError::VaultKeys(error)),
     };
-    let database = match sqlite::open(&config.database, DatabaseOptions::default()).await {
+    let database = match super::open_database(config).await {
         Ok(database) => database,
         Err(error) => return cant_start(&StartError::Database(error)),
     };

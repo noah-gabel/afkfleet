@@ -335,6 +335,18 @@ export const TESTED = [
     literal: '"list",',
   },
   {
+    line: "docker compose exec server /usr/local/bin/afkfleet-server database check --config /etc/afkfleet/server.toml",
+    test: CRASH,
+    file: OPS,
+    literal: '"database",',
+  },
+  {
+    line: "docker compose run --rm maintenance database check --config /etc/afkfleet/server.toml",
+    test: CRASH,
+    file: OPS,
+    literal: 'stack.maintenance(&["database", "check"])',
+  },
+  {
     line: "docker compose exec server /usr/local/bin/afkfleet-server agent disable --config /etc/afkfleet/server.toml --id <its id>",
     test: CRASH,
     file: OPS,

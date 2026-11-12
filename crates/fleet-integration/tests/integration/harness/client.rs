@@ -6,7 +6,9 @@
 
 use core::time::Duration;
 
-use fleet_api_types::accounts::{CreateGrantRequest, CreateOfflineAccountRequest, GrantLevel};
+use fleet_api_types::accounts::{
+    AccountStatus, CreateGrantRequest, CreateOfflineAccountRequest, GrantLevel, LinkFlowState,
+};
 use fleet_api_types::agents::AgentResponse;
 use fleet_api_types::auth::{LoginRequest, RegisterRequest};
 use fleet_api_types::bots::{BotModeRequest, BotPatchRequest, BotResponse};
@@ -25,11 +27,12 @@ use fleet_api_types::{PageQuery, SecretText};
 use fleet_client::{
     Client, ClientConfig, ClientError, LiveEvents, LoginStep, MemoryStore, ServerUrl, Trust,
 };
-use fleet_core::id::{AgentId, BotId, ModeId};
+use fleet_core::id::{AccountId, AgentId, BotId, ModeId};
 use fleet_core::system::Clock as _;
 use totp_rs::Totp;
 
 use super::live::Live;
+use super::logs::Logs;
 use super::server::{OWNER, PASSWORD, Server};
 
 /// One step that does `action`, which takes no field, every 250 ms.
@@ -93,15 +96,30 @@ pub(crate) const MC_SERVER: &str = "mc.example.com:25565";
 #[derive(Debug)]
 pub(crate) struct Owner {
     client: Client<MemoryStore>,
+    /// Their authenticator, for a later login ([`Owner::log_in_again`]).
+    app: Totp,
 }
 
 impl Owner {
     /// The Owner's first login on `server`: the setup step, the
     /// authenticator, and the login with the next step's code.
     pub(crate) async fn log_in(server: &Server) -> Self {
-        Self {
-            client: logged_in(server, OWNER).await,
-        }
+        let (client, app) = logged_in(server, OWNER).await;
+        Self { client, app }
+    }
+
+    /// A new login with the same password and authenticator, on a client
+    /// that holds nothing: the server opens the Owner's sealed TOTP secret
+    /// for it, so the vault still opens what it stored (P13.5). The clock
+    /// moves one TOTP step first, since the server takes only a later step
+    /// than the last one used.
+    pub(crate) async fn log_in_again(&mut self, server: &Server) {
+        server.clock().advance(Duration::from_secs(30));
+        let client = client(server);
+        let step = client.login(&login(OWNER)).await.unwrap();
+        assert!(matches!(step, LoginStep::MfaRequired { .. }), "{step:?}");
+        client.login_mfa(code(server, &self.app)).await.unwrap();
+        self.client = client;
     }
 
     /// Gives `username` `level` on `bot`'s account, as its owner shares it.
@@ -129,21 +147,7 @@ impl Owner {
             })
             .await
             .unwrap();
-        let mut before = None;
-        let bot = loop {
-            let page = self
-                .client
-                .bots(&PageQuery {
-                    before,
-                    limit: None,
-                })
-                .await
-                .unwrap();
-            if let Some(bot) = page.items.iter().find(|bot| bot.account.id == account.id) {
-                break bot.id;
-            }
-            before = Some(page.next.expect("the account's bot is listed"));
-        };
+        let bot = self.bot_of(account.id).await;
         self.client
             .patch_bot(
                 bot,
@@ -154,6 +158,64 @@ impl Owner {
             .await
             .unwrap();
         bot
+    }
+
+    /// Links a Microsoft account, which the case's fake Microsoft approves
+    /// at once (P13.5), and points its bot at [`MC_SERVER`], stopped: the
+    /// bot. The link's poller logs its steps, which wake `logs`' wait.
+    pub(crate) async fn link(&self, logs: &Logs) -> BotId {
+        let started = self.client.start_link().await.unwrap();
+        let account = asked(logs, "the account is linked", async || {
+            let status = self.client.link_status(started.flow_id).await.unwrap();
+            match status.status.known() {
+                Some(LinkFlowState::Linked) => {
+                    Some(status.account_id.expect("a linked flow names its account"))
+                }
+                Some(LinkFlowState::Waiting | LinkFlowState::Finishing) | None => None,
+                Some(other) => panic!("the link ended {other:?}"),
+            }
+        })
+        .await;
+        let bot = self.bot_of(account).await;
+        self.point(bot, MC_SERVER).await;
+        bot
+    }
+
+    /// The status of the account `bot` plays as, as the Owner's list shows
+    /// it.
+    pub(crate) async fn account_status(&self, bot: BotId) -> Option<AccountStatus> {
+        let account = self.shown(bot).await.account.id;
+        let page = self
+            .client
+            .accounts(&PageQuery {
+                before: None,
+                limit: None,
+            })
+            .await
+            .unwrap();
+        page.items
+            .into_iter()
+            .find(|listed| listed.id == account)
+            .and_then(|listed| listed.status.known())
+    }
+
+    /// The bot of `account`, from the Owner's list.
+    async fn bot_of(&self, account: AccountId) -> BotId {
+        let mut before = None;
+        loop {
+            let page = self
+                .client
+                .bots(&PageQuery {
+                    before,
+                    limit: None,
+                })
+                .await
+                .unwrap();
+            if let Some(bot) = page.items.iter().find(|bot| bot.account.id == account) {
+                return bot.id;
+            }
+            before = Some(page.next.expect("the account's bot is listed"));
+        }
     }
 
     /// A new private mode `name` of the Owner's, whose one step does
@@ -339,7 +401,7 @@ impl Member {
             .unwrap();
         Self {
             name: name.to_owned(),
-            client: logged_in(server, name).await,
+            client: logged_in(server, name).await.0,
         }
     }
 
@@ -361,9 +423,36 @@ fn client(server: &Server) -> Client<MemoryStore> {
     .unwrap()
 }
 
+/// How long [`asked`] leaves between two questions: three a second, under
+/// the ten a second the API allows one user.
+const ASK_EVERY: Duration = Duration::from_millis(300);
+
+/// Asks the API `ask` until it answers, at `logs`' wakes but no more often
+/// than every [`ASK_EVERY`]: a wait that reads through the API would
+/// otherwise spend the user's rate limit on a busy log. Bounded as every
+/// wait of `logs` is.
+pub(crate) async fn asked<T>(
+    logs: &Logs,
+    what: &str,
+    mut ask: impl AsyncFnMut() -> Option<T>,
+) -> T {
+    let mut last = None::<std::time::Instant>;
+    let mut answer = None;
+    logs.until(what, async || {
+        if last.is_some_and(|at| at.elapsed() < ASK_EVERY) {
+            return false;
+        }
+        last = Some(std::time::Instant::now());
+        answer = ask().await;
+        answer.is_some()
+    })
+    .await;
+    answer.expect("the wait ended with an answer")
+}
+
 /// `username`'s first login on `server`: the setup step, the authenticator,
 /// and the login with the next step's code.
-async fn logged_in(server: &Server, username: &str) -> Client<MemoryStore> {
+async fn logged_in(server: &Server, username: &str) -> (Client<MemoryStore>, Totp) {
     let client = client(server);
     let step = client.login(&login(username)).await.unwrap();
     assert!(matches!(step, LoginStep::SetupRequired { .. }), "{step:?}");
@@ -375,7 +464,7 @@ async fn logged_in(server: &Server, username: &str) -> Client<MemoryStore> {
     let step = client.login(&login(username)).await.unwrap();
     assert!(matches!(step, LoginStep::MfaRequired { .. }), "{step:?}");
     client.login_mfa(code(server, &app)).await.unwrap();
-    client
+    (client, app)
 }
 
 fn login(username: &str) -> LoginRequest {

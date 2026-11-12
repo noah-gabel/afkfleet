@@ -74,8 +74,9 @@ use tower::ServiceExt as _;
 use zeroize::Zeroizing;
 
 use crate::support::{
-    ChannelSignals, capture, closed_port, config_body, finish, json_lines, lines_with, listener,
-    path_arg, server_config, test_dir, toml_path, vault_keys, write_config,
+    ChannelSignals, capture, closed_port, config_body, config_body_without_database, finish,
+    json_lines, lines_with, listener, path_arg, server_config, test_dir, toml_path, vault_keys,
+    write_config,
 };
 
 /// What a start logs without `[grpc]`.
@@ -1435,7 +1436,7 @@ fn serve_with_a_missing_pki_logs_the_file_and_exits_1() {
         &dir,
         &format!(
             "{}[grpc]\nca_cert_file = {}\nca_key_file = {}\nserver_cert_file = {}\nserver_key_file = {}\n",
-            config_body(&dir, closed_port()),
+            config_body_without_database(&dir, closed_port()),
             toml_path(&pki.join("ca.crt")),
             toml_path(&pki.join("ca.key")),
             toml_path(&pki.join("server.crt")),

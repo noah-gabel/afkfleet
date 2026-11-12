@@ -23,6 +23,21 @@
 //! `Floating::return_to_pool`), so the write pool has no lifetime (S39); a
 //! closed pool has no socket left to wake. A sqlx bump re-reads that
 //! function.
+//!
+//! # A transaction SQLite ended by itself
+//! The same hook replaces a write connection that comes back still counted
+//! as inside a transaction (P13.5; ADR-0033, the chaos tests' finding).
+//! SQLite rolls a transaction back by itself after some errors, a full disk
+//! among them. sqlx doesn't see that: the `ROLLBACK` it sends when the
+//! transaction is dropped then fails ("no transaction is active"), and its
+//! count of open transactions on that connection stays at one
+//! (`Connection::is_in_transaction`, whose docs say an automatic rollback
+//! may not show there). Every later `BEGIN IMMEDIATE` on it is refused as
+//! nested, and the pool has that one connection: the server could read and
+//! never write again until it was restarted. So a connection that's still
+//! inside a transaction once it has run everything it was handed, its
+//! `ROLLBACK` included, is closed, and the pool opens a new one for the next
+//! write.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -30,6 +45,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use sqlx::Connection as _;
 use sqlx::sqlite::SqliteConnection;
 use tokio::sync::watch;
+use tracing::warn;
+
+/// What the server logs when it replaces its write connection.
+pub const REPLACED: &str = "the database's write connection was replaced: SQLite ended a transaction by itself, as it does when the disk is full";
 
 /// The count and its mark; the database and the write pool's hook share it.
 #[derive(Debug)]
@@ -72,10 +91,13 @@ impl CommitCount {
         }
     }
 
-    /// The write connection is back in its pool: after a commit that didn't
-    /// see its `COMMIT` return, waits until `connection` has run everything
-    /// it was handed, then moves the count. Whether the pool keeps the
-    /// connection: a failed ping closes it.
+    /// The write connection is back in its pool. After a commit that
+    /// didn't see its `COMMIT` return, or with a transaction still counted
+    /// as open (a dropped one's `ROLLBACK` is on its way), waits until
+    /// `connection` has run everything it was handed; then moves the count
+    /// for the commit. Whether the pool keeps the connection: a failed ping
+    /// closes it, and so does a transaction still counted as open after
+    /// that, which SQLite ended by itself (the [module docs](self)).
     ///
     /// # Errors
     /// The ping's error, which closes the connection; the count moves anyway.
@@ -83,12 +105,20 @@ impl CommitCount {
         &self,
         connection: &mut SqliteConnection,
     ) -> Result<bool, sqlx::Error> {
-        if !self.take_unsettled() {
+        let unsettled = self.take_unsettled();
+        if !unsettled && !connection.is_in_transaction() {
             return Ok(true);
         }
         let pinged = connection.ping().await;
-        self.bump();
-        pinged.map(|()| true)
+        if unsettled {
+            self.bump();
+        }
+        pinged?;
+        if connection.is_in_transaction() {
+            warn!("{REPLACED}");
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     /// Whether a commit's mark stood, clearing it: [`CommitCount::settle`]'s

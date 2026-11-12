@@ -31,6 +31,7 @@
 //! Every wait is bounded and wakes on an event: compose's `--wait`, a
 //! service's next log line, or a socket's own timeout (ADR-0014's form).
 
+mod chaos;
 mod checks;
 mod ops;
 mod stack;

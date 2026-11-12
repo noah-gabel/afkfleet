@@ -1312,3 +1312,70 @@ async fn every_clone_of_the_database_shares_one_count(
 
     assert!(watched.has_changed().unwrap());
 }
+
+// --- A transaction SQLite ended by itself (P13.5, ADR-0033) ---------------------------------
+
+/// Makes SQLite refuse `database`'s next commit: its commit hook says no
+/// once, so that `COMMIT` fails and SQLite rolls the transaction back by
+/// itself, as it does when the disk is full.
+async fn refuse_the_next_commit(database: &Database) {
+    let mut connection = database.write_pool().acquire().await.unwrap();
+    let mut handle = connection.lock_handle().await.unwrap();
+    let mut refused = false;
+    handle.set_commit_hook(move || core::mem::replace(&mut refused, true));
+}
+
+/// The chaos tests' finding (ADR-0033): after a full disk, every write
+/// failed until the server was restarted. SQLite had rolled a transaction
+/// back by itself; sqlx's own `ROLLBACK` then failed, its count of open
+/// transactions on the one write connection stayed at one, and every later
+/// `BEGIN IMMEDIATE` was refused as nested.
+#[sqlx::test(migrations = false)]
+async fn a_commit_sqlite_rolled_back_by_itself_doesnt_end_every_later_write(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = connect(options).await;
+    refuse_the_next_commit(&db).await;
+    let mut tx = db.write().await.unwrap();
+    tx.users()
+        .insert(&new_user(1, "alice", Role::Member))
+        .await
+        .unwrap();
+
+    let refused = tx.commit(entry("user.create")).await;
+
+    assert!(
+        matches!(refused, Err(StoreError::Backend(_))),
+        "{refused:?}"
+    );
+    // The next write is a transaction of its own, and lands.
+    let written = insert(&db, &new_user(2, "bob", Role::Member)).await;
+    assert!(written.is_ok(), "{written:?}");
+    assert!(db.users().get(user_id(1)).await.unwrap().is_none());
+    assert!(db.users().get(user_id(2)).await.unwrap().is_some());
+    // And so does the one after it: the connection is whole again.
+    let again = insert(&db, &new_user(3, "carol", Role::Member)).await;
+    assert!(again.is_ok(), "{again:?}");
+}
+
+/// The same when the transaction is dropped, not committed: a statement
+/// failed, SQLite rolled everything back by itself, and the handler gave up.
+#[sqlx::test(migrations = false)]
+async fn a_retention_batch_sqlite_rolled_back_by_itself_doesnt_end_every_later_write(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = connect(options).await;
+    refuse_the_next_commit(&db).await;
+    let batch = db.retention_batch().await.unwrap();
+
+    let refused = batch.commit().await;
+
+    assert!(
+        matches!(refused, Err(StoreError::Backend(_))),
+        "{refused:?}"
+    );
+    let written = insert(&db, &new_user(2, "bob", Role::Member)).await;
+    assert!(written.is_ok(), "{written:?}");
+}

@@ -106,7 +106,16 @@ pub(crate) struct Spec {
     /// Remote agents: the name the server certificate gives them and the
     /// host port their gRPC port is published on.
     pub(crate) grpc: Option<(&'static str, u16)>,
+    /// One more compose file of the test's own, [`EXTRA_FILE`], made by
+    /// this for the stack's addresses and read last (the chaos tests'
+    /// Minecraft server, second agent and capped volumes; ADR-0033). A
+    /// stack with one installs through compose's steps on every machine:
+    /// setup.sh takes only the files a release names.
+    pub(crate) extra: Option<fn(Net) -> String>,
 }
+
+/// The name of a stack's extra compose file in its copy.
+const EXTRA_FILE: &str = "compose.chaos.yaml";
 
 /// Who runs `setup.sh`: the runner's user, or root through `sudo -n`, where
 /// the runbook says `sudo`.
@@ -177,6 +186,14 @@ impl Net {
     pub(crate) fn proxy_address(self) -> String {
         format!("10.213.{}.2", self.n + 1)
     }
+    /// The network a chaos stack's Minecraft server and agents share.
+    pub(crate) fn play_subnet(self) -> String {
+        format!("10.213.{}.0/24", self.n + 2)
+    }
+    /// The number that tells this stack's addresses from every other's.
+    pub(crate) fn number(self) -> u8 {
+        self.n
+    }
 }
 
 impl Stack {
@@ -202,6 +219,7 @@ impl Stack {
             make_backups: true,
             ops: false,
             grpc: None,
+            extra: None,
         })
     }
 
@@ -214,13 +232,20 @@ impl Stack {
             "run the smoke tests with `just test-stack`, which builds both images first"
         );
         let Spec { path, project, .. } = spec;
-        let setup = Setup::from_env();
+        let setup = if spec.extra.is_some() {
+            Setup::Steps
+        } else {
+            Setup::from_env()
+        };
         let dir = TempDir::new().unwrap();
         fs::create_dir(dir.path().join("prod")).unwrap();
         for file in DEPLOY_FILES {
             fs::copy(repo().join("deploy").join(file), dir.path().join(file)).unwrap();
         }
         let net = Net { n: spec.net };
+        if let Some(extra) = spec.extra {
+            fs::write(dir.path().join(EXTRA_FILE), extra(net)).unwrap();
+        }
         let mut root_owned = Vec::new();
         let backups = (setup == Setup::Script).then(|| {
             let parent = dir.path().join("srv");
@@ -385,6 +410,20 @@ impl Stack {
                         pki.extend(["--dns", name]);
                     }
                     self.ok(&pki, SLOW);
+                    // The one step that creates the database: serve refuses
+                    // a missing one (ADR-0033).
+                    self.ok(
+                        &[
+                            "run",
+                            "--rm",
+                            "-T",
+                            "maintenance",
+                            "migrate",
+                            "--config",
+                            SERVER_CONFIG,
+                        ],
+                        SLOW,
+                    );
                 }
                 self.ok(
                     &[
@@ -542,10 +581,16 @@ fn env_file(spec: Spec, net: Net, backups: Option<&Path>) -> String {
     } else {
         ""
     };
+    // Last, so it has the last word over the override too.
+    let extra = if spec.extra.is_some() {
+        format!(":{EXTRA_FILE}")
+    } else {
+        String::new()
+    };
     let mut env = format!(
         "COMPOSE_PROJECT_NAME={project}\n\
          COMPOSE_PATH_SEPARATOR=:\n\
-         COMPOSE_FILE={files}{grpc}:compose.override.yaml\n\
+         COMPOSE_FILE={files}{grpc}:compose.override.yaml{extra}\n\
          AFKFLEET_SERVER_IMAGE={SERVER_IMAGE}\n\
          AFKFLEET_AGENT_IMAGE={AGENT_IMAGE}\n\
          AFKFLEET_DOMAIN=localhost\n\
@@ -664,6 +709,7 @@ mod tests {
             make_backups: true,
             ops: true,
             grpc: Some(("ops-grpc.test", 17443)),
+            extra: None,
         };
         let grpc = fs::read_to_string(repo().join("deploy/compose.grpc.yaml")).unwrap();
         let entry = grpc

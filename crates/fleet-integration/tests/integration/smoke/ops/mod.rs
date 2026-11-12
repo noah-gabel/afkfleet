@@ -6,8 +6,9 @@
 //!
 //! - **A restore after a crash** (`afkfleet-ops-crash`, the host path): the
 //!   install with the backups' folder left to `sudo sh setup.sh init`, the
-//!   Owner, `check`, `update`; a write, a backup, another write; the server
-//!   killed; `restore` moves the database and its `-wal` aside, never
+//!   Owner, `check`, `update`; a write, a backup, another write; `database
+//!   check` beside the server; the server killed, and `database check` of
+//!   what the kill left; `restore` moves the database and its `-wal` aside, never
 //!   opened, and ends stopped; `files put-back` undoes it, and a second
 //!   `restore` does it again; the start it prints brings back the first
 //!   write alone; `forget-aside` removes exactly the aside and undone files;
@@ -61,6 +62,7 @@ async fn slow_ops_restore_after_a_crash() {
         make_backups: false,
         ops: true,
         grpc: None,
+        extra: None,
     });
     stack.set_up_as(Root::Sudo);
     let password = draw_password();
@@ -76,7 +78,25 @@ async fn slow_ops_restore_after_a_crash() {
     account(&owner, "OpsBefore").await;
     let backup = stack.backup();
     account(&owner, "OpsAfter").await;
+    // The runbook's check beside the running server, then of the file as a
+    // kill leaves it, with the server down (ADR-0033).
+    let sound = stack.ok(
+        &[
+            "exec",
+            "-T",
+            "server",
+            "/usr/local/bin/afkfleet-server",
+            "database",
+            "check",
+            "--config",
+            SERVER_CONFIG,
+        ],
+        QUICK,
+    );
+    assert_eq!(sound.trim(), fleet_server::cli::database::SOUND);
     stack.ok(&["kill", "server"], QUICK);
+    let sound = stack.maintenance(&["database", "check"]);
+    assert_eq!(sound.trim(), fleet_server::cli::database::SOUND);
 
     let undone = stack.restore(&backup);
     assert_restored(&mut stack, &undone);
@@ -229,6 +249,7 @@ async fn slow_ops_new_host_from_the_keys_copy() {
         make_backups: true,
         ops: true,
         grpc,
+        extra: None,
     });
     old.set_up_with(Root::No, names);
     let password = draw_password();
@@ -264,6 +285,7 @@ async fn slow_ops_new_host_from_the_keys_copy() {
         make_backups: false,
         ops: true,
         grpc,
+        extra: None,
     });
     forbid_the_keys(&mut new, &copy);
     new.keys_restore(&copy, names);

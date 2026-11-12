@@ -24,7 +24,10 @@ use fleet_server::ports::store::Store as _;
 use fleet_server::ports::users::{NewUser, PasswordHash};
 use secrecy::SecretString;
 
-use crate::support::{ChannelSignals, capture, listener, server_config, test_dir, vault_keys};
+use crate::support::{
+    ChannelSignals, capture, listener, server_config, server_config_without_database, test_dir,
+    vault_keys,
+};
 
 #[tokio::test]
 async fn a_missing_database_folder_fails_the_start_before_listening() {
@@ -67,6 +70,127 @@ async fn a_missing_database_folder_fails_the_start_before_listening() {
 
 /// The longest the boot test waits for anything.
 const PATIENCE: Duration = Duration::from_secs(30);
+
+/// Outside dev mode `serve` never creates its database (Plan.md P13.5,
+/// ADR-0033): a data volume that isn't mounted would otherwise start an empty
+/// fleet, which refuses every agent and knows no user. The error names the
+/// file and the folder the volume belongs at.
+#[tokio::test]
+async fn a_missing_database_fails_the_start_outside_dev_mode_and_nothing_is_created() {
+    let dir = test_dir("boot_missing_database");
+    let (listener, address) = listener().await;
+    let config = server_config_without_database(&dir, address, false);
+    let (logs, _guard) = capture();
+
+    let keys = vault_keys(&config);
+    let exit = tokio::time::timeout(
+        PATIENCE,
+        serve::run(
+            &config,
+            listener,
+            None,
+            None,
+            ChannelSignals::silent(),
+            keys,
+        ),
+    )
+    .await;
+
+    assert_eq!(
+        exit.ok(),
+        Some(Exit::StartupFailed),
+        "the server started on a database it created"
+    );
+    let failed = logs.lines_with("the server can't start").unwrap();
+    assert_eq!(failed.len(), 1, "{}", logs.text());
+    assert_eq!(failed[0]["level"], "ERROR");
+    assert_eq!(
+        failed[0]["error"].as_str().unwrap(),
+        format!(
+            "the database can't be opened: the database {} doesn't exist, and this command never creates one: on a first install, `afkfleet-server migrate` creates it (`setup.sh init` runs it); on a server that ran before, the volume that holds it isn't mounted at {}",
+            config.database.path.display(),
+            dir.display()
+        )
+    );
+    assert!(
+        logs.json_lines()
+            .unwrap()
+            .iter()
+            .all(|line| line["message"] != "the server is listening"),
+        "{}",
+        logs.text()
+    );
+    assert!(!config.database.path.exists(), "nothing was created");
+}
+
+/// Dev mode keeps creating it, so `just dev-server` needs no step before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn in_dev_mode_a_missing_database_is_created_at_the_start() {
+    let dir = test_dir("boot_dev_creates");
+    let (listener, address) = listener().await;
+    let config = server_config_without_database(&dir, address, true);
+    let (sender, signals) = ChannelSignals::new();
+    let keys = vault_keys(&config);
+    let server = tokio::spawn({
+        let config = config.clone();
+        async move { serve::run(&config, listener, None, None, signals, keys).await }
+    });
+
+    let ready = healthcheck::get(address, "/health/ready", PATIENCE)
+        .await
+        .unwrap();
+    sender.send(Signal::Terminate).await.unwrap();
+    let exit = tokio::time::timeout(PATIENCE, server)
+        .await
+        .expect("the server should stop within its deadline")
+        .unwrap();
+
+    assert_eq!(ready.status, 200);
+    assert_eq!(exit, Exit::Stopped);
+    assert!(config.database.path.exists());
+}
+
+/// An existing file is migrated forward at the start, as after an update:
+/// here the empty file `migrate` leaves when it's stopped right after
+/// creating it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_existing_database_is_migrated_at_the_start_outside_dev_mode() {
+    let dir = test_dir("boot_migrates_existing");
+    let (listener, address) = listener().await;
+    let config = server_config_without_database(&dir, address, false);
+    std::fs::write(&config.database.path, b"").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(
+            &config.database.path,
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+    }
+    let (sender, signals) = ChannelSignals::new();
+    let keys = vault_keys(&config);
+    let server = tokio::spawn({
+        let config = config.clone();
+        async move { serve::run(&config, listener, None, None, signals, keys).await }
+    });
+
+    let ready = healthcheck::get(address, "/health/ready", PATIENCE)
+        .await
+        .unwrap();
+    sender.send(Signal::Terminate).await.unwrap();
+    let exit = tokio::time::timeout(PATIENCE, server)
+        .await
+        .expect("the server should stop within its deadline")
+        .unwrap();
+
+    assert_eq!(ready.status, 200);
+    assert_eq!(exit, Exit::Stopped);
+    let database = sqlite::open_migrated(&config.database, DatabaseOptions::default())
+        .await
+        .unwrap();
+    database.close().await;
+}
 
 /// Phase 6's Definition of Done: the app boots in-process on a fresh
 /// temporary database, with the wiring `serve` uses, passes both health

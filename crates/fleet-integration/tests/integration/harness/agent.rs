@@ -176,59 +176,8 @@ impl Agent {
         C: fleet_core::mc::MinecraftConnector,
     {
         assert!(self.running.is_none(), "the agent isn't running");
-        let identity = ManagedIdentity::load(&plane, UnixTime::now()).unwrap();
-        let config = AgentConfig {
-            name: AgentName::try_from(self.name.as_str()).unwrap(),
-            runtime: RuntimeConfig {
-                max_bots: NonZeroUsize::new(options.capacity).unwrap(),
-                ..RuntimeConfig::default()
-            },
-            mc: McConfig::default(),
-            retry: options.retry,
-            // As tests/control has it: a case's outages never trip the
-            // circuit breaker.
-            circuit: CircuitPolicy::try_new(
-                NonZeroUsize::new(8).unwrap(),
-                Duration::from_mins(10),
-                Duration::from_mins(15),
-            )
-            .unwrap(),
-            heartbeat_file: self.dir.join("agent.alive"),
-            log: LogConfig::default(),
-            mode: AgentMode::ControlPlane(plane),
-            metrics: None,
-        };
-        let endpoint = options.metrics.then(|| {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            listener.set_nonblocking(true).unwrap();
-            Endpoint {
-                listener: tokio::net::TcpListener::from_std(listener).unwrap(),
-                render: recorder(),
-            }
-        });
-        let metrics_port = endpoint
-            .as_ref()
-            .map(|endpoint| endpoint.listener.local_addr().unwrap());
-        let (signals, receiver) = mpsc::channel(4);
-        let mut task = JoinSet::new();
-        task.spawn(
-            run(RunParts {
-                config,
-                connector: Arc::new(connector),
-                diagnostics: Quiet,
-                signals: Signals(receiver),
-                heartbeat: Beats,
-                anchor: SystemClock.now(),
-                seed: self.seed,
-                managed: Some(Managed {
-                    identity,
-                    seed: self.seed,
-                    timings: options.timings,
-                }),
-                metrics: endpoint,
-            })
-            .in_current_span(),
-        );
+        let (signals, task, metrics_port) =
+            spawn_run(&self.name, &self.dir, plane, self.seed, options, connector);
         self.running = Some(Running {
             connector: None,
             signals,
@@ -240,6 +189,26 @@ impl Agent {
     /// The agent's certificate file, as it is now.
     pub(crate) fn certificate(&self) -> Vec<u8> {
         std::fs::read(&self.plane.cert_file).unwrap()
+    }
+
+    /// Where the agent's certificate file is.
+    pub(crate) fn cert_file(&self) -> &Path {
+        &self.plane.cert_file
+    }
+
+    /// The agent's folder, which holds its identity.
+    pub(crate) fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// The seed its key and its runs draw from.
+    pub(crate) fn seed(&self) -> u64 {
+        self.seed
+    }
+
+    /// Whether a run of this agent is going on in this process.
+    pub(crate) fn runs(&self) -> bool {
+        self.running.is_some()
     }
 
     fn running(&self) -> &Running {
@@ -303,6 +272,105 @@ impl Agent {
     }
 }
 
+/// One run of the agent `name` from the identity in `dir`, as main.rs runs
+/// it: `plane`'s files loaded now, its bots on `connector`; the run's
+/// signals, its task and where its metrics endpoint listens, if it has one.
+fn spawn_run<C>(
+    name: &str,
+    dir: &Path,
+    plane: ControlPlaneConfig,
+    seed: u64,
+    options: RunOptions,
+    connector: C,
+) -> (mpsc::Sender<Signal>, JoinSet<Outcome>, Option<SocketAddr>)
+where
+    C: fleet_core::mc::MinecraftConnector,
+{
+    let identity = ManagedIdentity::load(&plane, UnixTime::now()).unwrap();
+    let config = AgentConfig {
+        name: AgentName::try_from(name).unwrap(),
+        runtime: RuntimeConfig {
+            max_bots: NonZeroUsize::new(options.capacity).unwrap(),
+            ..RuntimeConfig::default()
+        },
+        mc: McConfig::default(),
+        retry: options.retry,
+        // As tests/control has it: a case's outages never trip the
+        // circuit breaker.
+        circuit: CircuitPolicy::try_new(
+            NonZeroUsize::new(8).unwrap(),
+            Duration::from_mins(10),
+            Duration::from_mins(15),
+        )
+        .unwrap(),
+        heartbeat_file: dir.join("agent.alive"),
+        log: LogConfig::default(),
+        mode: AgentMode::ControlPlane(plane),
+        metrics: None,
+    };
+    let endpoint = options.metrics.then(|| {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        Endpoint {
+            listener: tokio::net::TcpListener::from_std(listener).unwrap(),
+            render: recorder(),
+        }
+    });
+    let metrics_port = endpoint
+        .as_ref()
+        .map(|endpoint| endpoint.listener.local_addr().unwrap());
+    let (signals, receiver) = mpsc::channel(4);
+    let mut task = JoinSet::new();
+    task.spawn(
+        run(RunParts {
+            config,
+            connector: Arc::new(connector),
+            diagnostics: Quiet,
+            signals: Signals(receiver),
+            heartbeat: Beats,
+            anchor: SystemClock.now(),
+            seed,
+            managed: Some(Managed {
+                identity,
+                seed,
+                timings: options.timings,
+            }),
+            metrics: endpoint,
+        })
+        .in_current_span(),
+    );
+    (signals, task, metrics_port)
+}
+
+/// The `[control_plane]` of the agent whose identity is in `dir`, dialling
+/// `url`: what [`enroll_files`] wrote there.
+pub(crate) fn plane_in(dir: &Path, url: &str) -> ControlPlaneConfig {
+    ControlPlaneConfig {
+        url: url.to_owned(),
+        ca_cert_file: dir.join("ca.crt"),
+        cert_file: dir.join("agent.crt"),
+        key_file: dir.join("agent.key"),
+        private_targets: PrivateTargets::default(),
+        public_targets: true,
+    }
+}
+
+/// A crash case's agent in its child process (P13.5, ADR-0033): one run of
+/// the agent `name` from the identity an earlier process left in `dir`,
+/// dialling `url`, its bots on a fake connector of this process's own. The
+/// run's handles, which the child keeps until it's killed.
+pub(crate) fn run_from_files(
+    dir: &Path,
+    name: &str,
+    url: &str,
+    seed: u64,
+    options: RunOptions,
+) -> (mpsc::Sender<Signal>, JoinSet<Outcome>) {
+    let connector = Ledger::default().run(name);
+    let (signals, task, _) = spawn_run(name, dir, plane_in(dir, url), seed, options, connector);
+    (signals, task)
+}
+
 /// Why an enrollment failed: a fixed text, and `enroll`'s own output for a
 /// loopback case's message. The managed check shows only the text, since
 /// the output names files and the server's address.
@@ -341,14 +409,7 @@ pub(crate) async fn enroll_files(
     within: Duration,
 ) -> Result<ControlPlaneConfig, EnrollError> {
     let dir = dir.join(name);
-    let plane = ControlPlaneConfig {
-        url: url.to_owned(),
-        ca_cert_file: dir.join("ca.crt"),
-        cert_file: dir.join("agent.crt"),
-        key_file: dir.join("agent.key"),
-        private_targets: PrivateTargets::default(),
-        public_targets: true,
-    };
+    let plane = plane_in(&dir, url);
     let name =
         AgentName::try_from(name).map_err(|_| EnrollError::of("the agent's name was refused"))?;
     let enrolled = {

@@ -25,8 +25,9 @@ use fleet_server::ports::store::Store as _;
 use rstest::rstest;
 
 use crate::support::{
-    closed_port, config_body, finish, finish_beside, finish_with_stdin, json_lines, lines_with,
-    path_arg, running_server, test_dir, toml_path, vault_section, write_config,
+    closed_port, config_body, config_body_without_database, finish, finish_beside,
+    finish_with_stdin, json_lines, lines_with, path_arg, running_server, test_dir, toml_path,
+    vault_section, write_config,
 };
 
 #[rstest]
@@ -177,7 +178,7 @@ fn migrate_into_a_missing_folder_logs_the_error_and_exits_1() {
 #[test]
 fn serve_with_a_bad_vault_key_file_logs_the_file_and_exits_1() {
     let dir = test_dir("serve_bad_vault_key");
-    let config = write_config(&dir, &config_body(&dir, closed_port()));
+    let config = write_config(&dir, &config_body_without_database(&dir, closed_port()));
     let key = dir.join("vault-key-1");
     std::fs::write(&key, "not-a-key-marker\n").unwrap();
 
@@ -312,7 +313,7 @@ fn vault_create_key_writes_the_configured_key_file_once() {
 #[test]
 fn a_vault_command_never_creates_a_missing_database() {
     let dir = test_dir("vault_missing_database");
-    let config = write_config(&dir, &config_body(&dir, closed_port()));
+    let config = write_config(&dir, &config_body_without_database(&dir, closed_port()));
 
     let finished = finish(&["vault", "status", "--config", path_arg(&config)]);
 
@@ -325,6 +326,62 @@ fn a_vault_command_never_creates_a_missing_database() {
         finished.stderr
     );
     assert!(!dir.join("afkfleet.db").exists());
+}
+
+/// The binary itself, outside dev mode, with no database where its config
+/// names one (Plan.md P13.5, ADR-0033): what a data volume that isn't
+/// mounted looks like. `serve` exits 1, says which file and which folder,
+/// and creates nothing; then `migrate` creates it, as a first install does.
+#[test]
+fn serve_without_its_database_exits_1_naming_the_file_and_creates_nothing() {
+    let dir = test_dir("serve_missing_database");
+    let config = write_config(&dir, &config_body_without_database(&dir, closed_port()));
+
+    let finished = finish(&["serve", "--config", path_arg(&config)]);
+
+    assert_eq!(finished.status.code(), Some(1), "{}", finished.stdout);
+    let lines = json_lines(&finished.stdout);
+    let failed = lines_with(&lines, "the server can't start");
+    assert_eq!(failed.len(), 1, "{}", finished.stdout);
+    let error = failed[0]["error"].as_str().unwrap();
+    assert!(
+        error.starts_with("the database can't be opened: the database ")
+            && error.contains("afkfleet.db doesn't exist, and this command never creates one: ")
+            && error.contains("`afkfleet-server migrate` creates it")
+            && error.ends_with(&format!("isn't mounted at {}", dir.display())),
+        "{error}"
+    );
+    assert!(
+        lines_with(&lines, "the server is listening").is_empty(),
+        "{}",
+        finished.stdout
+    );
+    assert!(!dir.join("afkfleet.db").exists(), "nothing was created");
+
+    let migrated = finish(&["migrate", "--config", path_arg(&config)]);
+
+    assert_eq!(migrated.status.code(), Some(0), "{}", migrated.stdout);
+    assert!(dir.join("afkfleet.db").exists());
+}
+
+/// `user create-owner` holds the same rule: an Owner in a database it
+/// created itself would be an empty fleet's.
+#[test]
+fn create_owner_without_a_database_exits_1_and_creates_nothing() {
+    let dir = test_dir("create_owner_missing_database");
+    let config = write_config(&dir, &config_body_without_database(&dir, closed_port()));
+
+    let finished = create_owner(&config, Some(b"correct horse battery staple\n"));
+
+    assert_eq!(finished.status.code(), Some(1), "{}", finished.stdout);
+    assert!(
+        finished
+            .stderr
+            .contains("afkfleet.db doesn't exist, and this command never creates one: "),
+        "{}",
+        finished.stderr
+    );
+    assert!(!dir.join("afkfleet.db").exists(), "nothing was created");
 }
 
 fn create_owner(config: &Path, stdin: Option<&[u8]>) -> crate::support::Finished {

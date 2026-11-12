@@ -459,7 +459,9 @@ dod-build:
 
 # As dev-server, with deploy/dod/server.toml: Node creates the folder, the vault key when
 # it's missing (never overwritten, never printed) and the PKI with `pki init` when its files
-# are missing, for localhost, 127.0.0.1 and ::1 (never overwritten). [grpc] is on, on
+# are missing, for localhost, 127.0.0.1 and ::1 (never overwritten). Then `migrate` creates
+# the database when it's missing: this server isn't in dev mode, so serve refuses to start
+# without the file (ADR-0033). [grpc] is on, on
 # 127.0.0.1:7453. It logs JSON at info through scripts/dod-log.mjs, which keeps each start's
 # lines in `logs` for just dod-log-check and shows them readable in the terminal (S134, U132).
 # No exit message: on Windows, Ctrl+C reaches just and PowerShell too.
@@ -469,6 +471,7 @@ dod-server logs=(justfile_directory() / "target" / "dod-run" / "logs") $AFKFLEET
     node -e "require('node:fs').mkdirSync(require('node:path').dirname(process.argv[1]), { recursive: true })" "{{ AFKFLEET_SERVER__DATABASE__PATH }}"
     node scripts/dev-vault-key.mjs "{{ AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1 }}"
     node scripts/dev-pki.mjs --release deploy/dod/server.toml "{{ AFKFLEET_SERVER__GRPC__CA_CERT_FILE }}" "{{ AFKFLEET_SERVER__GRPC__CA_KEY_FILE }}" "{{ AFKFLEET_SERVER__GRPC__SERVER_CERT_FILE }}" "{{ AFKFLEET_SERVER__GRPC__SERVER_KEY_FILE }}"
+    cargo run --release -p fleet-server --bin afkfleet-server -- migrate --config deploy/dod/server.toml
     node scripts/dod-log.mjs "{{ logs }}" server cargo run --release -p fleet-server --bin afkfleet-server -- serve --config deploy/dod/server.toml
 
 # `user create-owner` with the password typed twice at the terminal, hidden; never an
@@ -628,6 +631,19 @@ fuzz target="all" seconds="60":
 # The load test (P13.4): prints its report.
 load:
     cargo nextest run -p fleet-integration --profile load --no-capture
+
+# fleet-integration's `chaos_` tests (P13.5, ADR-0033): the production compose project from
+# both images, with a Minecraft server and real bots in it, and Docker's own faults: kills
+# and stops of the server, the agent and the Minecraft server, a partition between the agent
+# and the server, the database's and the backups' volumes filled (capped tmpfs volumes,
+# never Docker's disk), and a lost data volume. One stack at a time, each under a project
+# name of its own (`afkfleet-chaos-*`), removed with its volumes at its end. No other profile
+# runs them. The exact kill points (a renewal, a backup, a retention run, an ingest batch, a
+# refresh) need no Docker and run in `check`: fleet-integration's `crash` module.
+# The chaos tests (P13.5): kills, a partition and a full disk on the real images (needs Docker).
+chaos $AFKFLEET_SMOKE_IMAGES_BUILT="1": images
+    docker compose --file deploy/compose.dev.yaml pull minecraft
+    cargo nextest run -p fleet-integration --profile chaos --no-fail-fast
 
 # The scopes are `core` (all of fleet-core) and `auth-vault` (the auth and vault coverage
 # gates' files outside it); `.cargo/mutants.toml` holds the mutants left out, each with

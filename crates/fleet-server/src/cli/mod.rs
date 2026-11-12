@@ -26,6 +26,8 @@
 //!
 //! - [`backup`]: one backup now into `[database] backup_dir`, beside a
 //!   running `serve` (P12.3).
+//! - [`database`]: `database check`, SQLite's integrity check over the
+//!   database file, beside a running `serve` or with it stopped (P13.5).
 
 use core::time::Duration;
 use std::ffi::OsString;
@@ -35,8 +37,12 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use fleet_core::id::AgentId;
 
+use crate::config::ServerConfig;
+use crate::infra::sqlite::{self, Database, DatabaseOptions, OpenError};
+
 pub mod agent;
 pub mod backup;
+pub mod database;
 pub mod healthcheck;
 pub mod housekeeping;
 pub mod migrate;
@@ -50,6 +56,23 @@ pub mod vault;
 /// the pools' acquire timeout: `migrate` waits this long, and `serve` at
 /// least this long within its shutdown deadline.
 pub const DATABASE_CLOSE: Duration = Duration::from_secs(5);
+
+/// Opens `config`'s database for `serve` and `user create-owner` (Plan.md
+/// P13.5, ADR-0033), running every pending migration. Outside dev mode the
+/// file must exist: only `migrate` creates one, so a data volume that isn't
+/// mounted where it was stops the command instead of starting an empty
+/// fleet. Dev mode creates a missing file, so `just dev-server` needs no step
+/// before it.
+///
+/// # Errors
+/// [`sqlite::open_existing`]'s outside dev mode, [`sqlite::open`]'s in it.
+pub async fn open_database(config: &ServerConfig) -> Result<Database, OpenError> {
+    if config.dev_mode {
+        sqlite::open(&config.database, DatabaseOptions::default()).await
+    } else {
+        sqlite::open_existing(&config.database, DatabaseOptions::default()).await
+    }
+}
 
 /// The exit codes of `afkfleet-server serve`, shown in its help.
 pub const SERVE_EXIT_CODES: &str = "\
@@ -93,7 +116,9 @@ pub struct Cli {
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum Command {
     /// Runs the HTTP API until a signal stops it. It migrates the database
-    /// first.
+    /// first. Outside dev mode the database must exist already: `migrate`
+    /// creates it, so a data volume that isn't mounted where it was never
+    /// starts an empty fleet.
     #[command(after_help = SERVE_EXIT_CODES)]
     Serve {
         /// The config file (TOML). `AFKFLEET_SERVER__…` environment variables
@@ -158,6 +183,28 @@ pub enum Command {
         /// What to do.
         #[command(subcommand)]
         command: AgentCommand,
+    },
+    /// Looks at the database file itself.
+    Database {
+        /// What to do.
+        #[command(subcommand)]
+        command: DatabaseCommand,
+    },
+}
+
+/// `afkfleet-server database …`.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum DatabaseCommand {
+    /// Runs SQLite's integrity check over the database: after a crash, a
+    /// full disk or a restore. It reads and changes nothing, never creates
+    /// or migrates the database, reads no key, and works while `serve` runs.
+    #[command(after_help = database::CHECK_EXIT_CODES)]
+    Check {
+        /// The config file (TOML): the command reads `[database] path` and
+        /// `[log]`. `AFKFLEET_SERVER__…` environment variables override its
+        /// keys, as for `serve`.
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
     },
 }
 
