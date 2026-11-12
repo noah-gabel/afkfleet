@@ -392,17 +392,28 @@ async fn chat(
     (board.take(), refused)
 }
 
+/// How many of the log's lines say `message`, by a scan of its text. The
+/// harness's own count parses every line as JSON, which takes seconds on
+/// this case's log and holds the one thread meanwhile, so a read in flight
+/// would look that much slower.
+fn said(world: &World, message: &str) -> usize {
+    world.logs.buffer().text().matches(message).count()
+}
+
 /// How long the rights' reads took that the log holds past its first
-/// `skip` ones, sorted, from their own lines.
+/// `skip` ones, sorted, from their own lines' `took_us`.
 fn rights_reads(world: &World, skip: usize) -> Vec<Duration> {
-    let mut took: Vec<Duration> = world
-        .logs
-        .buffer()
-        .lines_with(RIGHTS_READ)
-        .unwrap()
-        .iter()
+    const FIELD: &str = "\"took_us\":";
+    let text = world.logs.buffer().text();
+    let mut took: Vec<Duration> = text
+        .lines()
+        .filter(|line| line.contains(RIGHTS_READ))
         .skip(skip)
-        .filter_map(|line| line.get("took_us")?.as_u64())
+        .filter_map(|line| {
+            let digits = line.split_once(FIELD)?.1;
+            let end = digits.find(|c: char| !c.is_ascii_digit())?;
+            digits[..end].parse().ok()
+        })
         .map(Duration::from_micros)
         .collect();
     took.sort_unstable();
@@ -419,8 +430,8 @@ async fn every_bot_stopped_and_started(world: &World, board: &Board, bots: &[Bot
         ("stopped", BotStateKind::Stopped),
         ("started", BotStateKind::Online),
     ] {
-        let reads = world.logs.count(RIGHTS_READ);
-        let again = world.logs.count(READ_AGAIN);
+        let reads = said(world, RIGHTS_READ);
+        let again = said(world, READ_AGAIN);
         let frames = board.bot_frames.load(Ordering::Relaxed);
         let begun = Instant::now();
         for bot in bots {
@@ -448,7 +459,7 @@ async fn every_bot_stopped_and_started(world: &World, board: &Board, bots: &[Bot
             took.len(),
             percentile(&took, 50),
             took.last().copied().unwrap_or_default(),
-            world.logs.count(READ_AGAIN) - again,
+            said(world, READ_AGAIN) - again,
         );
     }
 }
@@ -471,8 +482,8 @@ async fn until(what: &str, mut done: impl FnMut() -> bool) {
 async fn the_agent_restarts(world: &World, board: &Board, bots: &[BotId], agent: &mut Agent) {
     let pairs = BOTS * VIEWERS_A_BOT;
     let before: Vec<usize> = bots.iter().map(|bot| world.ledger.sessions(*bot)).collect();
-    let reads = world.logs.count(RIGHTS_READ);
-    let again = world.logs.count(READ_AGAIN);
+    let reads = said(world, RIGHTS_READ);
+    let again = said(world, READ_AGAIN);
     let frames = board.bot_frames.load(Ordering::Relaxed);
     let begun = Instant::now();
     agent.stop().await;
@@ -505,7 +516,7 @@ async fn the_agent_restarts(world: &World, board: &Board, bots: &[BotId], agent:
         took.len(),
         percentile(&took, 50),
         took.last().copied().unwrap_or_default(),
-        world.logs.count(READ_AGAIN) - again,
+        said(world, READ_AGAIN) - again,
     );
 }
 
@@ -606,8 +617,8 @@ fn scraped((whose, took, bytes, failed): &Scrapes) -> String {
 /// What the run did and how long it took, and what its commits cost the
 /// sockets; the chat's own report line shows what it cost the chat.
 async fn retention_at_the_peak(world: &World, board: &Board, bots: &[BotId]) {
-    let reads = world.logs.count(RIGHTS_READ);
-    let again = world.logs.count(READ_AGAIN);
+    let reads = said(world, RIGHTS_READ);
+    let again = said(world, READ_AGAIN);
     let run = async {
         tokio::time::sleep(Duration::from_secs(1)).await;
         let begun = Instant::now();
@@ -623,7 +634,7 @@ async fn retention_at_the_peak(world: &World, board: &Board, bots: &[BotId]) {
         run.failed.len(),
         read.len(),
         percentile(&read, 50),
-        world.logs.count(READ_AGAIN) - again,
+        said(world, READ_AGAIN) - again,
     );
     assert!(run.failed.is_empty(), "the run's phases: {:?}", run.failed);
     assert!(run.deleted.chat_by_size > 0, "the run had lines to delete");
@@ -767,7 +778,7 @@ async fn load_200_bots_and_20_sockets() {
     let rows = ingest(&world).0 - rows_before;
     let bytes = world.server.database_bytes().saturating_sub(bytes_before);
     println!(
-        "LOAD chat on disk: {rows} lines of about 20 characters grew the database and its log by {} KiB, {} bytes a line",
+        "LOAD chat on disk: {rows} lines of about 20 characters grew the database and its log by {} KiB, at most {} bytes a line (the log keeps its largest size, so what was moved into the database counts twice)",
         bytes / 1024,
         bytes / u64::try_from(rows.max(1)).unwrap(),
     );
