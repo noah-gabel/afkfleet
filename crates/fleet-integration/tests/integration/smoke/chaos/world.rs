@@ -592,15 +592,36 @@ impl Chaos {
     /// A write the API acknowledges: a new offline account `name`. Every
     /// later [`Chaos::assert_kept`] finds it.
     pub(crate) async fn write(&mut self, name: &str) {
-        let account = self
-            .owner
-            .client
-            .create_offline_account(&CreateOfflineAccountRequest {
-                name: SecretText::new(name.to_owned()),
-            })
-            .await
-            .unwrap_or_else(|error| panic!("the API refused {name}: {error:?}"));
-        self.acknowledged.push((name.to_owned(), account.id));
+        if let Err(error) = self.try_write(name).await {
+            // The server's own last lines say why: its errors and warnings,
+            // which hold no secret (the transcript checks that at the end of
+            // a test that gets there).
+            let log = self
+                .stack
+                .compose
+                .run(
+                    &[
+                        "logs",
+                        "--no-color",
+                        "--no-log-prefix",
+                        "--tail",
+                        "400",
+                        "server",
+                    ],
+                    QUICK,
+                )
+                .map(|finished| finished.stdout)
+                .unwrap_or_default();
+            let said: Vec<&str> = log
+                .lines()
+                .filter(|line| line.contains("\"ERROR\"") || line.contains("\"WARN\""))
+                .collect();
+            let from = said.len().saturating_sub(25);
+            panic!(
+                "the API refused {name}: {error:?}\nthe server's last errors and warnings:\n{}",
+                said.get(from..).unwrap_or_default().join("\n")
+            );
+        }
     }
 
     /// A write the API may refuse: a new offline account `name`. One it
