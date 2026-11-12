@@ -632,6 +632,19 @@ fuzz target="all" seconds="60":
 load:
     cargo nextest run -p fleet-integration --profile load --no-capture
 
+# fleet-integration's `chaos_` tests (P13.5, ADR-0033): the production compose project from
+# both images, with a Minecraft server and real bots in it, and Docker's own faults: kills
+# and stops of the server, the agent and the Minecraft server, a partition between the agent
+# and the server, the database's and the backups' volumes filled (capped tmpfs volumes,
+# never Docker's disk), and a lost data volume. One stack at a time, each under a project
+# name of its own (`afkfleet-chaos-*`), removed with its volumes at its end. No other profile
+# runs them. The exact kill points (a renewal, a backup, a retention run, an ingest batch, a
+# refresh) need no Docker and run in `check`: fleet-integration's `crash` module.
+# The chaos tests (P13.5): kills, a partition and a full disk on the real images (needs Docker).
+chaos $AFKFLEET_SMOKE_IMAGES_BUILT="1": images
+    docker compose --file deploy/compose.dev.yaml pull minecraft
+    cargo nextest run -p fleet-integration --profile chaos
+
 # The scopes are `core` (all of fleet-core) and `auth-vault` (the auth and vault coverage
 # gates' files outside it); `.cargo/mutants.toml` holds the mutants left out, each with
 # why. scripts/mutants.mjs runs every shard in a git worktree of HEAD under

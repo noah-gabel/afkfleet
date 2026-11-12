@@ -30,7 +30,9 @@
 //!   and the runbook's operations on it (`smoke::ops`: a restore after a
 //!   crash, a new host from the keys' copy; ADR-0022, S43); `just
 //!   test-stack` and `just test-slow` run them, and the Stack workflow
-//!   nightly.
+//!   nightly. `smoke::chaos` holds P13.5's chaos tests on the same project
+//!   (ADR-0033): kills, a partition and a full disk, with a Minecraft
+//!   server and real bots; only `just chaos` runs them.
 //! - [`sftp`]: the backups' SFTP account (ADR-0022, S15), installed by
 //!   `deploy/host/sftp-backups.sh` in a throwaway sshd container.
 //!
