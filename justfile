@@ -622,6 +622,15 @@ fuzz target="all" seconds="60":
     cargo run -p fleet-fuzz --example seeds -- fuzz/corpus
     node scripts/fuzz.mjs {{ target }} {{ seconds }}
 
+# The scopes are `core` (all of fleet-core) and `auth-vault` (the auth and vault coverage
+# gates' files outside it); `.cargo/mutants.toml` holds the mutants left out, each with
+# why. scripts/mutants.mjs runs every shard in a git worktree of HEAD under
+# target/mutants/, never in the working tree, and refuses uncommitted changes (ADR-0031).
+# It takes hours, so it's outside `check` and `ci`.
+# Mutation tests of the last commit, in shards at once: `just mutants core` (needs cargo-mutants 27.1.0).
+mutants scope="all" shards="4":
+    node scripts/mutants.mjs {{ scope }} {{ shards }}
+
 # Tests for the scripts in scripts/.
 scripts-test:
     node --test "scripts/*.test.mjs"

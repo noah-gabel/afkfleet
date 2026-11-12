@@ -141,7 +141,7 @@ mod tests {
     fn debug_never_shows_what_was_typed() {
         let typed = UsernamePrefix::try_from("hunter2").unwrap();
 
-        assert!(!format!("{typed:?}").contains("hunter2"));
+        assert_eq!(format!("{typed:?}"), "UsernamePrefix([redacted])");
     }
 
     proptest! {

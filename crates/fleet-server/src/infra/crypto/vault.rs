@@ -870,6 +870,10 @@ mod tests {
             XChaChaVault::new(keys.load(1).unwrap(), Arc::new(SeededRandom::new(1)))
         );
 
+        assert_eq!(
+            format!("{loaded:?}"),
+            "VaultKeys { key_ids: [1], active: 1 }"
+        );
         assert!(shown.contains("active"), "{shown}");
         assert!(!shown.contains("171"), "{shown}");
         assert!(!shown.to_lowercase().contains("abab"), "{shown}");

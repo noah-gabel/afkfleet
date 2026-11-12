@@ -637,6 +637,91 @@ mod tests {
         assert!(metadata.to_json().len() <= AuditMetadata::MAX_JSON_BYTES);
     }
 
+    #[test]
+    fn metadata_with_an_entry_isnt_empty() {
+        let metadata = AuditMetadata::new().flag("ok", true).unwrap();
+
+        assert!(!metadata.is_empty());
+    }
+
+    #[test]
+    fn the_largest_integer_is_two_to_the_53_less_one() {
+        const TWO_TO_THE_53: i64 = 9_007_199_254_740_992;
+
+        assert_eq!(AuditMetadata::MAX_INT, TWO_TO_THE_53 - 1);
+        assert!(AuditMetadata::new().int("count", TWO_TO_THE_53 - 1).is_ok());
+        assert_eq!(
+            AuditMetadata::new().int("count", TWO_TO_THE_53),
+            Err(AuditError::IntOutOfRange)
+        );
+        assert_eq!(
+            AuditMetadata::new().int("count", -TWO_TO_THE_53),
+            Err(AuditError::IntOutOfRange)
+        );
+    }
+
+    /// The budget to its last byte. Thirteen full texts under the longest
+    /// keys fit; the fourteenth is cut to exactly what stays once the two
+    /// slots still free keep their room; and two entries as long as an entry
+    /// gets, an ID under the longest key, then fill the JSON to the byte.
+    /// A slot's room a byte short, or a cut a character off, misses 4096.
+    #[test]
+    fn the_budget_is_used_to_its_last_byte_and_never_beyond() {
+        let full = "a".repeat(AuditMetadata::MAX_TEXT_CHARS);
+        let mut metadata = AuditMetadata::new();
+        for n in 0..14 {
+            metadata = metadata.text(&long_key(n), &full).unwrap();
+        }
+
+        let metadata = metadata
+            .id(&long_key(14), session_uuid())
+            .unwrap()
+            .id(&long_key(15), session_uuid())
+            .unwrap();
+
+        for n in 0..13 {
+            assert_eq!(text_of(&metadata, &long_key(n)), full, "{n}");
+        }
+        assert_eq!(
+            text_of(&metadata, &long_key(13)),
+            format!("{}…", "a".repeat(84))
+        );
+        assert_eq!(metadata.to_json().len(), AuditMetadata::MAX_JSON_BYTES);
+    }
+
+    #[test]
+    fn a_control_character_without_a_short_escape_is_written_as_serde_json_writes_it() {
+        let mut json = String::new();
+
+        push_json_string(&mut json, "\u{1}\u{1f}");
+
+        assert_eq!(json, r#""\u0001\u001f""#);
+        assert_eq!(json, serde_json::to_string("\u{1}\u{1f}").unwrap());
+    }
+
+    #[test]
+    fn a_stored_integer_reads_back_within_the_bounds_and_as_unrecognized_beyond() {
+        let mut recorded = RecordedMetadata::new();
+
+        recorded.push_int("small", -5);
+        recorded.push_int("lowest", -AuditMetadata::MAX_INT);
+        recorded.push_int("highest", AuditMetadata::MAX_INT);
+        recorded.push_int("below", -AuditMetadata::MAX_INT - 1);
+        recorded.push_int("above", AuditMetadata::MAX_INT + 1);
+
+        let values: Vec<&RecordedValue> = recorded.entries().iter().map(|(_, v)| v).collect();
+        assert_eq!(
+            values,
+            [
+                &RecordedValue::Int(-5),
+                &RecordedValue::Int(-AuditMetadata::MAX_INT),
+                &RecordedValue::Int(AuditMetadata::MAX_INT),
+                &RecordedValue::Unrecognized("-9007199254740992".to_owned()),
+                &RecordedValue::Unrecognized("9007199254740992".to_owned()),
+            ]
+        );
+    }
+
     /// A version 7 ID's UUID, made from id.rs's fixed parts, whose text is
     /// worked out there.
     fn session_uuid() -> Uuid {

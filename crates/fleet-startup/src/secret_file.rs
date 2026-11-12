@@ -28,7 +28,7 @@
 use core::fmt;
 use std::error::Error;
 use std::fs::{self, File, Metadata};
-use std::io::{self, Read as _};
+use std::io::{self, Read};
 use std::mem;
 use std::path::{Path, PathBuf};
 
@@ -118,15 +118,7 @@ pub fn read(path: &Path) -> Result<SecretBox<Vec<u8>>, SecretFileError> {
         .metadata()
         .map_err(|error| fail(SecretFileProblem::Unreadable(error)))?;
     check(&metadata).map_err(fail)?;
-    // Allocated once at its full size, so the read never moves the bytes
-    // and leaves an unwiped copy behind.
-    let mut bytes = Zeroizing::new(Vec::with_capacity(MAX_BYTES + 1));
-    file.take(u64::try_from(MAX_BYTES + 1).unwrap_or(u64::MAX))
-        .read_to_end(&mut bytes)
-        .map_err(|error| fail(SecretFileProblem::Unreadable(error)))?;
-    if bytes.len() > MAX_BYTES {
-        return Err(fail(SecretFileProblem::TooLarge { max: MAX_BYTES }));
-    }
+    let mut bytes = read_bounded(file).map_err(fail)?;
     let line_break = if bytes.ends_with(b"\r\n") {
         2
     } else {
@@ -140,6 +132,23 @@ pub fn read(path: &Path) -> Result<SecretBox<Vec<u8>>, SecretFileError> {
     Ok(SecretBox::new(Box::new(mem::take(&mut *bytes))))
 }
 
+/// Reads all of `source`, which may hold at most [`MAX_BYTES`]. It asks for
+/// one byte more than that, so a source that holds more is told apart from
+/// one exactly that long, whatever its metadata said before the read.
+fn read_bounded(source: impl Read) -> Result<Zeroizing<Vec<u8>>, SecretFileProblem> {
+    // Allocated once at its full size, so the read never moves the bytes
+    // and leaves an unwiped copy behind.
+    let mut bytes = Zeroizing::new(Vec::with_capacity(MAX_BYTES + 1));
+    source
+        .take(u64::try_from(MAX_BYTES + 1).unwrap_or(u64::MAX))
+        .read_to_end(&mut bytes)
+        .map_err(SecretFileProblem::Unreadable)?;
+    if bytes.len() > MAX_BYTES {
+        return Err(SecretFileProblem::TooLarge { max: MAX_BYTES });
+    }
+    Ok(bytes)
+}
+
 /// The checks on an opened file's metadata: a regular file, owner-only on
 /// Unix, not empty, not larger than [`MAX_BYTES`].
 fn check(metadata: &Metadata) -> Result<(), SecretFileProblem> {
@@ -149,8 +158,7 @@ fn check(metadata: &Metadata) -> Result<(), SecretFileProblem> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        let mode = metadata.permissions().mode() & 0o7777;
-        if mode & 0o077 != 0 {
+        if let Some(mode) = open_to_others(metadata.permissions().mode()) {
             return Err(SecretFileProblem::Permissions { mode });
         }
     }
@@ -161,6 +169,15 @@ fn check(metadata: &Metadata) -> Result<(), SecretFileProblem> {
         return Err(SecretFileProblem::TooLarge { max: MAX_BYTES });
     }
     Ok(())
+}
+
+/// `mode`'s permission bits when they let the group or others read, write
+/// or run the file; `None` for a file that's its owner's alone. The file
+/// type's bits above them never count.
+#[cfg(any(unix, test))]
+const fn open_to_others(mode: u32) -> Option<u32> {
+    let bits = mode & 0o7777;
+    if bits & 0o077 != 0 { Some(bits) } else { None }
 }
 
 #[cfg(test)]
@@ -222,6 +239,97 @@ mod tests {
         let secret = read(&path).unwrap();
 
         assert_eq!(secret.expose_secret().as_slice(), expected);
+    }
+
+    #[test]
+    fn the_limit_is_64_kib() {
+        assert_eq!(MAX_BYTES, 65_536);
+    }
+
+    /// The buffer is allocated once, for the largest file and the one byte
+    /// more that shows a larger one, so no read ever moves the bytes and
+    /// leaves an unwiped copy behind; the secret keeps that buffer.
+    #[test]
+    fn the_secret_is_read_into_a_buffer_no_read_can_outgrow() {
+        let dir = folder();
+        let path = secret_file(
+            &dir,
+            "secret",
+            b"key material
+",
+        );
+
+        let secret = read(&path).unwrap();
+
+        assert!(
+            secret.expose_secret().capacity() > MAX_BYTES,
+            "{}",
+            secret.expose_secret().capacity()
+        );
+    }
+
+    /// The bits a regular file's mode has on Unix, the file type's on top:
+    /// run on every platform, since only the wiring is Unix's.
+    #[rstest]
+    #[case::owner_read_write(0o100_600, None)]
+    #[case::owner_read(0o100_400, None)]
+    #[case::owner_all(0o100_700, None)]
+    #[case::no_bits_at_all(0o100_000, None)]
+    #[case::group_read(0o100_640, Some(0o640))]
+    #[case::group_write(0o100_620, Some(0o620))]
+    #[case::other_read(0o100_604, Some(0o604))]
+    #[case::other_execute(0o100_601, Some(0o601))]
+    #[case::everyone(0o100_777, Some(0o777))]
+    #[case::set_uid_and_everyone(0o104_777, Some(0o4777))]
+    fn only_group_or_other_bits_make_a_mode_open_to_others(
+        #[case] mode: u32,
+        #[case] expected: Option<u32>,
+    ) {
+        assert_eq!(open_to_others(mode), expected);
+    }
+
+    /// A source one byte longer than the limit, as a file that grew after
+    /// its metadata was checked: refused, never cut to the limit.
+    #[test]
+    fn a_source_past_the_limit_is_too_large_whatever_was_checked_before() {
+        let grown = vec![b'a'; MAX_BYTES + 1];
+
+        let result = read_bounded(grown.as_slice());
+
+        assert!(
+            matches!(result, Err(SecretFileProblem::TooLarge { max: MAX_BYTES })),
+            "{:?}",
+            result.map(|bytes| bytes.len())
+        );
+    }
+
+    #[test]
+    fn a_source_of_exactly_the_limit_is_read_whole_without_growing_its_buffer() {
+        let full = vec![b'a'; MAX_BYTES];
+
+        let bytes = read_bounded(full.as_slice()).unwrap();
+
+        assert_eq!(bytes.len(), MAX_BYTES);
+        assert_eq!(bytes.capacity(), MAX_BYTES + 1);
+    }
+
+    /// A source that fails is unreadable, with the failure as it came.
+    #[test]
+    fn a_source_that_fails_is_unreadable() {
+        struct Failing;
+        impl Read for Failing {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::PermissionDenied, "refused"))
+            }
+        }
+
+        let result = read_bounded(Failing);
+
+        assert!(
+            matches!(&result, Err(SecretFileProblem::Unreadable(error)) if error.kind() == io::ErrorKind::PermissionDenied),
+            "{:?}",
+            result.map(|bytes| bytes.len())
+        );
     }
 
     #[test]

@@ -39,3 +39,37 @@ pub(super) async fn bearer<S: Send + Sync>(
     drop(bearer);
     Ok(presented)
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::http::Request;
+    use rstest::rstest;
+    use secrecy::ExposeSecret as _;
+
+    use super::*;
+
+    /// What a request with these `Authorization` headers gives.
+    async fn read(headers: &[&str]) -> Result<String, &'static str> {
+        let mut request = Request::get("/");
+        for value in headers {
+            request = request.header(AUTHORIZATION, *value);
+        }
+        let (mut parts, ()) = request.body(()).unwrap().into_parts();
+        bearer(&mut parts, &())
+            .await
+            .map(|token| token.expose_secret().to_owned())
+    }
+
+    #[rstest]
+    #[case::one_bearer(&["Bearer afk_at_token"], Ok("afk_at_token"))]
+    #[case::none(&[], Err("no Authorization header"))]
+    #[case::two(&["Bearer one", "Bearer two"], Err("more than one Authorization header"))]
+    #[case::another_scheme(&["Basic dXNlcjpwYXNz"], Err("not a Bearer credential"))]
+    #[tokio::test]
+    async fn the_one_bearer_header_gives_its_token_and_anything_else_its_reason(
+        #[case] headers: &[&str],
+        #[case] expected: Result<&str, &'static str>,
+    ) {
+        assert_eq!(read(headers).await, expected.map(str::to_owned));
+    }
+}

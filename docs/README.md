@@ -45,3 +45,4 @@ Each architecture decision record (ADR) holds one decision with its context, its
 - [0028. A session is enough: the password step-up stays only for the two credential changes](adr/0028-a-session-is-enough.md)
 - [0029. The authorization matrix of the HTTP API](adr/0029-the-authorization-matrix.md)
 - [0030. The fuzz targets](adr/0030-fuzz-targets.md)
+- [0031. Mutation testing](adr/0031-mutation-testing.md)

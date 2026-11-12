@@ -260,4 +260,9 @@ mod tests {
     fn an_invalid_type_name_is_an_error(#[case] kind: &str, #[case] expected: AuditError) {
         assert_eq!(RecordedTarget::from_parts(kind, Uuid::nil()), Err(expected));
     }
+
+    #[test]
+    fn a_stored_target_type_gives_its_name_back() {
+        assert_eq!(TargetKind::try_from("bot").unwrap().as_str(), "bot");
+    }
 }

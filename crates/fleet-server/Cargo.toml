@@ -89,6 +89,9 @@ serde = { workspace = true, features = ["derive"] }
 sha2 = { workspace = true, features = ["zeroize"] }
 # Reading the audit log's metadata JSON back (ADR-0015).
 serde_json.workspace = true
+# The type axum's JSON rejection holds serde_json's error in, for the line and column
+# of a refused body's `debug` line (ADR-0016, ADR-0031).
+serde_path_to_error.workspace = true
 # Constant-time comparison of secrets, first the vault's duplicate-key check (ADR-0016).
 subtle.workspace = true
 sqlx = { workspace = true, features = ["runtime-tokio", "sqlite-bundled", "macros", "migrate", "uuid"] }

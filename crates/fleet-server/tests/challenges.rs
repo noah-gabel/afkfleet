@@ -223,6 +223,25 @@ fn purging_drops_exactly_the_challenges_that_are_over() {
     assert_eq!(challenges.held(), 1);
 }
 
+/// A replace token is in a slot of its own, purged as the login slot is:
+/// kept while it lives, 10 minutes, and dropped once it's over.
+#[test]
+fn purging_keeps_a_live_replace_token_and_drops_it_once_it_is_over() {
+    let (challenges, clock) = setup();
+    let issued = challenges.issue_setup(user(1), replace(1)).unwrap();
+    clock.advance(Duration::from_mins(5));
+
+    let while_live = challenges.purge_expired();
+    let found = challenges.setup(token(&issued.token)).is_some();
+    clock.advance(Duration::from_mins(5));
+    let once_over = challenges.purge_expired();
+
+    assert_eq!(while_live, 0);
+    assert!(found, "a live replace token survives a purge");
+    assert_eq!(once_over, 1);
+    assert_eq!(challenges.held(), 0);
+}
+
 // --- Taking ------------------------------------------------------------------------
 
 #[test]

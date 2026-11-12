@@ -1,5 +1,7 @@
 # Build output (matches at any depth, including spikes/*/target)
 target/
+# cargo-mutants' reports, when a run isn't sent into target/ (`just mutants` is)
+mutants.out*/
 
 # Node
 node_modules/

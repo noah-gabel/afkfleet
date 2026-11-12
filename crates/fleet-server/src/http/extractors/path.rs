@@ -50,8 +50,10 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use axum::routing::get;
     use fleet_core::id::UserId;
+    use fleet_testkit::log_buffer::LogBuffer;
     use tower::ServiceExt as _;
 
+    use super::super::test_logs::capture;
     use super::*;
 
     async fn status(uri: &str) -> StatusCode {
@@ -87,8 +89,32 @@ mod tests {
 
     #[test]
     fn a_missing_parameter_is_not_found_too() {
+        let (logs, _guard) = capture();
         let rejection = PathRejection::from(axum::extract::rejection::MissingPathParams::default());
 
         assert!(matches!(refuse(&rejection), ApiError::NotFound));
+        assert_eq!(refusal_kinds(&logs), ["missing"]);
+    }
+
+    #[tokio::test]
+    async fn a_parameter_that_isnt_an_id_says_so_in_its_one_debug_line() {
+        let (logs, _guard) = capture();
+
+        let status = status("/users/not-an-id").await;
+
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(refusal_kinds(&logs), ["not an ID"]);
+    }
+
+    /// The kind of every refusal's line in `logs`, each a `debug` one.
+    fn refusal_kinds(logs: &LogBuffer) -> Vec<String> {
+        logs.lines_with("a path parameter was refused")
+            .unwrap()
+            .iter()
+            .map(|line| {
+                assert_eq!(line["level"], "DEBUG", "{line}");
+                line["kind"].as_str().unwrap().to_owned()
+            })
+            .collect()
     }
 }
