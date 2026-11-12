@@ -7,6 +7,8 @@
 //!   proxy in front of each agent, the Owner's client, the bots' ledger and
 //!   the one log every wait wakes on.
 //! - [`loopback`]: P10.9's cases over mTLS on `127.0.0.1`.
+//! - [`load`]: P13.4's load test, 200 bots and 20 Members' sockets,
+//!   measured (ADR-0032); only `just load` runs it.
 //! - [`dod_kit`]: the definition-of-done checks' kit (ADR-0020, S72): the server's and the
 //!   agent's configs, loaded with exactly their recipes' exports, fit each
 //!   other and their Minecraft container.

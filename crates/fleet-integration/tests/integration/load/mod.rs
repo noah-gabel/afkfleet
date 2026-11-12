@@ -1,12 +1,19 @@
-//! P13.4's load test (Plan.md P13.4): 200 bots on one managed agent and 20
-//! Members with a live events socket each, on the loopback harness: the real
-//! server, the real agent, the bots on the fake connector, every user on
-//! fleet-client. It measures; it asserts only what must hold under any load.
+//! P13.4's load test (Plan.md P13.4, ADR-0032): 200 bots on one managed
+//! agent and 20 Members with a live events socket each, on the loopback
+//! harness: the real server, the real agent, the bots on the fake connector,
+//! every user on fleet-client. It measures; it asserts only what must hold
+//! under any load.
 //!
 //! Its name starts with `load_`, which the default and `ci` profiles leave
 //! out: `just load` runs it alone and prints its report, the `LOAD` lines.
 //!
-//! WORK IN PROGRESS: the first stage, the setup and chat's latency.
+//! In order: the fleet and its viewers, set up through the API; chat,
+//! steady, in a burst and at rising rates, against the server's own counts,
+//! with both metrics ports scraped at the middle rate; what the stored chat
+//! takes on disk; a retention run while chat flows; every bot stopped and
+//! started again with the sockets open; the agent's restart; the server's
+//! and the agent's together. The process's CPU time and memory are read
+//! after each.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
