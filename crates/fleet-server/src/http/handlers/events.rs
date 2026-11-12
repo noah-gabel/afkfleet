@@ -71,7 +71,9 @@ use super::bots::bot_response;
 use super::{chat_failure, chat_line, mode_response, timestamp};
 use crate::app::auth::{SocketCheckError, SocketSession};
 use crate::app::bots::{BotService, BotView};
-use crate::app::events::{BusEvent, LiveEvent, LiveEventKind, LiveRights, NotSent, Rights};
+use crate::app::events::{
+    BusEvent, LiveEvent, LiveEventKind, LiveRights, NotSent, READ_AGAIN, Rights,
+};
 use crate::app::modes::ModeService;
 use crate::http::error::ApiError;
 use crate::http::extractors::{AuthUser, ValidQuery};
@@ -455,6 +457,7 @@ impl Viewer {
             if self.outrun() {
                 // A commit landed during the read: read again on the next
                 // turn, under the rights it made (S43).
+                debug!(bots = reads.ids.len(), "{READ_AGAIN}");
                 self.slots.push_front(Queued {
                     slot: Slot::Bots(reads),
                     replayed,
@@ -728,6 +731,7 @@ impl Project for Viewer {
                 if self.outrun() {
                     // A commit landed during the read: read again on the
                     // next turn (S43).
+                    debug!("{READ_AGAIN}");
                     self.slots.push_front(Queued {
                         slot: Slot::Mode { id, saw },
                         replayed,

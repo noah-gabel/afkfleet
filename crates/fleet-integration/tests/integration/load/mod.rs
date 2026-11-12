@@ -13,12 +13,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use fleet_api_types::Open;
 use fleet_api_types::accounts::GrantLevel;
+use fleet_api_types::bots::BotStateKind;
 use fleet_api_types::events::EventMessageKind;
 use fleet_client::{LiveEvents, LiveStop, LiveUpdate, MemoryStore, RefetchReason};
 use fleet_core::chat::IncomingChat;
 use fleet_core::id::BotId;
 use fleet_core::mc::SessionEvent;
+use fleet_server::app::events::{READ_AGAIN, RIGHTS_READ};
 use fleet_testkit::mc::EmitOutcome;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::task::JoinSet;
@@ -105,6 +108,11 @@ struct Board {
     unreadable: AtomicUsize,
     /// Times a socket went down.
     disconnects: AtomicUsize,
+    /// `bot` frames, on every socket together.
+    bot_frames: AtomicUsize,
+    /// The state each socket's newest `bot` frame showed, by the socket's
+    /// Member and the bot.
+    states: Mutex<HashMap<(usize, BotId), BotStateKind>>,
 }
 
 impl Board {
@@ -123,6 +131,16 @@ impl Board {
         if let Some(sent) = sent {
             self.took.lock().unwrap().push(now.duration_since(sent));
         }
+    }
+
+    /// How many of a Member's bots their socket last showed in `state`.
+    fn shown(&self, state: BotStateKind) -> usize {
+        self.states
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|shown| **shown == state)
+            .count()
     }
 
     /// How many lines reached a socket since the last [`Board::take`].
@@ -164,19 +182,30 @@ impl Board {
     }
 }
 
-/// One Member's socket, read until it's stopped.
-async fn read(mut socket: LiveEvents<MemoryStore>, board: Arc<Board>) {
+/// Member `member`'s socket, read until it's stopped.
+async fn read(mut socket: LiveEvents<MemoryStore>, board: Arc<Board>, member: usize) {
     loop {
         // No timeout: the socket waits for the server's next frame, and its
         // stopper ends it.
         match socket.recv().await {
-            Ok(LiveUpdate::Event(event)) => {
-                if event.kind.known() == Some(EventMessageKind::Chat)
-                    && let Some(chat) = &event.line
-                {
-                    board.arrived(chat.text.as_str());
+            Ok(LiveUpdate::Event(event)) => match event.kind.known() {
+                Some(EventMessageKind::Chat) => {
+                    if let Some(chat) = &event.line {
+                        board.arrived(chat.text.as_str());
+                    }
                 }
-            }
+                Some(EventMessageKind::Bot) => {
+                    board.bot_frames.fetch_add(1, Ordering::Relaxed);
+                    let state = event
+                        .bot
+                        .as_ref()
+                        .and_then(|bot| bot.status.state.as_ref().and_then(Open::known));
+                    if let (Some(bot), Some(state)) = (event.bot_id, state) {
+                        board.states.lock().unwrap().insert((member, bot), state);
+                    }
+                }
+                _ => {}
+            },
             Ok(LiveUpdate::Refetch(RefetchReason::Ready)) => {
                 board.ready.fetch_add(1, Ordering::Relaxed);
             }
@@ -276,10 +305,10 @@ impl Viewers {
         let board = Arc::new(Board::default());
         let mut readers = JoinSet::new();
         let mut stops = Vec::with_capacity(MEMBERS);
-        for member in &members {
+        for (m, member) in members.iter().enumerate() {
             let socket = member.live_events();
             stops.push(socket.stopper());
-            readers.spawn(read(socket, Arc::clone(&board)));
+            readers.spawn(read(socket, Arc::clone(&board), m));
         }
         world
             .logs
@@ -330,6 +359,67 @@ async fn chat(
         .until(count * VIEWERS_A_BOT, Duration::from_secs(30))
         .await;
     (board.take(), refused)
+}
+
+/// How long the rights' reads took that the log holds past its first
+/// `skip` ones, sorted, from their own lines.
+fn rights_reads(world: &World, skip: usize) -> Vec<Duration> {
+    let mut took: Vec<Duration> = world
+        .logs
+        .buffer()
+        .lines_with(RIGHTS_READ)
+        .unwrap()
+        .iter()
+        .skip(skip)
+        .filter_map(|line| line.get("took_us")?.as_u64())
+        .map(Duration::from_micros)
+        .collect();
+    took.sort_unstable();
+    took
+}
+
+/// What many commits cost the open sockets: every bot stopped through the
+/// API, then every bot started again, as fast as the API answers. Each
+/// commit moves the count every socket judges its rights by, and each
+/// changes a bot two Members see.
+async fn every_bot_stopped_and_started(world: &World, board: &Board, bots: &[BotId]) {
+    let pairs = BOTS * VIEWERS_A_BOT;
+    for (what, state) in [
+        ("stopped", BotStateKind::Stopped),
+        ("started", BotStateKind::Online),
+    ] {
+        let reads = world.logs.count(RIGHTS_READ);
+        let again = world.logs.count(READ_AGAIN);
+        let frames = board.bot_frames.load(Ordering::Relaxed);
+        let begun = Instant::now();
+        for bot in bots {
+            if state == BotStateKind::Stopped {
+                world.owner.stop(*bot).await;
+            } else {
+                world.owner.start(*bot).await;
+            }
+        }
+        let asked = begun.elapsed();
+        world
+            .logs
+            .until(&format!("every viewer shown its bots {what}"), async || {
+                board.shown(state) == pairs
+            })
+            .await;
+        let shown = begun.elapsed();
+        let took = rights_reads(world, reads);
+        println!(
+            "LOAD {BOTS} bots {what}: asked in {asked:?}, every viewer shown the last after {shown:?}; {} bot frames on the sockets",
+            board.bot_frames.load(Ordering::Relaxed) - frames,
+        );
+        println!(
+            "LOAD {BOTS} bots {what}: the rights were read {} times, p50 {:?}, max {:?}; {} reads done again",
+            took.len(),
+            percentile(&took, 50),
+            took.last().copied().unwrap_or_default(),
+            world.logs.count(READ_AGAIN) - again,
+        );
+    }
 }
 
 /// The server's count of chat rows its ingest wrote or skipped, and of
@@ -448,6 +538,8 @@ async fn load_200_bots_and_20_sockets() {
         sustained(&world, &board, &bots, rate, 5).await;
         meter.lap(&format!("{rate} lines/s and its 2 s of quiet"));
     }
+    every_bot_stopped_and_started(&world, &board, &bots).await;
+    meter.lap("200 bots stopped and started again");
     viewers.leave().await;
 
     println!(

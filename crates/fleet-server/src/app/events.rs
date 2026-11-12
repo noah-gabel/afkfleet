@@ -42,6 +42,8 @@ use fleet_core::chat::ChatFormats;
 use fleet_core::id::{AccountId, AgentId, BotId, ChatRequestId, UserId};
 use fleet_proto::control::ChatFailedReason;
 use tokio::sync::{broadcast, watch};
+use tokio::time::Instant;
+use tracing::debug;
 
 use crate::app::server_settings;
 use crate::ports::bots::{Access, BotAccess, UserAccess};
@@ -267,6 +269,14 @@ impl Rights {
     }
 }
 
+/// The `debug` line of every read of the rights, with what it read and how
+/// long it took.
+pub const RIGHTS_READ: &str = "the live events' rights were read";
+
+/// The `debug` line of a read a socket makes again, because a commit landed
+/// while it read (S43); what the load test counts too.
+pub const READ_AGAIN: &str = "a live events socket reads again: a commit landed during its read";
+
 /// The latest [`Rights`], shared by every socket, read again when a socket
 /// needs one newer than it (S30; the [module docs](self)). Clones share it.
 #[derive(Debug, Clone)]
@@ -324,10 +334,21 @@ impl LiveRights {
         // Before the read: a commit counted after this lands after the
         // read's snapshot, or moves the count past it.
         let at = self.count();
+        let begun = Instant::now();
         let access = self.inner.store.bots().access().await?;
         log_turned_unreadable(&mut logged, &access.unreadable_formats);
+        let (bots, grants) = (access.bots.len(), access.grants.len());
         let rights = Arc::new(Rights::new(at, access));
         *self.latest() = Some(Arc::clone(&rights));
+        // One line a read, however many sockets wait for it (S30): what the
+        // load test counts and times (P13.4).
+        debug!(
+            commit_count = at,
+            bots,
+            grants,
+            took_us = u64::try_from(begun.elapsed().as_micros()).unwrap_or(u64::MAX),
+            "{RIGHTS_READ}"
+        );
         Ok(rights)
     }
 
