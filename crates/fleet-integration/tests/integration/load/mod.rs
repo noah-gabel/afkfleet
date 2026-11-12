@@ -497,6 +497,45 @@ async fn the_agent_restarts(world: &World, board: &Board, bots: &[BotId], agent:
     );
 }
 
+/// The server and the agent both restart, as a host's reboot does: no
+/// stream, no socket and no session grant survives. How long until every
+/// bot plays again, every socket is live again and every viewer is shown
+/// its bots online, and how fast the new server granted the sessions.
+async fn both_restart(world: &mut World, board: &Board, bots: &[BotId], agent: &mut Agent) {
+    let pairs = BOTS * VIEWERS_A_BOT;
+    let before: Vec<usize> = bots.iter().map(|bot| world.ledger.sessions(*bot)).collect();
+    let ready = board.ready.load(Ordering::Relaxed);
+    let disconnects = board.disconnects.load(Ordering::Relaxed);
+    let begun = Instant::now();
+    agent.stop().await;
+    world.server.restart().await;
+    let restarted = begun.elapsed();
+    agent.start(&world.ledger, RunOptions::capacity(BOTS + 50));
+    until("every bot in a new session", || {
+        bots.iter().zip(&before).all(|(bot, sessions)| {
+            world.ledger.sessions(*bot) > *sessions && world.ledger.live(*bot)
+        })
+    })
+    .await;
+    let live = begun.elapsed();
+    let granted = world.server.series("afkfleet_session_grants_total");
+    until("every socket live again", || {
+        board.ready.load(Ordering::Relaxed) >= ready + MEMBERS
+    })
+    .await;
+    let sockets = begun.elapsed();
+    until("every viewer shown its bots online again", || {
+        board.reported_online() == pairs
+    })
+    .await;
+    let shown = begun.elapsed();
+    println!(
+        "LOAD both restart: the server back after {restarted:?}; every bot in a new session after {live:?} ({granted:.0} sessions granted by then, {:.0} a second since the agent's start); every socket live again after {sockets:?}, every viewer shown its bots online after {shown:?}; {} disconnects seen by the sockets",
+        granted / live.saturating_sub(restarted).as_secs_f64().max(0.001),
+        board.disconnects.load(Ordering::Relaxed) - disconnects,
+    );
+}
+
 /// The server's count of chat rows its ingest wrote or skipped, and of
 /// those it dropped before, from its own metrics: whole numbers.
 fn ingest(world: &World) -> (usize, usize) {
@@ -573,7 +612,7 @@ async fn sustained(world: &World, board: &Board, bots: &[BotId], rate: usize, se
 
 #[tokio::test]
 async fn load_200_bots_and_20_sockets() {
-    let world = World::new(ServerOptions {
+    let mut world = World::new(ServerOptions {
         limits: Limits::LoadSetup,
         ..ServerOptions::default()
     })
@@ -617,6 +656,8 @@ async fn load_200_bots_and_20_sockets() {
     meter.lap("200 bots stopped and started again");
     the_agent_restarts(&world, &board, &bots, &mut agent).await;
     meter.lap("the agent restarted with 200 bots");
+    both_restart(&mut world, &board, &bots, &mut agent).await;
+    meter.lap("the server and the agent restarted");
     viewers.leave().await;
 
     println!(
