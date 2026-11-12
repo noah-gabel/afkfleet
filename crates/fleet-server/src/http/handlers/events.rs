@@ -789,7 +789,7 @@ mod tests {
     use crate::infra::sqlite::{Database, DatabaseOptions};
     use crate::ports::bots::{Access, BotAccess, UserAccess};
     use crate::ports::live_hints::{ModeEvent, ModeSeen};
-    use crate::ports::store::Store;
+    use crate::ports::store::{Store, UnauditedWrite};
 
     fn at() -> chrono::DateTime<chrono::Utc> {
         "2027-01-15T08:00:00Z".parse().unwrap()
@@ -1056,6 +1056,140 @@ mod tests {
             .collect();
         assert_eq!(viewer.seen, BTreeSet::from([bot(1), bot(2)]));
         assert_eq!(waiting, [bot(3)]);
+        drop(viewer);
+        db.close().await;
+    }
+
+    /// The Owner `owner`'s rights, read at commit count 0, over `bots`.
+    fn owner_rights(owner: UserId, bots: &[u8]) -> Arc<Rights> {
+        Arc::new(Rights::new(
+            0,
+            Access {
+                bots: bots
+                    .iter()
+                    .map(|&n| BotAccess {
+                        bot: bot(n),
+                        account: account(n),
+                        owner,
+                    })
+                    .collect(),
+                grants: Vec::new(),
+                users: vec![UserAccess {
+                    user: owner,
+                    role: Role::Owner,
+                    enabled: true,
+                }],
+                ..Access::default()
+            },
+        ))
+    }
+
+    /// An Owner's viewer on rights over `bots`, and its database.
+    async fn owner_viewer(dir: &tempfile::TempDir, bots: &[u8]) -> (Viewer, Database) {
+        let owner = UserId::new_v7(at(), [1; 10]).unwrap();
+        let actor = Actor {
+            id: owner,
+            role: Role::Owner,
+        };
+        let (mut viewer, db) = viewer(dir, actor).await;
+        viewer.rights = owner_rights(owner, bots);
+        (viewer, db)
+    }
+
+    /// The bots each waiting read holds, and whether it was read already.
+    fn reads(viewer: &Viewer) -> Vec<(Vec<BotId>, bool)> {
+        viewer
+            .slots
+            .iter()
+            .filter_map(|queued| match &queued.slot {
+                Slot::Bots(reads) => {
+                    Some((reads.ids.iter().copied().collect(), reads.views.is_some()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A hint while a read's views wait to be sent: they were read before
+    /// the hint's event, so its bot gets a read of its own, behind them. A
+    /// second hint joins that one, which isn't read yet.
+    #[tokio::test]
+    async fn a_hint_joins_a_read_not_made_yet_and_never_one_already_made() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut viewer, db) = owner_viewer(&dir, &[1, 2, 3]).await;
+        viewer.slots = VecDeque::from([Queued::live(Slot::Bots(BotReads {
+            ids: BTreeSet::from([bot(2)]),
+            views: Some(BTreeMap::new()),
+        }))]);
+
+        viewer.hint(BTreeSet::from([bot(1)]));
+        viewer.hint(BTreeSet::from([bot(3)]));
+
+        assert_eq!(
+            reads(&viewer),
+            [(vec![bot(2)], true), (vec![bot(1), bot(3)], false)]
+        );
+        drop(viewer);
+        db.close().await;
+    }
+
+    /// A bot whose read shows nothing, its row gone or hidden since:
+    /// `bot_removed` when the viewer saw it, once, and nothing for a bot
+    /// they never saw.
+    #[tokio::test]
+    async fn a_bot_that_reads_as_nothing_is_removed_once_and_only_when_it_was_seen() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut viewer, db) = owner_viewer(&dir, &[]).await;
+        viewer.seen = BTreeSet::from([bot(1)]);
+
+        let first = viewer.bot_frame(bot(1), None);
+        let again = viewer.bot_frame(bot(1), None);
+        let never_seen = viewer.bot_frame(bot(2), None);
+
+        assert_eq!(
+            first,
+            Step::Send(Box::new(EventMessage::bot_removed(bot(1))))
+        );
+        assert_eq!(again, Step::Nothing);
+        assert_eq!(never_seen, Step::Nothing);
+        assert!(viewer.seen.is_empty());
+        drop(viewer);
+        db.close().await;
+    }
+
+    /// A hint of bots, judged on current rights and then on rights a commit
+    /// outran between `take`'s check and the judging: it waits only when
+    /// the rights are outrun and it names a bot they hide, which newer
+    /// rights may show. Hidden bots on current rights make nothing; bots the
+    /// viewer sees are hinted either way.
+    #[tokio::test]
+    async fn a_bots_hint_waits_only_when_outrun_rights_hide_one_of_its_bots() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut viewer, db) = owner_viewer(&dir, &[1]).await;
+        let hint = |bots: &[u8]| {
+            Arc::new(BusEvent::Bots(
+                bots.iter().map(|&n| bot(n)).collect::<Vec<_>>().into(),
+            ))
+        };
+
+        let hidden_on_current = viewer.judge(hint(&[9]));
+        // Any commit moves the count, whatever it wrote: here nothing.
+        Store::write(&db)
+            .await
+            .unwrap()
+            .commit_unaudited(UnauditedWrite::SessionTouch)
+            .await
+            .unwrap();
+        assert!(viewer.outrun(), "the commit count moved past the rights");
+        let seen_on_outrun = viewer.judge(hint(&[1]));
+        let hidden_on_outrun = viewer.judge(hint(&[9]));
+        let mixed_on_outrun = viewer.judge(hint(&[1, 9]));
+
+        assert_eq!(hidden_on_current, Ok(Taken::Uncounted));
+        assert_eq!(seen_on_outrun, Ok(Taken::Counted));
+        assert_eq!(hidden_on_outrun, Err(hint(&[9])));
+        assert_eq!(mixed_on_outrun, Err(hint(&[1, 9])));
+        assert_eq!(reads(&viewer), [(vec![bot(1)], false)]);
         drop(viewer);
         db.close().await;
     }

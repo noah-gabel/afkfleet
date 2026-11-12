@@ -1263,6 +1263,57 @@ mod tests {
         assert_eq!(limits.tracked(), 0);
     }
 
+    /// Every limiter's keys, each counted once: the thirteen hold 1 to 13
+    /// keys here, 91 together, so a limiter that's left out, taken off or
+    /// multiplied in gives another number.
+    #[test]
+    fn tracked_is_every_limiters_keys_together() {
+        let limits = RateLimits::new(&tight(), Arc::new(ManualClock::new(start())));
+        let nth_ip = |n: u8| IpAddr::from([192, 0, 2, n]);
+        let limiters: [&dyn Fn(u8) -> Result<(), Refused>; 13] = [
+            &|n| limits.check_ip(nth_ip(n)),
+            &|n| limits.check_class(RateClass::Login, nth_ip(n)),
+            &|n| limits.check_class(RateClass::Refresh, nth_ip(n)),
+            &|n| limits.check_class(RateClass::Register, nth_ip(n)),
+            &|n| limits.check_user(user(n)),
+            &|n| limits.check_grant_by_name(user(n)),
+            &|n| limits.check_grant_candidates(user(n)),
+            &|n| limits.check_enroll(nth_ip(n)),
+            &|n| limits.check_connect(fingerprint(n)),
+            &|n| limits.check_bot_action(bot(n)),
+            &|n| limits.check_fresh_session(bot(n)),
+            &|n| limits.check_chat_user(user(n)),
+            &|n| limits.check_chat_bot(bot(n)),
+        ];
+
+        for (keys, spend) in (1_u8..).zip(limiters) {
+            for n in 0..keys {
+                spend(n).unwrap();
+            }
+        }
+
+        assert_eq!(limits.tracked(), 91);
+    }
+
+    #[test]
+    fn open_sockets_counts_every_users_sockets_until_they_end() {
+        let limits = RateLimits::new(&tight(), Arc::new(ManualClock::new(start())));
+        assert_eq!(limits.open_sockets(), 0);
+
+        let first = limits.open_socket(user(1)).unwrap();
+        let second = limits.open_socket(user(1)).unwrap();
+        let other = limits.open_socket(user(2)).unwrap();
+        let all_open = limits.open_sockets();
+        drop(second);
+        drop(other);
+        let one_left = limits.open_sockets();
+        drop(first);
+
+        assert_eq!(all_open, 3);
+        assert_eq!(one_left, 1);
+        assert_eq!(limits.open_sockets(), 0);
+    }
+
     #[test]
     fn retain_recent_forgets_a_bots_chat_one_interval_after_its_bucket_is_full_again() {
         let clock = ManualClock::new(start());

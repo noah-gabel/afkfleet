@@ -86,3 +86,67 @@ fn refuse(reason: &'static str) -> ApiError {
     debug!(reason, "a request's setup token was refused");
     ApiError::Unauthorized
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use chrono::{DateTime, Utc};
+    use fleet_core::authz::Role;
+    use fleet_core::id::UserId;
+    use fleet_testkit::system::{ManualClock, SeededRandom};
+
+    use super::*;
+    use crate::app::challenges::{ChallengeUser, Challenges, SetupPurpose};
+    use crate::infra::crypto::tokens::Sha256Tokens;
+
+    fn at() -> DateTime<Utc> {
+        DateTime::from_timestamp_millis(1_800_000_000_000).unwrap()
+    }
+
+    fn user(n: u8) -> UserId {
+        UserId::new_v7(at(), [n; 10]).unwrap()
+    }
+
+    /// The live setup token of the Member `user(1)`.
+    fn members_token() -> SetupToken {
+        let challenges = Challenges::new(
+            Arc::new(ManualClock::new(at())),
+            Arc::new(Sha256Tokens::new(Arc::new(SeededRandom::new(7)))),
+        );
+        let member = ChallengeUser {
+            id: user(1),
+            role: Role::Member,
+            password_changed_at: at(),
+        };
+        let issued = challenges
+            .issue_setup(member, SetupPurpose::FirstEnrollment)
+            .unwrap();
+        let grant = challenges.setup(issued.token.expose_secret()).unwrap();
+        SetupToken { grant }
+    }
+
+    #[test]
+    fn require_decides_as_authorize_does_for_the_tokens_user() {
+        let token = members_token();
+        let own = ResourceContext::Personal { owner: user(1) };
+        let anothers = ResourceContext::Personal { owner: user(2) };
+
+        let on_own = token.require(Permission::UsePersonal, &own);
+        let on_anothers = token.require(Permission::UsePersonal, &anothers);
+
+        assert_eq!(
+            token.actor(),
+            Actor {
+                id: user(1),
+                role: Role::Member
+            }
+        );
+        assert_eq!(on_own, Ok(()));
+        assert!(on_anothers.is_err(), "another user's is refused");
+        assert_eq!(
+            on_anothers,
+            authorize(&token.actor(), Permission::UsePersonal, &anothers)
+        );
+    }
+}

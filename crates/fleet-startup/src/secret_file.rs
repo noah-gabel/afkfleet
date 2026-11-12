@@ -149,8 +149,7 @@ fn check(metadata: &Metadata) -> Result<(), SecretFileProblem> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        let mode = metadata.permissions().mode() & 0o7777;
-        if mode & 0o077 != 0 {
+        if let Some(mode) = open_to_others(metadata.permissions().mode()) {
             return Err(SecretFileProblem::Permissions { mode });
         }
     }
@@ -161,6 +160,15 @@ fn check(metadata: &Metadata) -> Result<(), SecretFileProblem> {
         return Err(SecretFileProblem::TooLarge { max: MAX_BYTES });
     }
     Ok(())
+}
+
+/// `mode`'s permission bits when they let the group or others read, write
+/// or run the file; `None` for a file that's its owner's alone. The file
+/// type's bits above them never count.
+#[cfg(any(unix, test))]
+const fn open_to_others(mode: u32) -> Option<u32> {
+    let bits = mode & 0o7777;
+    if bits & 0o077 != 0 { Some(bits) } else { None }
 }
 
 #[cfg(test)]
@@ -222,6 +230,53 @@ mod tests {
         let secret = read(&path).unwrap();
 
         assert_eq!(secret.expose_secret().as_slice(), expected);
+    }
+
+    #[test]
+    fn the_limit_is_64_kib() {
+        assert_eq!(MAX_BYTES, 65_536);
+    }
+
+    /// The buffer is allocated once, for the largest file and the one byte
+    /// more that shows a larger one, so no read ever moves the bytes and
+    /// leaves an unwiped copy behind; the secret keeps that buffer.
+    #[test]
+    fn the_secret_is_read_into_a_buffer_no_read_can_outgrow() {
+        let dir = folder();
+        let path = secret_file(
+            &dir,
+            "secret",
+            b"key material
+",
+        );
+
+        let secret = read(&path).unwrap();
+
+        assert!(
+            secret.expose_secret().capacity() > MAX_BYTES,
+            "{}",
+            secret.expose_secret().capacity()
+        );
+    }
+
+    /// The bits a regular file's mode has on Unix, the file type's on top:
+    /// run on every platform, since only the wiring is Unix's.
+    #[rstest]
+    #[case::owner_read_write(0o100_600, None)]
+    #[case::owner_read(0o100_400, None)]
+    #[case::owner_all(0o100_700, None)]
+    #[case::no_bits_at_all(0o100_000, None)]
+    #[case::group_read(0o100_640, Some(0o640))]
+    #[case::group_write(0o100_620, Some(0o620))]
+    #[case::other_read(0o100_604, Some(0o604))]
+    #[case::other_execute(0o100_601, Some(0o601))]
+    #[case::everyone(0o100_777, Some(0o777))]
+    #[case::set_uid_and_everyone(0o104_777, Some(0o4777))]
+    fn only_group_or_other_bits_make_a_mode_open_to_others(
+        #[case] mode: u32,
+        #[case] expected: Option<u32>,
+    ) {
+        assert_eq!(open_to_others(mode), expected);
     }
 
     #[test]

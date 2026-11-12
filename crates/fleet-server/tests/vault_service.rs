@@ -426,6 +426,9 @@ async fn a_rotation_re_encrypts_the_secrets_under_other_keys_and_records_it(
     let current = vault(&[1, 2], 2);
     let first = user_sealed_by(&setup.db, 1, &old).await;
     let second = user_sealed_by(&setup.db, 2, &current).await;
+    // Two TOTP secrets and one refresh token under the old key, so each
+    // count is its own.
+    user_sealed_by(&setup.db, 5, &old).await;
     account_sealed_by(&setup.db, first, 3, Some(&old)).await;
     account_sealed_by(&setup.db, first, 4, None).await;
     let already = envelope_of(&setup.db, SealedRecord::TotpSecret(second)).await;
@@ -437,7 +440,7 @@ async fn a_rotation_re_encrypts_the_secrets_under_other_keys_and_records_it(
         rotation,
         Rotation::Rotated {
             key_id: 2,
-            totp_secrets: 1,
+            totp_secrets: 2,
             refresh_tokens: 1,
         }
     );
@@ -457,7 +460,7 @@ async fn a_rotation_re_encrypts_the_secrets_under_other_keys_and_records_it(
         metadata(&[
             ("ms_refresh", RecordedValue::Int(1)),
             ("sealed_with", RecordedValue::Int(2)),
-            ("totp", RecordedValue::Int(1)),
+            ("totp", RecordedValue::Int(2)),
         ])
     );
 }

@@ -45,4 +45,15 @@ exclude_re = [
     # resilience/retry.rs, nth_delay: the fallback is unreachable, since backon's
     # schedule never ends without a maximum number of attempts.
     'fleet-core/src/resilience/retry\.rs:\d+:\d+: replace / with \* in RetryPolicy::nth_delay$',
+    # --- the auth and vault modules -----------------------------------------------------
+    # fleet-server's app/mfa.rs, check_code: the store's query matched the recovery code
+    # by its hash already, so the hash it hands back always equals. The constant-time
+    # comparison is the second look the security rules ask for, which no stored row fails.
+    'fleet-server/src/app/mfa\.rs:\d+:\d+: replace match guard stored\.ct_eq\(&hash\) with true in MfaService::check_code$',
+    # fleet-startup's secret_file.rs, check: on Windows it only repeats what `read` checks
+    # around it (a regular file before the open, empty and too large after the read). The
+    # one check of its own, the permission bits, is compiled on Unix alone, where the
+    # tests of the modes expect its refusal (reasoned from them: the mutants run on
+    # Windows).
+    'fleet-startup/src/secret_file\.rs:\d+:\d+: replace check -> Result<\(\), SecretFileProblem> with Ok\(\(\)\)$',
 ]

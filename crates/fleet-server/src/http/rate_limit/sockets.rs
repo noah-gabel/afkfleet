@@ -149,6 +149,26 @@ mod tests {
         assert_eq!(slots.open(), 1);
     }
 
+    /// One of a user's slots ends while they hold others: exactly its place
+    /// is free again, and the others still count against the cap.
+    #[test]
+    fn one_dropped_slot_of_several_gives_back_one_place_only() {
+        let slots = slots(2);
+        let first = slots.take(user(1)).unwrap();
+        let second = slots.take(user(1)).unwrap();
+
+        drop(first);
+        let open_after_one = slots.open();
+        let third = slots.take(user(1));
+        let fourth = slots.take(user(1));
+
+        assert_eq!(open_after_one, 1);
+        assert!(third.is_some());
+        assert!(fourth.is_none(), "the slot still held counts");
+        assert_eq!(slots.open(), 2);
+        drop(second);
+    }
+
     #[test]
     fn a_slot_held_by_a_task_that_panics_gives_its_place_back() {
         let slots = slots(1);

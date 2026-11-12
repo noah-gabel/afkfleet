@@ -305,10 +305,12 @@ fn methods(item: &PathItem) -> Vec<Method> {
 
 #[cfg(test)]
 mod tests {
+    use fleet_testkit::system::ManualClock;
     use utoipa::openapi::HttpMethod;
     use utoipa::openapi::path::Operation;
 
     use super::*;
+    use crate::config::RateLimitConfig;
 
     #[test]
     fn every_method_of_a_path_is_found_in_a_fixed_order() {
@@ -375,6 +377,18 @@ mod tests {
                 "{access:?}"
             );
         }
+    }
+
+    /// utoipa-axum's router has no `Debug`, so the routes show their
+    /// entries and say that something is left out.
+    #[test]
+    fn the_debug_form_shows_the_entries_and_that_there_is_more() {
+        let clock = ManualClock::new(chrono::DateTime::UNIX_EPOCH);
+        let limits = RateLimits::new(&RateLimitConfig::default(), Arc::new(clock));
+
+        let routes = Routes::new(&limits);
+
+        assert_eq!(format!("{routes:?}"), "Routes { entries: [], .. }");
     }
 
     #[test]
