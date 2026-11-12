@@ -1273,6 +1273,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - [x] **P6.11** CLI skeleton: `serve`, `migrate`, `healthcheck`.
 
   > Note (P6.11): `afkfleet-server` follows the agent's shape (ADR-0014), with no anyhow and `--config <PATH>` on every command; `serve` warns in dev mode and takes an already-bound listener; `healthcheck` is our own HTTP/1.1 probe of `/health/ready` with one 3 s timeout, asking loopback for an unspecified bind; `just dev-server` passes the database path as a `$`-parameter under `target/dev-server/` ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
+
+  > Note (P6.11, from P13.5) ([ADR-0033](docs/adr/0033-chaos-tests-and-the-missing-database.md)): **outside dev mode `serve` never creates its database.** A missing file is exit 1 with an error naming the file and the folder its volume belongs at; only `migrate` creates one, which a first install runs before the server's first start. Dev mode still creates it. And one more command, `database check`: SQLite's `integrity_check`, read-only, exit 0 sound, 1 it couldn't run, 3 damaged.
 - [x] **P6.12** 🔴 Graceful shutdown: axum's `with_graceful_shutdown` plus a `CancellationToken`.
 
   > Note (P6.12): the stop signals moved to fleet-startup; one deadline, `request_timeout + 5 s` from the first signal, bounds the drain and `Database::close()`; exit codes as the agent's: 0 stopped by a signal, 1 startup error, 2 usage error, 4 the server ended unasked or the database didn't close by the deadline, and 3 unused ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)).
@@ -1346,6 +1348,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P7.5): `user create-owner --config <PATH> --username <NAME> [--password-stdin]` checks for an Owner before any prompt or stdin read. The prompt asks for the password twice, at most 3 rounds; `--password-stdin` takes one password of at most 1 KiB and is refused when stdin is a terminal; there's no password flag or variable, and both reads run in `spawn_blocking` (the group A review, fixed in group B).
   > Exit codes: 0 created, 1 refused or failed, 2 usage. The entry is `user.create` (`role`, `via`), and `just dev-owner username` runs the command against the dev database ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)).
+
+  > Note (P7.5, from P13.5) ([ADR-0033](docs/adr/0033-chaos-tests-and-the-missing-database.md)): `user create-owner` opens the database as `serve` does: outside dev mode a missing file is refused, never created.
 - [x] **P7.6** 🔴 Endpoints:
   - `POST /auth/login`, `/auth/login/mfa`, `/auth/refresh`, `/auth/logout`, `/auth/register` (invite)
   - `GET /me`, `POST /me/password` (step-up)
@@ -2065,6 +2069,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - One setup script does the one-time steps; its form is group C's.
 
   > Note (P12.2, from Phase 12, group B) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S10, U1, U5): **the metrics ports.** The production configs set `[metrics] bind = "0.0.0.0:9480"` for the server and `"0.0.0.0:9481"` for agents, reachable only on the project's own network: no `ports:` and no `EXPOSE` for either. Caddy and the host's existing proxy route only the server's 8080, never a metrics port.
+  > Note (P12.2, from P13.5) ([ADR-0033](docs/adr/0033-chaos-tests-and-the-missing-database.md)): `setup.sh init` creates the database itself, with `migrate` through the `maintenance` service, after the PKI and before the server's first start; the server refuses to start without the file. A restored state has its database, so `init` on one skips the step.
+
   > Note (P12.2, Phase 12's group C) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S14–S18, S21, U10, U18–U20, R16): **as built.**
   > - **The project:** `deploy/compose.yaml` (the server, the managed agent, and the `setup` and `probe` services under profiles of their own), plus one file per proxy path, picked by `COMPOSE_FILE` in the host's `.env`: `compose.edge.yaml` with `compose.caddy.yaml` (afkfleet's Caddy on 80 and 443) or alone (an existing proxy in a container), `compose.loopback.yaml` (a proxy on the host, at `127.0.0.1:8080`), and `compose.grpc.yaml` for remote agents, whose own project is `compose.agent.yaml`. The configs are `deploy/prod/`'s, the Caddyfile `deploy/Caddyfile`, and `deploy/setup.sh check|init|update` does the one-time steps (S18).
   > - **Settings in `.env`** (U18): `deploy/env.example` (not `.env.example`, R16) lists every one; compose passes `.env` to the server, the agent and `setup`, and an update never replaces it.
