@@ -483,7 +483,7 @@ mod tests {
 
     /// Opening a FIFO blocks until a writer appears, so the read runs on a
     /// thread of its own and the test fails after a few seconds instead of
-    /// hanging (nextest's default profile has no time limit).
+    /// hanging until nextest's own limit, ten minutes.
     #[cfg(unix)]
     #[test]
     fn a_fifo_is_refused_without_blocking() {

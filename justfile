@@ -631,6 +631,14 @@ fuzz target="all" seconds="60":
 mutants scope="all" shards="4":
     node scripts/mutants.mjs {{ scope }} {{ shards }}
 
+# The runs keep a worktree a shard with its build, about 10 GB each, and their reports.
+# scripts/mutants-clean.mjs removes exactly those worktrees, through git, and then
+# target/mutants; it refuses a link there and any other worktree inside, and touches
+# nothing else in target/ (ADR-0031).
+# Remove the mutation runs' worktrees and target/mutants. Not while `just mutants` runs.
+mutants-clean:
+    node scripts/mutants-clean.mjs
+
 # Tests for the scripts in scripts/.
 scripts-test:
     node --test "scripts/*.test.mjs"

@@ -64,12 +64,45 @@ cargo-mutants 27.1.0 (2026-06-02, the newest; MIT), installed like the other car
 
 **One dependency became direct:** `serde_path_to_error` 0.1.20 (2025-09-15, MIT OR Apache-2.0), fleet-server's alone, to name the type axum wraps serde's error in. It was in `Cargo.lock` already, through axum's `json`; the lock gains one edge and no crate.
 
+## 2026-11-12: a time limit a test, and `just mutants-clean`
+Two follow-ups from the pull request's review (the user's, #113), in group E's first commit.
+
+### Every nextest profile ends a test after 10 minutes
+**Measured first,** on GitHub's runners: twelve jobs of three runs (#112's last, `main` after it, #113's), every test's time read from the jobs' logs.
+
+| Job | Slowest test | The whole run |
+|---|---|---|
+| `test` (ubuntu-latest, profile `ci`) | 48.0 to 59.6 s | 201 to 233 s |
+| `test` (windows-latest, profile `ci`) | 52.5 to 68.0 s | 255 to 317 s |
+| `coverage` (ubuntu-latest, the default profile, instrumented) | 41.8 to 62.3 s | 167 to 221 s |
+| `tauri-build` (the desktop crate's coverage, windows-latest) | 8.0 to 10.6 s | 42 to 53 s |
+
+The slowest is always the authorization matrix (ADR-0029), but in one coverage job, where a loopback case was (41.8 s to the matrix's 36.5 s). After it: fleet-integration's restart case at 42 s in every job that runs it (it waits real time), fleet-runtime's chaos property at 12.5 to 34.4 s, the outage case at 23 to 29 s and the renewal case at 21 to 22 s. No other test takes 11 s.
+
+**The limit:** `slow-timeout = { period = "60s", terminate-after = 10 }` in the default and the `ci` profile, as the `slow` and `manual` profiles had it already. A custom profile inherits the default's setting; each says it again, and `scripts/nextest-config.test.mjs` holds the line in all four, so dropping one can't lift the limit for the profile CI runs. A test that runs out of time fails, labelled `TIMEOUT` with its name (nextest's default, `on-timeout = "fail"`, which the test holds too). On Windows nextest ends the test's process at once; on Unix it sends SIGTERM, and SIGKILL 10 s later.
+
+**Why 10 minutes:** almost nine times the slowest test measured (68 s), and a hang costs it once, since tests run side by side. Less would cut close elsewhere: the matrix grows with every route, and on the development PC under four mutation shards fleet-server's suite took 165 to 215 s where it takes 46 s alone.
+
+**Seen working** with the mutant from above applied by hand (`Viewer::gate` answering without reading), on the `auth` tests' `events::chat` cases, under each profile: the cases that never end were stopped at 600 s and reported as `TIMEOUT [ 600.15s]` by name, four in one run and six in the other, and each run ended after 601 s with exit code 100. (The two runs went at once, which is most likely why other cases of theirs failed at once and not the same ones.)
+
+**A test still bounds its own waits.** The limit is for code that stops yielding, where no timer inside the test's process can fire.
+
+**For `just mutants`:** in the `auth-vault` scope a mutant whose tests never end is now a failed test after 10 minutes, so it counts as caught; cargo-mutants' own limit there was 14 to 18 minutes. In `core` cargo-mutants' limit, 102 s, still comes first, and such a mutant stays "timed out".
+
+### `just mutants-clean`
+**It removes exactly what the runs keep** (`scripts/mutants-clean.mjs`): every registered worktree named `target/mutants/tree-<k>`, through `git worktree remove --force`, then `target/mutants` itself. Nothing else in `target/` is touched.
+- **`--force`,** because a tree always holds its build, and a run that was cut off leaves a mutant in its source. git also forgets a tree whose folder was deleted by hand.
+- **It refuses** a `target/` or a `target/mutants` that is a link or junction, and any other registered worktree inside `target/mutants`, removing nothing: only its owner should say that one may go.
+- **It stops at a tree git can't remove** (a locked one, or one a run still holds), with git's reason.
+- **The folder is walked with lstat,** as `dod-clean` walks its own: a link inside is removed as an entry, never followed.
+- **Not while `just mutants` runs:** the run would lose its trees.
+
 ## Consequences
 - **A missed mutant fails `just mutants`.** Whoever runs it writes the test or the line in `.cargo/mutants.toml`.
 - **A run needs a commit.** Work in progress is committed first, as a WIP commit if need be.
-- **The trees stay** between runs, so the next one builds little: about 10 GB each. `git worktree remove target/mutants/tree-<k>` frees one.
+- **The trees stay** between runs, so the next one builds little: about 10 GB each. `just mutants-clean` removes them and the reports (since 2026-11-12, above).
 - **Code compiled on Unix alone shows as missed here,** since the mutants run on Windows: it gets a platform-free function to test, as the secret file's mode check did, or a recorded reason.
-- **Seven mutants are found only because the tests then never end** (two loops in fleet-core, five in the live events). A loop that never yields is beyond any bound a test sets for its own waits; only a limit outside the test's process ends it. nextest's default profile has none, so in CI such a defect would end at the job's own timeout, without naming the test.
+- **Seven mutants are found only because the tests then never end** (two loops in fleet-core, five in the live events). A loop that never yields is beyond any bound a test sets for its own waits; only a limit outside the test's process ends it. nextest's default profile had none, so in CI such a defect would have ended at the job's own timeout, without naming the test; since 2026-11-12 every profile ends a test after 10 minutes (above).
 
 ## Alternatives considered
 - **cargo-mutants' own copy of the tree, told to skip ignored files:** what the copy holds would then hang on an option and its default in the next version of the tool; a worktree is exactly the tracked files, and git keeps it that way.
