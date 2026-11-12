@@ -576,6 +576,19 @@ impl Server {
             .await
     }
 
+    /// How many bytes the database holds on disk now: its file and its
+    /// write-ahead log together.
+    pub(crate) fn database_bytes(&self) -> u64 {
+        let file = &self.config.database.path;
+        let mut wal = file.clone().into_os_string();
+        wal.push("-wal");
+        [file.clone(), PathBuf::from(wal)]
+            .iter()
+            .filter_map(|path| std::fs::metadata(path).ok())
+            .map(|found| found.len())
+            .sum()
+    }
+
     /// Where the running server's metrics port listens.
     pub(crate) fn metrics_port(&self) -> SocketAddr {
         self.running()

@@ -717,6 +717,8 @@ async fn load_200_bots_and_20_sockets() {
     agent.start(&world.ledger, running());
     let bots = fleet(&world).await;
     meter.lap("200 bots created and started");
+    let (rows_before, _) = ingest(&world);
+    let bytes_before = world.server.database_bytes();
     let viewers = Viewers::join(&world, &bots).await;
     let board = Arc::clone(&viewers.board);
     meter.lap("20 Members joined, their sockets ready");
@@ -761,6 +763,14 @@ async fn load_200_bots_and_20_sockets() {
         }
         meter.lap(&format!("{rate} lines/s and its 2 s of quiet"));
     }
+    // Before anything deletes: what the chat stored so far takes on disk.
+    let rows = ingest(&world).0 - rows_before;
+    let bytes = world.server.database_bytes().saturating_sub(bytes_before);
+    println!(
+        "LOAD chat on disk: {rows} lines of about 20 characters grew the database and its log by {} KiB, {} bytes a line",
+        bytes / 1024,
+        bytes / u64::try_from(rows.max(1)).unwrap(),
+    );
     retention_at_the_peak(&world, &board, &bots).await;
     meter.lap("a retention run at 1000 lines/s");
     every_bot_stopped_and_started(&world, &board, &bots).await;
