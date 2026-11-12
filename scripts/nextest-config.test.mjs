@@ -3,7 +3,8 @@
 // A test that never ends must fail by its name, not hold a run until a CI job's own timeout
 // (ADR-0031): every profile ends a test after ten 60 s periods. The default profile's
 // setting is inherited by the others, and each says it again, so dropping one line can't
-// lift the limit for the profile CI runs.
+// lift the limit for the profile CI runs. It also holds which profile runs which tests:
+// the load tests (P13.4) only in their own.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -66,8 +67,8 @@ describe("profiles", () => {
 describe(".config/nextest.toml", () => {
   const tables = profiles(readFileSync(join(root, ".config", "nextest.toml"), "utf8"));
 
-  it("has the four profiles the recipes and CI run", () => {
-    assert.deepEqual([...tables.keys()].sort(), ["ci", "default", "manual", "slow"]);
+  it("has the five profiles the recipes and CI run", () => {
+    assert.deepEqual([...tables.keys()].sort(), ["ci", "default", "load", "manual", "slow"]);
   });
 
   it("ends a test that never ends after ten minutes, in every profile", () => {
@@ -76,6 +77,17 @@ describe(".config/nextest.toml", () => {
 
       assert.deepEqual(limits, [LIMIT], name);
     }
+  });
+
+  it("runs the load tests in their own profile and in no other", () => {
+    const filter = (name) => tables.get(name).find((line) => line.startsWith("default-filter"));
+
+    assert.equal(filter("load"), 'default-filter = "test(/(^|::)load_/)"');
+    for (const name of ["default", "ci"]) {
+      assert.equal(filter(name), 'default-filter = "not test(/(^|::)(slow|manual|load)_/)"', name);
+    }
+    assert.equal(filter("slow"), 'default-filter = "test(/(^|::)slow_/)"');
+    assert.equal(filter("manual"), 'default-filter = "test(/(^|::)manual_/)"');
   });
 
   it("never lets a test that ran out of time pass", () => {

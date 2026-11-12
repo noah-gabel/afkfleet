@@ -21,6 +21,7 @@
 //!   addresses, with the same clock and randomness: a loopback case's
 //!   server only, since the managed check's key is used once.
 
+use core::num::NonZeroU32;
 use core::time::Duration;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
@@ -43,7 +44,7 @@ use fleet_server::cli::serve::{
 };
 use fleet_server::config::{
     AccountsConfig, AuditConfig, AuthConfig, ChatConfig, DatabaseConfig, GrpcConfig, Heartbeats,
-    HttpConfig, LogConfig, LogFormat, PkiPaths, RateLimitConfig, ServerConfig, VaultConfig,
+    HttpConfig, LogConfig, LogFormat, PkiPaths, Rate, RateLimitConfig, ServerConfig, VaultConfig,
 };
 use fleet_server::grpc::reconciler::ReconcileTimings;
 use fleet_server::grpc::registry::AgentRegistry;
@@ -91,6 +92,41 @@ pub(crate) struct ServerOptions {
     /// but for the renewal's case, which enrolls an agent in the past and
     /// then moves the clock to the real time TLS reads (P13.6).
     pub(crate) clock_behind: Duration,
+    /// `[rate_limits]`: the production ones, but where a case's own setup
+    /// would spend them (P13.4).
+    pub(crate) limits: Limits,
+}
+
+/// Which `[rate_limits]` a case's server runs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Limits {
+    /// The production ones.
+    #[default]
+    Production,
+    /// The production ones, but for those the load test's own setup would
+    /// spend: hundreds of requests from one address and one user, twenty
+    /// registrations and logins, 400 grants by name. The limits on what the
+    /// test loads (the bots' chat, their actions, the sockets a user) stay.
+    LoadSetup,
+}
+
+impl Limits {
+    fn config(self) -> RateLimitConfig {
+        match self {
+            Self::Production => RateLimitConfig::default(),
+            Self::LoadSetup => {
+                let many = NonZeroU32::new(10_000).unwrap_or(NonZeroU32::MIN);
+                RateLimitConfig {
+                    per_ip: Rate::per_second(many, many),
+                    per_user: Rate::per_second(many, many),
+                    login: Rate::per_minute(many),
+                    register: Rate::per_hour(many),
+                    grants_by_name: Rate::per_hour(many),
+                    ..RateLimitConfig::default()
+                }
+            }
+        }
+    }
 }
 
 /// What the managed check's server runs on, beside the real clock and the OS's
@@ -188,6 +224,7 @@ struct Running {
 struct Begin {
     heartbeats: Heartbeats,
     reconcile: ReconcileTimings,
+    limits: Limits,
     allow_offline: bool,
     clock: Arc<dyn Clock>,
     manual: Option<ManualClock>,
@@ -210,6 +247,7 @@ impl Server {
             Begin {
                 heartbeats: options.heartbeats,
                 reconcile: options.reconcile,
+                limits: options.limits,
                 allow_offline: true,
                 clock: Arc::new(manual.clone()),
                 // Never called: the cases' accounts are offline ones.
@@ -235,6 +273,7 @@ impl Server {
             Begin {
                 heartbeats: Heartbeats::default(),
                 reconcile: ReconcileTimings::default(),
+                limits: Limits::Production,
                 allow_offline: false,
                 clock: Arc::new(SystemClock),
                 manual: None,
@@ -260,6 +299,7 @@ impl Server {
             http_address,
             grpc_address,
             begin.heartbeats,
+            begin.limits,
             begin.allow_offline,
         );
         std::fs::create_dir_all(dir.join("pki"))
@@ -549,7 +589,7 @@ impl Server {
 }
 
 /// The production config, but for what a case sets: its addresses, its
-/// files in `dir`, `heartbeats`, and whether offline accounts are on (a
+/// files in `dir`, `heartbeats`, `limits`, and whether offline accounts are on (a
 /// loopback case's only accounts, since it has no Microsoft). The vault key
 /// comes from memory, so its file is never read.
 fn config(
@@ -557,6 +597,7 @@ fn config(
     http: SocketAddr,
     grpc: SocketAddr,
     heartbeats: Heartbeats,
+    limits: Limits,
     allow_offline: bool,
 ) -> ServerConfig {
     let pki = dir.join("pki");
@@ -577,7 +618,7 @@ fn config(
             filter: "info".parse().unwrap(),
         },
         auth: AuthConfig::default(),
-        rate_limits: RateLimitConfig::default(),
+        rate_limits: limits.config(),
         vault: VaultConfig {
             key_files: BTreeMap::from([(1, dir.join("vault-key-1"))]),
             active_key_id: 1,

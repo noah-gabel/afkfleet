@@ -38,6 +38,7 @@
 mod dod_kit;
 mod full_flow;
 mod harness;
+mod load;
 mod loopback;
 mod managed_check;
 mod sftp;

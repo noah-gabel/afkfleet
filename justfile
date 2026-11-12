@@ -622,6 +622,13 @@ fuzz target="all" seconds="60":
     cargo run -p fleet-fuzz --example seeds -- fuzz/corpus
     node scripts/fuzz.mjs {{ target }} {{ seconds }}
 
+# fleet-integration's `load_` tests: 200 bots on one managed agent and 20 Members' live
+# events sockets, in-process on the fake connector, measured and printed as `LOAD` lines.
+# No other profile runs them, and nothing runs beside them.
+# The load test (P13.4): prints its report.
+load:
+    cargo nextest run -p fleet-integration --profile load --no-capture
+
 # The scopes are `core` (all of fleet-core) and `auth-vault` (the auth and vault coverage
 # gates' files outside it); `.cargo/mutants.toml` holds the mutants left out, each with
 # why. scripts/mutants.mjs runs every shard in a git worktree of HEAD under

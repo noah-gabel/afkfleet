@@ -95,6 +95,20 @@ impl Ledger {
         );
     }
 
+    /// Has `bot`'s live session report `event`, as its server would send
+    /// it, and says whether the session took it.
+    pub(crate) fn emit(&self, bot: BotId, event: SessionEvent) -> EmitOutcome {
+        let book = self.0.lock().unwrap();
+        book.runs
+            .iter()
+            .filter(|run| !run.dead)
+            .flat_map(|run| &run.sessions)
+            .rfind(|session| session.bot == bot && session.live())
+            .expect("the bot has a live session")
+            .controller
+            .emit(event)
+    }
+
     /// Whether `bot` has a live session in a run that didn't crash.
     pub(crate) fn live(&self, bot: BotId) -> bool {
         let book = self.0.lock().unwrap();
