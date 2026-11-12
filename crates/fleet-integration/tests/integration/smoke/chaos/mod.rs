@@ -302,32 +302,10 @@ async fn chaos_after_a_restart_nothing_is_placed_until_every_agent_is_back_or_th
 /// and the request's own.
 const REFUSAL: Duration = Duration::from_secs(30);
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn chaos_a_full_disk_fails_writes_loudly_and_everything_goes_on_once_there_is_room() {
-    let mut chaos = Chaos::start("afkfleet-chaos-disk", 120, true).await;
-    chaos.write("DiskBefore").await;
-    chaos.after_the_fault().await;
-    let server = chaos.stack.container("server");
-    // Every bot holds more lines than it keeps: the next retention run has
-    // rows to delete.
-    chatter(&mut chaos, 130);
-    let runs = |chaos: &mut Chaos, outcome: &str| {
-        labelled(
-            &chaos.metrics(),
-            "afkfleet_retention_runs_total",
-            &format!("outcome=\"{outcome}\""),
-        )
-    };
-    let failed_runs = runs(&mut chaos, "failed");
-    let failed_backups = total(&chaos.metrics(), "afkfleet_backup_failures_total");
-
-    // Both volumes, to their last byte; with no finished backup left, the
-    // schedule finds one due.
-    chaos.drop_backups();
-    assert_eq!(chaos.fill("backups"), 0);
-    assert_eq!(chaos.fill("data"), 0);
-
-    // Reads keep working.
+/// On a full disk: reads keep working, and a write fails with the generic
+/// error and a request ID, within the request's own bound, with an `error`
+/// line in the server's log that names that request.
+async fn reads_work_and_a_write_is_refused_loudly(chaos: &mut Chaos) {
     assert!(chaos.agents().await.is_some(), "a read failed");
     for bot in chaos.bots.clone() {
         assert!(chaos.shown(bot).await.is_some(), "a read failed");
@@ -353,6 +331,34 @@ async fn chaos_a_full_disk_fails_writes_loudly_and_everything_goes_on_once_there
                 && line.contains("\"level\":\"ERROR\"")),
         "no error line for the refused write"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chaos_a_full_disk_fails_writes_loudly_and_everything_goes_on_once_there_is_room() {
+    let mut chaos = Chaos::start("afkfleet-chaos-disk", 120, true).await;
+    chaos.write("DiskBefore").await;
+    chaos.after_the_fault().await;
+    let server = chaos.stack.container("server");
+    // Every bot holds more lines than it keeps: the next retention run has
+    // rows to delete.
+    chatter(&mut chaos, 130);
+    let runs = |chaos: &mut Chaos, outcome: &str| {
+        labelled(
+            &chaos.metrics(),
+            "afkfleet_retention_runs_total",
+            &format!("outcome=\"{outcome}\""),
+        )
+    };
+    let failed_runs = runs(&mut chaos, "failed");
+    let failed_backups = total(&chaos.metrics(), "afkfleet_backup_failures_total");
+
+    // Both volumes, to their last byte; with no finished backup left, the
+    // schedule finds one due.
+    chaos.drop_backups();
+    assert_eq!(chaos.fill("backups"), 0);
+    assert_eq!(chaos.fill("data"), 0);
+
+    reads_work_and_a_write_is_refused_loudly(&mut chaos).await;
     // The command says the same of a backup, and publishes nothing.
     let backup = chaos
         .stack
