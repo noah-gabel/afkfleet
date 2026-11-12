@@ -20,6 +20,8 @@ mod path;
 mod query;
 mod setup_token;
 mod step_up;
+#[cfg(test)]
+mod test_logs;
 
 pub use auth_user::AuthUser;
 pub use json::ValidJson;

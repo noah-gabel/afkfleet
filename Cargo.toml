@@ -179,6 +179,10 @@ rustls = "0.23.46"
 # pulls in zeroize (alloc).
 secrecy = "0.10.3"
 serde = "1.0.229"
+# serde_path_to_error: named only so fleet-server's JSON extractor can read where serde
+# stopped out of axum's rejection, which wraps serde_json's error in this crate's
+# (ADR-0031). Already in Cargo.lock through axum's `json`.
+serde_path_to_error = "0.1.20"
 # sha2: SHA-256 of the session tokens; only the hash is stored (ADR-0006). Without
 # default features (no `alloc`, no `oid`); fleet-server enables `zeroize`, which wipes
 # the hasher's block buffer (ADR-0016). Already in Cargo.lock through sqlx and azalea.
