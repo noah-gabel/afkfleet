@@ -600,6 +600,35 @@ fn scraped((whose, took, bytes, failed): &Scrapes) -> String {
     )
 }
 
+/// A retention run while the bots hear 1000 lines a second: every bot holds
+/// about twice the 100 lines it may keep by now, so the run deletes about a
+/// hundred lines a bot, a thousand rows a batch, with its pause between.
+/// What the run did and how long it took, and what its commits cost the
+/// sockets; the chat's own report line shows what it cost the chat.
+async fn retention_at_the_peak(world: &World, board: &Board, bots: &[BotId]) {
+    let reads = world.logs.count(RIGHTS_READ);
+    let again = world.logs.count(READ_AGAIN);
+    let run = async {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let begun = Instant::now();
+        let run = world.server.retention_run().await;
+        (run, begun.elapsed())
+    };
+    let ((), (run, took)) = tokio::join!(sustained(world, board, bots, 1000, 6), run);
+    let read = rights_reads(world, reads);
+    println!(
+        "LOAD a retention run at 1000 lines/s: {} lines past their bot's bound deleted in {} batches within {took:?}; {} phases failed; the rights were read {} times meanwhile, p50 {:?}; {} reads done again",
+        run.deleted.chat_by_size,
+        run.batches,
+        run.failed.len(),
+        read.len(),
+        percentile(&read, 50),
+        world.logs.count(READ_AGAIN) - again,
+    );
+    assert!(run.failed.is_empty(), "the run's phases: {:?}", run.failed);
+    assert!(run.deleted.chat_by_size > 0, "the run had lines to delete");
+}
+
 /// The server's count of chat rows its ingest wrote or skipped, and of
 /// those it dropped before, from its own metrics: whole numbers.
 fn ingest(world: &World) -> (usize, usize) {
@@ -679,6 +708,7 @@ async fn load_200_bots_and_20_sockets() {
     let mut world = World::new(ServerOptions {
         limits: Limits::LoadSetup,
         metrics: true,
+        retention_by_hand: true,
         ..ServerOptions::default()
     })
     .await;
@@ -731,6 +761,8 @@ async fn load_200_bots_and_20_sockets() {
         }
         meter.lap(&format!("{rate} lines/s and its 2 s of quiet"));
     }
+    retention_at_the_peak(&world, &board, &bots).await;
+    meter.lap("a retention run at 1000 lines/s");
     every_bot_stopped_and_started(&world, &board, &bots).await;
     meter.lap("200 bots stopped and started again");
     the_agent_restarts(&world, &board, &bots, &mut agent).await;

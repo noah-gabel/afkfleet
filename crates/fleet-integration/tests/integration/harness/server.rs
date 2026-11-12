@@ -34,9 +34,11 @@ use fleet_core::auth::NewPassword;
 use fleet_core::enrollment::EnrollmentBundle;
 use fleet_core::id::{AgentId, BotId};
 use fleet_core::pki::CertFingerprint;
+use fleet_core::retention::ChatBound;
 use fleet_core::system::{Clock, SecureRandom};
 use fleet_core::value::Username;
 use fleet_server::app::enrollment::EnrollmentTokenService;
+use fleet_server::app::retention::{RetentionService, RetentionTimings, Run};
 use fleet_server::app::users::UserService;
 use fleet_server::cli::pki;
 use fleet_server::cli::serve::{
@@ -70,6 +72,7 @@ use secrecy::{ExposeSecret as _, SecretBox, SecretString};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 
 use super::logs::PATIENCE;
 
@@ -98,6 +101,12 @@ pub(crate) struct ServerOptions {
     /// Whether the metrics port listens, on a loopback port of its own: off,
     /// as without `[metrics]`, but where a case scrapes it (P13.4).
     pub(crate) metrics: bool,
+    /// Whether the case starts the retention's runs itself
+    /// ([`Server::retention_run`]): then the task's own runs are a day
+    /// apart, and each bot keeps its newest 100 lines, the least `[chat]
+    /// max_lines_per_bot` allows, so a run after a few hundred lines a bot
+    /// has work to do (P13.4).
+    pub(crate) retention_by_hand: bool,
 }
 
 /// Which `[rate_limits]` a case's server runs.
@@ -178,6 +187,8 @@ pub(crate) struct Server {
     keys: Keys,
     /// Whether each serve gets a metrics port.
     metrics: bool,
+    /// Whether the case starts the retention's runs.
+    retention_by_hand: bool,
     /// The API's listener, bound once for the server's whole life: each
     /// serve gets a clone of it, so a restart never frees its port and the
     /// Owner's client keeps its URL.
@@ -224,6 +235,8 @@ struct Running {
     metrics: MetricsRender,
     /// Where this serve's metrics port listens, if it has one.
     metrics_port: Option<SocketAddr>,
+    /// The retention the task runs, for a case that starts a run itself.
+    retention: RetentionService,
     stop: mpsc::Sender<Signal>,
     serving: JoinSet<Exit>,
 }
@@ -234,6 +247,7 @@ struct Begin {
     reconcile: ReconcileTimings,
     limits: Limits,
     metrics: bool,
+    retention_by_hand: bool,
     allow_offline: bool,
     clock: Arc<dyn Clock>,
     manual: Option<ManualClock>,
@@ -258,6 +272,7 @@ impl Server {
                 reconcile: options.reconcile,
                 limits: options.limits,
                 metrics: options.metrics,
+                retention_by_hand: options.retention_by_hand,
                 allow_offline: true,
                 clock: Arc::new(manual.clone()),
                 // Never called: the cases' accounts are offline ones.
@@ -285,6 +300,7 @@ impl Server {
                 reconcile: ReconcileTimings::default(),
                 limits: Limits::Production,
                 metrics: false,
+                retention_by_hand: false,
                 allow_offline: false,
                 clock: Arc::new(SystemClock),
                 manual: None,
@@ -311,6 +327,7 @@ impl Server {
             grpc_address,
             begin.heartbeats,
             begin.limits,
+            begin.retention_by_hand,
             begin.allow_offline,
         );
         std::fs::create_dir_all(dir.join("pki"))
@@ -361,6 +378,7 @@ impl Server {
             reconcile: begin.reconcile,
             keys: begin.keys,
             metrics: begin.metrics,
+            retention_by_hand: begin.retention_by_hand,
             ca_fingerprint,
             running: None,
         };
@@ -424,6 +442,13 @@ impl Server {
             .clone();
         let port = grpc_port(&self.config, Some(opened), app.grpc.take())
             .map_err(|_| "the gRPC port couldn't be set up")?;
+        if self.retention_by_hand {
+            app.retention = app.retention.with_timings(RetentionTimings {
+                interval: Duration::from_hours(24),
+                ..RetentionTimings::default()
+            });
+        }
+        let retention = app.retention.service().clone();
         let (stop, signals) = ChannelSignals::new();
         let timeouts = ShutdownTimeouts::of(&self.config.http);
         let db = database.clone();
@@ -447,6 +472,7 @@ impl Server {
             registry,
             metrics: render,
             metrics_port,
+            retention,
             stop,
             serving,
         });
@@ -539,6 +565,15 @@ impl Server {
                 (series == name).then(|| value.parse::<f64>().ok())?
             })
             .sum()
+    }
+
+    /// One run of the running server's retention, now, at the task's own
+    /// batch size and pause: what it did.
+    pub(crate) async fn retention_run(&self) -> Run {
+        self.running()
+            .retention
+            .run_once(&CancellationToken::new())
+            .await
     }
 
     /// Where the running server's metrics port listens.
@@ -639,7 +674,8 @@ impl Server {
 }
 
 /// The production config, but for what a case sets: its addresses, its
-/// files in `dir`, `heartbeats`, `limits`, and whether offline accounts are on (a
+/// files in `dir`, `heartbeats`, `limits`, whether each bot keeps only the least chat
+/// a config allows (`least_chat`), and whether offline accounts are on (a
 /// loopback case's only accounts, since it has no Microsoft). The vault key
 /// comes from memory, so its file is never read.
 fn config(
@@ -648,6 +684,7 @@ fn config(
     grpc: SocketAddr,
     heartbeats: Heartbeats,
     limits: Limits,
+    least_chat: bool,
     allow_offline: bool,
 ) -> ServerConfig {
     let pki = dir.join("pki");
@@ -677,7 +714,14 @@ fn config(
             allow_offline,
             ..AccountsConfig::default()
         },
-        chat: ChatConfig::default(),
+        chat: if least_chat {
+            ChatConfig {
+                bound: ChatBound::try_new(ChatBound::MIN_LINES).unwrap_or_default(),
+                ..ChatConfig::default()
+            }
+        } else {
+            ChatConfig::default()
+        },
         audit: AuditConfig::default(),
         grpc: Some(GrpcConfig {
             bind: grpc,
