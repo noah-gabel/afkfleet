@@ -40,10 +40,15 @@ fleet-startup.workspace = true
 # The fake connector, ManualClock, SeededRandom and the log buffer.
 fleet-testkit.workspace = true
 rstest.workspace = true
+# The recorder main.rs installs for the agent's metrics endpoint, which the load test
+# scrapes (P13.4, ADR-0032).
+metrics-exporter-prometheus.workspace = true
 # The process's one rustls provider, aws-lc-rs.
 rustls.workspace = true
 # The Owner's password and the vault key in their secret wrappers.
 secrecy.workspace = true
+# The load test's reading of its own process: CPU time and memory (P13.4, ADR-0032).
+sysinfo.workspace = true
 # Each test's folder: the database, the PKI, the agents' identities.
 tempfile.workspace = true
 # The DoD check's online-mode Minecraft server in Docker.
@@ -51,6 +56,8 @@ testcontainers.workspace = true
 # `net` and `io-util` for the stalling proxy; `rt-multi-thread` and `fs` for the
 # DoD check, beside azalea's host threads.
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+# The stop a retention run takes, which the load test starts by hand (P13.4).
+tokio-util.workspace = true
 # The Owner's authenticator: codes from the enroll answer's otpauth URI.
 totp-rs = { workspace = true, features = ["otpauth"] }
 tracing.workspace = true

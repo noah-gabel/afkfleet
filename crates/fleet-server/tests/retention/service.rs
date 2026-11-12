@@ -898,3 +898,72 @@ async fn the_stops_summary_waits_at_most_its_bound(
     );
     db.close().await;
 }
+
+/// How many lines `bot` holds.
+async fn held(db: &Database, bot: BotId) -> usize {
+    line_ids(db, bot).await.len()
+}
+
+/// Twenty days after [`T0`]: the setup's audit entries are within the audit
+/// log's 90 days, so a run then has only chat to delete.
+fn soon() -> DateTime<Utc> {
+    at(T0) + days(20)
+}
+
+/// Five bots, each three lines over its bound: one batch takes all fifteen,
+/// so the run commits and pauses once, not once a bot (P13.4: at 200 bots,
+/// a batch a bot made a run twenty seconds of pauses).
+#[sqlx::test(migrations = false)]
+async fn bots_a_little_over_their_bound_share_one_batch(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let user = add_user(&db, 1).await;
+    let mut bots = Vec::new();
+    for n in 1..=5 {
+        let bot = add_bot(&db, user, n).await;
+        lines(&db, bot, 103, soon() - days(1)).await;
+        bots.push(bot);
+    }
+    let store = WatchedStore::new(db.clone());
+
+    let run = run(&service(&store, soon(), policy(), Duration::ZERO)).await;
+
+    assert_eq!(run.deleted.chat_by_size, 15);
+    assert_eq!(run.batches, 1);
+    assert_eq!(store.commit_times().len(), 1);
+    for bot in bots {
+        assert_eq!(held(&db, bot).await, 100, "{bot}");
+    }
+    db.close().await;
+}
+
+/// Four bots, each 600 lines over: a batch still takes at most a thousand
+/// rows, so the 2400 go in three, a bot's rows split over two batches where
+/// one fills up, and every bot is left with exactly its newest hundred.
+#[sqlx::test(migrations = false)]
+async fn a_batch_that_fills_up_commits_and_its_bot_goes_on_in_the_next(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let user = add_user(&db, 1).await;
+    let mut bots = Vec::new();
+    for n in 1..=4 {
+        let bot = add_bot(&db, user, n).await;
+        lines(&db, bot, 700, soon() - days(1)).await;
+        bots.push((bot, line_ids(&db, bot).await));
+    }
+    let store = WatchedStore::new(db.clone());
+
+    let run = run(&service(&store, soon(), policy(), Duration::ZERO)).await;
+
+    assert_eq!(run.deleted.chat_by_size, 2400);
+    assert_eq!(run.batches, 3);
+    assert_eq!(store.commit_times().len(), 3);
+    for (bot, before) in bots {
+        assert_eq!(line_ids(&db, bot).await, before[600..], "{bot}");
+    }
+    db.close().await;
+}

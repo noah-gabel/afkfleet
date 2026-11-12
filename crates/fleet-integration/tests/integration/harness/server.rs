@@ -21,6 +21,7 @@
 //!   addresses, with the same clock and randomness: a loopback case's
 //!   server only, since the managed check's key is used once.
 
+use core::num::NonZeroU32;
 use core::time::Duration;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
@@ -33,9 +34,11 @@ use fleet_core::auth::NewPassword;
 use fleet_core::enrollment::EnrollmentBundle;
 use fleet_core::id::{AgentId, BotId};
 use fleet_core::pki::CertFingerprint;
+use fleet_core::retention::ChatBound;
 use fleet_core::system::{Clock, SecureRandom};
 use fleet_core::value::Username;
 use fleet_server::app::enrollment::EnrollmentTokenService;
+use fleet_server::app::retention::{RetentionService, RetentionTimings, Run};
 use fleet_server::app::users::UserService;
 use fleet_server::cli::pki;
 use fleet_server::cli::serve::{
@@ -43,7 +46,7 @@ use fleet_server::cli::serve::{
 };
 use fleet_server::config::{
     AccountsConfig, AuditConfig, AuthConfig, ChatConfig, DatabaseConfig, GrpcConfig, Heartbeats,
-    HttpConfig, LogConfig, LogFormat, PkiPaths, RateLimitConfig, ServerConfig, VaultConfig,
+    HttpConfig, LogConfig, LogFormat, PkiPaths, Rate, RateLimitConfig, ServerConfig, VaultConfig,
 };
 use fleet_server::grpc::reconciler::ReconcileTimings;
 use fleet_server::grpc::registry::AgentRegistry;
@@ -55,7 +58,7 @@ use fleet_server::infra::msauth::ReqwestMicrosoftAuth;
 use fleet_server::infra::pki::load;
 use fleet_server::infra::sqlite::{self, Database, DatabaseOptions};
 use fleet_server::infra::system::{MonotonicClock, OsRandom, SystemClock, TokioPace};
-use fleet_server::metrics::Metrics;
+use fleet_server::metrics::{Metrics, MetricsRender};
 use fleet_server::ports::agents::AgentCert;
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord};
 use fleet_server::ports::bots::Bot;
@@ -69,6 +72,7 @@ use secrecy::{ExposeSecret as _, SecretBox, SecretString};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 
 use super::logs::PATIENCE;
 
@@ -91,6 +95,50 @@ pub(crate) struct ServerOptions {
     /// but for the renewal's case, which enrolls an agent in the past and
     /// then moves the clock to the real time TLS reads (P13.6).
     pub(crate) clock_behind: Duration,
+    /// `[rate_limits]`: the production ones, but where a case's own setup
+    /// would spend them (P13.4).
+    pub(crate) limits: Limits,
+    /// Whether the metrics port listens, on a loopback port of its own: off,
+    /// as without `[metrics]`, but where a case scrapes it (P13.4).
+    pub(crate) metrics: bool,
+    /// Whether the case starts the retention's runs itself
+    /// ([`Server::retention_run`]): then the task's own runs are a day
+    /// apart, and each bot keeps its newest 100 lines, the least `[chat]
+    /// max_lines_per_bot` allows, so a run after a few hundred lines a bot
+    /// has work to do (P13.4).
+    pub(crate) retention_by_hand: bool,
+}
+
+/// Which `[rate_limits]` a case's server runs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Limits {
+    /// The production ones.
+    #[default]
+    Production,
+    /// The production ones, but for those the load test's own setup would
+    /// spend: hundreds of requests from one address and one user, twenty
+    /// registrations and logins, 400 grants by name. The limits on what the
+    /// test loads (the bots' chat, their actions, the sockets a user) stay.
+    LoadSetup,
+}
+
+impl Limits {
+    fn config(self) -> RateLimitConfig {
+        match self {
+            Self::Production => RateLimitConfig::default(),
+            Self::LoadSetup => {
+                let many = NonZeroU32::new(10_000).unwrap_or(NonZeroU32::MIN);
+                RateLimitConfig {
+                    per_ip: Rate::per_second(many, many),
+                    per_user: Rate::per_second(many, many),
+                    login: Rate::per_minute(many),
+                    register: Rate::per_hour(many),
+                    grants_by_name: Rate::per_hour(many),
+                    ..RateLimitConfig::default()
+                }
+            }
+        }
+    }
 }
 
 /// What the managed check's server runs on, beside the real clock and the OS's
@@ -137,6 +185,10 @@ pub(crate) struct Server {
     microsoft: Arc<dyn MicrosoftAuthProvider>,
     reconcile: ReconcileTimings,
     keys: Keys,
+    /// Whether each serve gets a metrics port.
+    metrics: bool,
+    /// Whether the case starts the retention's runs.
+    retention_by_hand: bool,
     /// The API's listener, bound once for the server's whole life: each
     /// serve gets a clone of it, so a restart never frees its port and the
     /// Owner's client keeps its URL.
@@ -180,6 +232,11 @@ impl Keys {
 struct Running {
     db: Database,
     registry: AgentRegistry,
+    metrics: MetricsRender,
+    /// Where this serve's metrics port listens, if it has one.
+    metrics_port: Option<SocketAddr>,
+    /// The retention the task runs, for a case that starts a run itself.
+    retention: RetentionService,
     stop: mpsc::Sender<Signal>,
     serving: JoinSet<Exit>,
 }
@@ -188,6 +245,9 @@ struct Running {
 struct Begin {
     heartbeats: Heartbeats,
     reconcile: ReconcileTimings,
+    limits: Limits,
+    metrics: bool,
+    retention_by_hand: bool,
     allow_offline: bool,
     clock: Arc<dyn Clock>,
     manual: Option<ManualClock>,
@@ -210,6 +270,9 @@ impl Server {
             Begin {
                 heartbeats: options.heartbeats,
                 reconcile: options.reconcile,
+                limits: options.limits,
+                metrics: options.metrics,
+                retention_by_hand: options.retention_by_hand,
                 allow_offline: true,
                 clock: Arc::new(manual.clone()),
                 // Never called: the cases' accounts are offline ones.
@@ -235,6 +298,9 @@ impl Server {
             Begin {
                 heartbeats: Heartbeats::default(),
                 reconcile: ReconcileTimings::default(),
+                limits: Limits::Production,
+                metrics: false,
+                retention_by_hand: false,
                 allow_offline: false,
                 clock: Arc::new(SystemClock),
                 manual: None,
@@ -260,6 +326,8 @@ impl Server {
             http_address,
             grpc_address,
             begin.heartbeats,
+            begin.limits,
+            begin.retention_by_hand,
             begin.allow_offline,
         );
         std::fs::create_dir_all(dir.join("pki"))
@@ -309,6 +377,8 @@ impl Server {
             microsoft: begin.microsoft,
             reconcile: begin.reconcile,
             keys: begin.keys,
+            metrics: begin.metrics,
+            retention_by_hand: begin.retention_by_hand,
             ca_fingerprint,
             running: None,
         };
@@ -336,6 +406,8 @@ impl Server {
         let lockout_key = keys
             .derive_key(DerivedKey::LoginAttempts)
             .map_err(|_| "the vault's key couldn't be derived")?;
+        let metrics = Metrics::prometheus();
+        let render = metrics.render().clone();
         let ports = ServerPorts {
             clock: Arc::clone(&self.clock),
             limiter_clock: Arc::new(MonotonicClock::start()),
@@ -343,7 +415,7 @@ impl Server {
             microsoft: Arc::clone(&self.microsoft),
             pace: Arc::new(TokioPace),
             reconcile: self.reconcile,
-            metrics: Metrics::prometheus(),
+            metrics,
         };
         let (opened, ca) = open(
             ControlPlane {
@@ -370,15 +442,37 @@ impl Server {
             .clone();
         let port = grpc_port(&self.config, Some(opened), app.grpc.take())
             .map_err(|_| "the gRPC port couldn't be set up")?;
+        if self.retention_by_hand {
+            app.retention = app.retention.with_timings(RetentionTimings {
+                interval: Duration::from_hours(24),
+                ..RetentionTimings::default()
+            });
+        }
+        let retention = app.retention.service().clone();
         let (stop, signals) = ChannelSignals::new();
         let timeouts = ShutdownTimeouts::of(&self.config.http);
         let db = database.clone();
+        let scraped = if self.metrics {
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .map_err(|_| "the metrics port couldn't be bound")?;
+            Some(listener)
+        } else {
+            None
+        };
+        let metrics_port = scraped
+            .as_ref()
+            .and_then(|listener| listener.local_addr().ok());
         let mut serving = JoinSet::new();
-        serving
-            .spawn(async move { serve(http, port, None, app, &database, signals, timeouts).await });
+        serving.spawn(async move {
+            serve(http, port, scraped, app, &database, signals, timeouts).await
+        });
         self.running = Some(Running {
             db,
             registry,
+            metrics: render,
+            metrics_port,
+            retention,
             stop,
             serving,
         });
@@ -456,6 +550,50 @@ impl Server {
     /// A loopback case's clock: the Owner's TOTP steps move it.
     pub(crate) fn clock(&self) -> &ManualClock {
         self.manual.as_ref().expect("a loopback case's server")
+    }
+
+    /// The running server's series `name`, every label's sample summed, as
+    /// its metrics port renders them now; 0 for a series it doesn't have.
+    pub(crate) fn series(&self, name: &str) -> f64 {
+        self.running()
+            .metrics
+            .text()
+            .lines()
+            .filter_map(|line| {
+                let (series, value) = line.rsplit_once(' ')?;
+                let series = series.split_once('{').map_or(series, |(bare, _)| bare);
+                (series == name).then(|| value.parse::<f64>().ok())?
+            })
+            .sum()
+    }
+
+    /// One run of the running server's retention, now, at the task's own
+    /// batch size and pause: what it did.
+    pub(crate) async fn retention_run(&self) -> Run {
+        self.running()
+            .retention
+            .run_once(&CancellationToken::new())
+            .await
+    }
+
+    /// How many bytes the database holds on disk now: its file and its
+    /// write-ahead log together.
+    pub(crate) fn database_bytes(&self) -> u64 {
+        let file = &self.config.database.path;
+        let mut wal = file.clone().into_os_string();
+        wal.push("-wal");
+        [file.clone(), PathBuf::from(wal)]
+            .iter()
+            .filter_map(|path| std::fs::metadata(path).ok())
+            .map(|found| found.len())
+            .sum()
+    }
+
+    /// Where the running server's metrics port listens.
+    pub(crate) fn metrics_port(&self) -> SocketAddr {
+        self.running()
+            .metrics_port
+            .expect("the case turned the metrics port on")
     }
 
     /// The running server's agents' streams.
@@ -549,7 +687,8 @@ impl Server {
 }
 
 /// The production config, but for what a case sets: its addresses, its
-/// files in `dir`, `heartbeats`, and whether offline accounts are on (a
+/// files in `dir`, `heartbeats`, `limits`, whether each bot keeps only the least chat
+/// a config allows (`least_chat`), and whether offline accounts are on (a
 /// loopback case's only accounts, since it has no Microsoft). The vault key
 /// comes from memory, so its file is never read.
 fn config(
@@ -557,6 +696,8 @@ fn config(
     http: SocketAddr,
     grpc: SocketAddr,
     heartbeats: Heartbeats,
+    limits: Limits,
+    least_chat: bool,
     allow_offline: bool,
 ) -> ServerConfig {
     let pki = dir.join("pki");
@@ -577,7 +718,7 @@ fn config(
             filter: "info".parse().unwrap(),
         },
         auth: AuthConfig::default(),
-        rate_limits: RateLimitConfig::default(),
+        rate_limits: limits.config(),
         vault: VaultConfig {
             key_files: BTreeMap::from([(1, dir.join("vault-key-1"))]),
             active_key_id: 1,
@@ -586,7 +727,14 @@ fn config(
             allow_offline,
             ..AccountsConfig::default()
         },
-        chat: ChatConfig::default(),
+        chat: if least_chat {
+            ChatConfig {
+                bound: ChatBound::try_new(ChatBound::MIN_LINES).unwrap_or_default(),
+                ..ChatConfig::default()
+            }
+        } else {
+            ChatConfig::default()
+        },
         audit: AuditConfig::default(),
         grpc: Some(GrpcConfig {
             bind: grpc,

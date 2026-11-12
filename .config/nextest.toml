@@ -2,6 +2,8 @@
 # Slow tests (containers, real Minecraft) are named `slow_*`, either at the top
 # level of an integration test or inside a module. nextest matches the full test
 # path (e.g. `tests::slow_join`), hence `(^|::)` instead of `^`.
+# Load tests (`load_*`) measure the fleet under load and print a report: `just load`
+# runs them, alone, in the `load` profile, and no other profile includes them (P13.4).
 # Manual tests (`manual_*`) need the user's real credentials, so only the user
 # runs them: fleet-mc's with `just test-real-account` (ADR-0011), fleet-server's
 # Microsoft check with `just test-ms-account` (ADR-0018), fleet-integration's
@@ -9,7 +11,14 @@
 # includes them.
 
 [profile.default]
-default-filter = "not test(/(^|::)(slow|manual)_/)"
+default-filter = "not test(/(^|::)(slow|manual|load)_/)"
+# A test that never ends is stopped after 10 minutes and fails by its name (TIMEOUT),
+# instead of holding the run until a CI job's own timeout ends it without one. A test
+# still bounds its own waits: this limit is for code that stops yielding, where no timer
+# inside the test's process can fire (ADR-0031). Measured on CI's runners on 2026-11-12,
+# over twelve jobs: the slowest test, the authorization matrix, took 37 to 68 s, and no
+# other more than 43 s.
+slow-timeout = { period = "60s", terminate-after = 10 }
 
 [profile.slow]
 default-filter = "test(/(^|::)slow_/)"
@@ -31,13 +40,22 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 filter = "test(/(^|::)manual_/)"
 test-group = "minecraft"
 
+# The load test (P13.4): it measures, so nothing else runs beside it.
+[profile.load]
+default-filter = "test(/(^|::)load_/)"
+slow-timeout = { period = "60s", terminate-after = 10 }
+test-threads = 1
+
 [test-groups]
 minecraft = { max-threads = 1 }
 
 [profile.ci]
-default-filter = "not test(/(^|::)(slow|manual)_/)"
+default-filter = "not test(/(^|::)(slow|manual|load)_/)"
 retries = 0
 fail-fast = false
+# The default profile's limit, which every profile inherits; said again here, so the
+# profile CI's test jobs run shows it.
+slow-timeout = { period = "60s", terminate-after = 10 }
 
 [profile.ci.junit]
 path = "junit.xml"

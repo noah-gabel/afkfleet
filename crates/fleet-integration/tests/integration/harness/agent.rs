@@ -13,8 +13,9 @@
 use core::num::NonZeroUsize;
 use core::time::Duration;
 use std::io;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use fleet_agent::config::{AgentConfig, AgentMode, ControlPlaneConfig, LogConfig};
 use fleet_agent::diagnostics::{HostDiagnostics, HostSample};
@@ -22,6 +23,7 @@ use fleet_agent::enroll::{self, Enrollment};
 use fleet_agent::heartbeat::Heartbeat;
 use fleet_agent::managed::identity::ManagedIdentity;
 use fleet_agent::managed::link::LinkTimings;
+use fleet_agent::metrics_endpoint::Endpoint;
 use fleet_agent::run::{Exit, Managed, Outcome, RunParts, run};
 use fleet_agent::signals::{ShutdownSignals, Signal};
 use fleet_core::enrollment::EnrollmentBundle;
@@ -35,6 +37,7 @@ use fleet_runtime::RuntimeConfig;
 use fleet_server::infra::system::SystemClock;
 use fleet_testkit::mc::FakeConnector;
 use fleet_testkit::system::SeededRandom;
+use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use rustls::pki_types::UnixTime;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
@@ -56,6 +59,9 @@ pub(crate) struct RunOptions {
     /// case's outages never trip the circuit breaker; a case that waits for
     /// a bot's next attempt caps it lower.
     pub(crate) retry: RetryPolicy,
+    /// Whether the metrics endpoint listens, on a loopback port of its own:
+    /// off, as without `[metrics]`, but where a case scrapes it (P13.4).
+    pub(crate) metrics: bool,
 }
 
 impl RunOptions {
@@ -70,8 +76,19 @@ impl RunOptions {
                 Duration::from_mins(5),
             )
             .unwrap(),
+            metrics: false,
         }
     }
+}
+
+/// The process's metrics recorder, installed once as the agent's main.rs
+/// installs it: the fleet's series register in whichever recorder is
+/// installed when it starts, and every run of a case's agents shares it.
+fn recorder() -> PrometheusHandle {
+    static RECORDER: OnceLock<PrometheusHandle> = OnceLock::new();
+    RECORDER
+        .get_or_init(|| PrometheusBuilder::new().install_recorder().unwrap())
+        .clone()
 }
 
 /// One enrolled agent; see the [module docs](self).
@@ -95,6 +112,8 @@ struct Running {
     connector: Option<Connector>,
     signals: mpsc::Sender<Signal>,
     task: JoinSet<Outcome>,
+    /// Where this run's metrics endpoint listens, if it has one.
+    metrics_port: Option<SocketAddr>,
 }
 
 impl Agent {
@@ -179,6 +198,17 @@ impl Agent {
             mode: AgentMode::ControlPlane(plane),
             metrics: None,
         };
+        let endpoint = options.metrics.then(|| {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            Endpoint {
+                listener: tokio::net::TcpListener::from_std(listener).unwrap(),
+                render: recorder(),
+            }
+        });
+        let metrics_port = endpoint
+            .as_ref()
+            .map(|endpoint| endpoint.listener.local_addr().unwrap());
         let (signals, receiver) = mpsc::channel(4);
         let mut task = JoinSet::new();
         task.spawn(
@@ -195,7 +225,7 @@ impl Agent {
                     seed: self.seed,
                     timings: options.timings,
                 }),
-                metrics: None,
+                metrics: endpoint,
             })
             .in_current_span(),
         );
@@ -203,6 +233,7 @@ impl Agent {
             connector: None,
             signals,
             task,
+            metrics_port,
         });
     }
 
@@ -213,6 +244,13 @@ impl Agent {
 
     fn running(&self) -> &Running {
         self.running.as_ref().expect("the agent runs")
+    }
+
+    /// Where the current run's metrics endpoint listens.
+    pub(crate) fn metrics_port(&self) -> SocketAddr {
+        self.running()
+            .metrics_port
+            .expect("the case turned the metrics endpoint on")
     }
 
     /// The current run's fake connector.

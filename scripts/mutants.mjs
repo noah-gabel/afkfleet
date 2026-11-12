@@ -15,7 +15,8 @@
 // (`--in-place --shard k/n`), all shards at once. So the run tests HEAD: with uncommitted
 // changes it refuses to start. A tree is reset before and after its run, since a mutated
 // run leaves files behind (proptest's failure seeds, and a mutant in the source when the
-// run is cut off).
+// run is cut off). The trees and their builds stay for the next run; `just mutants-clean`
+// (scripts/mutants-clean.mjs) removes them.
 //
 // Reports: target/mutants/<scope>/shard-<k>/mutants.out/, and beside it shard-<k>.log,
 // cargo-mutants' own output. The script prints each shard's counts, every missed mutant
@@ -45,8 +46,8 @@ const GATE_NAMES = ["auth", "vault"];
 /** fleet-core's folder: the `core` scope covers it whole, so `auth-vault` leaves it out. */
 const CORE_FOLDER = "crates/fleet-core/";
 
-/** The runs' folder, from the repository's root. */
-const OUT_FOLDER = join("target", "mutants");
+/** The runs' folder, from the repository's root; `just mutants-clean` removes it. */
+export const OUT_FOLDER = join("target", "mutants");
 
 /** The lists of a report this script reads, by outcome. */
 const LISTS = ["caught", "missed", "timeout", "unviable"];

@@ -622,6 +622,13 @@ fuzz target="all" seconds="60":
     cargo run -p fleet-fuzz --example seeds -- fuzz/corpus
     node scripts/fuzz.mjs {{ target }} {{ seconds }}
 
+# fleet-integration's `load_` tests: 200 bots on one managed agent and 20 Members' live
+# events sockets, in-process on the fake connector, measured and printed as `LOAD` lines.
+# No other profile runs them, and nothing runs beside them.
+# The load test (P13.4): prints its report.
+load:
+    cargo nextest run -p fleet-integration --profile load --no-capture
+
 # The scopes are `core` (all of fleet-core) and `auth-vault` (the auth and vault coverage
 # gates' files outside it); `.cargo/mutants.toml` holds the mutants left out, each with
 # why. scripts/mutants.mjs runs every shard in a git worktree of HEAD under
@@ -630,6 +637,14 @@ fuzz target="all" seconds="60":
 # Mutation tests of the last commit, in shards at once: `just mutants core` (needs cargo-mutants 27.1.0).
 mutants scope="all" shards="4":
     node scripts/mutants.mjs {{ scope }} {{ shards }}
+
+# The runs keep a worktree a shard with its build, about 10 GB each, and their reports.
+# scripts/mutants-clean.mjs removes exactly those worktrees, through git, and then
+# target/mutants; it refuses a link there and any other worktree inside, and touches
+# nothing else in target/ (ADR-0031).
+# Remove the mutation runs' worktrees and target/mutants. Not while `just mutants` runs.
+mutants-clean:
+    node scripts/mutants-clean.mjs
 
 # Tests for the scripts in scripts/.
 scripts-test:

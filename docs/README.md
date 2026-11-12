@@ -46,3 +46,4 @@ Each architecture decision record (ADR) holds one decision with its context, its
 - [0029. The authorization matrix of the HTTP API](adr/0029-the-authorization-matrix.md)
 - [0030. The fuzz targets](adr/0030-fuzz-targets.md)
 - [0031. Mutation testing](adr/0031-mutation-testing.md)
+- [0032. The load test](adr/0032-the-load-test.md)

@@ -6,11 +6,12 @@
 
 use core::time::Duration;
 
-use fleet_api_types::accounts::CreateOfflineAccountRequest;
+use fleet_api_types::accounts::{CreateGrantRequest, CreateOfflineAccountRequest, GrantLevel};
 use fleet_api_types::agents::AgentResponse;
-use fleet_api_types::auth::LoginRequest;
+use fleet_api_types::auth::{LoginRequest, RegisterRequest};
 use fleet_api_types::bots::{BotModeRequest, BotPatchRequest, BotResponse};
 use fleet_api_types::chat::{ChatPage, ChatPageQuery, ChatSendRequest, ChatSendResponse};
+use fleet_api_types::invites::CreateInviteRequest;
 use fleet_api_types::mfa::CODE_MAX_CHARS;
 use fleet_api_types::modes::{
     CreateModeRequest, ModeActionKind, ModeActionRequest, ModeResponse, ModeScheduleKind,
@@ -19,8 +20,11 @@ use fleet_api_types::modes::{
 use fleet_api_types::server_settings::{
     ChatFormatsInput, ConflictTextsInput, CreateServerSettingsRequest, ServerSettingsResponse,
 };
+use fleet_api_types::users::UserRole;
 use fleet_api_types::{PageQuery, SecretText};
-use fleet_client::{Client, ClientConfig, ClientError, LoginStep, MemoryStore, ServerUrl, Trust};
+use fleet_client::{
+    Client, ClientConfig, ClientError, LiveEvents, LoginStep, MemoryStore, ServerUrl, Trust,
+};
 use fleet_core::id::{AgentId, BotId, ModeId};
 use fleet_core::system::Clock as _;
 use totp_rs::Totp;
@@ -95,25 +99,24 @@ impl Owner {
     /// The Owner's first login on `server`: the setup step, the
     /// authenticator, and the login with the next step's code.
     pub(crate) async fn log_in(server: &Server) -> Self {
-        let client = Client::new(
-            ClientConfig {
-                server: ServerUrl::parse(&server.url()).unwrap(),
-                trust: Trust::System,
-            },
-            MemoryStore::new(),
-        )
-        .unwrap();
-        let step = client.login(&login()).await.unwrap();
-        assert!(matches!(step, LoginStep::SetupRequired { .. }), "{step:?}");
-        let enrolled = client.mfa_enroll().await.unwrap();
-        let app = Totp::from_url(enrolled.otpauth_uri.expose()).unwrap();
-        client.mfa_confirm(code(server, &app)).await.unwrap();
-        // The next TOTP step, so a new code logs in.
-        server.clock().advance(Duration::from_secs(30));
-        let step = client.login(&login()).await.unwrap();
-        assert!(matches!(step, LoginStep::MfaRequired { .. }), "{step:?}");
-        client.login_mfa(code(server, &app)).await.unwrap();
-        Self { client }
+        Self {
+            client: logged_in(server, OWNER).await,
+        }
+    }
+
+    /// Gives `username` `level` on `bot`'s account, as its owner shares it.
+    pub(crate) async fn grant(&self, bot: BotId, username: &str, level: GrantLevel) {
+        let account = self.shown(bot).await.account.id;
+        self.client
+            .create_grant(
+                account,
+                &CreateGrantRequest {
+                    username: SecretText::new(username.to_owned()),
+                    level,
+                },
+            )
+            .await
+            .unwrap();
     }
 
     /// A new offline account `name`, and its bot pointed at [`MC_SERVER`],
@@ -307,9 +310,77 @@ impl Owner {
     }
 }
 
-fn login() -> LoginRequest {
+/// A Member a case invited (P13.4): registered with an invite of the
+/// Owner's, and logged in with 2FA as the Owner is.
+#[derive(Debug)]
+pub(crate) struct Member {
+    /// Their username.
+    pub(crate) name: String,
+    client: Client<MemoryStore>,
+}
+
+impl Member {
+    /// A new Member `name`, registered with a fresh invite of `owner`'s.
+    pub(crate) async fn join(server: &Server, owner: &Owner, name: &str) -> Self {
+        let invite = owner
+            .client
+            .create_invite(&CreateInviteRequest {
+                role: UserRole::Member,
+            })
+            .await
+            .unwrap();
+        client(server)
+            .register(&RegisterRequest {
+                invite: invite.code,
+                username: SecretText::new(name.to_owned()),
+                password: SecretText::new(PASSWORD.to_owned()),
+            })
+            .await
+            .unwrap();
+        Self {
+            name: name.to_owned(),
+            client: logged_in(server, name).await,
+        }
+    }
+
+    /// Their live events, for the case to read as it likes.
+    pub(crate) fn live_events(&self) -> LiveEvents<MemoryStore> {
+        self.client.live_events()
+    }
+}
+
+/// A client of `server` with no session.
+fn client(server: &Server) -> Client<MemoryStore> {
+    Client::new(
+        ClientConfig {
+            server: ServerUrl::parse(&server.url()).unwrap(),
+            trust: Trust::System,
+        },
+        MemoryStore::new(),
+    )
+    .unwrap()
+}
+
+/// `username`'s first login on `server`: the setup step, the authenticator,
+/// and the login with the next step's code.
+async fn logged_in(server: &Server, username: &str) -> Client<MemoryStore> {
+    let client = client(server);
+    let step = client.login(&login(username)).await.unwrap();
+    assert!(matches!(step, LoginStep::SetupRequired { .. }), "{step:?}");
+    let enrolled = client.mfa_enroll().await.unwrap();
+    let app = Totp::from_url(enrolled.otpauth_uri.expose()).unwrap();
+    client.mfa_confirm(code(server, &app)).await.unwrap();
+    // The next TOTP step, so a new code logs in.
+    server.clock().advance(Duration::from_secs(30));
+    let step = client.login(&login(username)).await.unwrap();
+    assert!(matches!(step, LoginStep::MfaRequired { .. }), "{step:?}");
+    client.login_mfa(code(server, &app)).await.unwrap();
+    client
+}
+
+fn login(username: &str) -> LoginRequest {
     LoginRequest {
-        username: SecretText::new(OWNER.to_owned()),
+        username: SecretText::new(username.to_owned()),
         password: SecretText::new(PASSWORD.to_owned()),
     }
 }
