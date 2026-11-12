@@ -387,7 +387,6 @@ mod tests {
     /// the same seed makes without it.
     #[test]
     fn an_angle_with_a_maximum_of_zero_is_zero_and_draws_nothing() {
-        use rand::Rng as _;
         let mut drawn_from = rng(7);
         let mut untouched = rng(7);
 
