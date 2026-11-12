@@ -34,7 +34,7 @@ Moved from `CLAUDE.md` word for word; it points here. CLAUDE.md keeps the rule: 
 | | Rate limits | `governor` (fleet-server's HTTP limits too, behind its own middleware; no `tower_governor`, ADR-0016) |
 | | Cache / single-flight | `moka` |
 | Errors, config, observability | Errors | `thiserror` (libraries), `anyhow` (`main.rs` only) |
-| | Serialization | `serde`, `serde_json` |
+| | Serialization | `serde`, `serde_json`; `serde_path_to_error` only where fleet-server's JSON extractor reads serde's position out of axum's rejection (ADR-0031) |
 | | Config | `figment` |
 | | Validation | `garde` (DTOs/config); value objects use constructors in core |
 | | Logging | `tracing`, `tracing-subscriber` |
