@@ -20,6 +20,8 @@
 //! - [`retention`]: the server killed in the middle of a retention run.
 //! - [`ingest`]: the server killed in the middle of an ingest batch that
 //!   holds chat and a bot's sticky state (ADR-0019, U16's crash case).
+//! - [`refresh`]: the server killed while it refreshes an account's
+//!   Microsoft token, with the case's own Microsoft (ADR-0019, S64).
 //!
 //! After every kill a case checks what must hold after any fault
 //! ([`after_the_fault`]): SQLite's integrity check on the file as the kill
@@ -34,6 +36,7 @@
 mod backup;
 mod child;
 mod ingest;
+mod refresh;
 mod renewal;
 mod retention;
 

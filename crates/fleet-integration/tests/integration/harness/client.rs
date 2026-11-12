@@ -6,7 +6,9 @@
 
 use core::time::Duration;
 
-use fleet_api_types::accounts::{CreateGrantRequest, CreateOfflineAccountRequest, GrantLevel};
+use fleet_api_types::accounts::{
+    AccountStatus, CreateGrantRequest, CreateOfflineAccountRequest, GrantLevel, LinkFlowState,
+};
 use fleet_api_types::agents::AgentResponse;
 use fleet_api_types::auth::{LoginRequest, RegisterRequest};
 use fleet_api_types::bots::{BotModeRequest, BotPatchRequest, BotResponse};
@@ -25,11 +27,12 @@ use fleet_api_types::{PageQuery, SecretText};
 use fleet_client::{
     Client, ClientConfig, ClientError, LiveEvents, LoginStep, MemoryStore, ServerUrl, Trust,
 };
-use fleet_core::id::{AgentId, BotId, ModeId};
+use fleet_core::id::{AccountId, AgentId, BotId, ModeId};
 use fleet_core::system::Clock as _;
 use totp_rs::Totp;
 
 use super::live::Live;
+use super::logs::Logs;
 use super::server::{OWNER, PASSWORD, Server};
 
 /// One step that does `action`, which takes no field, every 250 ms.
@@ -144,21 +147,7 @@ impl Owner {
             })
             .await
             .unwrap();
-        let mut before = None;
-        let bot = loop {
-            let page = self
-                .client
-                .bots(&PageQuery {
-                    before,
-                    limit: None,
-                })
-                .await
-                .unwrap();
-            if let Some(bot) = page.items.iter().find(|bot| bot.account.id == account.id) {
-                break bot.id;
-            }
-            before = Some(page.next.expect("the account's bot is listed"));
-        };
+        let bot = self.bot_of(account.id).await;
         self.client
             .patch_bot(
                 bot,
@@ -169,6 +158,64 @@ impl Owner {
             .await
             .unwrap();
         bot
+    }
+
+    /// Links a Microsoft account, which the case's fake Microsoft approves
+    /// at once (P13.5), and points its bot at [`MC_SERVER`], stopped: the
+    /// bot. The link's poller logs its steps, which wake `logs`' wait.
+    pub(crate) async fn link(&self, logs: &Logs) -> BotId {
+        let started = self.client.start_link().await.unwrap();
+        let account = asked(logs, "the account is linked", async || {
+            let status = self.client.link_status(started.flow_id).await.unwrap();
+            match status.status.known() {
+                Some(LinkFlowState::Linked) => {
+                    Some(status.account_id.expect("a linked flow names its account"))
+                }
+                Some(LinkFlowState::Waiting | LinkFlowState::Finishing) | None => None,
+                Some(other) => panic!("the link ended {other:?}"),
+            }
+        })
+        .await;
+        let bot = self.bot_of(account).await;
+        self.point(bot, MC_SERVER).await;
+        bot
+    }
+
+    /// The status of the account `bot` plays as, as the Owner's list shows
+    /// it.
+    pub(crate) async fn account_status(&self, bot: BotId) -> Option<AccountStatus> {
+        let account = self.shown(bot).await.account.id;
+        let page = self
+            .client
+            .accounts(&PageQuery {
+                before: None,
+                limit: None,
+            })
+            .await
+            .unwrap();
+        page.items
+            .into_iter()
+            .find(|listed| listed.id == account)
+            .and_then(|listed| listed.status.known())
+    }
+
+    /// The bot of `account`, from the Owner's list.
+    async fn bot_of(&self, account: AccountId) -> BotId {
+        let mut before = None;
+        loop {
+            let page = self
+                .client
+                .bots(&PageQuery {
+                    before,
+                    limit: None,
+                })
+                .await
+                .unwrap();
+            if let Some(bot) = page.items.iter().find(|bot| bot.account.id == account) {
+                return bot.id;
+            }
+            before = Some(page.next.expect("the account's bot is listed"));
+        }
     }
 
     /// A new private mode `name` of the Owner's, whose one step does
@@ -374,6 +421,33 @@ fn client(server: &Server) -> Client<MemoryStore> {
         MemoryStore::new(),
     )
     .unwrap()
+}
+
+/// How long [`asked`] leaves between two questions: three a second, under
+/// the ten a second the API allows one user.
+const ASK_EVERY: Duration = Duration::from_millis(300);
+
+/// Asks the API `ask` until it answers, at `logs`' wakes but no more often
+/// than every [`ASK_EVERY`]: a wait that reads through the API would
+/// otherwise spend the user's rate limit on a busy log. Bounded as every
+/// wait of `logs` is.
+pub(crate) async fn asked<T>(
+    logs: &Logs,
+    what: &str,
+    mut ask: impl AsyncFnMut() -> Option<T>,
+) -> T {
+    let mut last = None::<std::time::Instant>;
+    let mut answer = None;
+    logs.until(what, async || {
+        if last.is_some_and(|at| at.elapsed() < ASK_EVERY) {
+            return false;
+        }
+        last = Some(std::time::Instant::now());
+        answer = ask().await;
+        answer.is_some()
+    })
+    .await;
+    answer.expect("the wait ended with an answer")
 }
 
 /// `username`'s first login on `server`: the setup step, the authenticator,

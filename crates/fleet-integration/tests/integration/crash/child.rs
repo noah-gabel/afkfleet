@@ -23,6 +23,10 @@
 //!   transaction written and not committed. With `hold`, it waits for the
 //!   case's `GO` on stdin instead and lets the commit through (`RELEASED`),
 //!   for a kill right after it.
+//! - A refresh the case's fake Microsoft never answers
+//!   (`harness::microsoft::Stall`, among the server's options): the server
+//!   waits in the provider's call, before Microsoft saw the request or
+//!   after it rotated the token.
 //! - [`Trip::Appears`] and [`Trip::Changes`]: a thread of the child's own
 //!   that looks at a folder or a file until a name ending in a suffix is
 //!   there, or the file's bytes differ, and says so. It only yields between
@@ -40,7 +44,8 @@ use std::sync::Arc;
 use fleet_server::infra::sqlite::Database;
 
 use crate::harness::agent::{RunOptions, run_from_files};
-use crate::harness::server::{Ahead, Limits, Server, ServerOptions, config_in};
+use crate::harness::microsoft::Stall;
+use crate::harness::server::{Ahead, Limits, Microsoft, Server, ServerOptions, config_in};
 
 /// The variable that makes [`crash_child`] a child: its role.
 pub(crate) const ROLE: &str = "AFKFLEET_CRASH_ROLE";
@@ -142,6 +147,13 @@ pub(crate) fn encode_options(options: ServerOptions, retention_run: bool) -> Str
     if options.limits == Limits::LoadSetup {
         words.push("load_setup");
     }
+    let microsoft = match options.microsoft {
+        Microsoft::NeverCalled => None,
+        Microsoft::Fake(None) => Some("microsoft"),
+        Microsoft::Fake(Some((Stall::BeforeTheRequest, _))) => Some("microsoft_stalls_before"),
+        Microsoft::Fake(Some((Stall::AfterTheRotation, _))) => Some("microsoft_stalls_after"),
+    };
+    words.extend(microsoft);
     if retention_run {
         words.push(RETENTION_RUN);
     }
@@ -161,6 +173,15 @@ fn decode_options(text: &str) -> (ServerOptions, bool) {
             } else {
                 Limits::Production
             },
+            microsoft: if has("microsoft_stalls_before") {
+                Microsoft::Fake(Some((Stall::BeforeTheRequest, tripped)))
+            } else if has("microsoft_stalls_after") {
+                Microsoft::Fake(Some((Stall::AfterTheRotation, tripped)))
+            } else if has("microsoft") {
+                Microsoft::Fake(None)
+            } else {
+                Microsoft::NeverCalled
+            },
             ..ServerOptions::default()
         },
         has(RETENTION_RUN),
@@ -172,6 +193,11 @@ fn say(line: &str) {
     let mut out = std::io::stdout().lock();
     writeln!(out, "{SAYS}{line}").unwrap();
     out.flush().unwrap();
+}
+
+/// Says that the child is where its case kills it.
+pub(crate) fn tripped() {
+    say("TRIPPED");
 }
 
 fn variable(name: &str) -> String {

@@ -83,6 +83,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use super::logs::PATIENCE;
+use super::microsoft::{FakeMicrosoft, Stall};
 
 /// The Owner's name.
 pub(crate) const OWNER: &str = "owner";
@@ -121,6 +122,32 @@ pub(crate) struct ServerOptions {
     /// default interval and count: off, as without `[database] backup_dir`,
     /// but where a case takes one (P13.5).
     pub(crate) backups: bool,
+    /// Which Microsoft the server asks: the real adapter, which no case
+    /// with offline accounts ever calls, but where a case links an account
+    /// with the fake one (P13.5).
+    pub(crate) microsoft: Microsoft,
+}
+
+/// Which Microsoft a case's server asks.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) enum Microsoft {
+    /// The real adapter, never called: the case's accounts are offline
+    /// ones.
+    #[default]
+    NeverCalled,
+    /// The case's own ([`FakeMicrosoft`]), with one refresh stalled where
+    /// a crash case's child process is killed, if anywhere.
+    Fake(Option<(Stall, fn())>),
+}
+
+impl Microsoft {
+    /// The provider for the server whose files are in `dir`, on `clock`.
+    fn provider(self, dir: &Path, clock: &Arc<dyn Clock>) -> Arc<dyn MicrosoftAuthProvider> {
+        match self {
+            Self::NeverCalled => Arc::new(ReqwestMicrosoftAuth::new(Arc::clone(clock)).unwrap()),
+            Self::Fake(stall) => Arc::new(FakeMicrosoft::new(dir, Arc::clone(clock), stall)),
+        }
+    }
 }
 
 /// Which `[rate_limits]` a case's server runs.
@@ -291,14 +318,14 @@ impl Server {
             whole_millis(SystemClock.now()),
             options.clock_behind,
         ));
+        let clock: Arc<dyn Clock> = Arc::new(manual.clone());
         Self::begin(
             dir,
             Begin {
                 options,
                 allow_offline: true,
-                clock: Arc::new(manual.clone()),
-                // Never called: the cases' accounts are offline ones.
-                microsoft: Arc::new(ReqwestMicrosoftAuth::new(Arc::new(manual.clone())).unwrap()),
+                microsoft: options.microsoft.provider(dir, &clock),
+                clock,
                 manual: Some(manual),
                 random: Arc::new(SeededRandom::new(11)),
                 keys: Keys::Fixed,
@@ -428,8 +455,7 @@ impl Server {
             http_address,
             grpc: GrpcAddress(Arc::new(std::sync::Mutex::new(grpc_address))),
             config,
-            // Never called: the cases' accounts are offline ones.
-            microsoft: Arc::new(ReqwestMicrosoftAuth::new(Arc::clone(&clock)).unwrap()),
+            microsoft: options.microsoft.provider(dir, &clock),
             clock,
             manual: None,
             random: Arc::new(OsRandom),
