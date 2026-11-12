@@ -196,7 +196,7 @@ async fn chaos_a_partition_between_the_agent_and_the_server_heals_with_every_bot
     let mut chaos = Chaos::start("afkfleet-chaos-partition", 100, false).await;
     let granted = |chaos: &mut Chaos| total(&chaos.metrics(), "afkfleet_session_grants_total");
 
-    chaos.write("BeforeThePartition").await;
+    chaos.write("Partitioned").await;
     chaos.partition("agent");
     let cut = Instant::now();
 
@@ -305,7 +305,7 @@ const REFUSAL: Duration = Duration::from_secs(30);
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chaos_a_full_disk_fails_writes_loudly_and_everything_goes_on_once_there_is_room() {
     let mut chaos = Chaos::start("afkfleet-chaos-disk", 120, true).await;
-    chaos.write("BeforeTheDiskFilled").await;
+    chaos.write("DiskBefore").await;
     chaos.after_the_fault().await;
     let server = chaos.stack.container("server");
     // Every bot holds more lines than it keeps: the next retention run has
@@ -335,7 +335,7 @@ async fn chaos_a_full_disk_fails_writes_loudly_and_everything_goes_on_once_there
     // A write fails with the generic error and a request ID, within the
     // request's own bound.
     let asked = Instant::now();
-    let refused = chaos.try_write("WhileTheDiskIsFull").await;
+    let refused = chaos.try_write("DiskFull").await;
     assert!(asked.elapsed() < REFUSAL, "{:?}", asked.elapsed());
     let Err(ClientError::Api(failure)) = &refused else {
         panic!("a write on a full disk wasn't refused by the API: {refused:?}");
@@ -394,7 +394,7 @@ async fn chaos_a_full_disk_fails_writes_loudly_and_everything_goes_on_once_there
     // With room again, everything goes on by itself: the write, the next
     // retention run, the bots' chat, and a backup; the same container,
     // never restarted.
-    chaos.write("OnceThereIsRoom").await;
+    chaos.write("DiskRoomAgain").await;
     let succeeded = runs(&mut chaos, "success");
     until(
         &compose,

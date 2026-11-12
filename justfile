@@ -643,7 +643,7 @@ load:
 # The chaos tests (P13.5): kills, a partition and a full disk on the real images (needs Docker).
 chaos $AFKFLEET_SMOKE_IMAGES_BUILT="1": images
     docker compose --file deploy/compose.dev.yaml pull minecraft
-    cargo nextest run -p fleet-integration --profile chaos
+    cargo nextest run -p fleet-integration --profile chaos --no-fail-fast
 
 # The scopes are `core` (all of fleet-core) and `auth-vault` (the auth and vault coverage
 # gates' files outside it); `.cargo/mutants.toml` holds the mutants left out, each with
