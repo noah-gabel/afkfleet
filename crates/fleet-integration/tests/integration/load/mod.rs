@@ -86,6 +86,22 @@ impl Board {
         .await;
     }
 
+    /// Waits until no line arrived for `quiet`, or `bound` passed: for a
+    /// phase that may lose lines, where no count says it's over.
+    async fn settled(&self, quiet: Duration, bound: Duration) {
+        let _ = tokio::time::timeout(bound, async {
+            let mut last = (self.arrivals(), Instant::now());
+            while last.1.elapsed() < quiet {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                let now = self.arrivals();
+                if now != last.0 {
+                    last = (now, Instant::now());
+                }
+            }
+        })
+        .await;
+    }
+
     /// Takes the latencies gathered so far, sorted.
     fn take(&self) -> Vec<Duration> {
         let mut took = std::mem::take(&mut *self.took.lock().unwrap());
@@ -262,6 +278,80 @@ async fn chat(
     (board.take(), refused)
 }
 
+/// The server's count of chat rows its ingest wrote or skipped, and of
+/// those it dropped before, from its own metrics: whole numbers.
+fn ingest(world: &World) -> (usize, usize) {
+    let count = |name| {
+        let value = world.server.series(name);
+        format!("{value:.0}").parse::<usize>().unwrap()
+    };
+    (
+        count("afkfleet_ingest_rows_total"),
+        count("afkfleet_ingest_chat_dropped_total"),
+    )
+}
+
+/// Chat at `rate` lines a second for `seconds`, spread over every bot, a
+/// tick every 10 ms: one report line with what arrived, how late, and what
+/// the server says it stored and dropped. Whatever the rate, every line is
+/// either counted as dropped or at each of its viewers, and no socket is
+/// told to fetch everything again.
+async fn sustained(world: &World, board: &Board, bots: &[BotId], rate: usize, seconds: usize) {
+    let (stored, dropped) = ingest(world);
+    let resyncs = board.resyncs.load(Ordering::Relaxed);
+    let a_tick = rate / 100;
+    let begun = Instant::now();
+    let mut sent = 0;
+    let mut refused = 0;
+    for tick in 0..seconds * 100 {
+        for _ in 0..a_tick {
+            let text = format!("{rate} a second, line {sent}");
+            board.sending(&text);
+            let heard = SessionEvent::Chat(IncomingChat::system(&text));
+            if world.ledger.emit(bots[sent % BOTS], heard) != EmitOutcome::Queued {
+                refused += 1;
+            }
+            sent += 1;
+        }
+        // The next tick's own time, so a slow tick doesn't lower the rate.
+        let next = Duration::from_millis(10) * u32::try_from(tick + 1).unwrap();
+        tokio::time::sleep(next.saturating_sub(begun.elapsed())).await;
+    }
+    let emitted = begun.elapsed();
+    board
+        .settled(Duration::from_secs(2), Duration::from_secs(30))
+        .await;
+    let took = board.take();
+    let (stored_now, dropped_now) = ingest(world);
+    println!(
+        "{}",
+        latencies(
+            &format!("{rate} lines/s for {seconds} s (sent in {emitted:.1?})"),
+            sent * VIEWERS_A_BOT,
+            &took
+        )
+    );
+    println!(
+        "LOAD {rate} lines/s: the server stored {} rows and dropped {}; {refused} lines a session didn't take; {} resyncs",
+        stored_now - stored,
+        dropped_now - dropped,
+        board.resyncs.load(Ordering::Relaxed) - resyncs,
+    );
+    let (stored, dropped) = (stored_now - stored, dropped_now - dropped);
+    assert_eq!(refused, 0, "{rate} lines/s: every session took its lines");
+    assert_eq!(stored + dropped, sent, "{rate} lines/s: stored or counted");
+    assert_eq!(
+        took.len(),
+        stored * VIEWERS_A_BOT,
+        "{rate} lines/s: every stored line at each of its viewers"
+    );
+    assert_eq!(
+        board.resyncs.load(Ordering::Relaxed),
+        resyncs,
+        "{rate} lines/s: no socket fell behind the bus"
+    );
+}
+
 #[tokio::test]
 async fn load_200_bots_and_20_sockets() {
     let world = World::new(ServerOptions {
@@ -292,6 +382,10 @@ async fn load_200_bots_and_20_sockets() {
     let (burst_took, burst_refused) =
         chat(&world, &board, &bots, "burst", burst, Duration::ZERO).await;
     let burst_done = begun.elapsed();
+    // Rising rates, up to and past what one agent's stream may hold a tick.
+    for rate in [500, 1000, 2000, 4000] {
+        sustained(&world, &board, &bots, rate, 5).await;
+    }
     viewers.leave().await;
 
     println!(

@@ -56,7 +56,7 @@ use fleet_server::infra::msauth::ReqwestMicrosoftAuth;
 use fleet_server::infra::pki::load;
 use fleet_server::infra::sqlite::{self, Database, DatabaseOptions};
 use fleet_server::infra::system::{MonotonicClock, OsRandom, SystemClock, TokioPace};
-use fleet_server::metrics::Metrics;
+use fleet_server::metrics::{Metrics, MetricsRender};
 use fleet_server::ports::agents::AgentCert;
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord};
 use fleet_server::ports::bots::Bot;
@@ -216,6 +216,7 @@ impl Keys {
 struct Running {
     db: Database,
     registry: AgentRegistry,
+    metrics: MetricsRender,
     stop: mpsc::Sender<Signal>,
     serving: JoinSet<Exit>,
 }
@@ -376,6 +377,8 @@ impl Server {
         let lockout_key = keys
             .derive_key(DerivedKey::LoginAttempts)
             .map_err(|_| "the vault's key couldn't be derived")?;
+        let metrics = Metrics::prometheus();
+        let render = metrics.render().clone();
         let ports = ServerPorts {
             clock: Arc::clone(&self.clock),
             limiter_clock: Arc::new(MonotonicClock::start()),
@@ -383,7 +386,7 @@ impl Server {
             microsoft: Arc::clone(&self.microsoft),
             pace: Arc::new(TokioPace),
             reconcile: self.reconcile,
-            metrics: Metrics::prometheus(),
+            metrics,
         };
         let (opened, ca) = open(
             ControlPlane {
@@ -419,6 +422,7 @@ impl Server {
         self.running = Some(Running {
             db,
             registry,
+            metrics: render,
             stop,
             serving,
         });
@@ -496,6 +500,21 @@ impl Server {
     /// A loopback case's clock: the Owner's TOTP steps move it.
     pub(crate) fn clock(&self) -> &ManualClock {
         self.manual.as_ref().expect("a loopback case's server")
+    }
+
+    /// The running server's series `name`, every label's sample summed, as
+    /// its metrics port renders them now; 0 for a series it doesn't have.
+    pub(crate) fn series(&self, name: &str) -> f64 {
+        self.running()
+            .metrics
+            .text()
+            .lines()
+            .filter_map(|line| {
+                let (series, value) = line.rsplit_once(' ')?;
+                let series = series.split_once('{').map_or(series, |(bare, _)| bare);
+                (series == name).then(|| value.parse::<f64>().ok())?
+            })
+            .sum()
     }
 
     /// The running server's agents' streams.
