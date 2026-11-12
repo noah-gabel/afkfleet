@@ -119,6 +119,9 @@ Both tiers check the same things, each with what it has:
 - *Rejected:* a lifetime for the write connection (S39 took it away for the commit count, and a poisoned connection would still refuse writes until it ran out); asking SQLite itself whether a transaction is open (`sqlite3_get_autocommit` through the raw handle is `unsafe`); starting transactions without sqlx's `Transaction` (a rewrite of the store's write path for one error path).
 - **Worth an upstream report:** a `ROLLBACK` that fails because SQLite already rolled back leaves sqlx's depth where it was. That's the user's to file.
 
+### The other six chaos tests: nothing
+They passed on their first run, on both architectures: the three pairs of a kill and a stop, the partition, the placement gate and the lost volume. Each takes 40 s to 3 minutes on CI's runners, the seven together about 11 minutes after the images are built. They ran there alone: Docker Desktop wasn't running on the development PC while this group was built, so `just chaos`, `just test-stack` and the `sh` tests of `setup.sh` were run by CI (the Stack workflow runs on a pull request that touches `deploy/` or the workflow itself).
+
 ### The crash cases: nothing in the server or the agent
 Every case passed against the code as it was. Each was then shown to bite with a temporary mutation of that code, reverted from git right after:
 
@@ -137,7 +140,7 @@ The retention case and the ingest-batch case pin that a batch is one transaction
 Thirty runs of the first eight in a row, and ten of all eleven, had no failure.
 
 ### Three things the cases made visible, left as they are
-- **A killed retention run's count isn't audited.** Its deletions are right, batch by batch, but the tally is in memory until the hourly `retention.purge` entry or a graceful stop (ADR-0020, U20). After a kill the entry misses what was deleted since the last one. The rows are gone either way, as the policy says; an entry a batch would be the per-batch audit U20 decided against.
+- **A killed retention run's count isn't audited.** Its deletions are right, batch by batch, but the tally is in memory until the hourly `retention.purge` entry or a graceful stop (ADR-0020, U20). After a kill the entry misses what was deleted since the last one. The rows are gone either way, as the policy says; an entry a batch would be the per-batch audit U20 decided against. The threat model lists it among its accepted risks already.
 - **A bot's state is never recorded backwards** (ADR-0019, S40): the server compares its receipt time with the stored one. The first draft of the harness ran the child on the real clock while the case's own clock stood 30 s ahead (the Owner's logins move it by their TOTP steps), and the child stored no state at all. That's the rule working. It also means a server whose clock is set back by minutes stores no bot's state until it has caught up; the runbook already asks for NTP on every host.
 - **A kill between a backup's first and last step leaves its dot file for a day.** Pruning removes it with the first backup taken once it's a day old, with its journal. Until then it only takes room.
 
