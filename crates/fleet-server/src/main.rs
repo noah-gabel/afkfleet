@@ -50,8 +50,8 @@ use fleet_core::system::Clock as _;
 use fleet_server::cli::serve::{ControlPlane, StartError};
 use fleet_server::cli::user::{self, PasswordInput, TerminalPrompt};
 use fleet_server::cli::{
-    self, AgentCommand, Cli, Command, PkiCommand, UserCommand, VaultCommand, agent, backup,
-    healthcheck, migrate, pki, serve, vault,
+    self, AgentCommand, Cli, Command, DatabaseCommand, PkiCommand, UserCommand, VaultCommand,
+    agent, backup, database, healthcheck, migrate, pki, serve, vault,
 };
 use fleet_server::config::{self, ServerConfig};
 use fleet_server::infra::crypto::vault::VaultKeys;
@@ -75,6 +75,9 @@ fn main() -> ExitCode {
         Command::Serve { config } => run_server(&config),
         Command::Backup { config } => back_up(&config),
         Command::Migrate { config } => migrate_database(&config),
+        Command::Database {
+            command: DatabaseCommand::Check { config },
+        } => check_database(&config),
         Command::Healthcheck { config } => check_health(&config),
         Command::User {
             command:
@@ -246,6 +249,28 @@ fn back_up(path: &Path) -> ExitCode {
     let exit = runtime.block_on(backup::run(
         &config,
         Arc::new(SystemClock),
+        &mut io::stdout(),
+        &mut io::stderr(),
+    ));
+    ExitCode::from(exit.code())
+}
+
+/// `afkfleet-server database check`.
+fn check_database(path: &Path) -> ExitCode {
+    let config = match config::load(path) {
+        Ok(config) => config,
+        Err(error) => return fail_early(&error),
+    };
+    // Logs to stderr: stdout carries the verdict alone.
+    if let Err(error) = init_on(&config.log, &NoRules, LogOutput::Stderr) {
+        return fail_early(&error);
+    }
+    let runtime = match current_thread() {
+        Ok(runtime) => runtime,
+        Err(error) => return fail_early(&StartError::Runtime(error)),
+    };
+    let exit = runtime.block_on(database::check(
+        &config,
         &mut io::stdout(),
         &mut io::stderr(),
     ));

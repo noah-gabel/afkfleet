@@ -70,6 +70,7 @@ mod envelopes;
 mod error;
 mod file;
 mod grants;
+pub mod integrity;
 mod invites;
 mod login_attempts;
 mod mfa;
