@@ -111,6 +111,14 @@ Both tiers check the same things, each with what it has:
 
 ## What the faults found
 
+### The full disk: after it, the server could never write again. Fixed
+- **What the test saw.** While both volumes were full, everything was as asked: reads worked, a write got the generic 500 with its request ID and an `error` line, `backup` ended with 1 and published nothing, a retention run and the schedule's backup failed in their metrics, the database stayed sound, and the server kept running. Then the room came back, and the next write failed with 500 too, on both architectures. So did every write after it: the server could read and never write again until it was restarted.
+- **Why.** SQLite rolls a transaction back by itself after some errors, a full disk among them. sqlx doesn't see that. When the transaction is dropped it sends its own `ROLLBACK`, which fails ("no transaction is active"), and its count of open transactions on that connection stays at one; `Connection::is_in_transaction`'s docs say an automatic rollback may not show there. The server starts every write with `begin_with("BEGIN IMMEDIATE")`, which sqlx refuses on a connection it counts as inside a transaction (`InvalidSavePointStatement`), and the write pool has exactly that one connection, with no lifetime (ADR-0020, S39).
+- **The failing tests first,** without a disk: SQLite's commit hook refuses one commit, which fails that `COMMIT` and rolls its transaction back, the same state. In fleet-server's `tests/store.rs`, the write after it failed with `InvalidSavePointStatement`, for an audited transaction and for a retention batch.
+- **The fix,** in the write pool's `after_release` hook (`infra/sqlite/commits.rs`), which already settled the commit count there: a connection that comes back still counted as inside a transaction is pinged, so it has run everything it was handed, its `ROLLBACK` included; if it's still inside one then, the pool closes it and opens a new one for the next write. One `warn` says so: "the database's write connection was replaced: SQLite ended a transaction by itself, as it does when the disk is full". A transaction that was dropped and rolled back in the ordinary way costs one ping and keeps its connection.
+- *Rejected:* a lifetime for the write connection (S39 took it away for the commit count, and a poisoned connection would still refuse writes until it ran out); asking SQLite itself whether a transaction is open (`sqlite3_get_autocommit` through the raw handle is `unsafe`); starting transactions without sqlx's `Transaction` (a rewrite of the store's write path for one error path).
+- **Worth an upstream report:** a `ROLLBACK` that fails because SQLite already rolled back leaves sqlx's depth where it was. That's the user's to file.
+
 ### The crash cases: nothing in the server or the agent
 Every case passed against the code as it was. Each was then shown to bite with a temporary mutation of that code, reverted from git right after:
 
@@ -142,6 +150,7 @@ Thirty runs of the first eight in a row, and ten of all eleven, had no failure.
 ## Consequences
 - An operator who updates sees no difference: the database exists. A first install through `setup.sh init` gains one step it runs itself. Whoever started the server by hand on an empty folder outside dev mode runs `migrate` once first; the error says so.
 - A server whose volume is gone now stops with a line that says so, and stays stopped until a backup is restored.
+- A server whose disk was full writes again once there's room. Its write connection is replaced after any transaction SQLite ended by itself, with one `warn`; a transaction dropped in the ordinary way costs the write connection one ping more than before.
 - `database check` is one more command to keep: its help, the runbook's lines and the tests of both.
 - The crash cases start a child process each, 6 s for the first nine together and 28 s each for the two refresh cases, in `just check` and CI.
 - The harness's `Server` and `Agent` can run in a child, and its options grew by two (`backups`, `microsoft`); every loopback case runs as before.

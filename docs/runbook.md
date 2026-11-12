@@ -717,6 +717,7 @@ docker compose exec server /usr/local/bin/afkfleet-server database check --confi
   docker compose run --rm maintenance database check --config /etc/afkfleet/server.toml
   ```
 - **"the database is damaged"** (exit 3), with SQLite's findings below it: stop afkfleet and restore the newest backup ([Restoring a backup](#restoring-a-backup)). The findings name tables, pages and row numbers, never a row's content.
+- **While the disk is full,** the app still shows everything, and whatever would change something fails with the server's generic error and a request ID, which the server's log names at `error`. The bots stay online. Retention and the backups fail, and say so in their metrics: `afkfleet_retention_runs_total` with `outcome="failed"`, and `afkfleet_backup_failures_total` ([Metrics](#metrics)). Free some room, and everything goes on by itself: nothing needs a restart or a repair. The log then says once, at `warn`, "the database's write connection was replaced"; the schedule tries a failed backup again within the hour.
 - **After a kill** (the host lost power, the kernel ran out of memory, a container was killed): start afkfleet as usual. A backup that was being written is left as its dot file ending in `.partial`, which never counts as a backup and is removed a day later. An agent that was renewing its certificate comes back on its old one or its new one.
 
 ## When a service won't start or keeps restarting

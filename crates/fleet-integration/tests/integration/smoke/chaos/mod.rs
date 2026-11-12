@@ -395,6 +395,16 @@ async fn chaos_a_full_disk_fails_writes_loudly_and_everything_goes_on_once_there
     // retention run, the bots' chat, and a backup; the same container,
     // never restarted.
     chaos.write("DiskRoomAgain").await;
+    // That write is why this test exists: SQLite rolled the failed
+    // transactions back by itself, and the server replaced the write
+    // connection that was left counting one as open (ADR-0033).
+    let log = chaos
+        .stack
+        .ok(&["logs", "--no-color", "--no-log-prefix", "server"], QUICK);
+    assert!(
+        log.contains(fleet_server::infra::sqlite::WRITE_CONNECTION_REPLACED),
+        "the server never said that it replaced its write connection"
+    );
     let succeeded = runs(&mut chaos, "success");
     until(
         &compose,
