@@ -40,6 +40,9 @@ fleet-startup.workspace = true
 # The fake connector, ManualClock, SeededRandom and the log buffer.
 fleet-testkit.workspace = true
 rstest.workspace = true
+# The recorder main.rs installs for the agent's metrics endpoint, which the load test
+# scrapes (P13.4, ADR-0032).
+metrics-exporter-prometheus.workspace = true
 # The process's one rustls provider, aws-lc-rs.
 rustls.workspace = true
 # The Owner's password and the vault key in their secret wrappers.

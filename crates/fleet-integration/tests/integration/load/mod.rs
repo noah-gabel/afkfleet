@@ -9,6 +9,7 @@
 //! WORK IN PROGRESS: the first stage, the setup and chat's latency.
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -24,6 +25,8 @@ use fleet_core::mc::SessionEvent;
 use fleet_server::app::events::{READ_AGAIN, RIGHTS_READ};
 use fleet_testkit::mc::EmitOutcome;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::net::TcpStream;
 use tokio::task::JoinSet;
 
 use crate::harness::agent::{Agent, RunOptions};
@@ -263,6 +266,15 @@ fn latencies(phase: &str, expected: usize, sorted: &[Duration]) -> String {
     )
 }
 
+/// How the one agent runs: room for every bot and fifty more, its metrics
+/// endpoint on.
+fn running() -> RunOptions {
+    RunOptions {
+        metrics: true,
+        ..RunOptions::capacity(BOTS + 50)
+    }
+}
+
 /// The fleet: every bot its own offline account, all started on the one
 /// agent and live.
 async fn fleet(world: &World) -> Vec<BotId> {
@@ -470,7 +482,7 @@ async fn the_agent_restarts(world: &World, board: &Board, bots: &[BotId], agent:
     })
     .await;
     let dark = begun.elapsed();
-    agent.start(&world.ledger, RunOptions::capacity(BOTS + 50));
+    agent.start(&world.ledger, running());
     until("every bot in a new session", || {
         bots.iter().zip(&before).all(|(bot, sessions)| {
             world.ledger.sessions(*bot) > *sessions && world.ledger.live(*bot)
@@ -510,7 +522,7 @@ async fn both_restart(world: &mut World, board: &Board, bots: &[BotId], agent: &
     agent.stop().await;
     world.server.restart().await;
     let restarted = begun.elapsed();
-    agent.start(&world.ledger, RunOptions::capacity(BOTS + 50));
+    agent.start(&world.ledger, running());
     until("every bot in a new session", || {
         bots.iter().zip(&before).all(|(bot, sessions)| {
             world.ledger.sessions(*bot) > *sessions && world.ledger.live(*bot)
@@ -534,6 +546,58 @@ async fn both_restart(world: &mut World, board: &Board, bots: &[BotId], agent: &
         granted / live.saturating_sub(restarted).as_secs_f64().max(0.001),
         board.disconnects.load(Ordering::Relaxed) - disconnects,
     );
+}
+
+/// One `GET /metrics` on `port`, as a scraper sends it: how long the whole
+/// answer took and how many bytes it was, or `None` when it wasn't a 200.
+async fn scrape(port: SocketAddr) -> Option<(Duration, usize)> {
+    let begun = Instant::now();
+    let answered = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut stream = TcpStream::connect(port).await.ok()?;
+        stream
+            .write_all(b"GET /metrics HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .ok()?;
+        let mut answer = Vec::new();
+        stream.read_to_end(&mut answer).await.ok()?;
+        Some(answer)
+    })
+    .await
+    .ok()??;
+    answered
+        .starts_with(b"HTTP/1.1 200")
+        .then(|| (begun.elapsed(), answered.len()))
+}
+
+/// What a port's scrapes gave: whose port, every scrape's time, the largest
+/// answer in bytes, and how many weren't answered with a 200.
+type Scrapes = (&'static str, Vec<Duration>, usize, usize);
+
+/// Scrapes `whose` `port` every quarter second until it's stopped.
+async fn scrapes(whose: &'static str, port: SocketAddr, stop: Arc<AtomicUsize>) -> Scrapes {
+    let (mut took, mut bytes, mut failed) = (Vec::new(), 0, 0);
+    while stop.load(Ordering::Relaxed) == 0 {
+        match scrape(port).await {
+            Some((time, size)) => {
+                took.push(time);
+                bytes = bytes.max(size);
+            }
+            None => failed += 1,
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    took.sort_unstable();
+    (whose, took, bytes, failed)
+}
+
+/// One report line for a port's scrapes.
+fn scraped((whose, took, bytes, failed): &Scrapes) -> String {
+    format!(
+        "LOAD metrics, {whose}: {} scrapes at 1000 lines/s, p50 {:?}, max {:?}, at most {bytes} bytes; {failed} not answered",
+        took.len(),
+        percentile(took, 50),
+        took.last().copied().unwrap_or_default(),
+    )
 }
 
 /// The server's count of chat rows its ingest wrote or skipped, and of
@@ -614,12 +678,13 @@ async fn sustained(world: &World, board: &Board, bots: &[BotId], rate: usize, se
 async fn load_200_bots_and_20_sockets() {
     let mut world = World::new(ServerOptions {
         limits: Limits::LoadSetup,
+        metrics: true,
         ..ServerOptions::default()
     })
     .await;
     let mut meter = Meter::start();
     let mut agent = world.agent("agent-a").await;
-    agent.start(&world.ledger, RunOptions::capacity(BOTS + 50));
+    agent.start(&world.ledger, running());
     let bots = fleet(&world).await;
     meter.lap("200 bots created and started");
     let viewers = Viewers::join(&world, &bots).await;
@@ -649,7 +714,21 @@ async fn load_200_bots_and_20_sockets() {
     meter.lap("a burst of 1000 lines");
     // Rising rates, up to and past what one agent's stream may hold a tick.
     for rate in [500, 1000, 2000, 4000] {
+        // Both metrics ports are scraped while the middle rate runs.
+        let stop = Arc::new(AtomicUsize::new(0));
+        let mut scrapers = JoinSet::new();
+        if rate == 1000 {
+            let (server, agent) = (world.server.metrics_port(), agent.metrics_port());
+            scrapers.spawn(scrapes("the server's port", server, Arc::clone(&stop)));
+            scrapers.spawn(scrapes("the agent's port", agent, Arc::clone(&stop)));
+        }
         sustained(&world, &board, &bots, rate, 5).await;
+        stop.store(1, Ordering::Relaxed);
+        while let Some(done) = scrapers.join_next().await {
+            let done = done.unwrap();
+            assert_eq!(done.3, 0, "{}: every scrape answered", done.0);
+            println!("{}", scraped(&done));
+        }
         meter.lap(&format!("{rate} lines/s and its 2 s of quiet"));
     }
     every_bot_stopped_and_started(&world, &board, &bots).await;

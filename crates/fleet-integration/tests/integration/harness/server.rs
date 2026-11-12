@@ -95,6 +95,9 @@ pub(crate) struct ServerOptions {
     /// `[rate_limits]`: the production ones, but where a case's own setup
     /// would spend them (P13.4).
     pub(crate) limits: Limits,
+    /// Whether the metrics port listens, on a loopback port of its own: off,
+    /// as without `[metrics]`, but where a case scrapes it (P13.4).
+    pub(crate) metrics: bool,
 }
 
 /// Which `[rate_limits]` a case's server runs.
@@ -173,6 +176,8 @@ pub(crate) struct Server {
     microsoft: Arc<dyn MicrosoftAuthProvider>,
     reconcile: ReconcileTimings,
     keys: Keys,
+    /// Whether each serve gets a metrics port.
+    metrics: bool,
     /// The API's listener, bound once for the server's whole life: each
     /// serve gets a clone of it, so a restart never frees its port and the
     /// Owner's client keeps its URL.
@@ -217,6 +222,8 @@ struct Running {
     db: Database,
     registry: AgentRegistry,
     metrics: MetricsRender,
+    /// Where this serve's metrics port listens, if it has one.
+    metrics_port: Option<SocketAddr>,
     stop: mpsc::Sender<Signal>,
     serving: JoinSet<Exit>,
 }
@@ -226,6 +233,7 @@ struct Begin {
     heartbeats: Heartbeats,
     reconcile: ReconcileTimings,
     limits: Limits,
+    metrics: bool,
     allow_offline: bool,
     clock: Arc<dyn Clock>,
     manual: Option<ManualClock>,
@@ -249,6 +257,7 @@ impl Server {
                 heartbeats: options.heartbeats,
                 reconcile: options.reconcile,
                 limits: options.limits,
+                metrics: options.metrics,
                 allow_offline: true,
                 clock: Arc::new(manual.clone()),
                 // Never called: the cases' accounts are offline ones.
@@ -275,6 +284,7 @@ impl Server {
                 heartbeats: Heartbeats::default(),
                 reconcile: ReconcileTimings::default(),
                 limits: Limits::Production,
+                metrics: false,
                 allow_offline: false,
                 clock: Arc::new(SystemClock),
                 manual: None,
@@ -350,6 +360,7 @@ impl Server {
             microsoft: begin.microsoft,
             reconcile: begin.reconcile,
             keys: begin.keys,
+            metrics: begin.metrics,
             ca_fingerprint,
             running: None,
         };
@@ -416,13 +427,26 @@ impl Server {
         let (stop, signals) = ChannelSignals::new();
         let timeouts = ShutdownTimeouts::of(&self.config.http);
         let db = database.clone();
+        let scraped = if self.metrics {
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .map_err(|_| "the metrics port couldn't be bound")?;
+            Some(listener)
+        } else {
+            None
+        };
+        let metrics_port = scraped
+            .as_ref()
+            .and_then(|listener| listener.local_addr().ok());
         let mut serving = JoinSet::new();
-        serving
-            .spawn(async move { serve(http, port, None, app, &database, signals, timeouts).await });
+        serving.spawn(async move {
+            serve(http, port, scraped, app, &database, signals, timeouts).await
+        });
         self.running = Some(Running {
             db,
             registry,
             metrics: render,
+            metrics_port,
             stop,
             serving,
         });
@@ -515,6 +539,13 @@ impl Server {
                 (series == name).then(|| value.parse::<f64>().ok())?
             })
             .sum()
+    }
+
+    /// Where the running server's metrics port listens.
+    pub(crate) fn metrics_port(&self) -> SocketAddr {
+        self.running()
+            .metrics_port
+            .expect("the case turned the metrics port on")
     }
 
     /// The running server's agents' streams.
