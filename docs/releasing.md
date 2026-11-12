@@ -99,7 +99,7 @@ afkfleet's bots speak one Minecraft version, azalea's: today Java Edition 26.1 w
 
    **Auth and `cargo deny`.**
    - `just deny`: a new azalea crate that depends on azalea-auth is named there, and `deny.toml`'s azalea-auth wrapper list is updated together with a note in ADR-0018.
-   - ADR-0012's re-checks: the `rsa` advisory still holds (azalea never decrypts with RSA), the six hickory ignores go once azalea uses hickory-proto 0.26.2 or newer, and the license exceptions move to the new versions after a review.
+   - ADR-0012's re-checks: the `rsa` advisory still holds (azalea never decrypts with RSA), the eleven hickory ignores go once azalea uses hickory 0.26.2 or newer, and the license exceptions move to the new versions after a review.
    - fleet-server's Microsoft adapter (`crates/fleet-server/src/infra/msauth/`) against the new azalea-auth's `auth.rs`: its endpoints, client ID, scope, fields and headers. The adapter sends its own requests with azalea-auth's protocol, so a change there isn't picked up by the bump. Then you run `just test-ms-account` against your own account (the AI never does).
 
    **The runs.**

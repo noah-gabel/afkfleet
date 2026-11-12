@@ -35,7 +35,7 @@ Both are unconditional azalea dependencies, and both licenses are GPL-compatible
 ### Re-checking
 Every azalea bump (ADR-0003's procedure, step 5):
 - re-checks the `rsa` advisory
-- removes the six hickory ignores once azalea uses hickory-proto ≥ 0.26.2 (two until 2026-11-11, at ≥ 0.26.1; the amendment below)
+- removes the eleven hickory ignores once azalea uses hickory 0.26.2 or newer (two until 2026-11-11, at hickory-proto ≥ 0.26.1; six until 2026-11-12; the amendments below)
 - updates the license exceptions to the new versions after a review
 
 ### Phase 9, group B: azalea-auth only through azalea *(the user's decision, [ADR-0018](0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md))*
@@ -57,9 +57,30 @@ Every azalea bump (ADR-0003's procedure, step 5):
 
 **Not done:** resolving with the OS resolver instead (the alternative below, rejected for SRV records); a `[patch]` to a fork of hickory 0.25 with the fix, which would put unreviewed code where a reviewed release was.
 
+### 2026-11-12: five advisories about DNSSEC validation *(decided under [ADR-0025](0025-a-simpler-workflow.md))*
+**What happened.** RUSTSEC-2026-0504, 0505, 0511 and 0512 were published against `hickory-proto`, and RUSTSEC-2026-0514 against `hickory-resolver`, a day after the four above. `just deny` failed again on `main` and on the open pull request, with nothing changed in the workspace.
+
+**No fix can be taken,** for the same reason: `hickory-proto` has no fixed 0.25 release (from 0.26 the validation code lives in `hickory-net`, fixed in 0.26.2), `hickory-resolver`'s fix is 0.26.2, and azalea-protocol 0.16.0 asks for `hickory-resolver` 0.25.
+
+**All five are about DNSSEC validation, which isn't compiled here.** Checked in the 0.25.2 sources on docs.rs and with `cargo tree -e features --target all`:
+- `hickory-proto` declares its `dnssec` module under `#[cfg(any(feature = "dnssec-aws-lc-rs", feature = "dnssec-ring"))]`. The features in this build are `std`, `tokio` and `futures-io`.
+- `hickory-resolver` wraps its client in the validating handle only under `#[cfg(feature = "__dnssec")]`, which only its `dnssec-ring` and `dnssec-aws-lc-rs` features turn on; without it, setting `validate` logs a warning and the plain client answers. The features in this build are `default`, `system-config` and `tokio`.
+
+| Advisory | What it is | Why it's acceptable | Removal trigger |
+|---|---|---|---|
+| RUSTSEC-2026-0504 | The last NSEC3 record of a zone's chain compared the wrong way round, so it "covers" nearly every name | `hickory-proto`'s `dnssec` module: not compiled | Removed once azalea uses hickory 0.26.2 or newer |
+| RUSTSEC-2026-0505 | NSEC3 owner names matched by their first label only, not checked against the zone | The same module: not compiled | The same |
+| RUSTSEC-2026-0511 | An NXDOMAIN taken as proven for a name that is an empty non-terminal | The same module: not compiled | The same |
+| RUSTSEC-2026-0512 | An unrelated signed record set taken as the validated answer | The same module: not compiled | The same |
+| RUSTSEC-2026-0514 | `Resolver::lookup` and `lookup_ip` answered `Ok` with records whose validation had failed | Only with validation on, which needs the features above: here no lookup is validated, and nothing takes one as validated. azalea looks a server's name up as any client without DNSSEC does | The same |
+
+**What it doesn't change:** the agent never relied on DNSSEC. Whoever can forge a DNS answer on the agent's path could always point a bot at another address; these five make that no easier.
+
+**Not done:** the same two as above.
+
 ## Consequences
 - **Easier:** azalea builds in the workspace, and `cargo deny` stays strict everywhere else. Each exception carries its reason and its removal trigger in `deny.toml` itself.
-- **Harder:** every azalea bump has to revisit five entries (nine since 2026-11-11). A new advisory against `rsa` or `hickory-proto` still fails the build, because the ignores name single advisory IDs.
+- **Harder:** every azalea bump has to revisit five entries (nine since 2026-11-11, fourteen since 2026-11-12). A new advisory against `rsa` or `hickory-proto` still fails the build, because the ignores name single advisory IDs.
 - **Accepted risk:** the `rsa` advisory has no fix in sight. The analysis above holds only as long as azalea never decrypts with RSA, so each bump checks that again.
 
 ## Alternatives considered
