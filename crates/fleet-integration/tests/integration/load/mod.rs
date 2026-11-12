@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use fleet_api_types::Open;
 use fleet_api_types::accounts::GrantLevel;
-use fleet_api_types::bots::BotStateKind;
+use fleet_api_types::bots::{BotStateKind, BotStatusKind};
 use fleet_api_types::events::EventMessageKind;
 use fleet_client::{LiveEvents, LiveStop, LiveUpdate, MemoryStore, RefetchReason};
 use fleet_core::chat::IncomingChat;
@@ -26,7 +26,7 @@ use fleet_testkit::mc::EmitOutcome;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::task::JoinSet;
 
-use crate::harness::agent::RunOptions;
+use crate::harness::agent::{Agent, RunOptions};
 use crate::harness::client::Member;
 use crate::harness::server::{Limits, ServerOptions};
 use crate::harness::world::World;
@@ -110,10 +110,14 @@ struct Board {
     disconnects: AtomicUsize,
     /// `bot` frames, on every socket together.
     bot_frames: AtomicUsize,
-    /// The state each socket's newest `bot` frame showed, by the socket's
-    /// Member and the bot.
-    states: Mutex<HashMap<(usize, BotId), BotStateKind>>,
+    /// What each socket's newest `bot` frame showed, by the socket's Member
+    /// and the bot: what the status rests on, and the state. A bot whose
+    /// agent is away keeps its last state, and its status is `unknown`.
+    states: Mutex<HashMap<(usize, BotId), Shown>>,
 }
+
+/// A `bot` frame's status: what it rests on, and its state.
+type Shown = (Option<BotStatusKind>, Option<BotStateKind>);
 
 impl Board {
     /// Notes that the line `text` goes out now.
@@ -139,7 +143,19 @@ impl Board {
             .lock()
             .unwrap()
             .values()
-            .filter(|shown| **shown == state)
+            .filter(|shown| shown.1 == Some(state))
+            .count()
+    }
+
+    /// How many of a Member's bots their socket last showed online as their
+    /// agent reports it, not as last known.
+    fn reported_online(&self) -> usize {
+        let online = (Some(BotStatusKind::Reported), Some(BotStateKind::Online));
+        self.states
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|shown| **shown == online)
             .count()
     }
 
@@ -196,12 +212,15 @@ async fn read(mut socket: LiveEvents<MemoryStore>, board: Arc<Board>, member: us
                 }
                 Some(EventMessageKind::Bot) => {
                     board.bot_frames.fetch_add(1, Ordering::Relaxed);
-                    let state = event
-                        .bot
-                        .as_ref()
-                        .and_then(|bot| bot.status.state.as_ref().and_then(Open::known));
-                    if let (Some(bot), Some(state)) = (event.bot_id, state) {
-                        board.states.lock().unwrap().insert((member, bot), state);
+                    if let (Some(bot), Some(shown)) = (event.bot_id, &event.bot) {
+                        let status = &shown.status;
+                        board.states.lock().unwrap().insert(
+                            (member, bot),
+                            (
+                                status.kind.known(),
+                                status.state.as_ref().and_then(Open::known),
+                            ),
+                        );
                     }
                 }
                 _ => {}
@@ -422,6 +441,62 @@ async fn every_bot_stopped_and_started(world: &World, board: &Board, bots: &[Bot
     }
 }
 
+/// Waits until `done`, looking every 10 ms, and fails with `what` after two
+/// minutes: a wait that costs the same whatever the log holds.
+async fn until(what: &str, mut done: impl FnMut() -> bool) {
+    let waited = tokio::time::timeout(Duration::from_mins(2), async {
+        while !done() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(waited.is_ok(), "{what}: not within two minutes");
+}
+
+/// The agent stops and starts again with every bot running, the sockets
+/// open: how long until every bot plays again and every viewer is shown it,
+/// and what the server's passes over 200 bots cost the sockets.
+async fn the_agent_restarts(world: &World, board: &Board, bots: &[BotId], agent: &mut Agent) {
+    let pairs = BOTS * VIEWERS_A_BOT;
+    let before: Vec<usize> = bots.iter().map(|bot| world.ledger.sessions(*bot)).collect();
+    let reads = world.logs.count(RIGHTS_READ);
+    let again = world.logs.count(READ_AGAIN);
+    let frames = board.bot_frames.load(Ordering::Relaxed);
+    let begun = Instant::now();
+    agent.stop().await;
+    let stopped = begun.elapsed();
+    until("every viewer shown that no bot is reported", || {
+        board.reported_online() == 0
+    })
+    .await;
+    let dark = begun.elapsed();
+    agent.start(&world.ledger, RunOptions::capacity(BOTS + 50));
+    until("every bot in a new session", || {
+        bots.iter().zip(&before).all(|(bot, sessions)| {
+            world.ledger.sessions(*bot) > *sessions && world.ledger.live(*bot)
+        })
+    })
+    .await;
+    let live = begun.elapsed();
+    until("every viewer shown its bots online again", || {
+        board.reported_online() == pairs
+    })
+    .await;
+    let shown = begun.elapsed();
+    let took = rights_reads(world, reads);
+    println!(
+        "LOAD the agent restarts: stopped after {stopped:?}, every viewer shown its bots as last known after {dark:?}; started again, every bot in a new session after {live:?}, every viewer shown it online after {shown:?}"
+    );
+    println!(
+        "LOAD the agent restarts: {} bot frames on the sockets; the rights were read {} times, p50 {:?}, max {:?}; {} reads done again",
+        board.bot_frames.load(Ordering::Relaxed) - frames,
+        took.len(),
+        percentile(&took, 50),
+        took.last().copied().unwrap_or_default(),
+        world.logs.count(READ_AGAIN) - again,
+    );
+}
+
 /// The server's count of chat rows its ingest wrote or skipped, and of
 /// those it dropped before, from its own metrics: whole numbers.
 fn ingest(world: &World) -> (usize, usize) {
@@ -540,6 +615,8 @@ async fn load_200_bots_and_20_sockets() {
     }
     every_bot_stopped_and_started(&world, &board, &bots).await;
     meter.lap("200 bots stopped and started again");
+    the_agent_restarts(&world, &board, &bots, &mut agent).await;
+    meter.lap("the agent restarted with 200 bots");
     viewers.leave().await;
 
     println!(
