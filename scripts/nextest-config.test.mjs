@@ -68,10 +68,14 @@ describe(".config/nextest.toml", () => {
   const tables = profiles(readFileSync(join(root, ".config", "nextest.toml"), "utf8"));
 
   it("has the six profiles the recipes and CI run", () => {
-    assert.deepEqual(
-      [...tables.keys()].sort(),
-      ["chaos", "ci", "default", "load", "manual", "slow"],
-    );
+    assert.deepEqual([...tables.keys()].sort(), [
+      "chaos",
+      "ci",
+      "default",
+      "load",
+      "manual",
+      "slow",
+    ]);
   });
 
   it("ends a test that never ends after ten minutes, in every profile", () => {

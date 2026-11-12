@@ -90,6 +90,16 @@ fn api_port(net: Net) -> u16 {
     18_000 + u16::from(net.number())
 }
 
+/// The agents' retries in a chaos stack: a bot tries again after 20 s at
+/// most, where production waits up to 5 minutes, and the circuit breaker is
+/// out of reach, where production's would open after 8 failures for a
+/// quarter of an hour. A test takes its Minecraft server down twice within
+/// minutes and waits for every bot to be back; how the backoff grows and
+/// when the breaker opens are fleet-runtime's own tests.
+const RETRY: &str = "      AFKFLEET_AGENT__RETRY__MAX_DELAY_SECS: \"20\"
+      AFKFLEET_AGENT__RETRY__CIRCUIT_FAILURES: \"1000\"
+";
+
 /// How large the capped volumes are: the database's and the backups'.
 const DATA_CAP: &str = "32m";
 const BACKUPS_CAP: &str = "16m";
@@ -209,7 +219,7 @@ services:
     environment:
       AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS: "false"
       AFKFLEET_AGENT__CONTROL_PLANE__PRIVATE_TARGETS: '["{play}"]'
-  {SECOND_SERVICE}:
+{RETRY}  {SECOND_SERVICE}:
     image: ${{AFKFLEET_AGENT_IMAGE}}
     profiles: [{SECOND_PROFILE}]
     pull_policy: never
@@ -226,7 +236,7 @@ services:
       AFKFLEET_AGENT__NAME: {SECOND}
       AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS: "false"
       AFKFLEET_AGENT__CONTROL_PLANE__PRIVATE_TARGETS: '["{play}"]'
-    volumes:
+{RETRY}    volumes:
       - ./prod/agent.toml:/etc/afkfleet/agent.toml:ro
       - agent-two-data:/data
       - ca:/ca:ro
