@@ -34,7 +34,11 @@
 //!   lifetime: sqlx closes a connection past it without the release hook
 //!   that settles the commit count (ADR-0020, S39; the `commits` module).
 //!   Its idle timeout still replaces a connection that sat unused, which is
-//!   always settled by then.
+//!   always settled by then. A connection that comes back still counted as
+//!   inside a transaction, because SQLite ended it by itself (a full disk),
+//!   is replaced too, with one `warn`
+//!   ([`WRITE_CONNECTION_REPLACED`]; ADR-0033; the `commits` module): every
+//!   later write on it would be refused.
 //! - **The read pool has four**, each with `query_only=ON`, so a write through
 //!   a read connection fails instead of bypassing the single writer.
 //!
@@ -86,6 +90,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use self::commits::CommitCount;
+pub use self::commits::REPLACED as WRITE_CONNECTION_REPLACED;
 pub use self::connect::{
     BUSY_TIMEOUT, DatabaseOptions, PoolRole, READ_CONNECTIONS, connect_options,
 };
