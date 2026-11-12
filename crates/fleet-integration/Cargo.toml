@@ -44,6 +44,8 @@ rstest.workspace = true
 rustls.workspace = true
 # The Owner's password and the vault key in their secret wrappers.
 secrecy.workspace = true
+# The load test's reading of its own process: CPU time and memory (P13.4, ADR-0032).
+sysinfo.workspace = true
 # Each test's folder: the database, the PKI, the agents' identities.
 tempfile.workspace = true
 # The DoD check's online-mode Minecraft server in Docker.

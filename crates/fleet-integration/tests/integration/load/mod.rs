@@ -20,6 +20,7 @@ use fleet_core::chat::IncomingChat;
 use fleet_core::id::BotId;
 use fleet_core::mc::SessionEvent;
 use fleet_testkit::mc::EmitOutcome;
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::task::JoinSet;
 
 use crate::harness::agent::RunOptions;
@@ -35,6 +36,59 @@ const MEMBERS: usize = 20;
 const GRANTS_EACH: usize = 20;
 /// How many Members see each bot.
 const VIEWERS_A_BOT: usize = MEMBERS * GRANTS_EACH / BOTS;
+
+/// The test's own process, read from the OS: the server, the agent, every
+/// client and the harness itself run in it, so its CPU time and memory are
+/// an upper bound for the server's and the agent's together.
+struct Meter {
+    system: System,
+    pid: Pid,
+    /// The last reading: when, and the CPU time used until then.
+    last: (Instant, Duration),
+    /// The most memory any reading found, in bytes.
+    peak: u64,
+}
+
+impl Meter {
+    fn start() -> Self {
+        let mut meter = Self {
+            system: System::new().unwrap(),
+            pid: sysinfo::get_current_pid().unwrap(),
+            last: (Instant::now(), Duration::ZERO),
+            peak: 0,
+        };
+        meter.last.1 = meter.read().0;
+        meter
+    }
+
+    /// The CPU time the process used so far, and the memory it holds now.
+    fn read(&mut self) -> (Duration, u64) {
+        let what = ProcessRefreshKind::nothing().with_cpu().with_memory();
+        self.system
+            .refresh_processes_specifics(ProcessesToUpdate::Some(&[self.pid]), true, what);
+        let process = self.system.process(self.pid).expect("this process");
+        let memory = process.memory();
+        self.peak = self.peak.max(memory);
+        (
+            Duration::from_millis(process.accumulated_cpu_time()),
+            memory,
+        )
+    }
+
+    /// One report line for what `phase` used since the last one.
+    fn lap(&mut self, phase: &str) {
+        let (cpu, memory) = self.read();
+        let wall = self.last.0.elapsed();
+        let used = cpu.saturating_sub(self.last.1);
+        self.last = (Instant::now(), cpu);
+        println!(
+            "LOAD process, {phase}: {} ms of CPU in {wall:.1?} ({:.0} % of one core); {} MiB held",
+            used.as_millis(),
+            100.0 * used.as_secs_f64() / wall.as_secs_f64().max(0.001),
+            memory / (1024 * 1024),
+        );
+    }
+}
 
 /// What the sockets saw, and when each line was sent.
 #[derive(Debug, Default)]
@@ -359,11 +413,16 @@ async fn load_200_bots_and_20_sockets() {
         ..ServerOptions::default()
     })
     .await;
+    let mut meter = Meter::start();
     let mut agent = world.agent("agent-a").await;
     agent.start(&world.ledger, RunOptions::capacity(BOTS + 50));
     let bots = fleet(&world).await;
+    meter.lap("200 bots created and started");
     let viewers = Viewers::join(&world, &bots).await;
     let board = Arc::clone(&viewers.board);
+    meter.lap("20 Members joined, their sockets ready");
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    meter.lap("idle, 200 bots online and 20 sockets open");
 
     // Steady chat: twenty lines a second for ten seconds.
     let steady = 200;
@@ -376,15 +435,18 @@ async fn load_200_bots_and_20_sockets() {
         Duration::from_millis(50),
     )
     .await;
+    meter.lap("20 lines/s for 10 s");
     // A burst: five lines on every bot at once.
     let burst = 5 * BOTS;
     let begun = Instant::now();
     let (burst_took, burst_refused) =
         chat(&world, &board, &bots, "burst", burst, Duration::ZERO).await;
     let burst_done = begun.elapsed();
+    meter.lap("a burst of 1000 lines");
     // Rising rates, up to and past what one agent's stream may hold a tick.
     for rate in [500, 1000, 2000, 4000] {
         sustained(&world, &board, &bots, rate, 5).await;
+        meter.lap(&format!("{rate} lines/s and its 2 s of quiet"));
     }
     viewers.leave().await;
 
@@ -408,6 +470,10 @@ async fn load_200_bots_and_20_sockets() {
         board.unreadable.load(Ordering::Relaxed),
         board.disconnects.load(Ordering::Relaxed),
         steady_refused + burst_refused,
+    );
+    println!(
+        "LOAD process: at most {} MiB held at any reading",
+        meter.peak / (1024 * 1024)
     );
     assert_eq!(steady_took.len(), steady * VIEWERS_A_BOT, "steady lines");
     assert_eq!(burst_took.len(), burst * VIEWERS_A_BOT, "burst lines");

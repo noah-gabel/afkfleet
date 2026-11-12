@@ -310,6 +310,10 @@ proptest = { version = "1.11.0", default-features = false }
 rstest = { version = "0.27.0", default-features = false }
 # serde_json: also fleet-testkit's log buffer, which parses JSON log lines (ADR-0015).
 serde_json = "1.0.151"
+# sysinfo: the load test reads its own process's CPU time and memory (P13.4, ADR-0032).
+# fleet-integration's tests only, never a shipped binary. Without default features:
+# `system` alone, which is the processes; no disks, networks, GPUs or users.
+sysinfo = { version = "0.40.1", default-features = false, features = ["system"] }
 # tempfile: fleet-server's database tests open real files in a fresh folder, and
 # fleet-integration's tests keep each server's database, PKI and agents' identities in
 # one; already in the lockfile through figment and insta (ADR-0015, ADR-0019 U21).
