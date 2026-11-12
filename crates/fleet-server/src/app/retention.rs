@@ -10,8 +10,9 @@
 //! 2. **chat by age:** lines received at or before `[chat] retention_days`
 //!    ago, users' lines among them;
 //! 3. **chat by size:** for each bot, the lines past its newest
-//!    `[chat] max_lines_per_bot`, the cut read before its deletes, so a line
-//!    written meanwhile, newer, stays;
+//!    `[chat] max_lines_per_bot`, every bot's cut read before any delete, so
+//!    a line written meanwhile, newer, stays; a batch takes rows of as many
+//!    bots as fit (P13.4);
 //! 4. **the audit log:** a prefix by ID, everything below the first entry
 //!    dated after `[audit] retention_days` ago;
 //! 5. **invites,** then **enrollment tokens:** unused ones that expired at
@@ -484,25 +485,80 @@ impl RetentionService {
         }
     }
 
-    /// Each bot's lines past its bound, its cut read before its deletes.
+    /// Each bot's lines past its bound. Every bot's cut is read first, with
+    /// no write open; then the lines at or below the cuts go
+    /// ([`Self::through_cuts`]).
     async fn size_phase(&self, stop: &CancellationToken, run: &mut Run) -> Ended {
         let bots = match self.store.retention().bots().await {
             Ok(bots) => bots,
             Err(error) => return Ended::Failed(error),
         };
         let keep = self.policy.bound.lines();
+        let mut cuts = Vec::new();
         for bot in bots {
             if stop.is_cancelled() {
                 return Ended::Stopped;
             }
-            let cut = match self.store.retention().chat_cut(bot, keep).await {
-                Ok(Some(cut)) => cut,
-                Ok(None) => continue,
+            match self.store.retention().chat_cut(bot, keep).await {
+                Ok(Some(cut)) => cuts.push((bot, cut)),
+                Ok(None) => {}
                 Err(error) => return Ended::Failed(error),
+            }
+        }
+        self.through_cuts(stop, run, &cuts).await
+    }
+
+    /// The lines at or below each bot's cut, in batches of at most [`BATCH`]
+    /// rows. A batch takes rows of as many bots as fit, so many bots a
+    /// little over their bound are one commit and one pause, not one a bot:
+    /// with a batch a bot, 200 bots made a run twenty seconds of pauses
+    /// (P13.4, ADR-0032). A bot whose rows don't fit goes on in the next
+    /// batch. Each batch is committed and followed by the pause, its rows
+    /// counted in `run` once it committed.
+    async fn through_cuts(
+        &self,
+        stop: &CancellationToken,
+        run: &mut Run,
+        cuts: &[(BotId, ChatMessageId)],
+    ) -> Ended {
+        let mut cuts = cuts.iter().copied().peekable();
+        while cuts.peek().is_some() {
+            let mut batch = match self.open(stop).await {
+                Ok(batch) => batch,
+                Err(ended) => return ended,
             };
-            match self.drain(stop, run, Delete::ChatThrough(bot, cut)).await {
-                Ended::Done => {}
-                ended => return ended,
+            let mut taken = 0_u32;
+            while let Some(&(bot, cut)) = cuts.peek() {
+                let room = BATCH.saturating_sub(taken);
+                if room == 0 {
+                    break;
+                }
+                let delete = Delete::ChatThrough(bot, cut);
+                let purged = match delete.run(batch.as_mut(), room).await {
+                    Ok(purged) => u32::try_from(purged.count).unwrap_or(room).min(room),
+                    Err(error) => return Ended::Failed(error),
+                };
+                taken = taken.saturating_add(purged);
+                if purged < room {
+                    // Fewer than asked for: this bot has no more.
+                    cuts.next();
+                }
+            }
+            if taken == 0 {
+                // Nothing to commit: dropped, it moves no commit count.
+                return Ended::Done;
+            }
+            if let Err(error) = batch.commit().await {
+                return Ended::Failed(error);
+            }
+            // Counted once committed: a batch that failed deleted nothing.
+            run.deleted.chat_by_size = run.deleted.chat_by_size.saturating_add(u64::from(taken));
+            run.batches = run.batches.saturating_add(1);
+            tokio::select! {
+                biased;
+                // Both are cancel-safe: waiting loses nothing.
+                () = stop.cancelled() => return Ended::Stopped,
+                () = sleep(self.pause) => {}
             }
         }
         Ended::Done
@@ -567,6 +623,22 @@ impl RetentionService {
         drained.ended
     }
 
+    /// A batch on the write connection, or how the phase ends without one:
+    /// the stop came, before the connection was asked for or while it was
+    /// waited for, or the store failed.
+    async fn open(&self, stop: &CancellationToken) -> Result<Box<dyn RetentionBatch>, Ended> {
+        if stop.is_cancelled() {
+            return Err(Ended::Stopped);
+        }
+        let batch = self.store.retention_batch().await.map_err(Ended::Failed)?;
+        if stop.is_cancelled() {
+            // Dropping the batch rolls it back: the shutdown's flush never
+            // waits behind a batch that started after it.
+            return Err(Ended::Stopped);
+        }
+        Ok(batch)
+    }
+
     /// `delete`'s batches; see [`Self::drain`].
     async fn batches(&self, stop: &CancellationToken, delete: Delete) -> Drained {
         let mut drained = Drained {
@@ -576,18 +648,10 @@ impl RetentionService {
             ended: Ended::Done,
         };
         let ended = loop {
-            if stop.is_cancelled() {
-                break Ended::Stopped;
-            }
-            let mut batch = match self.store.retention_batch().await {
+            let mut batch = match self.open(stop).await {
                 Ok(batch) => batch,
-                Err(error) => break Ended::Failed(error),
+                Err(ended) => break ended,
             };
-            if stop.is_cancelled() {
-                // Dropping the batch rolls it back: the shutdown's flush
-                // never waits behind a batch that started after it.
-                break Ended::Stopped;
-            }
             let purged = match delete.run(batch.as_mut(), BATCH).await {
                 Ok(purged) => purged,
                 Err(error) => break Ended::Failed(error),
