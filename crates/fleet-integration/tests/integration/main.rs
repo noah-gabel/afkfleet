@@ -9,6 +9,10 @@
 //! - [`loopback`]: P10.9's cases over mTLS on `127.0.0.1`.
 //! - [`load`]: P13.4's load test, 200 bots and 20 Members' sockets,
 //!   measured (ADR-0032); only `just load` runs it.
+//! - [`crash`]: P13.5's crash cases (ADR-0033): the server or the agent in a
+//!   child process of this binary, killed by the operating system at an
+//!   exact point of a renewal, a backup, a retention run or an ingest
+//!   batch, then started again on the files it left.
 //! - [`dod_kit`]: the definition-of-done checks' kit (ADR-0020, S72): the server's and the
 //!   agent's configs, loaded with exactly their recipes' exports, fit each
 //!   other and their Minecraft container.
@@ -37,6 +41,7 @@
 //! too, against Docker, each wait bounded and woken by an event.
 #![cfg(test)]
 
+mod crash;
 mod dod_kit;
 mod full_flow;
 mod harness;

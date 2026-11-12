@@ -2674,6 +2674,7 @@ dependencies = [
  "rstest",
  "rustls",
  "secrecy",
+ "sqlx",
  "sysinfo",
  "tempfile",
  "testcontainers",

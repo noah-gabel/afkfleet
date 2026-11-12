@@ -12,6 +12,8 @@
 //! - [`Proxy::close_gate`] / [`Proxy::open_gate`]: while the gate is
 //!   closed, a new connection is closed as soon as it's accepted, so the
 //!   agent's dial fails fast and it backs off.
+//!   [`Proxy::close_gate_after`] closes it by itself after a number of
+//!   connections.
 //!
 //! Its tasks die with it.
 
@@ -46,6 +48,8 @@ pub(crate) struct Proxy {
 #[derive(Debug, Default)]
 struct Shared {
     gate_closed: bool,
+    /// How many more connections pass before the gate closes by itself.
+    passes_left: Option<usize>,
     open: Vec<Connection>,
 }
 
@@ -57,6 +61,22 @@ struct Connection {
 }
 
 impl Shared {
+    /// Whether a connection accepted now passes the gate; one that does
+    /// uses up a pass, and the last pass closes the gate.
+    fn pass(&mut self) -> bool {
+        if self.gate_closed {
+            return false;
+        }
+        if let Some(left) = self.passes_left.as_mut() {
+            *left = left.saturating_sub(1);
+            if *left == 0 {
+                self.gate_closed = true;
+                self.passes_left = None;
+            }
+        }
+        true
+    }
+
     /// Forgets the connections whose pumps both ended.
     fn prune(&mut self) {
         self.open.retain(|connection| !connection.cut.is_closed());
@@ -90,9 +110,20 @@ impl Proxy {
         self.shared.lock().unwrap().gate_closed = true;
     }
 
+    /// The next `passes` connections pass, then the gate closes by itself:
+    /// a case's way to let an agent's one connection through and none after
+    /// it, with no moment between the two for a second one to slip in.
+    pub(crate) fn close_gate_after(&self, passes: usize) {
+        let mut shared = self.shared.lock().unwrap();
+        shared.gate_closed = passes == 0;
+        shared.passes_left = Some(passes);
+    }
+
     /// New connections pass again.
     pub(crate) fn open_gate(&self) {
-        self.shared.lock().unwrap().gate_closed = false;
+        let mut shared = self.shared.lock().unwrap();
+        shared.gate_closed = false;
+        shared.passes_left = None;
     }
 
     /// The open connections go silent both ways and stay open.
@@ -123,7 +154,7 @@ async fn accept(listener: TcpListener, upstream: GrpcAddress, shared: Arc<Mutex<
             continue;
         };
         while pumps.try_join_next().is_some() {}
-        if shared.lock().unwrap().gate_closed {
+        if !shared.lock().unwrap().pass() {
             drop(client);
             continue;
         }

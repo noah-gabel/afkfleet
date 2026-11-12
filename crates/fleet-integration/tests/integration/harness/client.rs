@@ -93,15 +93,30 @@ pub(crate) const MC_SERVER: &str = "mc.example.com:25565";
 #[derive(Debug)]
 pub(crate) struct Owner {
     client: Client<MemoryStore>,
+    /// Their authenticator, for a later login ([`Owner::log_in_again`]).
+    app: Totp,
 }
 
 impl Owner {
     /// The Owner's first login on `server`: the setup step, the
     /// authenticator, and the login with the next step's code.
     pub(crate) async fn log_in(server: &Server) -> Self {
-        Self {
-            client: logged_in(server, OWNER).await,
-        }
+        let (client, app) = logged_in(server, OWNER).await;
+        Self { client, app }
+    }
+
+    /// A new login with the same password and authenticator, on a client
+    /// that holds nothing: the server opens the Owner's sealed TOTP secret
+    /// for it, so the vault still opens what it stored (P13.5). The clock
+    /// moves one TOTP step first, since the server takes only a later step
+    /// than the last one used.
+    pub(crate) async fn log_in_again(&mut self, server: &Server) {
+        server.clock().advance(Duration::from_secs(30));
+        let client = client(server);
+        let step = client.login(&login(OWNER)).await.unwrap();
+        assert!(matches!(step, LoginStep::MfaRequired { .. }), "{step:?}");
+        client.login_mfa(code(server, &self.app)).await.unwrap();
+        self.client = client;
     }
 
     /// Gives `username` `level` on `bot`'s account, as its owner shares it.
@@ -339,7 +354,7 @@ impl Member {
             .unwrap();
         Self {
             name: name.to_owned(),
-            client: logged_in(server, name).await,
+            client: logged_in(server, name).await.0,
         }
     }
 
@@ -363,7 +378,7 @@ fn client(server: &Server) -> Client<MemoryStore> {
 
 /// `username`'s first login on `server`: the setup step, the authenticator,
 /// and the login with the next step's code.
-async fn logged_in(server: &Server, username: &str) -> Client<MemoryStore> {
+async fn logged_in(server: &Server, username: &str) -> (Client<MemoryStore>, Totp) {
     let client = client(server);
     let step = client.login(&login(username)).await.unwrap();
     assert!(matches!(step, LoginStep::SetupRequired { .. }), "{step:?}");
@@ -375,7 +390,7 @@ async fn logged_in(server: &Server, username: &str) -> Client<MemoryStore> {
     let step = client.login(&login(username)).await.unwrap();
     assert!(matches!(step, LoginStep::MfaRequired { .. }), "{step:?}");
     client.login_mfa(code(server, &app)).await.unwrap();
-    client
+    (client, app)
 }
 
 fn login(username: &str) -> LoginRequest {

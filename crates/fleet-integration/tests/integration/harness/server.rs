@@ -20,6 +20,11 @@
 //!   operator does, and starts it again on the same database, PKI and
 //!   addresses, with the same clock and randomness: a loopback case's
 //!   server only, since the managed check's key is used once.
+//! - **A crash case's server** runs in a child process between two serves of
+//!   the case's own ([`Server::resume`], which the child calls on the files
+//!   the case's server left; [`Server::moved_to`], which points the agents'
+//!   proxies at it): the real clock and the OS's randomness, the same fixed
+//!   vault key (P13.5, ADR-0033).
 
 use core::num::NonZeroU32;
 use core::time::Duration;
@@ -31,12 +36,14 @@ use std::sync::Arc;
 use chrono::TimeDelta;
 use fleet_core::audit::AuditAction;
 use fleet_core::auth::NewPassword;
+use fleet_core::backup::BackupPolicy;
 use fleet_core::enrollment::EnrollmentBundle;
 use fleet_core::id::{AgentId, BotId};
 use fleet_core::pki::CertFingerprint;
 use fleet_core::retention::ChatBound;
 use fleet_core::system::{Clock, SecureRandom};
 use fleet_core::value::Username;
+use fleet_server::app::backup::BackupService;
 use fleet_server::app::enrollment::EnrollmentTokenService;
 use fleet_server::app::retention::{RetentionService, RetentionTimings, Run};
 use fleet_server::app::users::UserService;
@@ -45,8 +52,9 @@ use fleet_server::cli::serve::{
     ControlPlane, Exit, ServerPorts, ShutdownTimeouts, app_with, grpc_port, open, serve,
 };
 use fleet_server::config::{
-    AccountsConfig, AuditConfig, AuthConfig, ChatConfig, DatabaseConfig, GrpcConfig, Heartbeats,
-    HttpConfig, LogConfig, LogFormat, PkiPaths, Rate, RateLimitConfig, ServerConfig, VaultConfig,
+    AccountsConfig, AuditConfig, AuthConfig, BackupConfig, ChatConfig, DatabaseConfig, GrpcConfig,
+    Heartbeats, HttpConfig, LogConfig, LogFormat, PkiPaths, Rate, RateLimitConfig, ServerConfig,
+    VaultConfig,
 };
 use fleet_server::grpc::reconciler::ReconcileTimings;
 use fleet_server::grpc::registry::AgentRegistry;
@@ -78,6 +86,8 @@ use super::logs::PATIENCE;
 
 /// The Owner's name.
 pub(crate) const OWNER: &str = "owner";
+/// The backups' folder in a case's folder, when its backups are on.
+pub(crate) const BACKUPS: &str = "backups";
 /// A loopback case's Owner's password: strong, so the server takes it.
 pub(crate) const PASSWORD: &str = "correct horse battery staple";
 
@@ -107,6 +117,10 @@ pub(crate) struct ServerOptions {
     /// max_lines_per_bot` allows, so a run after a few hundred lines a bot
     /// has work to do (P13.4).
     pub(crate) retention_by_hand: bool,
+    /// Whether backups are on, into [`BACKUPS`] in the case's folder, at the
+    /// default interval and count: off, as without `[database] backup_dir`,
+    /// but where a case takes one (P13.5).
+    pub(crate) backups: bool,
 }
 
 /// Which `[rate_limits]` a case's server runs.
@@ -167,6 +181,21 @@ impl GrpcAddress {
 
     fn set(&self, address: SocketAddr) {
         *self.0.lock().unwrap() = address;
+    }
+}
+
+/// The real clock, a fixed time ahead: a crash case's child process starts
+/// where the case's own clock stands, which the Owner's logins moved ahead
+/// of the real time by their TOTP steps, and runs on from there. A server
+/// whose clock were behind the one before it would find every bot's stored
+/// state newer than what its agents report now, and store none of it
+/// (ADR-0019, S40: a state is never recorded backwards).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Ahead(pub(crate) Duration);
+
+impl Clock for Ahead {
+    fn now(&self) -> chrono::DateTime<chrono::Utc> {
+        whole_millis(fleet_core::time::add(SystemClock.now(), self.0))
     }
 }
 
@@ -243,11 +272,8 @@ struct Running {
 
 /// Everything a first start needs.
 struct Begin {
-    heartbeats: Heartbeats,
-    reconcile: ReconcileTimings,
-    limits: Limits,
-    metrics: bool,
-    retention_by_hand: bool,
+    /// How it runs; the clock's start is the caller's.
+    options: ServerOptions,
     allow_offline: bool,
     clock: Arc<dyn Clock>,
     manual: Option<ManualClock>,
@@ -268,11 +294,7 @@ impl Server {
         Self::begin(
             dir,
             Begin {
-                heartbeats: options.heartbeats,
-                reconcile: options.reconcile,
-                limits: options.limits,
-                metrics: options.metrics,
-                retention_by_hand: options.retention_by_hand,
+                options,
                 allow_offline: true,
                 clock: Arc::new(manual.clone()),
                 // Never called: the cases' accounts are offline ones.
@@ -296,11 +318,7 @@ impl Server {
         Self::begin(
             dir,
             Begin {
-                heartbeats: Heartbeats::default(),
-                reconcile: ReconcileTimings::default(),
-                limits: Limits::Production,
-                metrics: false,
-                retention_by_hand: false,
+                options: ServerOptions::default(),
                 allow_offline: false,
                 clock: Arc::new(SystemClock),
                 manual: None,
@@ -325,13 +343,15 @@ impl Server {
             dir,
             http_address,
             grpc_address,
-            begin.heartbeats,
-            begin.limits,
-            begin.retention_by_hand,
+            begin.options,
             begin.allow_offline,
         );
         std::fs::create_dir_all(dir.join("pki"))
             .map_err(|_| "the PKI's folder couldn't be made")?;
+        if begin.options.backups {
+            std::fs::create_dir_all(dir.join(BACKUPS))
+                .map_err(|_| "the backups' folder couldn't be made")?;
+        }
         // Its output names the files: never shown.
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let created = pki::init(
@@ -375,15 +395,84 @@ impl Server {
             manual: begin.manual,
             random: begin.random,
             microsoft: begin.microsoft,
-            reconcile: begin.reconcile,
+            reconcile: begin.options.reconcile,
             keys: begin.keys,
-            metrics: begin.metrics,
-            retention_by_hand: begin.retention_by_hand,
+            metrics: begin.options.metrics,
+            retention_by_hand: begin.options.retention_by_hand,
             ca_fingerprint,
             running: None,
         };
         server.boot(grpc).await?;
         Ok(server)
+    }
+
+    /// A crash case's server in its child process (P13.5, ADR-0033): serve
+    /// again on the database and the PKI the case's own server left in
+    /// `dir`, as `options` say, on ports of its own, a clock `ahead` of the
+    /// real one ([`Ahead`]) and the OS's randomness. Nothing is created: no
+    /// PKI, no Owner.
+    pub(crate) async fn resume(dir: &Path, options: ServerOptions, ahead: Duration) -> Self {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let http = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let http_address = http.local_addr().unwrap();
+        let grpc = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let grpc_address = grpc.local_addr().unwrap();
+        let config = config(dir, http_address, grpc_address, options, true);
+        let clock: Arc<dyn Clock> = Arc::new(Ahead(ahead));
+        let ca_fingerprint = load(&grpc_config(&config).pki, clock.now())
+            .unwrap()
+            .ca
+            .fingerprint();
+        let mut server = Self {
+            http,
+            http_address,
+            grpc: GrpcAddress(Arc::new(std::sync::Mutex::new(grpc_address))),
+            config,
+            // Never called: the cases' accounts are offline ones.
+            microsoft: Arc::new(ReqwestMicrosoftAuth::new(Arc::clone(&clock)).unwrap()),
+            clock,
+            manual: None,
+            random: Arc::new(OsRandom),
+            reconcile: options.reconcile,
+            keys: Keys::Fixed,
+            metrics: options.metrics,
+            retention_by_hand: options.retention_by_hand,
+            ca_fingerprint,
+            running: None,
+        };
+        server
+            .boot(grpc)
+            .await
+            .unwrap_or_else(|why| panic!("the child's server didn't start: {why}"));
+        server
+    }
+
+    /// The gRPC port is at `address` now, in a child process: the agents'
+    /// proxies dial it there until the next [`Server::start_again`].
+    pub(crate) fn moved_to(&self, address: SocketAddr) {
+        assert!(self.running.is_none(), "the server is stopped");
+        self.grpc.set(address);
+    }
+
+    /// The running server's database.
+    pub(crate) fn database(&self) -> &Database {
+        &self.running().db
+    }
+
+    /// The whole config, as serve got it.
+    pub(crate) fn config(&self) -> &ServerConfig {
+        &self.config
+    }
+
+    /// The backups as serve's schedule and the `backup` command take them,
+    /// on this server's clock.
+    pub(crate) fn backups(&self) -> BackupService {
+        BackupService::from_config(
+            &self.config,
+            Arc::clone(&self.clock),
+            DatabaseOptions::default(),
+        )
+        .expect("the case turned backups on")
     }
 
     /// Serve over a clone of the API's listener and `grpc`, on the database
@@ -656,6 +745,24 @@ impl Server {
         self.running().db.bots().find(bot).await.unwrap().unwrap()
     }
 
+    /// How many chat lines the database holds for `bot`.
+    pub(crate) async fn chat_lines(&self, bot: BotId) -> usize {
+        let db = &self.running().db;
+        let limit = PageLimit::new(u32::from(PageLimit::MAX)).unwrap();
+        let whole = usize::from(PageLimit::MAX);
+        let mut count = 0;
+        let mut before = None;
+        loop {
+            // One row more than the limit when another page follows.
+            let rows = db.chat().page(bot, Page { before, limit }).await.unwrap();
+            count += rows.len().min(whole);
+            match rows.get(whole.saturating_sub(1)) {
+                Some(last) if rows.len() > whole => before = Some(last.record.id),
+                _ => return count,
+            }
+        }
+    }
+
     /// Every audit entry of `action`, oldest first.
     pub(crate) async fn entries(&self, action: &AuditAction) -> Vec<AuditRecord> {
         let mut all = self.audit().await;
@@ -687,19 +794,25 @@ impl Server {
 }
 
 /// The production config, but for what a case sets: its addresses, its
-/// files in `dir`, `heartbeats`, `limits`, whether each bot keeps only the least chat
-/// a config allows (`least_chat`), and whether offline accounts are on (a
-/// loopback case's only accounts, since it has no Microsoft). The vault key
-/// comes from memory, so its file is never read.
+/// files in `dir`, `options`' heartbeats and limits, whether each bot keeps
+/// only the least chat a config allows (`retention_by_hand`) and whether
+/// backups go into the folder's [`BACKUPS`], and whether offline accounts
+/// are on (a loopback case's only accounts, since it has no Microsoft). The
+/// vault key comes from memory, so its file is never read.
 fn config(
     dir: &Path,
     http: SocketAddr,
     grpc: SocketAddr,
-    heartbeats: Heartbeats,
-    limits: Limits,
-    least_chat: bool,
+    options: ServerOptions,
     allow_offline: bool,
 ) -> ServerConfig {
+    let ServerOptions {
+        heartbeats,
+        limits,
+        retention_by_hand: least_chat,
+        backups,
+        ..
+    } = options;
     let pki = dir.join("pki");
     ServerConfig {
         dev_mode: false,
@@ -711,7 +824,10 @@ fn config(
         },
         database: DatabaseConfig {
             path: dir.join("afkfleet.db"),
-            backups: None,
+            backups: backups.then(|| BackupConfig {
+                dir: dir.join(BACKUPS),
+                policy: BackupPolicy::default(),
+            }),
         },
         log: LogConfig {
             format: LogFormat::Json,
@@ -749,6 +865,14 @@ fn config(
         }),
         metrics: None,
     }
+}
+
+/// The config of the server whose files are in `dir`, run as `options` say,
+/// for a command that binds nothing (a crash case's `backup`): the
+/// addresses are never used.
+pub(crate) fn config_in(dir: &Path, options: ServerOptions) -> ServerConfig {
+    let unused = SocketAddr::from(([127, 0, 0, 1], 1));
+    config(dir, unused, unused, options, true)
 }
 
 fn grpc_config(config: &ServerConfig) -> &GrpcConfig {
