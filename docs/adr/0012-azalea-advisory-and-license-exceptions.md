@@ -35,7 +35,7 @@ Both are unconditional azalea dependencies, and both licenses are GPL-compatible
 ### Re-checking
 Every azalea bump (ADR-0003's procedure, step 5):
 - re-checks the `rsa` advisory
-- removes the eleven hickory ignores once azalea uses hickory 0.26.2 or newer (two until 2026-11-11, at hickory-proto ≥ 0.26.1; six until 2026-11-12; the amendments below)
+- removes the fourteen hickory ignores once azalea uses hickory 0.26.2 or newer (two until 2026-11-11, at hickory-proto ≥ 0.26.1; six until 2026-11-12; eleven until 2026-11-13; the amendments below)
 - updates the license exceptions to the new versions after a review
 
 ### Phase 9, group B: azalea-auth only through azalea *(the user's decision, [ADR-0018](0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md))*
@@ -78,9 +78,26 @@ Every azalea bump (ADR-0003's procedure, step 5):
 
 **Not done:** the same two as above.
 
+### 2026-11-13: three more advisories about DNSSEC validation *(decided under [ADR-0025](0025-a-simpler-workflow.md))*
+**What happened.** RUSTSEC-2026-0530, 0531 and 0532 were published against `hickory-proto`, a day after the five above. `just deny` failed again on `main` and on the open pull request, with nothing changed in the workspace.
+
+**No fix can be taken,** for the same reason: each advisory says that no `hickory-proto` release contains a fix (from 0.26 the validation code lives in `hickory-net`, fixed in 0.26.2), and azalea-protocol 0.16.0 asks for `hickory-resolver` 0.25.
+
+**All three are about DNSSEC validation, which isn't compiled here.** Checked again on 2026-11-13: `hickory-proto` 0.25.2's `lib.rs` on docs.rs declares `pub mod dnssec` under `#[cfg(any(feature = "dnssec-aws-lc-rs", feature = "dnssec-ring"))]`, and `cargo tree -i hickory-proto -e features --target all` shows `std`, `tokio` and `futures-io`.
+
+| Advisory | What it is | Why it's acceptable | Removal trigger |
+|---|---|---|---|
+| RUSTSEC-2026-0530 | The NSEC record a parent zone signs at a delegation taken as proof that names below the zone cut don't exist | `hickory-proto`'s `dnssec` module: not compiled | Removed once azalea uses hickory 0.26.2 or newer |
+| RUSTSEC-2026-0531 | An NSEC or NSEC3 record from the child side of a zone cut taken as proof that the delegation has no DS record | The same module: not compiled | The same |
+| RUSTSEC-2026-0532 | The NSEC3 record a parent zone signs at a delegation taken as proof that names at or below the zone cut don't exist | The same module: not compiled | The same |
+
+**What it doesn't change:** as with the five above, the agent never relied on DNSSEC, and these three make a forged DNS answer no easier.
+
+**Not done:** the same two as above.
+
 ## Consequences
 - **Easier:** azalea builds in the workspace, and `cargo deny` stays strict everywhere else. Each exception carries its reason and its removal trigger in `deny.toml` itself.
-- **Harder:** every azalea bump has to revisit five entries (nine since 2026-11-11, fourteen since 2026-11-12). A new advisory against `rsa` or `hickory-proto` still fails the build, because the ignores name single advisory IDs.
+- **Harder:** every azalea bump has to revisit five entries (nine since 2026-11-11, fourteen since 2026-11-12, seventeen since 2026-11-13). A new advisory against `rsa` or `hickory-proto` still fails the build, because the ignores name single advisory IDs.
 - **Accepted risk:** the `rsa` advisory has no fix in sight. The analysis above holds only as long as azalea never decrypts with RSA, so each bump checks that again.
 
 ## Alternatives considered
