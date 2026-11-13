@@ -71,7 +71,7 @@ const SECURITY_HEADERS: [(&str, &str); 5] = [
     ("cache-control", "no-store"),
     (
         "content-security-policy",
-        "default-src 'none'; frame-ancestors 'none'",
+        "default-src 'none'; base-uri 'none'; frame-ancestors 'none'",
     ),
     ("x-frame-options", "DENY"),
 ];

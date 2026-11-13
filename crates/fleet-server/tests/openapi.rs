@@ -278,7 +278,7 @@ async fn dev_mode_serves_the_document_as_json_with_the_security_headers(
     assert_eq!(answer.header("cache-control"), Some("no-store"));
     assert_eq!(
         answer.header("content-security-policy"),
-        Some("default-src 'none'; frame-ancestors 'none'")
+        Some("default-src 'none'; base-uri 'none'; frame-ancestors 'none'")
     );
     assert!(answer.header("x-request-id").is_some());
     // The document names the server's own version, which every release's
