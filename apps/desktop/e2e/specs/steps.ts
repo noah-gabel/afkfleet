@@ -1,8 +1,10 @@
 // What the e2e specs do on a page, as a user does it (Plan.md P8.9).
 import type { LiveUpdateMessage } from "@afkfleet/ui/generated/LiveUpdateMessage";
-import type { Page } from "@playwright/test";
+import type { Page, Request } from "@playwright/test";
 
+import { IPC_PATH } from "../app/fetchInvoke";
 import { PUSH_HOOK } from "../app/push";
+import { BASE_URL } from "../base";
 import { type FakeBackend, PASSWORD } from "../fake/backend";
 import { expect } from "../fixtures";
 
@@ -72,4 +74,39 @@ export async function expectHome(page: Page, username: string, role?: string): P
       account.getByRole("link", { name: `${username}, ${role}, Profile` }),
     ).toBeVisible();
   }
+}
+
+/**
+ * Watches the page's calls of `command` from now on. `answered()` waits until at least one was
+ * answered and none is on its way.
+ *
+ * A save puts its answer into the list and reads the list again in the background
+ * (`rememberMode`). The fake answers that read with what it holds when the read arrives, so a spec
+ * that changes the fake right after the save races it: on a slow runner the read came second,
+ * and the screen showed the changed row where the spec meant the saved one (found on `main`,
+ * 2026-11-13). A spec that changes the fake behind the app's back waits for this first.
+ */
+export function calls(page: Page, command: string): { answered(): Promise<void> } {
+  const url = `${BASE_URL}${IPC_PATH}${command}`;
+  let sent = 0;
+  let over = 0;
+  const onSent = (request: Request) => {
+    sent += request.url() === url ? 1 : 0;
+  };
+  const onOver = (request: Request) => {
+    over += request.url() === url ? 1 : 0;
+  };
+  page.on("request", onSent);
+  page.on("requestfinished", onOver);
+  page.on("requestfailed", onOver);
+  return {
+    async answered() {
+      await expect
+        .poll(() => over > 0 && over === sent, { message: `every ${command} call answered` })
+        .toBe(true);
+      page.off("request", onSent);
+      page.off("requestfinished", onOver);
+      page.off("requestfailed", onOver);
+    },
+  };
 }
