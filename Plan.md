@@ -543,6 +543,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - Release builds use `overflow-checks = true` and `panic = "unwind"`, never `abort`.
 - **HTTP:**
   - Security headers: `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` and `X-Frame-Options: DENY` (the last two added in P6.6), on every response; HSTS at Caddy.
+    > Note (§7.6, from P13.8) ([ADR-0035](docs/adr/0035-the-reviews-and-phase-13s-end.md)): the CSP is `default-src 'none'; base-uri 'none'; frame-ancestors 'none'`: `default-src` doesn't cover `base-uri`, which ASVS 3.4.3 asks for.
   - 64 KiB body limit and 15 s timeout.
   - **No CORS layer.** The app proxies every call through Rust, and the future website will be served from the same origin.
 - **Tauri:**
@@ -1498,6 +1499,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Identifier `io.github.noah-gabel.afkfleet`; TypeScript 7.0.2, shadcn/ui as only `components.json` and its theme tokens, Vitest, the Tauri CLI from npm; a placeholder icon that `just icons` renders ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 - [x] **P8.3** Tauri hardening:
   - CSP: `default-src 'self'; img-src 'self' data:; style-src 'self'; connect-src ipc: http://ipc.localhost`. Relax it only with an ADR.
+    > Note (P8.3, from P13.8) ([ADR-0035](docs/adr/0035-the-reviews-and-phase-13s-end.md)): three directives `default-src` doesn't give are added, `object-src 'none'; base-uri 'none'; frame-ancestors 'none'` (ASVS 3.4.3, 3.4.6). Stricter, so no relaxing; `just tauri-check` pins the whole text.
   - Capabilities allow only our commands.
   - `withGlobalTauri: false`.
   - Devtools only in debug builds.
@@ -2384,13 +2386,38 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The app:** no inline "Confirm it's you" but in the profile's two flows; `useStepUpAction` is `useWriteAction`; a command or a mode off the allowlist goes on to its twin within the same send or save; whatever asked a question first still does. A server older than the app reads "This server is older than the app and still asks for your password here. Ask its owner to update it.".
   > - **The records:** the threat model's rows and its accepted risk "A live session does everything its user may, without the password", CLAUDE.md's security rule 1, and notes on ADR-0016 to ADR-0020.
   > - **Deviations:** two routes keep asking, as the decision allowed. An Owner's or Admin's stolen session can now invite and register an account of the attacker's own; the ADR names it as the edge to revisit at P13.7 and P13.8.
-- [ ] **P13.7** Reviews:
+- [x] **P13.7** Reviews:
   - threat model
   - dependencies (`cargo deny`, `cargo tree -d`, `pnpm audit`)
   - a secret scan of the repo history
-- [ ] **P13.8** Self-review against the relevant parts of OWASP ASVS Level 2.
+
+  > Note (P13.7) ([ADR-0035](docs/adr/0035-the-reviews-and-phase-13s-end.md)): **done.**
+  > - **The threat model:** stale in ten places (its "skeleton" status, two "(planned)" cells, two step-ups ADR-0028 removed, three rows without a test), corrected; ten accepted risks and one row added. ADR-0028's invite edge, ADR-0022's R23 and S51's four stay accepted.
+  > - **The dependencies:** clean. Seventeen ignored advisories, none past its removal trigger; no second TLS or crypto stack among the duplicates. **Found:** `fuzz/Cargo.lock` still named 0.1.2, rewritten unseen by `just deny`, whose three passes are `--locked` now.
+  > - **The history:** gitleaks 8.30.1 over every ref's 899 commits, and a script for personal data: no secret, and nothing personal in any file or message.
+  > - **Deviation:** the dependency review's fix and a rule for a dependency with an advisory (`.claude/rules/dependencies.md`) aren't in P13.7's text.
+- [x] **P13.8** Self-review against the relevant parts of OWASP ASVS Level 2.
+
+  > Note (P13.8) ([ADR-0035](docs/adr/0035-the-reviews-and-phase-13s-end.md)): **done,** against ASVS 5.0.0, every Level 1 and 2 item: 153 met, 7 met by this group's changes, 15 accepted, 78 not applicable ([the review](docs/asvs-review.md), with the inventories ASVS asks for).
+  > - **Fixed:** a refused request's log line names the user whose session made it; both CSPs name `base-uri`, and the app's `object-src` and `frame-ancestors` too.
+  > - **Accepted, the largest:** nothing resets a forgotten password, so an Owner who forgets theirs can't be replaced; a command on the host is proposed in the ADR, for the user to decide.
+  > - **Deviation:** ADR-0028 quoted ASVS 4.0.3; the review uses 5.0.0, the current one.
 
 **DoD:** Every finding is either fixed or explicitly accepted in an ADR.
+
+> Note (Phase 13's DoD, 2026-11-13) ([ADR-0035](docs/adr/0035-the-reviews-and-phase-13s-end.md)): **met.** Each group's findings, fixed or accepted where its ADR says:
+>
+> | Group | Found | Where |
+> |---|---|---|
+> | A, A2 (P13.6, P13.9) | Nothing found; two decisions (the renewal, a session is enough) with their accepted risks | ADR-0027, ADR-0028 |
+> | B (P13.1) | Nothing wrong in 691 cells | ADR-0029 |
+> | C (P13.2) | No defect in 36.5 million inputs | ADR-0030 |
+> | D (P13.3) | 73 missed mutants: 59 tests, 14 exclusions with reasons; one defect fixed (a refusal's line and column) | ADR-0031 |
+> | E (P13.4) | Two hot spots: the retention's batch a bot, fixed; the rights read at every commit, left with its numbers | ADR-0032 |
+> | F (P13.5) | No write after a full disk, fixed; a server that would start as an empty fleet on a missing volume, refused since | ADR-0033 |
+> | G (P13.7, P13.8) | The reviews' findings above | ADR-0035 |
+>
+> Also in the group: the screenshot rows wait for the page's commands (the user's addition, from PR #119), with no baseline changed.
 
 ---
 

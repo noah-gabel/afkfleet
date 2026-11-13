@@ -234,7 +234,7 @@ The frontend's rules (structure, data and state, safety, quality, and every plac
 - **Dev machine:** Windows 11, already set up by the user.
   - **Your shell tool is Git Bash.** Write POSIX shell commands. Claude Code's PowerShell tool may be there too; don't use it for work. The settings' deny rules cover it as well.
   - The `justfile` runs recipes with **PowerShell 7** (`pwsh`) on Windows and `sh` on Linux.
-  - Docker Desktop (WSL 2 backend) runs the Minecraft test server and the compose stack. It must be running for `just mc-up`, `just test-slow` and `just shots`; if Docker isn't reachable, ask the user to start it.
+  - Docker Desktop (WSL 2 backend) runs the Minecraft test server and the compose stack. It must be running for `just mc-up`, `just test-slow` and `just shots`; if Docker isn't reachable, start it yourself with `docker desktop start` (the user's word, 2026-11-13), and only if that fails say so and let CI's runners run the container tests.
 - **Toolchain:** `rust-toolchain.toml` pins a **dated nightly**, and rustup installs it automatically.
   - Change it only in a deliberate Minecraft-version bump.
   - That bump changes nightly, azalea and the test server's `VERSION` together, as in `docs/releasing.md`.

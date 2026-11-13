@@ -9,7 +9,7 @@ A self-hosted fleet of **Minecraft Java Edition AFK bots**, one per Microsoft ac
 
 > **Use responsibly.** Only run the bots on servers whose rules allow AFK bots. afkfleet isn't affiliated with Mojang or Microsoft.
 
-**Status:** v0.1.3 is released: the server, its agents and the Windows app, with the installer, updates and the operators' runbook. Phase 13 (hardening) is under way. Bots speak Minecraft Java Edition **26.1**; servers on newer versions need ViaVersion/ViaBackwards.
+**Status:** v0.1.3 is released: the server, its agents and the Windows app, with the installer, updates and the operators' runbook. Phase 13 (hardening) is done: its reviews are in [the threat model](docs/threat-model.md) and [the ASVS self-review](docs/asvs-review.md). Bots speak Minecraft Java Edition **26.1**; servers on newer versions need ViaVersion/ViaBackwards.
 
 ## Quickstart
 **Using the app** (your admin runs a server and gave you its address and an invite):

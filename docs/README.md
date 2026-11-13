@@ -10,6 +10,7 @@ Every document in this folder. Start with the repository's [README](../README.md
 
 ## Security, design and checks
 - [The threat model](threat-model.md): what afkfleet protects, from whom, and how, each mitigation with the tests behind it.
+- [The ASVS Level 2 self-review](asvs-review.md): every Level 1 and 2 item of OWASP ASVS 5.0.0 with its verdict at v0.1.3, and the inventories it asks for: the cryptography, the logs, the ways in.
 - [The design brief](design-brief.md): the desktop app's users, screens and constraints, the starting point of its design.
 - [Phase 12's definition of done](dod/phase-12.md): the kit for checking a release on your own host, with a friend on another PC.
 
@@ -49,3 +50,4 @@ Each architecture decision record (ADR) holds one decision with its context, its
 - [0032. The load test](adr/0032-the-load-test.md)
 - [0033. Chaos tests, and a server that refuses a missing database](adr/0033-chaos-tests-and-the-missing-database.md)
 - [0034. A stopgap mode action into the nearest minecart, and a right-click every 200 ms](adr/0034-a-stopgap-action-into-the-nearest-minecart.md)
+- [0035. The reviews: the threat model, the dependencies, the history and ASVS Level 2](adr/0035-the-reviews-and-phase-13s-end.md)
