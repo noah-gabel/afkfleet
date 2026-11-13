@@ -10,7 +10,7 @@ import type { Page } from "@playwright/test";
 import { type FakeBackend, MEMBER, NEW_USER, OWNER } from "../fake/backend";
 import { expect, fakeBackend, shooting, test } from "../fixtures";
 import { NOW } from "../shots";
-import { calls, enterCode, expectHome, logIn, push } from "./steps";
+import { enterCode, expectHome, idle, logIn, push } from "./steps";
 import {
   AA,
   bothThemes,
@@ -23,12 +23,16 @@ import {
   walked,
 } from "./theme";
 
-/** Signed in as `username`, on Home. */
+/**
+ * Signed in as `username`, on Home, with every read Home made answered: the screens after it show
+ * what those reads left in the cache (the modes' list, say), whatever the row does to the fake next.
+ */
 async function signIn(page: Page, backend: FakeBackend, username: string): Promise<void> {
   await page.goto("/");
   await logIn(page, username);
   await enterCode(page, backend.code(username));
   await expectHome(page, username);
+  await idle(page);
 }
 
 /** Opens `name` in the app's nav. */
@@ -1018,12 +1022,11 @@ test("modes: the list, the editor, a conflict, and a locked one", async ({ page,
     .getByRole("group", { name: "Step 1", exact: true })
     .getByLabel("What it does")
     .selectOption({ label: "Select a hotbar slot" });
-  const listReads = calls(page, "modes");
   await save.click();
   await expect(main.getByRole("heading", { name: "Fishing", level: 1 })).toBeVisible();
   // The save reads the list again: the change comes after that read's answer, so the heading
   // keeps the name the form was opened with.
-  await listReads.answered();
+  await idle(page);
 
   backend.changeMode("Fishing", { name: "Elsewhere" });
   await main.getByLabel("Name").fill("Mine");

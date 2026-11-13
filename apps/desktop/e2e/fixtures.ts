@@ -12,9 +12,20 @@
 //   page's listeners (ADR-0020, R260).
 // - In the screenshots' project, the page's clock and the fake's are fixed at `NOW`, so no shot
 //   depends on when it ran (ADR-0020, S131).
+// - `unanswered(page)`: the commands the page sent that have no answer yet, but those the fake
+//   keeps open on purpose. A shot and a change to the fake behind the app's back wait until
+//   there is none (specs/steps.ts's `idle`), so neither depends on how fast a read was answered.
 import { defineNetworkFixture } from "@msw/playwright";
-import { type BrowserContext, test as base, expect } from "@playwright/test";
+import {
+  type BrowserContext,
+  test as base,
+  expect,
+  type Page,
+  type Request,
+} from "@playwright/test";
 
+import { IPC_PATH } from "./app/fetchInvoke";
+import { BASE_URL } from "./base";
 import { FakeBackend } from "./fake/backend";
 import { handlers } from "./fake/handlers";
 import { NOW, SHOTS_PROJECT } from "./shots";
@@ -24,9 +35,62 @@ export function shooting(): boolean {
   return base.info().project.name === SHOTS_PROJECT;
 }
 
+/** Where every command goes: `fetchInvoke`'s URL up to the command's name. */
+const COMMANDS_URL = `${BASE_URL}${IPC_PATH}`;
+
+/** A context's fake backend, and the commands its pages sent that have no answer yet. */
+interface Traffic {
+  readonly backend: FakeBackend;
+  readonly open: Set<Request>;
+}
+
+const TRAFFIC = new WeakMap<BrowserContext, Traffic>();
+
+/**
+ * The commands `page` sent that have no answer yet, by name, but those its fake keeps open on
+ * purpose (`FakeBackend.keepsOpen`: a held read, the live events watch). None for a page without
+ * a fake backend.
+ */
+export function unanswered(page: Page): readonly string[] {
+  const traffic = TRAFFIC.get(page.context());
+  if (traffic === undefined) {
+    return [];
+  }
+  return [...traffic.open]
+    .map((request) => request.url().slice(COMMANDS_URL.length))
+    .filter((command) => !traffic.backend.keepsOpen(command));
+}
+
 /** A fresh fake backend that answers the commands of `context`'s pages. */
 export async function fakeBackend(context: BrowserContext): Promise<FakeBackend> {
   const backend = new FakeBackend(shooting() ? { now: () => new Date(NOW) } : {});
+  const open = new Set<Request>();
+  context.on("request", (request) => {
+    if (request.url().startsWith(COMMANDS_URL)) {
+      open.add(request);
+    }
+  });
+  const over = (request: Request) => {
+    open.delete(request);
+  };
+  context.on("requestfinished", over);
+  context.on("requestfailed", over);
+  // A command cut off by a new document (a reload, a `goto` right after "Log out") reports no end:
+  // its page's open commands end with the document that sent them.
+  const endsWithItsDocument = (page: Page) => {
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) {
+        for (const request of open) {
+          if (request.frame().page() === page) {
+            open.delete(request);
+          }
+        }
+      }
+    });
+  };
+  context.pages().forEach(endsWithItsDocument);
+  context.on("page", endsWithItsDocument);
+  TRAFFIC.set(context, { backend, open });
   const network = defineNetworkFixture({
     context,
     handlers: handlers(backend),

@@ -1,12 +1,13 @@
 // The screenshot baselines' one way to shoot (Plan.md P11.11; ADR-0020, U97, U125, S131): a sweep
 // row in both themes, in Playwright's pinned image only. Before each shot the pointer rests where it
-// touches no control, the sidebar or a toast, the focus is let go, and the shot is refused while a
-// tooltip, a focus indicator, a font still loading or a scrolled column would make it depend on
-// where things happened to be. The row's own window is kept; a row asks for a taller one, the
-// smallest one too, or its column's end as well.
+// touches no control, the sidebar or a toast, the focus is let go, every command the page sent has
+// its answer (but a read the fake holds back for a loading state, and the live events watch), and
+// the shot is refused while a tooltip, a focus indicator, a font still loading or a scrolled column
+// would make it depend on where things happened to be. The row's own window is kept; a row asks
+// for a taller one, the smallest one too, or its column's end as well.
 import type { Page } from "@playwright/test";
 
-import { expect, test } from "../fixtures";
+import { expect, test, unanswered } from "../fixtures";
 import { SHOT_ANNOTATION, SMALL, slug } from "../shots";
 import { inScheme } from "./scheme";
 
@@ -130,8 +131,14 @@ export function problems(page: Page, options: ShotOptions): Promise<readonly str
   );
 }
 
-/** Waits until exactly `count` toasts are up, none on its way out, and every font has loaded. */
+/**
+ * Waits until every command the page sent has its answer (`unanswered`), exactly `count` toasts
+ * are up, none on its way out, and every font has loaded.
+ */
 async function settled(page: Page, count: number): Promise<void> {
+  await expect
+    .poll(() => unanswered(page), { message: "commands still unanswered", timeout: 10_000 })
+    .toEqual([]);
   await expect(page.locator("[data-sonner-toast]:not([data-removed=true])")).toHaveCount(count, {
     timeout: 10_000,
   });
