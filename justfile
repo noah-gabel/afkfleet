@@ -115,11 +115,14 @@ cov-desktop:
 # platform it ships for. Its Linux GTK3 stack is never built or shipped. A new desktop
 # target joins the second pass. The third is fuzz/, the cargo-fuzz crate with its own
 # lockfile (ADR-0030): its graph holds no dev-dependency, so some ignores match nothing.
-# cargo-deny: advisories, licenses, bans and sources.
+# Each pass is `--locked`: a lockfile that isn't up to date fails here instead of being
+# rewritten unseen, so what was checked is what's committed (fuzz/Cargo.lock still named
+# the previous version after a bump; ADR-0035).
+# cargo-deny: advisories, licenses, bans and sources; refuses a stale lockfile.
 deny:
-    cargo deny --exclude {{ desktop }} check
-    cargo deny --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc check -A advisory-not-detected
-    cargo deny --manifest-path fuzz/Cargo.toml check -A advisory-not-detected
+    cargo deny --locked --exclude {{ desktop }} check
+    cargo deny --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc check -A advisory-not-detected
+    cargo deny --locked --manifest-path fuzz/Cargo.toml check -A advisory-not-detected
 
 # Format Rust and frontend code.
 fmt:

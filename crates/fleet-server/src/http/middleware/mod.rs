@@ -23,8 +23,10 @@
 //!
 //! The security headers are `X-Content-Type-Options: nosniff`,
 //! `Referrer-Policy: no-referrer`, `Cache-Control: no-store`,
-//! `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` and
-//! `X-Frame-Options: DENY`; Caddy adds HSTS. There is no CORS layer (§7.6).
+//! `Content-Security-Policy: default-src 'none'; base-uri 'none';
+//! frame-ancestors 'none'` and `X-Frame-Options: DENY`; Caddy adds HSTS.
+//! `default-src` doesn't cover `base-uri`, so the policy names it (ASVS
+//! 3.4.3; ADR-0035). There is no CORS layer (§7.6).
 //! A route's rate-limit class adds its own limit as a route layer
 //! ([`routes`](super::routes)).
 
@@ -55,6 +57,8 @@ pub mod arrival;
 pub mod request_id;
 mod trace;
 
+pub(crate) use self::trace::USER_ID;
+
 pub use arrival::Arrival;
 pub use request_id::RequestIds;
 
@@ -71,7 +75,7 @@ const SECURITY_HEADERS: [(HeaderName, HeaderValue); 5] = [
     (CACHE_CONTROL, HeaderValue::from_static("no-store")),
     (
         CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static("default-src 'none'; frame-ancestors 'none'"),
+        HeaderValue::from_static("default-src 'none'; base-uri 'none'; frame-ancestors 'none'"),
     ),
     (X_FRAME_OPTIONS, HeaderValue::from_static("DENY")),
 ];

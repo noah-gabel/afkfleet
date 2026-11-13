@@ -769,6 +769,51 @@ async fn a_refusal_is_logged_with_its_reason_and_no_part_of_the_token(
     }
 }
 
+/// A refusal's line has to say who was refused (ASVS 16.3.2; ADR-0035): the
+/// request's line names its route, status and code, and since group G of
+/// Phase 13 the user whose session made it.
+#[sqlx::test(migrations = false)]
+async fn a_signed_in_users_request_is_logged_with_their_id_whatever_its_answer(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let tokens = setup.login().await;
+    let value = bearer(&tokens);
+    let logs = LogBuffer::default();
+    let config = LogConfig {
+        format: LogFormat::Json,
+        filter: "info".parse().unwrap(),
+    };
+    let subscriber =
+        tracing_subscriber::registry().with(layer_with(&config, &NoRules, false, logs.clone()));
+    let guard = tracing::subscriber::set_default(subscriber);
+
+    let own = setup.send("/own", &[&value]).await;
+    let others = setup.send("/others", &[&value]).await;
+    let users = setup.send("/users", &[&value]).await;
+    let anonymous = setup.send("/whoami", &[]).await;
+
+    drop(guard);
+    assert_eq!(own.status, StatusCode::OK);
+    assert_eq!(others.status, StatusCode::NOT_FOUND);
+    assert_eq!(users.status, StatusCode::FORBIDDEN);
+    assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+    let lines = logs.lines_with("request finished").unwrap();
+    assert_eq!(lines.len(), 4, "{}", logs.text());
+    for (line, status, code) in [
+        (&lines[0], 200, Value::Null),
+        (&lines[1], 404, Value::from("not_found")),
+        (&lines[2], 403, Value::from("forbidden")),
+    ] {
+        assert_eq!(line["status"], status, "{line}");
+        assert_eq!(line.get("code").cloned().unwrap_or(Value::Null), code);
+        assert_eq!(line["span"]["user_id"], setup.user.to_string(), "{line}");
+    }
+    assert_eq!(lines[3]["status"], 401);
+    assert!(lines[3]["span"].get("user_id").is_none(), "{}", lines[3]);
+}
+
 #[sqlx::test(migrations = false)]
 async fn a_skipped_touch_is_logged_at_debug(
     _pool: SqlitePoolOptions,

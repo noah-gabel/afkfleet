@@ -925,6 +925,14 @@ export class FakeBackend {
     this.#held.add(command);
   }
 
+  /**
+   * Whether a call of `command` is unanswered on purpose right now: held back (`hold`), or the
+   * live events watch, which stays open while its session lasts.
+   */
+  keepsOpen(command: string): boolean {
+    return command === "watch_events" || this.#held.has(command);
+  }
+
   /** Answers every call `hold` kept waiting, and holds nothing more. */
   release(): void {
     this.#held.clear();

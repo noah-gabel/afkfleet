@@ -13,6 +13,9 @@
 //!   user. Nothing tells a client whether a token existed. The reason is one
 //!   `debug` line, with the session's and the user's IDs where they're
 //!   known; no token, hash or header value is ever logged.
+//! - **An accepted token names its user in the request's span,** before the
+//!   user's rate limit and the handler's `require`, so a 429, a 403 and a
+//!   404 are each logged with who asked (ASVS 16.3.2; ADR-0035).
 //! - **A database failure isn't a refusal:** busy is 503, anything else 500.
 //! - **Every authed request spends its user's rate limit** (§7.4), right after
 //!   authentication: past it, 429 with `Retry-After`.
@@ -27,11 +30,12 @@ use chrono::{DateTime, Utc};
 use fleet_core::auth::SessionTimes;
 use fleet_core::authz::{Actor, AuthzError, Permission, ResourceContext, authorize};
 use fleet_core::id::SessionId;
-use tracing::debug;
+use tracing::{Span, debug, field};
 
 use super::bearer::bearer;
 use crate::app::auth::{AuthenticateError, RejectedAccess};
 use crate::http::error::ApiError;
+use crate::http::middleware::USER_ID;
 use crate::http::router::AppState;
 
 /// The authenticated user of a request: the actor (their ID and current
@@ -99,6 +103,8 @@ impl FromRequestParts<AppState> for AuthUser {
             .map_err(|reason| refuse(&RejectedAccess::reason(reason)))?;
         match state.tokens.authenticate(&presented).await {
             Ok(authenticated) => {
+                // The request's own span: extractors run right inside the trace layer's.
+                Span::current().record(USER_ID, field::display(authenticated.actor.id));
                 state
                     .limits
                     .check_user(authenticated.actor.id)

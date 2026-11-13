@@ -68,3 +68,16 @@ describe("readJustfile", () => {
     ]);
   });
 });
+
+describe("the deny recipe", () => {
+  // A pass without --locked rewrites a lockfile that isn't up to date and checks the rewritten
+  // one: fuzz/Cargo.lock still named the version before a bump, unseen (ADR-0035).
+  it("runs every pass with --locked, so a stale lockfile fails instead of being rewritten", () => {
+    const passes = recipeBody("deny", readJustfile());
+
+    assert.equal(passes.length, 3);
+    for (const pass of passes) {
+      assert.match(pass, /^cargo deny --locked /);
+    }
+  });
+});
