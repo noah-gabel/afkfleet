@@ -115,6 +115,15 @@ expression: json
         "type": "on_respawn"
       },
       "probability": 100
+    },
+    {
+      "action": {
+        "type": "enter_minecart"
+      },
+      "schedule": {
+        "type": "at_start"
+      },
+      "probability": 100
     }
   ]
 }

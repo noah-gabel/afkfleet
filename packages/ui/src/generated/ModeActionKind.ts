@@ -5,4 +5,4 @@
  * This union lists the values this version knows; a newer server may send
  * others, so code that branches on one always keeps a default branch.
  */
-export type ModeActionKind = "look" | "rotate_random" | "jump" | "sneak" | "swing_arm" | "use_item" | "hold_use" | "attack_facing_entity" | "select_hotbar_slot" | "send_chat";
+export type ModeActionKind = "look" | "rotate_random" | "jump" | "sneak" | "swing_arm" | "use_item" | "hold_use" | "attack_facing_entity" | "select_hotbar_slot" | "send_chat" | "enter_minecart";

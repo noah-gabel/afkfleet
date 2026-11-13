@@ -426,7 +426,11 @@ function stepsRefused(steps: readonly ModeStepRequest[]): ApiErrorDetails["field
       if (step.action.type === "send_chat" && interval < 30_000) {
         return [{ path, message: "must be at least 30 seconds for chat" }];
       }
-      if (interval < 250) {
+      if (step.action.type === "use_item") {
+        if (interval < 200) {
+          return [{ path, message: "must be at least 200 ms for using an item" }];
+        }
+      } else if (interval < 250) {
         return [{ path, message: "must be at least 250 ms" }];
       }
     }

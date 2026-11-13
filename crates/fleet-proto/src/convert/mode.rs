@@ -67,6 +67,7 @@ fn step_to_wire(step: &Step) -> wire::Step {
         Action::SendChat { message } => A::SendChat(wire::action::SendChat {
             message: message.as_str().to_owned(),
         }),
+        Action::EnterMinecart => A::EnterMinecart(unit),
     };
     let schedule = match step.schedule {
         Schedule::AtStart => wire::schedule::Schedule::AtStart(unit),
@@ -120,6 +121,7 @@ fn step_from_wire(step: wire::Step) -> Result<Step, ConvertError> {
         A::SendChat(send) => Action::SendChat {
             message: chat_message_from_wire("Action.SendChat.message", &send.message)?,
         },
+        A::EnterMinecart(wire::Unit {}) => Action::EnterMinecart,
     };
     let schedule = match required(
         "Schedule.schedule",

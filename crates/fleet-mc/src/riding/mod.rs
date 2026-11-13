@@ -29,6 +29,7 @@
 //! Only a minecart has a seat here. A bot on foot, or one riding anything
 //! else, is left to azalea alone.
 
+mod enter;
 mod pick;
 
 use std::collections::HashMap;
@@ -66,6 +67,7 @@ use azalea::world::{WorldName, Worlds};
 use azalea::ecs as bevy_ecs;
 use tracing::debug;
 
+pub(crate) use self::enter::enter_minecart;
 use self::pick::Seated;
 
 /// On the bot while the server has it as a passenger.
@@ -170,7 +172,8 @@ impl Plugin for RidingPlugin {
             )
             .add_systems(
                 GameTick,
-                keep_the_seat
+                (keep_the_seat, enter::enter_when_in_reach)
+                    .chain()
                     .after(PhysicsSystems)
                     .after(send_sprinting_if_needed)
                     .before(send_position),

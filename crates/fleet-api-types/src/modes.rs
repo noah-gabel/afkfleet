@@ -163,6 +163,9 @@ pub enum ModeActionKind {
     SelectHotbarSlot,
     /// Send chat or a command: `message`.
     SendChat,
+    /// Get into the nearest minecart within reach, unless the bot rides
+    /// already. Temporary: it goes once scripted modes exist (ADR-0034).
+    EnterMinecart,
 }
 
 impl OpenEnum for ModeActionKind {
@@ -177,6 +180,7 @@ impl OpenEnum for ModeActionKind {
         Self::AttackFacingEntity,
         Self::SelectHotbarSlot,
         Self::SendChat,
+        Self::EnterMinecart,
     ];
 
     fn as_str(self) -> &'static str {
@@ -191,6 +195,7 @@ impl OpenEnum for ModeActionKind {
             Self::AttackFacingEntity => "attack_facing_entity",
             Self::SelectHotbarSlot => "select_hotbar_slot",
             Self::SendChat => "send_chat",
+            Self::EnterMinecart => "enter_minecart",
         }
     }
 }
@@ -208,6 +213,7 @@ impl From<&Action> for ModeActionKind {
             Action::AttackFacingEntity => Self::AttackFacingEntity,
             Action::SelectHotbarSlot { .. } => Self::SelectHotbarSlot,
             Action::SendChat { .. } => Self::SendChat,
+            Action::EnterMinecart => Self::EnterMinecart,
         }
     }
 }
@@ -391,8 +397,9 @@ pub struct ModeScheduleRequest {
     /// When it runs.
     #[serde(rename = "type")]
     pub kind: ModeScheduleKind,
-    /// `every`: the shortest gap, in milliseconds: at least 250 (500 to
-    /// attack or use the use button, 30,000 to chat), at most a day.
+    /// `every`: the shortest gap, in milliseconds: at least 250 (200 to
+    /// use an item, 500 to attack or use the use button, 30,000 to chat), at
+    /// most a day.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     #[schema(schema_with = integer_schema::<0, MAX_MS>, nullable = false)]
@@ -491,7 +498,8 @@ const fn action_takes(kind: ModeActionKind) -> &'static [&'static str] {
         ModeActionKind::Jump
         | ModeActionKind::SwingArm
         | ModeActionKind::UseItem
-        | ModeActionKind::AttackFacingEntity => &[],
+        | ModeActionKind::AttackFacingEntity
+        | ModeActionKind::EnterMinecart => &[],
     }
 }
 
@@ -557,6 +565,7 @@ fn action(step: usize, request: &ModeActionRequest) -> Result<Action, ModeFieldE
             on: needed(request.on, field("on"))?,
         },
         ModeActionKind::AttackFacingEntity => Action::AttackFacingEntity,
+        ModeActionKind::EnterMinecart => Action::EnterMinecart,
         ModeActionKind::SelectHotbarSlot => Action::SelectHotbarSlot {
             slot: HotbarSlot::try_from(needed(request.slot, field("slot"))?).map_err(|error| {
                 match error {
@@ -679,10 +688,12 @@ const fn duplicate_rule(kind: LimitedStep) -> &'static str {
 
 /// The field message of an interval shorter than its action allows:
 /// fleet-core's minimum for that action (`ModeDefinition::MIN_INTERVAL`,
-/// `MIN_ATTACK_INTERVAL`, `MIN_HOLD_USE_INTERVAL`, `MIN_CHAT_INTERVAL`).
+/// `MIN_USE_ITEM_INTERVAL`, `MIN_ATTACK_INTERVAL`, `MIN_HOLD_USE_INTERVAL`,
+/// `MIN_CHAT_INTERVAL`).
 const fn interval_rule(kind: ModeActionKind) -> &'static str {
     match kind {
         ModeActionKind::SendChat => "must be at least 30 seconds for chat",
+        ModeActionKind::UseItem => "must be at least 200 ms for using an item",
         ModeActionKind::AttackFacingEntity | ModeActionKind::HoldUse => {
             "must be at least 500 ms for attacking or the use button"
         }
@@ -691,8 +702,8 @@ const fn interval_rule(kind: ModeActionKind) -> &'static str {
         | ModeActionKind::Jump
         | ModeActionKind::Sneak
         | ModeActionKind::SwingArm
-        | ModeActionKind::UseItem
-        | ModeActionKind::SelectHotbarSlot => "must be at least 250 ms",
+        | ModeActionKind::SelectHotbarSlot
+        | ModeActionKind::EnterMinecart => "must be at least 250 ms",
     }
 }
 
@@ -939,7 +950,11 @@ impl ModeStep {
                 action.message = Some(BoundedText::new(redacted.text));
                 action.arguments_hidden = redacted.arguments_hidden;
             }
-            Action::Jump | Action::SwingArm | Action::UseItem | Action::AttackFacingEntity => {}
+            Action::Jump
+            | Action::SwingArm
+            | Action::UseItem
+            | Action::AttackFacingEntity
+            | Action::EnterMinecart => {}
         }
         let schedule = match step.schedule {
             Schedule::AtStart => ModeSchedule {
@@ -1007,7 +1022,8 @@ mod tests {
             { "action": { "type": "attack_facing_entity" }, "schedule": { "type": "every", "interval_ms": 650, "jitter_ms": 150 }, "probability": 100 },
             { "action": { "type": "select_hotbar_slot", "slot": 8 }, "schedule": { "type": "at_start" }, "probability": 100 },
             { "action": { "type": "send_chat", "message": "/home base" }, "schedule": { "type": "every", "interval_ms": 30000, "jitter_ms": 0 }, "probability": 100 },
-            { "action": { "type": "send_chat", "message": "/spawn" }, "schedule": { "type": "on_respawn" }, "probability": 75 }
+            { "action": { "type": "send_chat", "message": "/spawn" }, "schedule": { "type": "on_respawn" }, "probability": 75 },
+            { "action": { "type": "enter_minecart" }, "schedule": { "type": "at_start" }, "probability": 100 }
         ] })
     }
 
@@ -1360,8 +1376,9 @@ mod tests {
 
     /// Each action kind, in `ModeActionKind::ALL`'s order, with an interval
     /// just under fleet-core's minimum for it and the text that names it.
-    fn interval_minimums() -> [(Value, u32, &'static str); 10] {
+    fn interval_minimums() -> [(Value, u32, &'static str); 11] {
         const ANY: &str = "must be at least 250 ms";
+        const USE: &str = "must be at least 200 ms for using an item";
         const ATTACK_OR_USE: &str = "must be at least 500 ms for attacking or the use button";
         const CHAT: &str = "must be at least 30 seconds for chat";
         [
@@ -1378,7 +1395,7 @@ mod tests {
             (json!({ "type": "jump" }), 249, ANY),
             (json!({ "type": "sneak", "on": true }), 249, ANY),
             (json!({ "type": "swing_arm" }), 249, ANY),
-            (json!({ "type": "use_item" }), 249, ANY),
+            (json!({ "type": "use_item" }), 199, USE),
             (
                 json!({ "type": "hold_use", "on": false }),
                 499,
@@ -1395,6 +1412,7 @@ mod tests {
                 29_999,
                 CHAT,
             ),
+            (json!({ "type": "enter_minecart" }), 249, ANY),
         ]
     }
 
@@ -1455,6 +1473,10 @@ mod tests {
     #[test]
     fn each_minimum_text_is_fleet_cores_minimum() {
         assert_eq!(ModeDefinition::MIN_INTERVAL, Duration::from_millis(250));
+        assert_eq!(
+            ModeDefinition::MIN_USE_ITEM_INTERVAL,
+            Duration::from_millis(200)
+        );
         assert_eq!(
             ModeDefinition::MIN_ATTACK_INTERVAL,
             Duration::from_millis(500)

@@ -60,6 +60,7 @@ describe("a mode's values and its request (R158, R159)", () => {
     ["the first slot", asked({ type: "select_hotbar_slot", slot: 0 })],
     ["the last slot", asked({ type: "select_hotbar_slot", slot: 8 })],
     ["send_chat", asked({ type: "send_chat", message: "/warp farm" })],
+    ["enter_minecart", asked({ type: "enter_minecart" })],
     ["a chance", asked({ type: "jump" }, AT_START, 25)],
     ["a repeating step", asked({ type: "jump" }, EVERY)],
     ["a wait and its random part", asked({ type: "jump" }, { ...EVERY, jitter_ms: 75_000 })],
@@ -80,6 +81,7 @@ describe("a mode's values and its request (R158, R159)", () => {
       attack_facing_entity: true,
       select_hotbar_slot: true,
       send_chat: true,
+      enter_minecart: true,
     };
 
     expect([...ACTION_KINDS].sort()).toEqual(Object.keys(every).sort());
@@ -215,6 +217,7 @@ describe("the time fields (U72, S82)", () => {
     [5_400_000, "90", "minutes"],
     [86_400_000, "24", "hours"],
     [250, "0.25", "seconds"],
+    [200, "0.2", "seconds"],
     [1_500, "1.5", "seconds"],
     [0, "0", "seconds"],
     [undefined, "", "seconds"],
@@ -228,6 +231,7 @@ describe("the time fields (U72, S82)", () => {
     ["2", "hours", 7_200_000],
     ["0.1", "seconds", 100],
     ["0.25", "seconds", 250],
+    ["0.2", "seconds", 200],
     ["1.1", "minutes", 66_000],
     ["0.07", "hours", 252_000],
     // Not whole milliseconds: it stays so, for the local refusal, rather than being rounded.

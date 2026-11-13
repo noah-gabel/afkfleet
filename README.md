@@ -3,13 +3,13 @@
 A self-hosted fleet of **Minecraft Java Edition AFK bots**, one per Microsoft account, run on your own server and managed from a Windows desktop app.
 
 - **Bots stay online by themselves.** They reconnect, heal themselves, and back off when a human logs into the same account.
-- **Modes** such as `afk` (anti-AFK-kick) and `farm` (look in one direction and attack or use an item on a schedule), or your own. A bot sitting in a minecart clicks and attacks from its seat, as a player there would.
+- **Modes** such as `afk` (anti-AFK-kick) and `farm` (look in one direction and attack or use an item on a schedule), or your own. A bot sitting in a minecart clicks and attacks from its seat, as a player there would, and a mode step gets it back into its minecart when a server put it beside it.
 - **Chat:** read what each bot hears, live, and have it send a line or a command.
 - **Shared with friends:** invite-only accounts, roles and mandatory 2FA; each Microsoft account stays its owner's and can be shared.
 
 > **Use responsibly.** Only run the bots on servers whose rules allow AFK bots. afkfleet isn't affiliated with Mojang or Microsoft.
 
-**Status:** v0.1.2 is released: the server, its agents and the Windows app, with the installer, updates and the operators' runbook. Phase 13 (hardening) is under way. Bots speak Minecraft Java Edition **26.1**; servers on newer versions need ViaVersion/ViaBackwards.
+**Status:** v0.1.3 is released: the server, its agents and the Windows app, with the installer, updates and the operators' runbook. Phase 13 (hardening) is under way. Bots speak Minecraft Java Edition **26.1**; servers on newer versions need ViaVersion/ViaBackwards.
 
 ## Quickstart
 **Using the app** (your admin runs a server and gave you its address and an invite):
