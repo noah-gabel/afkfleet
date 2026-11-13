@@ -48,3 +48,4 @@ Each architecture decision record (ADR) holds one decision with its context, its
 - [0031. Mutation testing](adr/0031-mutation-testing.md)
 - [0032. The load test](adr/0032-the-load-test.md)
 - [0033. Chaos tests, and a server that refuses a missing database](adr/0033-chaos-tests-and-the-missing-database.md)
+- [0034. A stopgap mode action into the nearest minecart, and a right-click every 200 ms](adr/0034-a-stopgap-action-into-the-nearest-minecart.md)

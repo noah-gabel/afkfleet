@@ -3,7 +3,7 @@
 A self-hosted fleet of **Minecraft Java Edition AFK bots**, one per Microsoft account, run on your own server and managed from a Windows desktop app.
 
 - **Bots stay online by themselves.** They reconnect, heal themselves, and back off when a human logs into the same account.
-- **Modes** such as `afk` (anti-AFK-kick) and `farm` (look in one direction and attack or use an item on a schedule), or your own. A bot sitting in a minecart clicks and attacks from its seat, as a player there would.
+- **Modes** such as `afk` (anti-AFK-kick) and `farm` (look in one direction and attack or use an item on a schedule), or your own. A bot sitting in a minecart clicks and attacks from its seat, as a player there would, and a mode step gets it back into its minecart when a server put it beside it.
 - **Chat:** read what each bot hears, live, and have it send a line or a command.
 - **Shared with friends:** invite-only accounts, roles and mandatory 2FA; each Microsoft account stays its owner's and can be shared.
 
