@@ -57,6 +57,8 @@ pub mod arrival;
 pub mod request_id;
 mod trace;
 
+pub(crate) use self::trace::USER_ID;
+
 pub use arrival::Arrival;
 pub use request_id::RequestIds;
 

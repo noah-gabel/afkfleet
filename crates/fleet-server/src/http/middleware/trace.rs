@@ -2,8 +2,11 @@
 //! ADR-0015).
 //!
 //! The span, `request` at `info`, carries the request's ID, its method and
-//! its route. The inner layers and the handler run inside it, so every line
-//! they log carries those fields, the panic hook's report included. When the
+//! its route, and from the moment a session's access token is accepted, its
+//! user's ID ([`USER_ID`], which `AuthUser` records): a refusal's line says
+//! who was refused (ASVS 16.3.2; ADR-0035). The inner layers and the handler
+//! run inside it, so every line they log carries those fields, the panic
+//! hook's report included. When the
 //! response is ready, one line, "request finished", names its `status`,
 //! `latency_ms` and, for an error, the `code`
 //! [`render_errors`](crate::http::error::render_errors) wrote. This is where
@@ -48,6 +51,11 @@ const QUIET_PREFIX: &str = "/health/";
 /// The metrics port's route, whose line is logged at `debug` too.
 const METRICS_ROUTE: &str = "/metrics";
 
+/// The span's field for the user whose session made the request: empty until
+/// `AuthUser` accepts the access token, so a request without a live session
+/// has none.
+pub(crate) const USER_ID: &str = "user_id";
+
 /// The methods logged by name.
 static STANDARD_METHODS: [Method; 9] = [
     Method::GET,
@@ -71,6 +79,7 @@ pub(super) async fn trace(request: Request, next: Next) -> Response {
         request_id = request_id.map(field::display),
         method = method_label(request.method()),
         route,
+        user_id = field::Empty,
     );
     let started = Instant::now();
     let mut response = next.run(request).instrument(span.clone()).await;
