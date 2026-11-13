@@ -37,9 +37,12 @@ import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
-/** P8.3's CSP, exactly. Relaxing it needs an ADR. */
+/**
+ * P8.3's CSP, exactly, with the three directives `default-src` doesn't give (ASVS 3.4.3, 3.4.6;
+ * ADR-0035): no plugin content, no `<base>`, no framing. Relaxing it needs an ADR.
+ */
 export const CSP =
-  "default-src 'self'; img-src 'self' data:; style-src 'self'; connect-src ipc: http://ipc.localhost";
+  "default-src 'self'; img-src 'self' data:; style-src 'self'; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
 
 /** The app's own commands, as build.rs lists them (P8.4; the accounts' and the opener in P9.8, ADR-0018). */
 export const COMMANDS = [
