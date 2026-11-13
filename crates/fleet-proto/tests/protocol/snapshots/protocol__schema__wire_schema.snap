@@ -15,6 +15,7 @@ message fleet.v1.Action
   8 attack_facing_entity: fleet.v1.Unit (oneof action)
   9 select_hotbar_slot: fleet.v1.Action.SelectHotbarSlot (oneof action)
   10 send_chat: fleet.v1.Action.SendChat (oneof action)
+  11 enter_minecart: fleet.v1.Unit (oneof action)
 message fleet.v1.Action.HoldUse
   1 on: bool
 message fleet.v1.Action.Look

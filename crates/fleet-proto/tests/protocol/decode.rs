@@ -124,6 +124,7 @@ fn wire_action() -> impl Strategy<Value = Option<wire::Action>> {
                     "hello".prop_map(String::from)
                 ]
                 .prop_map(|message| A::SendChat(wire::action::SendChat { message })),
+                Just(A::EnterMinecart(wire::Unit {})),
             ],
         ),
     )
@@ -211,6 +212,7 @@ fn draft_of(mode: &wire::ModeDefinition) -> Option<ModeDraft> {
                     }
                     Action::SendChat { message }
                 }
+                A::EnterMinecart(_) => Action::EnterMinecart,
             };
             let schedule = match step.schedule.as_ref()?.schedule.as_ref()? {
                 S::AtStart(_) => Schedule::AtStart,

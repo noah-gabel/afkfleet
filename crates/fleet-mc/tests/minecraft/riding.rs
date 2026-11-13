@@ -20,6 +20,10 @@
 //!              behind the minecart's own box
 //!   z =  2     a chest on the floor
 //! ```
+//!
+//! A second scenario, at the file's end, checks the stopgap action that gets
+//! a bot on foot into the nearest minecart (ADR-0034), on a platform with
+//! the rail and the minecart alone; it goes with that action.
 
 use core::fmt::Write as _;
 use core::ops::RangeInclusive;
@@ -750,6 +754,288 @@ async fn slow_riding_scenario() {
     // The broken minecart's item would be picked up into the bot's hand.
     scene.server.rcon("kill @e[type=minecraft:item]").await;
     opens_the_chest_on_foot(&scene, 4).await;
+
+    within("the teardown", scene.session.disconnect()).await;
+    assert_eq!(connector.pool().live_threads(), 0);
+}
+
+// --- Getting into the nearest minecart (ADR-0034) ---
+
+/// How long the action looks for a minecart, in game ticks: fleet-mc's
+/// `riding::enter::PATIENCE`, and a second more.
+const PATIENCE_AND_MORE: usize = 220;
+
+/// Where the bot's own look packets since `since` pointed, in order.
+fn looks_sent_since(scene: &Scene, since: Mark) -> Vec<(f32, f32)> {
+    scene
+        .sent_since(since)
+        .iter()
+        .filter_map(|packet| match packet {
+            ServerboundGamePacket::MovePlayerRot(look) => Some(look.look_direction),
+            ServerboundGamePacket::MovePlayerPosRot(look) => Some(look.look_direction),
+            _ => None,
+        })
+        .map(|look| (look.y_rot(), look.x_rot()))
+        .collect()
+}
+
+/// How many clicks on an entity the bot sent since `since`.
+fn entity_clicks_since(scene: &Scene, since: Mark) -> usize {
+    scene
+        .sent_since(since)
+        .iter()
+        .filter(|packet| matches!(packet, ServerboundGamePacket::Interact(_)))
+        .count()
+}
+
+/// The one click on an entity since `since` came right after a look at the
+/// minecart, `yaw` and `pitch` away, and the last look the bot sent since
+/// is its own, `own`: it turned to the minecart, clicked and turned back.
+async fn turned_clicked_and_turned_back(
+    scene: &Scene,
+    since: Mark,
+    (yaw, pitch): (f32, RangeInclusive<f32>),
+    own: (f32, f32),
+) {
+    let sent = scene.sent_since(since);
+    let clicked = sent
+        .iter()
+        .position(|packet| matches!(packet, ServerboundGamePacket::Interact(_)));
+    let turned = clicked
+        .and_then(|clicked| sent.get(clicked.checked_sub(1)?))
+        .and_then(|packet| match packet {
+            ServerboundGamePacket::MovePlayerRot(look) => Some(look.look_direction),
+            _ => None,
+        });
+    assert!(
+        turned
+            .is_some_and(|look| (look.y_rot() - yaw).abs() < 1.0 && pitch.contains(&look.x_rot())),
+        "no look at the minecart right before the click: {}",
+        scene.report(since).await
+    );
+    assert_eq!(
+        entity_clicks_since(scene, since),
+        1,
+        "{}",
+        scene.report(since).await
+    );
+    let looks = looks_sent_since(scene, since);
+    assert!(
+        looks
+            .last()
+            .is_some_and(|(yaw, pitch)| (yaw - own.0).abs() < 0.5 && (pitch - own.1).abs() < 0.5),
+        "{looks:?}"
+    );
+}
+
+/// Far from the minecart, the action does nothing: no click, no turn, for
+/// as long as it looks for one. After that, a minecart within reach is
+/// left alone.
+async fn finds_no_minecart_out_of_reach(scene: &Scene) {
+    scene
+        .is_moved_to("the bot's place far from the minecart", 4.5, 5.5)
+        .await;
+    scene.look(90.0, 10.0).await;
+    let before = scene.mark();
+
+    scene.perform(GameAction::EnterMinecart).await;
+    ticks_pass(&scene.session, PATIENCE_AND_MORE).await;
+    let waited = scene.mark();
+    scene
+        .is_moved_to("the bot's place beside the minecart", 1.5, 0.5)
+        .await;
+    ticks_pass(&scene.session, 20).await;
+
+    assert_eq!(entity_clicks_since(scene, before), 0);
+    // Until the move, whose answer says the teleport's own look.
+    let sent = scene.sent_since(before);
+    assert!(
+        !sent
+            .iter()
+            .take(waited.sent - before.sent)
+            .any(|packet| matches!(
+                packet,
+                ServerboundGamePacket::MovePlayerRot(_)
+                    | ServerboundGamePacket::MovePlayerPosRot(_)
+            )),
+        "{}",
+        scene.report(before).await
+    );
+    scene
+        .server_has_it_riding("the bot whose patience ran out", false)
+        .await;
+}
+
+/// On foot one block east of the minecart, the bot gets in: it turns to
+/// the minecart, clicks it once and turns back. The look step right after
+/// the action, as a mode runs its steps back to back, is the bot's look
+/// in the seat.
+async fn gets_in_from_beside_it_and_the_next_look_applies(scene: &Scene) {
+    scene
+        .is_moved_to("the bot's place beside the minecart", 1.5, 0.5)
+        .await;
+    let before = scene.mark();
+
+    scene.perform(GameAction::EnterMinecart).await;
+    scene
+        .perform(GameAction::Look {
+            yaw: -45.0,
+            pitch: 20.0,
+        })
+        .await;
+
+    scene.is_seated("the bot that got in").await;
+    scene.server.sees_rotation(NAME, -45.0, 20.0).await;
+    ticks_pass(&scene.session, 20).await;
+    scene.server.sees_rotation(NAME, -45.0, 20.0).await;
+    scene.is_seated("the bot a second later").await;
+    // The minecart's middle is a block west of the bot's eyes and 1.2
+    // below them.
+    turned_clicked_and_turned_back(scene, before, (90.0, 49.0..=52.0), (-45.0, 20.0)).await;
+    assert_eq!(scene.teleports_since(before), 1, "the mount's teleport");
+}
+
+/// A seated bot stays seated and does nothing.
+async fn stays_seated(scene: &Scene) {
+    let before = scene.mark();
+
+    scene.perform(GameAction::EnterMinecart).await;
+    ticks_pass(&scene.session, 10).await;
+
+    assert_eq!(entity_clicks_since(scene, before), 0);
+    assert_eq!(looks_sent_since(scene, before), []);
+    assert_eq!(scene.teleports_since(before), 0);
+    scene.is_seated("the seated bot").await;
+    scene.server.sees_rotation(NAME, -45.0, 20.0).await;
+}
+
+/// The server takes the bot out of its minecart and the bot leaves, as
+/// after a restart that puts a bot back beside its minecart. It joins
+/// again and runs the action at once, as a mode's steps at start do,
+/// when it has no minecart within its reach yet: it's in again, looking
+/// where the server had it look.
+async fn gets_in_right_after_a_join(scene: Scene, connector: &AzaleaConnector) -> Scene {
+    let output = scene.server.rcon(&format!("ride {NAME} dismount")).await;
+    assert!(output.contains("stopped riding"), "{output}");
+    scene.server_has_it_riding("the bot taken out", false).await;
+    scene.is_where_the_server_has_it("the bot taken out").await;
+    let Scene {
+        server,
+        session,
+        picture,
+    } = scene;
+    within("the bot's leaving", session.disconnect()).await;
+
+    let (session, mut events) = connect(connector, &server, bot(1), offline(NAME)).await;
+    wait_for(&mut events, "the bot's second join", |event| {
+        *event == SessionEvent::Joined
+    })
+    .await;
+    let scene = Scene {
+        server,
+        session,
+        picture,
+    };
+    let before = scene.mark();
+    let asked = Instant::now();
+    scene.perform(GameAction::EnterMinecart).await;
+
+    within("the click after the join", async {
+        while entity_clicks_since(&scene, before) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    // For ADR-0034's record of how long a server takes to show a minecart.
+    eprintln!(
+        "the click came {:?} after the action at the join",
+        asked.elapsed()
+    );
+    scene.is_seated("the bot after its join").await;
+    assert_eq!(
+        entity_clicks_since(&scene, before),
+        1,
+        "{}",
+        scene.report(before).await
+    );
+    scene.server.sees_rotation(NAME, -45.0, 20.0).await;
+    scene
+}
+
+/// Seated, the bot leaves and joins again: the server has it in its
+/// minecart from the start, as after a short reconnect. The action at that
+/// join, as early as a mode's steps at start run, leaves it there: no
+/// click, however long it looks for a minecart.
+async fn stays_seated_through_a_join(scene: Scene, connector: &AzaleaConnector) -> Scene {
+    let Scene {
+        server,
+        session,
+        picture,
+    } = scene;
+    within("the seated bot's leaving", session.disconnect()).await;
+
+    let (session, mut events) = connect(connector, &server, bot(1), offline(NAME)).await;
+    wait_for(&mut events, "the bot's third join", |event| {
+        *event == SessionEvent::Joined
+    })
+    .await;
+    let scene = Scene {
+        server,
+        session,
+        picture,
+    };
+    let before = scene.mark();
+    scene.perform(GameAction::EnterMinecart).await;
+    ticks_pass(&scene.session, PATIENCE_AND_MORE).await;
+
+    scene.is_seated("the bot that joined seated").await;
+    assert_eq!(
+        entity_clicks_since(&scene, before),
+        0,
+        "{}",
+        scene.report(before).await
+    );
+    scene
+}
+
+#[tokio::test]
+async fn slow_enter_minecart_scenario() {
+    let server = Server::start(Mode::Offline).await;
+    let picture = Arc::new(Mutex::new(Picture::default()));
+    let _evidence = Evidence(Arc::clone(&picture));
+    // The container is published on 127.0.0.1, which only the offline
+    // scenario checks (ADR-0019, S69).
+    let connector = AzaleaConnector::new(&McConfig::default())
+        .with_targets(TargetPolicy::Unchecked)
+        .with_app_hook(watch(bot(1), &picture));
+    let (session, mut events) = connect(&connector, &server, bot(1), offline(NAME)).await;
+    wait_for(&mut events, "the bot's join", |event| {
+        *event == SessionEvent::Joined
+    })
+    .await;
+    let below = FLOOR - 1;
+    server
+        .rcon(&format!("fill -6 {below} -5 6 {below} 6 minecraft:stone"))
+        .await;
+    let scene = Scene {
+        server,
+        session,
+        picture,
+    };
+    // The bot stands aside while the rail and the minecart appear.
+    scene.is_moved_to("the bot's step aside", 3.5, 3.5).await;
+    for command in [
+        format!("setblock 0 {FLOOR} 0 minecraft:rail"),
+        format!("summon minecraft:minecart 0.5 {FLOOR} 0.5 {{Tags:[\"cart\"]}}"),
+    ] {
+        scene.server.rcon(&command).await;
+    }
+
+    finds_no_minecart_out_of_reach(&scene).await;
+    gets_in_from_beside_it_and_the_next_look_applies(&scene).await;
+    stays_seated(&scene).await;
+    let scene = gets_in_right_after_a_join(scene, &connector).await;
+    let scene = stays_seated_through_a_join(scene, &connector).await;
 
     within("the teardown", scene.session.disconnect()).await;
     assert_eq!(connector.pool().live_threads(), 0);

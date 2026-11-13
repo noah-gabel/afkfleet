@@ -55,6 +55,10 @@ pub enum GameAction {
         /// The slot.
         slot: HotbarSlot,
     },
+    /// Get into the nearest minecart within reach, unless the bot rides
+    /// already. See [`Action::EnterMinecart`] for what it does and how long
+    /// it looks for one (ADR-0034).
+    EnterMinecart,
 }
 
 /// One thing the runtime does for a mode: a game action, or a chat message
@@ -302,6 +306,7 @@ fn resolve<R: Rng + ?Sized>(action: &Action, rng: &mut R) -> PlannedAction {
         Action::HoldUse { on } => GameAction::HoldUse { on },
         Action::AttackFacingEntity => GameAction::AttackFacingEntity,
         Action::SelectHotbarSlot { slot } => GameAction::SelectHotbarSlot { slot },
+        Action::EnterMinecart => GameAction::EnterMinecart,
         Action::SendChat { ref message } => return PlannedAction::Chat(message.clone()),
     };
     PlannedAction::Game(game)
@@ -634,6 +639,7 @@ mod tests {
     #[case::hold_use(Action::HoldUse { on: true }, game(GameAction::HoldUse { on: true }))]
     #[case::release_use(Action::HoldUse { on: false }, game(GameAction::HoldUse { on: false }))]
     #[case::attack(Action::AttackFacingEntity, game(GameAction::AttackFacingEntity))]
+    #[case::enter_minecart(Action::EnterMinecart, game(GameAction::EnterMinecart))]
     #[case::select_hotbar_slot(
         Action::SelectHotbarSlot { slot: slot(4) },
         game(GameAction::SelectHotbarSlot { slot: slot(4) })

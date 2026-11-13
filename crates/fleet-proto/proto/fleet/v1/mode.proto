@@ -46,6 +46,9 @@ message Action {
     SelectHotbarSlot select_hotbar_slot = 9;
     // Send a chat message or a command.
     SendChat send_chat = 10;
+    // Get into the nearest minecart within reach. A reader that doesn't know
+    // this case sees the oneof unset and refuses the whole message.
+    Unit enter_minecart = 11;
   }
 
   // A fixed direction.

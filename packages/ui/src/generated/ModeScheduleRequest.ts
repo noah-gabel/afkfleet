@@ -11,8 +11,9 @@ export type ModeScheduleRequest = {
  */
 type: ModeScheduleKind, 
 /**
- * `every`: the shortest gap, in milliseconds: at least 250 (500 to
- * attack or use the use button, 30,000 to chat), at most a day.
+ * `every`: the shortest gap, in milliseconds: at least 250 (200 to
+ * use an item, 500 to attack or use the use button, 30,000 to chat), at
+ * most a day.
  */
 interval_ms?: number, 
 /**
