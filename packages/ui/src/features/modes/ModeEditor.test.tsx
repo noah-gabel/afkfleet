@@ -178,6 +178,7 @@ describe("a step's card (S12, U68, U70, U72)", () => {
     ["Attack what's in front (left-click)", []],
     ["Select a hotbar slot", ["Slot"]],
     ["Send chat or a command", ["Message"]],
+    ["Get into the nearest minecart", []],
   ])("shows only %s's fields", async (kind, expected) => {
     const found = await asKind(kind);
 

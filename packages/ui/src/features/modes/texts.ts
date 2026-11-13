@@ -121,6 +121,7 @@ export const ACTION_TEXT: Readonly<Record<ModeActionKind, string>> = {
   attack_facing_entity: "Attack what's in front (left-click)",
   select_hotbar_slot: "Select a hotbar slot",
   send_chat: "Send chat or a command",
+  enter_minecart: "Get into the nearest minecart",
 };
 
 export const YAW_FIELD = "Yaw (left or right, as F3 shows it)";
