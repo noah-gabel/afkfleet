@@ -129,7 +129,7 @@ They're written by the runtime, not by the script, and don't count against the s
 - **Timers reach 24 hours** (250 ms to 86,400,000 ms), the longest interval of a step mode, so "every 10 hours" is one timer.
 
 ### C9. Tests
-- **Properties** (fleet-core): a pattern never fits a line with one character added at either end; a match's values are inside their declared ranges; no player message and no line a chat format fits is ever a candidate; a closed window never matches.
+- **Properties** (fleet-core): a line with a player's name before it or text after it never fits; a match's values are inside their declared ranges and lists; no player message and no line a chat format fits is ever a candidate; whatever a script and the runtime do, in any order, a reply matches only inside a window a sent command opened, once for each send.
 - **A fuzz target,** `chat_pattern` (group B): any pattern declaration and any line; no panic, bounded work, and the properties above.
 - **Live, on the test server** (groups C and G): a second player sends the reply's exact text as chat, as a whisper and with `/me`, dies to an item renamed to it, and joins under a name as close to it as a name can be; the script's `/pay` is never sent. Then the server prints the line itself (`tellraw`), inside the window and outside it: only the first is matched.
 

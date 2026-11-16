@@ -11,15 +11,28 @@
 //!   lists of text a mode's declaration holds.
 //! - [`MessageTemplate`] is a message the mode declares, fixed or with
 //!   typed values: the only text its script can send (ADR-0036, D8).
+//! - [`ChatPattern`] is a line of the server's own chat the mode declares
+//!   it reads, as typed values and never as text; [`candidate_line`] says
+//!   which received lines may be read at all, and [`ChatWatch`] which
+//!   patterns count right now (ADR-0037). [`amount`] reads the numbers.
 
+pub mod amount;
 mod ident;
+mod pattern;
 mod placeholder;
 mod template;
+mod watch;
 mod word;
 
+pub use amount::DecimalMark;
 pub use ident::{Ident, IdentError};
+pub use pattern::{
+    Capture, CaptureDraft, CaptureKind, Captured, ChatMatch, ChatPattern, ChatPatterns,
+    ChatPatternsError, PatternDraft, PatternError, When, candidate_line,
+};
 pub use template::{
     Given, MessageDraft, MessageTemplate, MessageValue, RenderError, TemplateError, ValueDraft,
     ValueKind,
 };
+pub use watch::{ChatWatch, Observed, SendId, WindowError};
 pub use word::{Word, WordError, WordList, WordListError};
