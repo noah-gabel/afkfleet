@@ -569,7 +569,9 @@ async fn the_records_page_newest_first(_pool: SqlitePoolOptions, options: Sqlite
 
 /// A bot whose mode doesn't read back, an action or a schedule type this
 /// version doesn't know among them, is left alone: never run with the
-/// steps read as something else (ADR-0020, S25).
+/// steps read as something else (ADR-0020, S25). A scripted mode is one of
+/// them until the server and the wire know scripts (Plan.md P15.20,
+/// P15.21): it's never sent to an agent as a mode without steps.
 #[sqlx::test(migrations = false)]
 async fn a_bot_whose_mode_isnt_valid_reads_as_unreadable(
     _pool: SqlitePoolOptions,
@@ -582,6 +584,7 @@ async fn a_bot_whose_mode_isnt_valid_reads_as_unreadable(
     for definition in [
         r#"{"steps":[{"action":{"type":"nope"}}]}"#,
         r#"{"steps":[{"action":{"type":"jump"},"schedule":{"type":"on_teleport"},"probability":100}]}"#,
+        r#"{"script":{"api":1,"source":"fn on_join(first) {}","leash":8,"tool_guard":2,"messages":[],"patterns":[]}}"#,
     ] {
         sqlx::query!(
             "UPDATE modes SET definition_json = ? WHERE id = ?",

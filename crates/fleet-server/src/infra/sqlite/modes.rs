@@ -10,11 +10,11 @@ use core::num::NonZeroU32;
 
 use fleet_core::authz::{Actor, ModeVisibility, Role, UserRef};
 use fleet_core::id::{ModeId, UserId};
-use fleet_core::mode::{ModeDefinition, ModeName};
+use fleet_core::mode::ModeName;
 use fleet_core::value::Username;
 use sqlx::SqliteConnection;
 
-use super::convert::{id_text, parse_id, parse_time, time_text};
+use super::convert::{id_text, parse_id, parse_time, stored_mode, time_text};
 use super::error::{store_error, unique_violation};
 use crate::ports::modes::{ListedMode, ModeChange, ModeOwner, NewMode, StoredMode, WriteModeError};
 use crate::ports::page::Page;
@@ -356,9 +356,7 @@ fn mode_from_row(row: &ModeRow) -> Result<StoredMode, StoreError> {
         .as_deref()
         .map(|owner| parse_id(owner).ok_or_else(|| corrupt("owner_user_id")))
         .transpose()?;
-    // serde_json's error can quote the stored text: it's dropped here.
-    let definition: ModeDefinition =
-        serde_json::from_str(&row.definition_json).map_err(|_| corrupt("definition_json"))?;
+    let definition = stored_mode(&row.definition_json).ok_or_else(|| corrupt("definition_json"))?;
     Ok(StoredMode {
         id: parse_id(&row.id).ok_or_else(|| corrupt("id"))?,
         owner,

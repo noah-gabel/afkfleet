@@ -7,7 +7,7 @@ use core::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use super::{Action, HotbarSlot};
-use crate::chat::ChatMessage;
+use crate::script::Script;
 
 /// When a [`Step`] runs.
 ///
@@ -63,16 +63,59 @@ pub struct ModeDraft {
     pub steps: Vec<Step>,
 }
 
+/// What a mode is made of: a list of steps, or a script (ADR-0036, D13).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModeBody {
+    /// Steps, each an action with its schedule and probability.
+    Steps(Vec<Step>),
+    /// A script with its settings and declarations.
+    Script(Box<Script>),
+}
+
 /// A validated mode: what a bot does while it's online.
 ///
-/// The only ways to get one are [`ModeDraft::validate`] and the presets
-/// ([`ModeDefinition::afk`], [`ModeDefinition::farm`]), so every definition
-/// keeps the limits. It has the same JSON as [`ModeDraft`], and reading it
-/// validates again, so stored modes can't skip the checks either.
+/// Its body is steps or a script ([`ModeBody`]). The only ways to get one
+/// are [`ModeDraft::validate`], the presets ([`ModeDefinition::afk`],
+/// [`ModeDefinition::farm`]) and [`ModeDefinition::scripted`] with a
+/// checked [`Script`], so every definition keeps the limits.
+///
+/// **Its JSON has `steps` or `script`, never both and never neither.** A
+/// step mode's is a [`ModeDraft`]'s, unchanged. A scripted mode has
+/// `script` and no `steps`, so a server from before scripts can't read it
+/// and fails to load it, as with any new step type (ADR-0010), instead of
+/// running a mode that does nothing. Reading validates again, so stored
+/// modes can't skip the checks either.
+///
+/// **Whoever runs or sends a mode reads [`body`](Self::body).**
+/// [`steps`](Self::steps) is empty for a scripted mode: enough to show a
+/// step mode's steps, never to decide what a bot does.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(try_from = "ModeDraft", into = "ModeDraft")]
+#[serde(try_from = "StoredMode", into = "StoredMode")]
 pub struct ModeDefinition {
-    steps: Vec<Step>,
+    body: ModeBody,
+}
+
+/// A mode's JSON: `steps` or `script`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredMode {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    steps: Option<Vec<Step>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    script: Option<Script>,
+}
+
+/// Why a stored mode's JSON isn't a mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+enum StoredModeError {
+    /// The steps break a limit.
+    #[error(transparent)]
+    Steps(#[from] ModeError),
+    /// Neither `steps` nor `script`.
+    #[error("a mode needs its steps or its script")]
+    NoBody,
+    /// Both `steps` and `script`.
+    #[error("a mode has steps or a script, not both")]
+    TwoBodies,
 }
 
 /// Why a [`ModeDraft`] isn't a valid mode.
@@ -251,19 +294,52 @@ impl ModeDefinition {
     /// largest maximum pitch of [`Action::RotateRandom`].
     pub const MAX_PITCH: f32 = 90.0;
 
-    /// Returns the steps.
+    /// A scripted mode: `script` is checked already, and whether its source
+    /// is a valid program is `fleet-script`'s to say when the mode is saved.
     #[must_use]
-    pub fn steps(&self) -> &[Step] {
-        &self.steps
+    pub fn scripted(script: Script) -> Self {
+        Self {
+            body: ModeBody::Script(Box::new(script)),
+        }
     }
 
-    /// Returns the [`Action::SendChat`] messages that are `/commands`, in step
-    /// order, for the allowlist check (P2.9).
-    pub fn commands(&self) -> impl Iterator<Item = &ChatMessage> {
+    /// What the mode is made of.
+    #[must_use]
+    pub const fn body(&self) -> &ModeBody {
+        &self.body
+    }
+
+    /// Returns a step mode's steps; none for a scripted mode.
+    #[must_use]
+    pub fn steps(&self) -> &[Step] {
+        match &self.body {
+            ModeBody::Steps(steps) => steps,
+            ModeBody::Script(_) => &[],
+        }
+    }
+
+    /// Returns a scripted mode's script; `None` for a step mode.
+    #[must_use]
+    pub fn script(&self) -> Option<&Script> {
+        match &self.body {
+            ModeBody::Steps(_) => None,
+            ModeBody::Script(script) => Some(script),
+        }
+    }
+
+    /// Returns the names of the `/commands` the mode can send, for the
+    /// allowlist check (P2.9): a step mode's [`Action::SendChat`] messages
+    /// that are commands, in step order, and a scripted mode's declared
+    /// messages that are, in declared order. A name is what
+    /// [`ChatMessage::command_name`](crate::chat::ChatMessage::command_name)
+    /// gives: without its `/`, compared as it
+    /// is. No value of a declared message changes one (ADR-0036, D8).
+    pub fn command_names(&self) -> impl Iterator<Item = &str> {
+        let declared = self.script().into_iter().flat_map(Script::command_names);
         // Every action is listed: one that sends text must show up here, or
         // it would get around the allowlist.
-        self.steps.iter().filter_map(|step| match &step.action {
-            Action::SendChat { message } => message.is_command().then_some(message),
+        let steps = self.steps().iter().filter_map(|step| match &step.action {
+            Action::SendChat { message } => message.command_name(),
             Action::Look { .. }
             | Action::RotateRandom { .. }
             | Action::Jump
@@ -274,7 +350,8 @@ impl ModeDefinition {
             | Action::AttackFacingEntity
             | Action::SelectHotbarSlot { .. }
             | Action::EnterMinecart => None,
-        })
+        });
+        steps.chain(declared)
     }
 
     /// Whether `self` and `other` read the same in an answer (ADR-0020,
@@ -284,17 +361,35 @@ impl ModeDefinition {
     /// steps read the same, with the same name and visibility, changes
     /// nothing.
     ///
+    /// Two scripted modes read the same when they're equal: a script's
+    /// source and its declarations hold no invisible character, so they
+    /// read as they're stored. A step mode and a scripted mode never do.
+    ///
     /// It never says which steps to keep, and never feeds the allowlist,
     /// which compares a command's name as it is: `/spa\u{200B}wn` reads as
     /// `/spawn` but isn't that command.
     #[must_use]
     pub fn same_as_shown(&self, other: &Self) -> bool {
-        self.steps.len() == other.steps.len()
-            && self.steps.iter().zip(&other.steps).all(|(one, other)| {
-                one.schedule == other.schedule
-                    && one.probability == other.probability
-                    && same_action(&one.action, &other.action)
-            })
+        match (&self.body, &other.body) {
+            (ModeBody::Steps(steps), ModeBody::Steps(others)) => {
+                steps.len() == others.len()
+                    && steps.iter().zip(others).all(|(one, other)| {
+                        one.schedule == other.schedule
+                            && one.probability == other.probability
+                            && same_action(&one.action, &other.action)
+                    })
+            }
+            (ModeBody::Script(script), ModeBody::Script(other)) => script == other,
+            (ModeBody::Steps(_), ModeBody::Script(_))
+            | (ModeBody::Script(_), ModeBody::Steps(_)) => false,
+        }
+    }
+
+    /// A step mode of `steps`, which the caller has checked.
+    const fn of_steps(steps: Vec<Step>) -> Self {
+        Self {
+            body: ModeBody::Steps(steps),
+        }
     }
 
     /// The built-in `afk` mode: keeps a bot from being kicked for idling.
@@ -305,29 +400,27 @@ impl ModeDefinition {
     /// non-zero `player-idle-timeout` of 60 s (ADR-0008 §8, ADR-0010).
     #[must_use]
     pub fn afk() -> Self {
-        Self {
-            steps: vec![
-                Step {
-                    action: Action::RotateRandom {
-                        max_yaw: 30.0,
-                        max_pitch: 10.0,
-                    },
-                    schedule: Schedule::Every {
-                        interval: Duration::from_secs(45),
-                        jitter: Duration::from_secs(75),
-                    },
-                    probability: 100,
+        Self::of_steps(vec![
+            Step {
+                action: Action::RotateRandom {
+                    max_yaw: 30.0,
+                    max_pitch: 10.0,
                 },
-                Step {
-                    action: Action::SwingArm,
-                    schedule: Schedule::Every {
-                        interval: Duration::from_secs(20),
-                        jitter: Duration::from_secs(20),
-                    },
-                    probability: 100,
+                schedule: Schedule::Every {
+                    interval: Duration::from_secs(45),
+                    jitter: Duration::from_secs(75),
                 },
-            ],
-        }
+                probability: 100,
+            },
+            Step {
+                action: Action::SwingArm,
+                schedule: Schedule::Every {
+                    interval: Duration::from_secs(20),
+                    jitter: Duration::from_secs(20),
+                },
+                probability: 100,
+            },
+        ])
     }
 
     /// The built-in `farm` mode: attacks whatever the bot looks at.
@@ -338,25 +431,23 @@ impl ModeDefinition {
     /// (ADR-0010).
     #[must_use]
     pub fn farm() -> Self {
-        Self {
-            steps: vec![
-                Step {
-                    action: Action::SelectHotbarSlot {
-                        slot: HotbarSlot::FIRST,
-                    },
-                    schedule: Schedule::AtStart,
-                    probability: 100,
+        Self::of_steps(vec![
+            Step {
+                action: Action::SelectHotbarSlot {
+                    slot: HotbarSlot::FIRST,
                 },
-                Step {
-                    action: Action::AttackFacingEntity,
-                    schedule: Schedule::Every {
-                        interval: Duration::from_millis(650),
-                        jitter: Duration::from_millis(150),
-                    },
-                    probability: 100,
+                schedule: Schedule::AtStart,
+                probability: 100,
+            },
+            Step {
+                action: Action::AttackFacingEntity,
+                schedule: Schedule::Every {
+                    interval: Duration::from_millis(650),
+                    jitter: Duration::from_millis(150),
                 },
-            ],
-        }
+                probability: 100,
+            },
+        ])
     }
 }
 
@@ -395,7 +486,7 @@ impl ModeDraft {
             .enumerate()
             .map(|(index, step)| check_step(index, step, &mut seen))
             .collect::<Result<_, _>>()?;
-        Ok(ModeDefinition { steps })
+        Ok(ModeDefinition::of_steps(steps))
     }
 }
 
@@ -562,10 +653,30 @@ impl TryFrom<ModeDraft> for ModeDefinition {
     }
 }
 
-impl From<ModeDefinition> for ModeDraft {
+impl TryFrom<StoredMode> for ModeDefinition {
+    type Error = StoredModeError;
+
+    fn try_from(stored: StoredMode) -> Result<Self, StoredModeError> {
+        match (stored.steps, stored.script) {
+            (Some(steps), None) => Ok(ModeDraft { steps }.validate()?),
+            (None, Some(script)) => Ok(Self::scripted(script)),
+            (None, None) => Err(StoredModeError::NoBody),
+            (Some(_), Some(_)) => Err(StoredModeError::TwoBodies),
+        }
+    }
+}
+
+impl From<ModeDefinition> for StoredMode {
     fn from(definition: ModeDefinition) -> Self {
-        Self {
-            steps: definition.steps,
+        match definition.body {
+            ModeBody::Steps(steps) => Self {
+                steps: Some(steps),
+                script: None,
+            },
+            ModeBody::Script(script) => Self {
+                steps: None,
+                script: Some(*script),
+            },
         }
     }
 }
@@ -598,6 +709,11 @@ fn same_action(one: &Action, other: &Action) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chat::ChatMessage;
+    use crate::script::{
+        CaptureDraft, CaptureKind, DecimalMark, MessageDraft, PatternDraft, ScriptDraft,
+        ValueDraft, ValueKind, When, draft_of,
+    };
     use ModeError::{
         AngleOutOfRange, DuplicateStep, IntervalTooLong, IntervalTooShort, InvalidProbability,
         JitterTooLong, NoRotation, TooManySteps,
@@ -1040,18 +1156,20 @@ mod tests {
         vec![at_start(chat("hello")), repeating(Action::Jump), at_start(hold(true))],
         &[]
     )]
-    #[case::one(vec![at_start(chat("/spawn")), repeating(chat("hello"))], &["/spawn"])]
+    #[case::one(vec![at_start(chat("/spawn")), repeating(chat("hello"))], &["spawn"])]
     #[case::in_step_order(
         vec![repeating(chat("/afk")), at_start(Action::Jump), at_start(chat("/home base"))],
-        &["/afk", "/home base"]
+        &["afk", "home"]
     )]
-    fn commands_lists_the_command_messages_in_step_order(
+    #[case::a_lone_slash_has_an_empty_name(vec![at_start(chat("/"))], &[""])]
+    #[case::as_written(vec![at_start(chat("/spa\u{200B}wn x"))], &["spa\u{200B}wn"])]
+    fn command_names_lists_the_chat_steps_commands_in_step_order(
         #[case] steps: Vec<Step>,
         #[case] expected: &[&str],
     ) {
         let definition = validate(steps).unwrap();
-        let commands: Vec<&str> = definition.commands().map(ChatMessage::as_str).collect();
-        assert_eq!(commands, expected);
+        let names: Vec<&str> = definition.command_names().collect();
+        assert_eq!(names, expected);
     }
 
     // --- Presets ---
@@ -1084,7 +1202,9 @@ mod tests {
     #[case::afk(ModeDefinition::afk())]
     #[case::farm(ModeDefinition::farm())]
     fn presets_pass_validation_unchanged(#[case] preset: ModeDefinition) {
-        assert_eq!(ModeDraft::from(preset.clone()).validate(), Ok(preset));
+        let again = draft(preset.steps().to_vec()).validate();
+
+        assert_eq!(again, Ok(preset));
     }
 
     #[test]
@@ -1277,12 +1397,310 @@ mod tests {
     }
 
     #[test]
-    fn a_definition_converts_back_to_its_draft() {
+    fn a_step_mode_has_its_steps_and_no_script() {
         let steps = vec![repeating(Action::Jump), at_start(chat("/spawn"))];
+
+        let definition = validate(steps.clone()).unwrap();
+
+        assert_eq!(definition.steps(), steps);
+        assert_eq!(definition.body(), &ModeBody::Steps(steps));
+        assert_eq!(definition.script(), None);
+    }
+
+    // --- A scripted mode ---
+
+    const FARM_SCRIPT: &str = "fn on_join(first) {\n    timer.every(1200, \"swing\");\n}\n";
+
+    fn message(key: &str, text: &str) -> MessageDraft {
+        MessageDraft {
+            key: key.to_owned(),
+            text: text.to_owned(),
+            values: Vec::new(),
+        }
+    }
+
+    /// A script that declares `messages`, each a key and its text.
+    fn script_with(source: &str, messages: &[(&str, &str)]) -> Script {
+        Script::try_from(ScriptDraft {
+            messages: messages
+                .iter()
+                .map(|(key, text)| message(key, text))
+                .collect(),
+            ..draft_of(source)
+        })
+        .unwrap()
+    }
+
+    fn scripted(source: &str) -> ModeDefinition {
+        ModeDefinition::scripted(script_with(source, &[]))
+    }
+
+    /// A scripted mode with one of everything a mode's JSON can hold: both
+    /// settings off their defaults, a fixed message, a message with each
+    /// kind of value, and a pattern of each kind with each kind of capture.
+    fn every_part() -> ModeDefinition {
+        let value = |name: &str, kind| ValueDraft {
+            name: name.to_owned(),
+            kind,
+        };
+        let capture = |name: &str, kind| CaptureDraft {
+            name: name.to_owned(),
+            kind,
+        };
+        let options = |words: &[&str]| words.iter().map(|&word| word.to_owned()).collect();
+        let script = Script::try_from(ScriptDraft {
+            api: 1,
+            source: FARM_SCRIPT.to_owned(),
+            leash: 16,
+            tool_guard: 0,
+            messages: vec![
+                message("home", "/home farm"),
+                MessageDraft {
+                    key: "pay".to_owned(),
+                    text: "/pay {to} {amount} x{times}".to_owned(),
+                    values: vec![
+                        value(
+                            "to",
+                            ValueKind::Word {
+                                options: options(&["AfkMain", "AfkBot2"]),
+                            },
+                        ),
+                        value(
+                            "amount",
+                            ValueKind::Decimal {
+                                min: 0.01,
+                                max: 1_000_000.0,
+                                places: 2,
+                            },
+                        ),
+                        value("times", ValueKind::Integer { min: 1, max: 64 }),
+                    ],
+                },
+                message("thanks", "thank you"),
+            ],
+            patterns: vec![
+                PatternDraft {
+                    key: "balance".to_owned(),
+                    when: When::Reply,
+                    text: "Balance: ${amount}".to_owned(),
+                    captures: vec![capture(
+                        "amount",
+                        CaptureKind::Amount {
+                            min: 0.0,
+                            max: 1_000_000_000.0,
+                            decimal_mark: DecimalMark::Point,
+                        },
+                    )],
+                },
+                PatternDraft {
+                    key: "shop".to_owned(),
+                    when: When::AnyTime,
+                    text: "Shop is {state} with {n} items".to_owned(),
+                    captures: vec![
+                        capture(
+                            "state",
+                            CaptureKind::Word {
+                                options: options(&["open", "closed"]),
+                            },
+                        ),
+                        capture("n", CaptureKind::Integer { min: 0, max: 64 }),
+                    ],
+                },
+            ],
+        })
+        .unwrap();
+        ModeDefinition::scripted(script)
+    }
+
+    #[test]
+    fn a_scripted_mode_has_its_script_and_no_steps() {
+        let script = script_with(FARM_SCRIPT, &[("home", "/home farm")]);
+
+        let definition = ModeDefinition::scripted(script.clone());
+
+        assert_eq!(definition.script(), Some(&script));
+        assert_eq!(definition.body(), &ModeBody::Script(Box::new(script)));
+        assert_eq!(definition.steps(), []);
+    }
+
+    /// Its JSON has `script` and no `steps` (ADR-0036, D13).
+    #[test]
+    fn a_scripted_modes_json_has_script_and_no_steps() {
+        let definition = scripted(FARM_SCRIPT);
+
+        let json = serde_json::to_value(&definition).unwrap();
+
+        let fields: Vec<&String> = json.as_object().unwrap().keys().collect();
+        assert_eq!(fields, ["script"]);
+        assert_eq!(json["script"]["source"], FARM_SCRIPT);
+        assert_eq!(json["script"]["api"], 1);
+        assert_eq!(json["script"]["leash"], 8);
+        assert_eq!(json["script"]["tool_guard"], 2);
+    }
+
+    /// A step mode's JSON is what it always was: `steps`, and nothing new.
+    #[test]
+    fn a_step_modes_json_has_steps_and_no_script() {
+        let json = serde_json::to_value(ModeDefinition::farm()).unwrap();
+
+        let fields: Vec<&String> = json.as_object().unwrap().keys().collect();
+        assert_eq!(fields, ["steps"]);
+    }
+
+    #[test]
+    fn a_scripted_mode_reads_back_from_its_json_as_itself() {
+        for definition in [scripted(""), scripted(FARM_SCRIPT), every_part()] {
+            let json = serde_json::to_string(&definition).unwrap();
+
+            assert_eq!(
+                serde_json::from_str::<ModeDefinition>(&json).unwrap(),
+                definition
+            );
+        }
+    }
+
+    #[test]
+    fn scripted_mode_json_is_stable() {
+        let json = serde_json::to_string_pretty(&every_part()).unwrap();
+        insta::assert_snapshot!("scripted_mode", json);
+    }
+
+    /// A server from before scripts reads a mode as a [`ModeDraft`], whose
+    /// `steps` are required: it can't read a scripted mode, and so fails to
+    /// load it instead of running a mode with no steps.
+    #[test]
+    fn a_reader_that_knows_only_steps_cant_read_a_scripted_mode() {
+        let json = serde_json::to_string(&every_part()).unwrap();
+
+        assert!(serde_json::from_str::<ModeDraft>(&json).is_err());
+    }
+
+    fn script_json(script: &str) -> String {
+        format!(r#"{{"script":{script}}}"#)
+    }
+
+    const EMPTY_SCRIPT: &str =
+        r#"{"api":1,"source":"","leash":8,"tool_guard":2,"messages":[],"patterns":[]}"#;
+
+    #[test]
+    fn reads_a_scripted_modes_documented_json() {
+        let definition: ModeDefinition = serde_json::from_str(&script_json(EMPTY_SCRIPT)).unwrap();
+
+        assert_eq!(definition, scripted(""));
         assert_eq!(
-            ModeDraft::from(validate(steps.clone()).unwrap()),
-            draft(steps)
+            serde_json::to_string(&definition).unwrap(),
+            script_json(EMPTY_SCRIPT)
         );
+    }
+
+    #[rstest]
+    #[case::neither_body("{}".to_owned())]
+    #[case::both_bodies(format!(r#"{{"steps":[],"script":{EMPTY_SCRIPT}}}"#))]
+    #[case::both_bodies_script_first(format!(r#"{{"script":{EMPTY_SCRIPT},"steps":[]}}"#))]
+    #[case::a_script_that_is_null(r#"{"script":null}"#.to_owned())]
+    #[case::steps_that_are_null(r#"{"steps":null}"#.to_owned())]
+    #[case::a_script_as_text(r#"{"script":"fn on_join(first) {}"}"#.to_owned())]
+    #[case::a_script_without_its_settings(r#"{"script":{"api":1,"source":""}}"#.to_owned())]
+    #[case::a_newer_api_level(script_json(
+        r#"{"api":2,"source":"","leash":8,"tool_guard":2,"messages":[],"patterns":[]}"#
+    ))]
+    #[case::a_leash_that_is_off(script_json(
+        r#"{"api":1,"source":"","leash":0,"tool_guard":2,"messages":[],"patterns":[]}"#
+    ))]
+    #[case::a_source_with_a_hidden_character(script_json(
+        r#"{"api":1,"source":"\u202e","leash":8,"tool_guard":2,"messages":[],"patterns":[]}"#
+    ))]
+    #[case::a_message_that_isnt_one(script_json(
+        r#"{"api":1,"source":"","leash":8,"tool_guard":2,"messages":[{"key":"k","text":"{a}","values":[]}],"patterns":[]}"#
+    ))]
+    #[case::a_pattern_that_reads_free_text(script_json(
+        r#"{"api":1,"source":"","leash":8,"tool_guard":2,"messages":[],"patterns":[{"key":"k","when":"reply","text":"Balance: {a}","captures":[{"name":"a","type":"text"}]}]}"#
+    ))]
+    fn refuses_a_stored_mode_that_isnt_one(#[case] json: String) {
+        assert!(
+            serde_json::from_str::<ModeDefinition>(&json).is_err(),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn the_errors_of_a_modes_two_bodies_say_what_is_wrong() {
+        let error = |json: &str| {
+            serde_json::from_str::<ModeDefinition>(json)
+                .unwrap_err()
+                .to_string()
+        };
+
+        assert!(error("{}").starts_with("a mode needs its steps or its script"));
+        assert!(
+            error(&format!(r#"{{"steps":[],"script":{EMPTY_SCRIPT}}}"#))
+                .starts_with("a mode has steps or a script, not both")
+        );
+    }
+
+    #[test]
+    fn a_scripted_modes_commands_are_its_declared_ones() {
+        let definition = ModeDefinition::scripted(script_with(
+            FARM_SCRIPT,
+            &[
+                ("greet", "hello all"),
+                ("home", "/home farm"),
+                ("sell", "/ah sell 5"),
+                ("thanks", "thank you"),
+            ],
+        ));
+
+        let names: Vec<&str> = definition.command_names().collect();
+
+        assert_eq!(names, ["home", "ah"]);
+        assert_eq!(scripted(FARM_SCRIPT).command_names().count(), 0);
+    }
+
+    #[test]
+    fn a_scripted_mode_reads_the_same_only_as_itself() {
+        let base = ModeDefinition::scripted(script_with(FARM_SCRIPT, &[("home", "/home farm")]));
+        let with = |draft: ScriptDraft| ModeDefinition::scripted(Script::try_from(draft).unwrap());
+        let base_draft = || ScriptDraft::from(base.script().unwrap().clone());
+        let others = [
+            scripted(FARM_SCRIPT),
+            ModeDefinition::scripted(script_with("", &[("home", "/home farm")])),
+            ModeDefinition::scripted(script_with(FARM_SCRIPT, &[("home", "/home base")])),
+            ModeDefinition::scripted(script_with(FARM_SCRIPT, &[("house", "/home farm")])),
+            with(ScriptDraft {
+                leash: 9,
+                ..base_draft()
+            }),
+            with(ScriptDraft {
+                tool_guard: 3,
+                ..base_draft()
+            }),
+            with(ScriptDraft {
+                patterns: vec![PatternDraft {
+                    key: "back".to_owned(),
+                    when: When::Reply,
+                    text: "Welcome back".to_owned(),
+                    captures: Vec::new(),
+                }],
+                ..base_draft()
+            }),
+        ];
+
+        assert!(base.same_as_shown(&base.clone()));
+        assert!(every_part().same_as_shown(&every_part()));
+        for other in others {
+            assert!(!base.same_as_shown(&other), "{other:?}");
+            assert!(!other.same_as_shown(&base), "{other:?}");
+        }
+    }
+
+    #[test]
+    fn a_step_mode_and_a_scripted_mode_never_read_the_same() {
+        let empty_steps = validate(Vec::new()).unwrap();
+        let empty_script = scripted("");
+
+        assert!(!empty_steps.same_as_shown(&empty_script));
+        assert!(!empty_script.same_as_shown(&empty_steps));
+        assert_ne!(empty_steps, empty_script);
     }
 
     #[rstest]
@@ -1588,6 +2006,35 @@ mod tests {
     }
 
     proptest! {
+        /// Whatever a scripted mode's source and settings: it reads back
+        /// from its JSON as itself, and never as a step mode.
+        #[test]
+        fn a_scripted_mode_round_trips_through_json(
+            source in "[ -~
+    ü]{0,60}",
+            leash in 1_u8..=64,
+            tool_guard in 0_u8..=100,
+            command in "/?[a-z]{1,8}( [a-z]{1,8})?",
+        ) {
+            let script = Script::try_from(ScriptDraft {
+                leash,
+                tool_guard,
+                messages: vec![message("say", &command)],
+                ..draft_of(&source)
+            })
+            .unwrap();
+            let definition = ModeDefinition::scripted(script);
+
+            let json = serde_json::to_string(&definition).unwrap();
+            let again: ModeDefinition = serde_json::from_str(&json).unwrap();
+
+            prop_assert_eq!(&again, &definition);
+            prop_assert!(again.same_as_shown(&definition));
+            prop_assert_eq!(again.steps(), []);
+            prop_assert!(serde_json::from_str::<ModeDraft>(&json).is_err());
+            prop_assert_eq!(again.command_names().count(), usize::from(command.starts_with('/')));
+        }
+
         #[test]
         fn validate_never_panics(steps in vec(any_step(), 0..=40)) {
             let _ = draft(steps).validate();

@@ -280,6 +280,48 @@ async fn an_on_respawn_step_reads_back_and_an_unknown_schedule_is_corrupt(
     );
 }
 
+/// Until the server and the wire know scripts (Plan.md P15.20, P15.21), a
+/// stored scripted mode is read as a server from before scripts reads it:
+/// not at all. It never reads as a mode without steps, which a bot would
+/// then run as nothing (ADR-0036, D13).
+#[sqlx::test(migrations = false)]
+async fn a_stored_scripted_mode_isnt_read_before_the_server_knows_scripts(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let scripted = r#"{"script":{"api":1,"source":"fn on_join(first) {}","leash":8,"tool_guard":2,"messages":[],"patterns":[]}}"#;
+    // It is a mode fleet-core reads, so only this guard stands in its way.
+    assert!(
+        serde_json::from_str::<ModeDefinition>(scripted)
+            .unwrap()
+            .script()
+            .is_some()
+    );
+    let db = database(options).await;
+    add_owner(db.write_pool()).await;
+    Row {
+        json: scripted,
+        ..Row::valid()
+    }
+    .insert(db.write_pool())
+    .await
+    .unwrap();
+
+    let read = db.modes().find(OTHER.parse().unwrap()).await;
+
+    assert!(
+        matches!(
+            read,
+            Err(StoreError::Corrupt {
+                table: "modes",
+                column: "definition_json",
+                ..
+            })
+        ),
+        "{read:?}"
+    );
+}
+
 #[sqlx::test(migrations = false)]
 async fn a_stored_mode_that_isnt_valid_is_corrupt_and_the_error_never_holds_its_json(
     _pool: SqlitePoolOptions,

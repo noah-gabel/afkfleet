@@ -1,0 +1,88 @@
+---
+source: crates/fleet-core/src/mode/definition.rs
+expression: json
+---
+{
+  "script": {
+    "api": 1,
+    "source": "fn on_join(first) {\n    timer.every(1200, \"swing\");\n}\n",
+    "leash": 16,
+    "tool_guard": 0,
+    "messages": [
+      {
+        "key": "home",
+        "text": "/home farm",
+        "values": []
+      },
+      {
+        "key": "pay",
+        "text": "/pay {to} {amount} x{times}",
+        "values": [
+          {
+            "name": "to",
+            "type": "word",
+            "options": [
+              "AfkMain",
+              "AfkBot2"
+            ]
+          },
+          {
+            "name": "amount",
+            "type": "decimal",
+            "min": 0.01,
+            "max": 1000000.0,
+            "places": 2
+          },
+          {
+            "name": "times",
+            "type": "integer",
+            "min": 1,
+            "max": 64
+          }
+        ]
+      },
+      {
+        "key": "thanks",
+        "text": "thank you",
+        "values": []
+      }
+    ],
+    "patterns": [
+      {
+        "key": "balance",
+        "when": "reply",
+        "text": "Balance: ${amount}",
+        "captures": [
+          {
+            "name": "amount",
+            "type": "amount",
+            "min": 0.0,
+            "max": 1000000000.0,
+            "decimal_mark": "."
+          }
+        ]
+      },
+      {
+        "key": "shop",
+        "when": "any_time",
+        "text": "Shop is {state} with {n} items",
+        "captures": [
+          {
+            "name": "state",
+            "type": "word",
+            "options": [
+              "open",
+              "closed"
+            ]
+          },
+          {
+            "name": "n",
+            "type": "integer",
+            "min": 0,
+            "max": 64
+          }
+        ]
+      }
+    ]
+  }
+}

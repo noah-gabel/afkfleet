@@ -7,6 +7,9 @@
 //! runs the program, `fleet-runtime` gives it events and performs what it
 //! asks for, and `fleet-mc` only translates.
 //!
+//! - [`Script`] is a scripted mode's body: its [`ScriptSource`], the API
+//!   level it was validated at, its leash and tool guard, and what it
+//!   declares. [`limits`] holds a script's limits as constants.
 //! - [`Ident`], [`Word`] and [`WordList`] are the names and the closed
 //!   lists of text a mode's declaration holds.
 //! - [`MessageTemplate`] is a message the mode declares, fixed or with
@@ -18,8 +21,11 @@
 
 pub mod amount;
 mod ident;
+pub mod limits;
 mod pattern;
 mod placeholder;
+mod settings;
+mod source;
 mod template;
 mod watch;
 mod word;
@@ -30,6 +36,13 @@ pub use pattern::{
     Capture, CaptureDraft, CaptureKind, Captured, ChatMatch, ChatPattern, ChatPatterns,
     ChatPatternsError, PatternDraft, PatternError, When, candidate_line,
 };
+#[cfg(test)]
+pub(crate) use settings::draft_of;
+pub use settings::{
+    LeashRadius, LeashRadiusError, Script, ScriptApiLevel, ScriptApiLevelError, ScriptDraft,
+    ScriptError, ToolGuard, ToolGuardError,
+};
+pub use source::{ScriptSource, ScriptSourceError};
 pub use template::{
     Given, MessageDraft, MessageTemplate, MessageValue, RenderError, TemplateError, ValueDraft,
     ValueKind,

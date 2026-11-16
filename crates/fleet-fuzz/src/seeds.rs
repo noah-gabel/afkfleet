@@ -64,6 +64,10 @@ pub fn seeds(name: &str) -> Vec<Vec<u8>> {
             r#"{"steps":[{"action":{"type":"swing_arm"},"schedule":{"type":"every","interval_ms":20000,"jitter_ms":0},"probability":100}]}"#,
             r#"{"name":"Farm","visibility":"private","steps":[{"action":{"type":"send_chat","message":"/spawn"},"schedule":{"type":"at_start"},"probability":100}]}"#,
             r#"{"version":1,"name":"Farm","visibility":"shared","steps":[{"action":{"type":"look","yaw":-90.5,"pitch":12.0},"schedule":{"type":"at_start"},"probability":50}]}"#,
+            // A scripted mode with every kind of declaration, and the
+            // smallest one (Phase 15).
+            r#"{"script":{"api":1,"source":"fn on_join(first) {\n    chat.send(\"balance\");\n}\n","leash":8,"tool_guard":2,"messages":[{"key":"balance","text":"/balance","values":[]},{"key":"pay","text":"/pay {to} {amount} x{n}","values":[{"name":"to","type":"word","options":["AfkMain","AfkBot2"]},{"name":"amount","type":"decimal","min":0.01,"max":1000000.0,"places":2},{"name":"n","type":"integer","min":1,"max":64}]}],"patterns":[{"key":"balance","when":"reply","text":"Balance: ${amount}","captures":[{"name":"amount","type":"amount","min":0,"max":1000000000,"decimal_mark":"."}]},{"key":"shop","when":"any_time","text":"Shop is {state} with {n} items","captures":[{"name":"state","type":"word","options":["open","closed"]},{"name":"n","type":"integer","min":0,"max":64}]}]}}"#,
+            r#"{"script":{"api":1,"source":"","leash":64,"tool_guard":0,"messages":[],"patterns":[]}}"#,
         ]),
         "agent_message" => agent_messages(),
         "server_message" => server_messages(),
