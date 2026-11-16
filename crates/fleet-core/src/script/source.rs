@@ -62,11 +62,13 @@ impl TryFrom<&str> for ScriptSource {
     /// [`ScriptSourceError::TooLong`] first, then
     /// [`ScriptSourceError::ForbiddenChar`] for the first such character.
     fn try_from(text: &str) -> Result<Self, ScriptSourceError> {
-        let text = text.replace("\r\n", "\n");
-        let bytes = text.len();
+        // Counted before anything is copied, so text of any size costs a
+        // scan and no memory.
+        let bytes = text.len() - text.matches("\r\n").count();
         if bytes > Self::MAX_BYTES {
             return Err(ScriptSourceError::TooLong { bytes });
         }
+        let text = text.replace("\r\n", "\n");
         let (mut line, mut column) = (1_usize, 0_usize);
         for c in text.chars() {
             column += 1;
