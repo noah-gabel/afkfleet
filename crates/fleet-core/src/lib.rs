@@ -23,6 +23,8 @@
 //! - [`placement`]: which agent runs which bot: the scheduler's choice and
 //!   the reconciler's diff.
 //! - [`mode`]: what a bot does while it's online, and the presets.
+//! - [`script`]: what a scripted mode is made of and bound by: its declared
+//!   messages and chat patterns, its inputs, facts, limits and guards.
 //! - [`net`]: IP networks, and which addresses a managed agent's bots may
 //!   dial.
 //! - [`mc`]: the Minecraft ports the runtime drives a session through.
@@ -95,6 +97,7 @@ pub mod pki;
 pub mod placement;
 pub mod resilience;
 pub mod retention;
+pub mod script;
 pub mod server_settings;
 pub mod system;
 pub mod text;
