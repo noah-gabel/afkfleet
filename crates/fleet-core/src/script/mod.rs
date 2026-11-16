@@ -12,6 +12,10 @@
 //!   declares. [`limits`] holds a script's limits as constants.
 //! - [`Ident`], [`Word`] and [`WordList`] are the names and the closed
 //!   lists of text a mode's declaration holds.
+//! - [`Input`] names the keys and mouse buttons of a vanilla client,
+//!   [`HoldTracker`] knows which a script holds down, and
+//!   [`ActionLimiter`] holds every kind of action to today's shortest
+//!   interval, below the script (ADR-0036, D4, D7, D9).
 //! - [`MessageTemplate`] is a message the mode declares, fixed or with
 //!   typed values: the only text its script can send (ADR-0036, D8).
 //! - [`ChatPattern`] is a line of the server's own chat the mode declares
@@ -21,6 +25,8 @@
 
 pub mod amount;
 mod ident;
+mod input;
+mod limiter;
 pub mod limits;
 mod pattern;
 mod placeholder;
@@ -32,6 +38,8 @@ mod word;
 
 pub use amount::DecimalMark;
 pub use ident::{Ident, IdentError};
+pub use input::{HoldError, HoldTracker, Input, Key, MouseButton, Pressed};
+pub use limiter::{ActionLimiter, Limited, Press, TooSoon};
 pub use pattern::{
     Capture, CaptureDraft, CaptureKind, Captured, ChatMatch, ChatPattern, ChatPatterns,
     ChatPatternsError, PatternDraft, PatternError, When, candidate_line,
