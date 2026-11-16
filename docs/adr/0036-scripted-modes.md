@@ -272,7 +272,8 @@ The limiter is per bot and outlives a hook, a reconnect and a mode change, as AD
 ### D10. Walking's safety net
 **The leash.** fleet-mc checks it every game tick, below script and runtime.
 - **The anchor** is where the bot was put: its position at a join, a respawn, a world change, and after a server teleport of more than 8 blocks. Only fleet-mc sets it; no action moves it.
-- **Beyond the radius** (horizontal distance), a tick that takes the bot further from the anchor releases every movement key and reports it; the limiter then answers `leashed` for keys until the bot is inside again. Walking back is allowed: the rule is about getting further, not about being outside.
+- **Beyond the radius** (horizontal distance), a tick that takes the bot further from the anchor releases every movement key and reports it. Walking back is allowed: the rule is about getting further, not about being outside.
+- **A press is judged too** *(group A)*: beyond the radius, a direction key that would lead further, by where the bot looks, returns `leashed`; one that leads back or along the edge is taken. The plan had every key refused until the bot was inside again, which would have kept it from walking back.
 - **It applies to a riding bot too,** since movement keys steer some vehicles.
 - **The radius is a mode setting** next to the script, 1 to 64 blocks, 8 by default; no "off" (the user's answer 5).
 
@@ -301,7 +302,8 @@ The user's decision that it's in; mine that it fits this phase, in group C.
 - **Why here:** left-hold is one more input with the same hold and release machinery; its guards are per-tick checks in fleet-mc beside the leash; the tool's durability comes with the held-item fact; a cobblestone generator needs nothing of Phase 16.
 - **azalea 0.16.0 has hold-to-mine** (docs.rs): `Client::left_click_mine(enabled)`, "When enabled, the bot will mine any block that it is looking at if it is reachable", with `is_mining()` and `start_mining(position)`.
 - **As vanilla:** held on a block, it mines block after block. An entity under the crosshair when the button goes down is attacked once, never again during the hold.
-- **Guard 1, the floor:** never a block whose top is at or below the bot's feet, which includes the one it stands on and everything under it. A hold that meets such a block pauses; a new hold on one returns `mining_guard`.
+- **Guard 1, the floor:** never a block that reaches below the bot's feet: only a block whose bottom is at the feet's height or above is mined. That includes the one it stands on and everything under it. A hold that meets such a block pauses; a new hold on one returns `mining_guard`.
+  - *Sharpened in group A:* the plan's wording was "whose top is at or below the bot's feet". A bot on a slab, on soul sand or on farmland has its feet inside that block's cube, below its top, and would have mined the block it stands on. The price: the blocks beside the bot at that height stay too, and so does everything at feet level while the bot is in the air or on a carpet.
 - **Guard 2, the tool:** when the held item has a durability and only N uses are left, mining stops and the hold ends; a new hold returns `tool_guard`. N is a mode setting, 2 by default, 0 to turn it off (the user's answer 6: on, at 2 uses left). `bot.held.durability` is the fact.
 - **Both guards are decisions in fleet-core,** applied by fleet-mc each tick before azalea's mining system runs.
 - **Known limits to state after the live tests:** azalea predicts the broken block itself, so a break the server refuses (spawn protection, a claim) must be seen to resync; the guards say nothing about blocks beside or above the bot.

@@ -80,7 +80,7 @@ if !mouse.left.tap().ok {
 | `dead` | The bot is dead |
 | `not_in_world` | The bot is between worlds, or its session is ending |
 | `leashed` | The bot is at the end of its leash, and this would take it further |
-| `mining_guard` | The block is below the bot's feet |
+| `mining_guard` | The block reaches below the bot's feet |
 | `tool_guard` | The held tool is nearly used up |
 | `bad_value` | A number outside its range, an angle that isn't a number, an unknown kind |
 | `too_many` | No room for another timer |
@@ -119,7 +119,7 @@ keys.sprint.hold_for(3000);
 keys.forward.hold_for(3000);
 ```
 
-**The leash.** A bot walks at most a set number of blocks from where it was put: where it joined, respawned, changed worlds or was teleported by the server. At the end of the leash, a key that would take it further is released and returns `leashed`; walking back works. The radius is a setting of the mode (8 blocks unless changed), not of the script, and a script can't move the anchor.
+**The leash.** A bot walks at most a set number of blocks from where it was put: where it joined, respawned, changed worlds or was teleported by the server. At the end of the leash, a direction key that would take it further, by where it looks, is released and returns `leashed`; walking back and along the edge works. The radius is a setting of the mode (8 blocks unless changed), not of the script, and a script can't move the anchor.
 
 ### `mouse`
 `mouse.left` and `mouse.right`, with the same four methods and `held`.
@@ -127,7 +127,7 @@ keys.forward.hold_for(3000);
 **Left button**
 - `tap()` on an entity attacks it once. On anything else it swings the arm.
 - `hold()` mines the block the bot looks at, and then the next one that appears there, as a held button does in vanilla. An entity in front of the bot is attacked once when the button goes down, never again while it's held.
-- **The bot never mines a block below its feet,** which includes the one it stands on: the hold returns `mining_guard`, and a hold that's already down pauses while the bot looks at such a block.
+- **The bot never mines a block that reaches below its feet:** the one it stands on, whatever its shape, everything under it, and the blocks beside it at that height. The hold returns `mining_guard`, and a hold that's already down pauses while the bot looks at such a block. So aim at feet level or higher from solid ground: a bot standing on a slab, on soul sand or on a carpet mines at eye level only, and so does one in mid-jump.
 - **The tool guard.** When the held tool has only a few uses left (2 unless the mode's setting says otherwise), mining stops, `held` turns `false`, and a new hold returns `tool_guard` until another item is in hand. `bot.held.durability` says how many uses are left.
 
 **Right button**
