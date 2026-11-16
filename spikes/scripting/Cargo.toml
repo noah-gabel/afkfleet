@@ -1,0 +1,16 @@
+[package]
+name = "scripting-spike"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Throwaway (Phase 15's planning): Rhai's limits, its API facts and both time models at 200 bots. Findings live in ADR-0036."
+
+[dependencies]
+# The pin and the features ADR-0036 proposes. Never `unchecked` or `internals`.
+rhai = { version = "=1.27.0", features = ["sync", "no_module", "no_time", "no_custom_syntax"] }
+# The process's own CPU time and memory, as the load test reads them (ADR-0032).
+sysinfo = { version = "=0.40.1", default-features = false, features = ["system"] }
+
+[profile.release]
+debug = false
