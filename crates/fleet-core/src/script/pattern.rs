@@ -39,6 +39,8 @@ pub enum CaptureKind {
         max: i64,
     },
     /// An amount, as [`amount::read_amount`] reads it, from `min` to `max`.
+    /// Each end is a whole number up to 10^15 in either direction, or a
+    /// number with at most four decimals up to 10^11.
     Amount {
         /// The smallest value that counts.
         min: f64,
@@ -151,8 +153,9 @@ pub enum PatternError {
         /// The second one's place.
         capture: usize,
     },
-    /// A number's range is empty, isn't a number, or reaches past
-    /// [`amount::MAX_AMOUNT`].
+    /// A number's range is empty or isn't a number; or an amount's end
+    /// reaches past [`amount::MAX_AMOUNT`], or isn't a whole number and
+    /// has more than four decimals or is larger than 10^11.
     #[error("capture {capture}'s range isn't one")]
     Range {
         /// The capture's place.
@@ -366,9 +369,8 @@ impl Checked {
                 max,
                 decimal_mark,
             } => {
-                let reaches = |end: f64| end.abs() <= amount::MAX_AMOUNT;
                 // A comparison with NaN is false, so it's refused here too.
-                if !(min <= max && reaches(min) && reaches(max)) {
+                if !(min <= max && is_range_end(min) && is_range_end(max)) {
                     return Err(PatternError::Range { capture });
                 }
                 Ok(Self::Amount {
@@ -399,6 +401,25 @@ impl Checked {
                 .map(|word| (Captured::Word(word.clone()), word.as_str().len())),
         }
     }
+}
+
+/// The largest end of an amount's range that isn't a whole number: 10^11,
+/// which with four decimals is 15 digits.
+const MAX_FRACTIONAL_END: f64 = 100_000_000_000.0;
+
+/// Whether `end` may be an end of an amount's range: a whole number up to
+/// [`amount::MAX_AMOUNT`] in either direction, or a number with at most
+/// [`amount::MAX_DECIMALS`] decimals up to [`MAX_FRACTIONAL_END`].
+///
+/// Such a number is written in at most 16 digits, which every JSON reader
+/// reads back as the same `f64`; one with more digits can come back as its
+/// neighbour, and a stored mode would then no longer equal itself.
+fn is_range_end(end: f64) -> bool {
+    if end.fract() == 0.0 {
+        return end.abs() <= amount::MAX_AMOUNT;
+    }
+    end.abs() <= MAX_FRACTIONAL_END
+        && format!("{end:.places$}", places = amount::MAX_DECIMALS).parse() == Ok(end)
 }
 
 /// Checks a declaration's captures, in order.
@@ -840,6 +861,18 @@ mod tests {
     )]
     #[case::a_range_past_the_largest(
         draft("Balance: {a}", vec![amount("a", 0.0, 1.5e15)]),
+        PatternError::Range { capture: 0 }
+    )]
+    #[case::a_range_finer_than_four_decimals(
+        draft("Balance: {a}", vec![amount("a", 0.000_05, 9.0)]),
+        PatternError::Range { capture: 0 }
+    )]
+    #[case::a_range_of_sixteen_digits(
+        draft("Balance: {a}", vec![amount("a", 0.0, 123_456_789_012.345_6)]),
+        PatternError::Range { capture: 0 }
+    )]
+    #[case::a_range_that_isnt_a_decimal_number(
+        draft("Balance: {a}", vec![amount("a", 0.0, 1.0 / 3.0)]),
         PatternError::Range { capture: 0 }
     )]
     #[case::no_words(
@@ -1384,6 +1417,26 @@ mod tests {
                 let _ = pattern.matches(&line);
                 let again = ChatPattern::try_from(PatternDraft::from(pattern.clone()));
                 prop_assert_eq!(again.as_ref(), Ok(&pattern));
+            }
+        }
+
+        /// Whatever range is accepted, of any numbers at all: the pattern
+        /// reads back from its JSON as itself, because a range's ends are
+        /// plain decimal numbers a JSON reader can't round another way.
+        #[test]
+        fn an_accepted_range_reads_back_from_its_json(
+            min in prop_oneof![any::<f64>(), (-9_999_999..9_999_999).prop_map(|n| f64::from(n) / 1e4)],
+            max in prop_oneof![any::<f64>(), (-9_999_999..9_999_999).prop_map(|n| f64::from(n) / 1e4)],
+        ) {
+            if let Ok(pattern) = ChatPattern::try_from(draft("Balance: {a}", vec![amount("a", min, max)])) {
+                let json = serde_json::to_string(&pattern).unwrap();
+                let again: ChatPattern = serde_json::from_str(&json).unwrap();
+                prop_assert_eq!(again, pattern);
+                for end in [min, max] {
+                    let written = format!("{end}");
+                    let digits = written.chars().filter(char::is_ascii_digit).count();
+                    prop_assert!(digits <= 16, "{written}");
+                }
             }
         }
 

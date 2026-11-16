@@ -76,7 +76,7 @@ A mode declares up to **8** patterns, each with a key. A pattern is literal text
   | `amount` | An optional `-`; digits, with or without thousands separators in groups of exactly three; an optional decimal part of 1 to 4 digits; an optional suffix `k`, `M` or `B` (either case) that isn't followed by a letter or a digit. The decimal mark is declared, `.` or `,`; the separator is the other one | A decimal number |
   | `word` | One of up to 32 declared words, the longest that fits | That word |
 
-- **Bounded.** Every number capture declares its range; a value outside it is no match. An amount is at most 10^15 after its suffix.
+- **Bounded.** Every number capture declares its range; a value outside it is no match. An amount is at most 10^15 after its suffix. An end of an amount's range is a whole number, or a number with at most four decimals up to 10^11: a number of at most 16 digits, which reads back from a mode's JSON exactly (a longer one can come back as its neighbour, found by a property test).
 - **Deterministic and linear.** Each capture reads the longest text its grammar allows and is never tried again shorter. Two captures are never side by side, and a pattern holds at least 4 literal characters that aren't spaces, so a pattern is never "any number" alone.
 - **A pattern's own text** is at most 128 characters, one line, and holds no character received chat never has (as a chat format).
 - **The first declared pattern that may count now and fits** wins.
