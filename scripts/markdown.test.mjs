@@ -17,6 +17,7 @@ const GUIDES = [
   "docs/runbook.md",
   "docs/using-the-app.md",
   "docs/releasing.md",
+  "docs/scripting.md",
   "docs/dod/phase-12.md",
 ];
 

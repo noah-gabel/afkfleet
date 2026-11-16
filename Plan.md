@@ -190,6 +190,11 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 
 **Rule: one crate per concern, used throughout the whole project.** A concern that isn't covered here needs the user's approval, an ADR, and an entry in this table and in the index in `.claude/rules/dependencies.md`. All Rust crates are declared once in `[workspace.dependencies]`, when the first crate uses them (see the P0.3 note). Versions were pinned in P0.3 (2026-10-05) after checking crates.io and docs.rs. They're caret requirements, and `Cargo.lock` holds the exact pin (ADR-0009). **dfo** means `default-features = false` at workspace level.
 
+> Note (§5, Phase 15's planning, 2026-11-16) ([ADR-0036](docs/adr/0036-scripted-modes.md)): **planned, not in the tables yet.** Each joins its table, with its pin and its ADR note, in the group that first uses it.
+> - `rhai` `=1.27.0` (published 2026-10-21), the script engine, in the new crate `fleet-script` alone (Phase 15, group B), with `sync`, `no_module`, `no_time` and `no_custom_syntax`. Its graph needs a license exception for `tiny-keccak` (CC0-1.0, build time only) and an ignore for RUSTSEC-2026-0249 (`smartstring`, unmaintained).
+> - CodeMirror 6 for the mode editor (`codemirror`, `@codemirror/state`, `view`, `commands`, `language`, `autocomplete`, `lint`), mounted in a shadow root (Phase 15, group F).
+> - A Paper server and a test plugin in Java, test-only (Phase 16, group A).
+
 ### Rust: runtime, domain & infrastructure
 | Concern | Crate | Version | Used in | Notes |
 |---|---|---|---|---|
@@ -607,6 +612,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - **0–5** produce a working standalone bot.
   - **6–11** build the fully managed system with the app.
   - **12–13** make it production ready.
+  - **15–16** (planned) let a mode be a script.
 
 | Phase | Name | Milestone |
 |---|---|---|
@@ -625,6 +631,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 | 12 | Deployment & operations | Reproducible production deployment |
 | 13 | Hardening | Security & resilience proven |
 | 14 | *Website (future)* | Not planned yet |
+| 15 | Scripted modes | *Planned.* A mode can be a script: a virtual vanilla client in a sandbox |
+| 16 | Inventory and menus in scripts | *Planned.* A sell macro and an auction scan on any server |
 
 ---
 
@@ -2438,9 +2446,105 @@ What would be left to do:
 
 ---
 
+### Phase 15: Scripted modes
+**Goal:** A mode can be a script: a virtual player at a vanilla client that presses keys and mouse buttons, looks, mines, rides and reacts to joins, world changes, deaths and timers, inside a sandbox and under today's limits.
+**Introduces:** `rhai`, the crate `fleet-script`, CodeMirror 6 in the app.
+
+> Note (P15, Phase 15's planning, 2026-11-16) ([ADR-0036](docs/adr/0036-scripted-modes.md)): **planned, not started.** The plan, [the ADR](docs/adr/0036-scripted-modes.md) and [the script reference's draft](docs/scripting.md) are one pull request for the user's review; nothing is built before it's approved. The ADR ends with eight questions that are the user's; until they're answered, the tasks below follow its recommendations.
+>
+> - **The groups,** one pull request each, in this order, each after the last one's merge, under [ADR-0025](docs/adr/0025-a-simpler-workflow.md):
+>
+>   | Group | Branch | Tasks |
+>   |---|---|---|
+>   | A | `p15/p15.1-script-core` | P15.1 to P15.4: fleet-core's types and rules |
+>   | B | `p15/p15.5-fleet-script` | P15.5 to P15.9: the new crate, Rhai, validation, the instance, the fuzz targets |
+>   | C | `p15/p15.10-mc-inputs` | P15.10 to P15.15: fleet-mc and fleet-testkit, with the live scenarios |
+>   | D | `p15/p15.16-script-runner` | P15.16 to P15.19: fleet-runtime, and the load test |
+>   | E | `p15/p15.20-scripted-modes-api` | P15.20 to P15.23: the wire, the server, the agent |
+>   | F | `p15/p15.24-script-editor` | P15.24 to P15.26: the app |
+>   | G | `p15/p15.27-stopgap-and-records` | P15.27 to P15.29: the stopgap's conversion, the records, the DoD |
+>
+> - **Measured before the plan was written** (`spikes/scripting`, and CodeMirror under the app's CSP): the ADR's "What was measured". In short: hooks that run to their end cost about 0.3 % of a core for 200 bots with a hook every 250 ms each; a 54-slot auction page is scanned in about 50 µs and 1,437 operations; game objects and a shared state object work inside a script's own functions through a variable resolver; CodeMirror 6 runs under `style-src 'self'` in a shadow root with no violation, and not in the document.
+> - **Found there, for group B:** Rhai's graph needs two `deny.toml` exceptions (`tiny-keccak`'s CC0-1.0 license at build time, and RUSTSEC-2026-0249 for the unmaintained `smartstring`), and Rhai calls the variable resolver's API volatile.
+
+- [ ] **P15.1** 🔴 **A mode's body is steps or a script** (`fleet-core`): `ScriptSource` (at most 16 KiB, its characters checked), `ScriptSettings` (the leash's radius, the tool guard, the declared messages), the limits as constants, and `ModeDefinition` with either body. JSON with snapshot tests: a scripted mode has `script` and no `steps`, so an older server can't read it. `commands()` and `same_as_shown` cover both bodies.
+- [ ] **P15.2** 🔴 **Message templates:** fixed text or `{name}` values typed as an integer in a range, a decimal in a range with fixed places, or one of up to 32 literals. The command's name is literal; the longest possible text is checked against chat's 256 characters; rendering goes through `ChatMessage` again. The allowlist check reads the names.
+- [ ] **P15.3** 🔴 **Inputs and the limiter:** the keys and buttons as a type, the hold tracker (`hold`, `hold_for` with its deadline, `release`), the `ActionLimiter` with today's minimums per input and kind, where a release always passes. `GameAction` gains the new cases, `ReleaseAll` among them.
+- [ ] **P15.4** 🔴 **Facts, the leash and the guards:** the snapshot's types (the bot, its held item with durability, what it looks at, at most 64 entities within 16 blocks with whether a vehicle is occupied, the blocks within 4), registry identifiers as validated values; the leash's rule (the anchor, the radius, "further"); the mining guard's and the tool guard's decisions; the hook events.
+- [ ] **P15.5** **The `fleet-script` crate and Rhai:** `rhai` `=1.27.0` with `sync`, `no_module`, `no_time`, `no_custom_syntax`; §5 and the registry's index; a `deny.toml` wrapper entry so only fleet-script depends on it; the two exceptions, each with its reason and removal trigger, listed under Weakened; the sandboxed engine with every limit; a 90 % coverage gate.
+- [ ] **P15.6** 🔴 **Validation:** `compile(source, settings)` answers an error with line and column for a syntax error, an undefined variable (strict variables against placeholder objects), `import`, `eval`, a variable or parameter named like a game object, an unknown `on_…` function and a hook with the wrong parameters. Top-level statements are refused if Rhai's public API can show them, and never run either way.
+- [ ] **P15.7** 🔴 **The instance:** `handle(event, facts, now)` runs one hook to its end and returns its actions, the next wake and the outcome. The state object (shared, checked after every hook: a map, 64 entries, 4 KiB), timers (16, at least 250 ms, waiting while the bot is dead, cleared at a disconnect), results with their closed list of reasons, the budgets per hook and per second, and every way a script stops.
+- [ ] **P15.8** 🔴 **The API's objects** (`keys`, `mouse`, `look`, `hotbar`, `vehicle`, `chat`, `timer`, `random`, `log`, `bot`, `world`) bound to fleet-core's types through a variable resolver, working in a script's own functions; one description of the API that the reference's tables and the editor's autocomplete are generated from; the three examples (an AFK farm, the minecart farm, a cobblestone generator) as files, compiled and run against a fake world.
+- [ ] **P15.9** **Fuzz targets** (ADR-0030's shape): `script_compile`, `script_run`, `script_api`, `message_template`, each with its properties held in `just check` too.
+- [ ] **P15.10** 🔴 **The keys in fleet-mc:** walking, sprinting, jumping and sneaking through azalea's own key states (`walk`, `sprint`, `set_jumping`, `set_crouching`); drop, drop stack and swap to offhand; `ReleaseAll`; nothing held at a new session. The fake session in fleet-testkit records them.
+- [ ] **P15.11** 🔴 **The mouse in fleet-mc:** a held right button that uses again every 4 ticks for an item without a use duration and holds one long use otherwise, with `hold_until_used`; a held left button as azalea's `left_click_mine`, one attack per press on an entity, the mining guard (never a block at or below the feet) and the tool guard, both applied each tick before azalea's mining.
+- [ ] **P15.12** 🔴 **The leash's tick system:** the anchor set at a join, a respawn, a world change and a server teleport of more than 8 blocks; every movement key released on a tick that takes the bot further beyond the radius; reported to the runtime.
+- [ ] **P15.13** 🔴 **The facts reader and vehicles:** the snapshot built on the host thread; other entities' passengers tracked from the server's packets; `vehicle.mount` as ADR-0034's click by ID and patience, for the nearest free minecart; `vehicle.dismount`.
+- [ ] **P15.14** 🔴 **A world change as an event:** a second login or a respawn packet without a death, on a connection that stays open, becomes `SessionEvent::WorldChanged`; the actor and the step runner treat it as before.
+- [ ] **P15.15** **Live scenarios** (`just test-slow`): walking to the leash's end and back; `hold_for` and each release; sneaking at an edge; mounting past an occupied minecart; a cobblestone generator with both guards; a dimension change; the right-hold's cadence counted in ticks. Each new scenario repeated before it's trusted.
+- [ ] **P15.16** 🔴 **`ScriptRunner`** (`fleet-runtime`): an event or a due timer takes a snapshot, runs the hook and performs its actions through the limiter; timers and `hold_for` on tokio's time, tested paused. The script's state belongs to the bot's actor: kept across sessions, reset at Start and at a mode change or save.
+- [ ] **P15.17** 🔴 **Everything is released on every exit:** Stop, a mode change, an error, a limit, a death, a world change, a disconnect, and the runner's task ending for any other reason, a panic included. `on_stop` at an orderly stop only.
+- [ ] **P15.18** 🔴 **A script's status, error and log** as bounded bot events with the error's line, and metrics for hooks, refused actions and stopped scripts.
+- [ ] **P15.19** **The load test with 200 scripted bots** (`just load`, ADR-0032): CPU, memory and a hook's latency, the snapshot's cost on the host thread; the two budgets confirmed or changed, with the numbers in the ADR.
+- [ ] **P15.20** 🔴 **The wire:** `ModeDefinition.script`; `Hello.script_api`, the API level an agent runs; a refusal per bot with the error and its line; the status and log messages. The conversions and their fuzz targets grow with them.
+- [ ] **P15.21** 🔴 **The server:** a scripted mode validated at save, answering 422 with line and column; the DTOs (`just gen`); who may write one, as the user decides; the allowlist check over the declared messages; audit entries. It never sends a scripted mode to an agent below the level it needs: setting one answers 409, and placement skips such an agent. Route tests and the authorization matrix's rows.
+- [ ] **P15.22** 🔴 **The agent** validates again with its own engine and refuses per bot, its stream staying up. The standalone config can name a script file, for development and the live tests.
+- [ ] **P15.23** **Status, error and log reach the app's live events,** to those who may see them.
+- [ ] **P15.24** **The editor component:** CodeMirror 6 in a shadow root, its packages pinned at versions at least 7 days old; a Rhai tokenizer of our own; a theme of the app's colour tokens only; the focus outline on the host; the frontend rule's one exception for a constructed stylesheet inside a shadow root; sweep rows and baselines; the check exe started with it.
+- [ ] **P15.25** 🔴 **The mode editor:** a script body with its settings (leash, tool guard, messages with typed values), the server's errors shown at their lines, autocomplete from the generated description, and the three starter templates to copy.
+- [ ] **P15.26** **The bot's page** shows the script's status, its error with the line, and its log; e2e flows; `docs/using-the-app.md`.
+- [ ] **P15.27** 🔴 **The stopgap's way out:** a converter from any step mode to a script, tested against the plan it replaces; "Convert to script" in the editor; a new mode with `enter_minecart` is refused with a text that points there, and a stored one keeps running. Its removal, with the wire's case reserved and a server that names every mode still using it, is the next release's first task.
+- [ ] **P15.28** **The records:** the threat model's rows for the sandbox, the walking and the mining; `docs/scripting.md` out of draft, its tables generated; `docs/development.md`, the runbook's update order, CLAUDE.md and `.claude/rules/` for the new crate.
+- [ ] **P15.29** **The phase's check:** the three examples as live tests on the test server; the fuzz targets' run; the load test's numbers; an agent of the last release refusing nothing it's sent, because it's sent no script.
+
+**DoD:** The reference's three examples run on the test server as written. A script that loops forever, recurses forever or fills its state stops by itself and takes no other bot with it. After every way a script can end, nothing is held. A scripted mode never reaches an agent that can't run it. No script acts faster than a step mode could.
+
+---
+
+### Phase 16: Inventory and menus in scripts
+**Goal:** A script reads the bot's inventory and a server's menus and clicks in them, reliably enough for a sell macro and an auction scan on any server: no click on the wrong thing, no listing bought twice, every miss in the log.
+**Introduces:** a Paper test server with a small test plugin, test-only.
+
+> Note (P16, planned with Phase 15, 2026-11-16) ([ADR-0036](docs/adr/0036-scripted-modes.md), "Decisions for Phase 16"): **planned, not started; after Phase 15.** It adds to Phase 15's API and changes none of it: scripts that use it need agents at API level 2.
+>
+> | Group | Branch | Tasks |
+> |---|---|---|
+> | A | `p16/p16.1-menu-harness` | P16.1 to P16.3: the harness and the measurements |
+> | B | `p16/p16.4-menu-core` | P16.4 to P16.7: fleet-core |
+> | C | `p16/p16.8-mc-menus` | P16.8 to P16.11: fleet-mc and fleet-testkit |
+> | D | `p16/p16.12-menu-scripts` | P16.12 to P16.14: fleet-script and fleet-runtime |
+> | E | `p16/p16.15-menus-in-the-app` | P16.15 and P16.16: the wire, the server, the app |
+> | F | `p16/p16.17-trading-live` | P16.17 to P16.19: the live tests and the DoD |
+> | G | `p16/p16.20-system-messages` | P16.20, only if the user says yes to the ADR's question 2 |
+
+- [ ] **P16.1** **The harness:** a Paper server in the slow suite with a test plugin built in Docker: an auction menu whose listings carry prices in their lore, a sell menu, a second player who can buy a listing. Its image and build pinned as the other test images are. If Paper has no build for the pinned Minecraft version, the group says what works instead.
+- [ ] **P16.2** **The measurements:** what a server sends after a click on a vanilla chest, on the bot's own inventory and on a plugin's button, in packets and ticks; how fast clicks may come before a server drops or kicks. The plugin logs each click's time, so the user can join the local test server with their own client and click fast: a step only they run, and optional.
+- [ ] **P16.3** **The two rules fixed from the numbers,** as an amendment to ADR-0036: when a click counts as answered, and the click limit's class.
+- [ ] **P16.4** 🔴 **An item's name and lore** (`fleet-core`): sanitized as chat is, plain text, a name to 64 characters, lore to 16 lines of 128.
+- [ ] **P16.5** 🔴 **The inventory's and the menu's snapshots:** every slot; the screen's kind, size, title and cursor; the window ID and the state ID.
+- [ ] **P16.6** 🔴 **Menu commands and the click guard:** the click kinds (left, right, shift, number key, drop, drop stack), a screen's button, a trade, the anvil's name from a template, close. The guard as a pure decision: the same window, the same state, the same item in the slot, or the reason. The rule that a screen takes one click at a time, as a small state machine with a click's three fates.
+- [ ] **P16.7** 🔴 **Number helpers:** a parser for prices as servers write them (thousands separators, decimals, the suffixes k, M and B), fuzzed. The limiter's class for clicks.
+- [ ] **P16.8** 🔴 **Readers and events** (`fleet-mc`): the snapshots from azalea's `Inventory` component; a screen opened, updated and closed as events; a new screen with an old title is a new one.
+- [ ] **P16.9** 🔴 **Clicks:** the guard applied on the host thread at the moment of sending, one packet a click with azalea's prediction; a rejection and a resync recognised; every key and button released while a screen is open.
+- [ ] **P16.10** 🔴 **Special screens:** a villager's trade selected, the anvil's name set, a screen's button pressed.
+- [ ] **P16.11** **Live on the vanilla test server:** a chest, a villager, an anvil, an enchanting table.
+- [ ] **P16.12** 🔴 **`inventory` and `menu` in fleet-script:** the objects, the slot's helpers, the hooks `on_menu_open`, `on_menu_update`, `on_menu_close` and `on_click`, API level 2, the generated description; the sell macro and the auction scan as example files.
+- [ ] **P16.13** 🔴 **The runtime:** menu updates at most one a tick, a click's fate delivered, the pending rule, a log line for every click not sent, rejected or unanswered.
+- [ ] **P16.14** **Fuzz targets** for a snapshot made from anything a server could send, the number helpers and the click guard; the operation budget measured again on real pages.
+- [ ] **P16.15** 🔴 **The wire and the server at level 2.**
+- [ ] **P16.16** **The app:** the log's trade lines, the two starter templates, autocomplete for the new objects; the threat model's rows for text that steers a script.
+- [ ] **P16.17** **Live:** the auction scan and the sell macro on the harness, with the other player buying a listing between the scan and the click.
+- [ ] **P16.18** **The long run:** thousands of clicks against the harness, counting double buys and misses without a log line. Both are zero.
+- [ ] **P16.19** **The records and the DoD.**
+- [ ] **P16.20** 🔴 **System messages by declared patterns,** never player chat, as a hook with the pattern's key and its typed numbers. Only on the user's yes.
+
+**DoD:** The reference's sell macro and auction scan run against the harness as written. In the long run no listing is bought twice and no failed or missed buy lacks its log line. A click is never sent to a screen other than the one the script saw.
+
+---
+
 ## 10. Future extension ideas
 These are not scheduled. Each one needs an ADR before it starts.
-- Chat triggers (pattern → response or action) as part of modes, with strict limits.
+- Chat triggers (pattern → response or action) as part of modes, with strict limits. *Phase 16's last group, only on the user's yes, is the narrow form: system messages by declared patterns, never player chat ([ADR-0036](docs/adr/0036-scripted-modes.md), question 2).*
 - Notifications on `Failed`, `Paused` or re-auth required (Discord webhook, desktop notification).
 - Several server profiles in the desktop app.
 - A process-per-bot connector for stronger isolation.
@@ -2452,13 +2556,15 @@ These are not scheduled. Each one needs an ADR before it starts.
   - **What:** when it's due, the server sets the bot to Stopped as the Stop button does, audited with `via = timer`, and stored so it survives a restart.
   - **Edge times:** a clock time that doesn't exist (spring forward) fires at the next valid minute; one that exists twice (fall back) fires at its first occurrence.
   - **Needs:** a time-zone crate, a new dependency for the user's approval then.
-- **A sell routine** *(the user's idea, recorded in Phase 11, group B2; after Phase 13)*, modelled on the FWM mod's sell macro (https://modrinth.com/mod/fwm-mod):
+- **A sell routine** *(the user's idea, recorded in Phase 11, group B2; after Phase 13; planned as a script in Phase 16, [ADR-0036](docs/adr/0036-scripted-modes.md))*, modelled on the FWM mod's sell macro (https://modrinth.com/mod/fwm-mod):
   - **The routine:** the user picks item types (e.g. `minecraft:slime_block`). The bot opens the server's sell menu with a configured command and keeps it open, and shift-clicks only stacks of those items from its inventory into it. It clicks the configured sell slot when the container is full, optionally also after a wait, and reopens the menu after a delay if it closes.
   - **A per-server profile:** the command, the expected raw menu title, its size and the sell slot; or a menu that sells when it's closed; or a server that sells by command only.
   - **Matching:** by item ID, optionally also by custom name or components.
   - **Safety:** a first recon step reports what the server's menu really sends. The bot stops and alerts when the menu doesn't match, and never clicks anything else.
   - **Stats:** optional, display-only sales stats from payout messages; chat never triggers an action.
   - **Built on** azalea's container support: the first GUI interaction the bots would do, so it lifts §1's non-goal "inventories or container GUIs" for this routine.
+- **Later ideas for scripts** *(the user's list at Phase 15's planning, 2026-11-16; [ADR-0036](docs/adr/0036-scripted-modes.md))*: placing blocks as an action of its own, fishing with bite detection, steering boats and horses, elytra, signs and books. Two things work without them: a right-click with a block in hand places it as in vanilla, and holding the right button at a classic AFK fishing farm; neither is tested or guarded.
+- **A bot's-eyes panel** *(the user's idea; recommended as a phase of its own after Phase 16)*: what a bot sees, read-only, in the app. Phase 15's fact types and fleet-mc's reader are built to be shared with it; it needs a wire message, live events, a screen, and a decision on who may see a bot's position.
 
 ---
 
