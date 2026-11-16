@@ -6,7 +6,7 @@ Every document in this folder. Start with the repository's [README](../README.md
 - [Using the afkfleet app](using-the-app.md), for friends: installing the app, connecting to a server, registering with an invite, 2FA, updates and removing it.
 - [The runbook](runbook.md), for whoever hosts afkfleet on a Linux host with Docker: installing, settings, updates, backups and restores, the keys' copy, metrics, agents on other hosts, incident response and uninstalling.
 - [Releasing afkfleet](releasing.md), for the maintainer: GitHub's setup, the updater's key, each release's steps and the Minecraft version bump.
-- [Scripted modes: the script reference](scripting.md), for whoever writes a mode as a script: hooks, state, the game objects, limits and examples. **A draft:** Phases 15 and 16 are planned, not built.
+- [Scripted modes: the script reference](scripting.md), for whoever writes a mode as a script: hooks, state, the game objects, limits and examples. **A draft:** Phase 15 is being built, Phase 16 is planned.
 - [Developing afkfleet](development.md), for contributors: the architecture, a local fleet, the binaries' settings and the API, the commands, and the checks only you run with your own account.
 
 ## Security, design and checks
@@ -52,4 +52,5 @@ Each architecture decision record (ADR) holds one decision with its context, its
 - [0033. Chaos tests, and a server that refuses a missing database](adr/0033-chaos-tests-and-the-missing-database.md)
 - [0034. A stopgap mode action into the nearest minecart, and a right-click every 200 ms](adr/0034-a-stopgap-action-into-the-nearest-minecart.md)
 - [0035. The reviews: the threat model, the dependencies, the history and ASVS Level 2](adr/0035-the-reviews-and-phase-13s-end.md)
-- [0036. Scripted modes: a virtual vanilla client in Rhai, and menus after it](adr/0036-scripted-modes.md) (proposed)
+- [0036. Scripted modes: a virtual vanilla client in Rhai, and menus after it](adr/0036-scripted-modes.md)
+- [0037. Scripts read chat: system lines, by declared patterns with typed values](adr/0037-scripts-read-system-chat.md)

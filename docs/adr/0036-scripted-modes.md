@@ -1,8 +1,8 @@
 # 0036. Scripted modes: a virtual vanilla client in Rhai, and menus after it
 
-- **Status:** Proposed. It's the plan for Phases 15 and 16, for the user's review; nothing in it is built
+- **Status:** Accepted. The user approved the plan and answered its eight questions on 2026-11-16 ("The user's answers", at the end); the decisions they changed are marked. Reading chat is [ADR-0037](0037-scripts-read-system-chat.md)
 - **Date:** 2026-11-16
-- **Related:** Plan.md Phases 15 and 16, §10; [the script reference](../scripting.md) (draft); ADR-0008 (one host thread per bot), ADR-0010 (the mode model and its limits), ADR-0011 (`UseItem`, `HoldUse`), ADR-0013 (the mode runner), ADR-0017 (the app's CSP, no runtime styles), ADR-0019 (a mode on the wire), ADR-0020 (S20 to S27: respawn; S80: chat formats), ADR-0025, ADR-0026 (riding), ADR-0030 (fuzz targets), ADR-0032 (the load test), ADR-0034 (the stopgap this replaces); `spikes/scripting/`
+- **Related:** Plan.md Phases 15 and 16, §10; [the script reference](../scripting.md) (draft); [ADR-0037](0037-scripts-read-system-chat.md) (scripts read system chat); ADR-0008 (one host thread per bot), ADR-0010 (the mode model and its limits), ADR-0011 (`UseItem`, `HoldUse`), ADR-0013 (the mode runner), ADR-0017 (the app's CSP, no runtime styles), ADR-0019 (a mode on the wire), ADR-0020 (S20 to S27: respawn; S80: chat formats), ADR-0025, ADR-0026 (riding), ADR-0030 (fuzz targets), ADR-0032 (the load test), ADR-0034 (the stopgap this replaces); `spikes/scripting/`
 
 ## Context
 A mode is a list of steps today: an action, a schedule, a probability. It can't react: it doesn't know whether the bot sits in its minecart, which world it's in or what it holds. ADR-0034 added one stopgap action for one such case and said scripted modes would replace it.
@@ -14,11 +14,11 @@ A mode is a list of steps today: an action, a schedule, a probability. It can't 
 - Hooks for joins, world changes without a disconnect, deaths, respawns and timers; state the author controls, kept across reconnects.
 - Mining by holding the left button, with guards.
 - Every held input released by the runtime whenever a script stops; today's rate limits enforced below the script; a safety net for walking.
-- Chat never triggers an action.
+- Chat never triggers an action. *(Changed by the user's answer 2: a script reads system lines by declared patterns, [ADR-0037](0037-scripts-read-system-chat.md).)*
 - Engine-neutral: the API's types and limits in fleet-core, fleet-mc only translating.
 - **A second phase in the same plan:** inventory and menus, for a sell macro and an auction scan on any server, with clicks that can't land on the wrong thing and never buy twice.
 
-**Decided under ADR-0025.** Every decision below is mine unless it says it's the user's. The eight questions at the end are the user's to answer; until then each has my recommendation, and the plan is written as if it were taken.
+**Decided under ADR-0025.** Every decision below is mine unless it says it's the user's. The eight questions at the end were the user's; their answers are there, and each decision an answer or their reviewer's notes changed says so.
 
 ## What was measured
 `spikes/scripting` holds the code; `cargo run --release -- all` prints every line below, and `spikes/scripting/linux.sh all` the same in `rust:1-bookworm`. rhai 1.27.0 with `sync`, `no_module`, `no_time`, `no_custom_syntax`; one thread; a release build; the development PC (Windows 11) and a Linux container on it with 4 CPUs.
@@ -154,8 +154,8 @@ A script defines hooks. The runtime calls one when its event happens, the hook r
 | Expression depth | 32, and 16 inside functions | |
 | Functions | 64 | |
 | Text, array, map | 1,024 characters, 256 items, 64 entries | |
-| State | 64 entries and 4 KiB, checked by the runtime after every hook | Rhai's own limits don't hold through the shared map (measured) |
-| Timers | 16, each at least 250 ms | Today's shortest interval (ADR-0010) |
+| State | 64 entries and 4 KiB, checked by the runtime **while a hook runs** (every 256 operations) and after it | Rhai's own limits don't hold through the shared map (measured); D5 says why after the hook is too late |
+| Timers | 16, each 250 ms to 24 hours | Today's shortest and longest interval (ADR-0010); the user's case needs 10 hours |
 | Log | 200 characters a line, 20 lines a minute | |
 
 - **A script that fails or hits a limit stops.** Everything is released, the bot stays online and idle, and the error with its line reaches the app. It starts again at the next Start or when its mode is saved or changed. It isn't restarted at the next join: a script that fails at every join would otherwise fail forever.
@@ -223,7 +223,10 @@ The reference draft is [docs/scripting.md](../scripting.md). Its rules:
 ### D5. State
 - **`state` is a shared object map** the resolver hands out: readable and writable everywhere in the script (measured).
 - **Empty at Start. Kept** across reconnects, world changes, deaths and respawns. **Gone** at Stop and when the bot's mode changes or is saved.
-- **The runtime checks it after every hook:** still a map, at most 64 entries and 4 KiB. Otherwise the script stops with that error.
+- **The runtime checks it while a hook runs and after it:** still a map, at most 64 entries and 4 KiB. Otherwise the script stops with that error.
+  - **Why not only after the hook** (the user's reviewer, 2026-11-16): an assignment copies its value, so `state.a = state.b` doubles what the state holds, and one hook's 10,000 operations could grow it to fill the agent's 512 MiB and take every bot on that agent down before the check ran.
+  - **So the size is checked in Rhai's progress callback,** every 256 operations, and the script stops there. Between two checks a script can add at most what 256 operations add, each bounded by Rhai's own limits for one text, array or map.
+  - **Tested in group B:** a script that tries it never takes more than a few MiB, measured.
 - **Reading a property that was never set is an error** (`set_fail_on_invalid_map_property`), so a typo shows with its line instead of reading as nothing.
 - It lives in memory on the agent. An agent's restart is a Start for every bot's script.
 
@@ -233,7 +236,7 @@ The reference draft is [docs/scripting.md](../scripting.md). Its rules:
 - **Stored on the server,** to survive an agent's restart. A write path from every bot for a counter; not asked.
 
 ### D6. Hooks
-`on_join(first)`, `on_world_change()`, `on_death()`, `on_respawn()`, `on_timer(name)`, `on_stop()`.
+`on_join(first)`, `on_world_change()`, `on_death()`, `on_respawn()`, `on_timer(name)`, `on_stop()`, and `on_chat(key, values)` for a declared pattern's match ([ADR-0037](0037-scripts-read-system-chat.md)).
 
 - **`on_reconnect` isn't a hook.** It's `on_join(false)`: one way to say each thing.
 - **A world change** is a second login, or a respawn packet without a death, on a connection that stays open. Today fleet-mc reports neither. A proxy that sends a bot through a lobby produces the first, a portal the second.
@@ -243,7 +246,9 @@ The reference draft is [docs/scripting.md](../scripting.md). Its rules:
 - **A function named `on_…` that isn't a hook,** or a hook with the wrong number of parameters, is refused at save.
 
 ### D7. Limits below the script
-One `ActionLimiter` in fleet-core sits between a script's actions and the session. Each input and each action kind has its minimum, today's: 250 ms in general, 200 ms for a use, 500 ms for an attack and for holding or releasing the use button, 30 s for chat. A refused action returns `too_soon` and is counted in a metric. A release always passes.
+One `ActionLimiter` in fleet-core sits between a script's actions and the session. Each input and each action kind has its minimum, today's: 250 ms in general, 200 ms for a use, 500 ms for an attack and for holding the use button, 30 s for plain chat. A refused action returns `too_soon` and is counted in a metric. A release always passes, and doesn't count as a press.
+
+**A declared command goes by the bot's own chat rate** (the user's answer 4): the limiter passes it, and the bot's chat queue paces it as it paces a command typed in the app (ADR-0020, S3). Plain chat keeps 30 s.
 
 The limiter is per bot and outlives a hook, a reconnect and a mode change, as ADR-0020's 30 s chat memory does, so no sequence of events gets around a minimum.
 
@@ -252,7 +257,7 @@ The limiter is per bot and outlives a hook, a reconnect and a mode change, as AD
 - **The command's name is literal text,** never a value. So `ModeDefinition::commands()` lists the names as it does for steps, and the allowlist check for setting a mode on a bot is unchanged: Control when every command is on the allowlist, Manage otherwise.
 - **The longest text a template can produce is checked at save** against chat's 256 characters; a rendered message goes through `ChatMessage`'s own validation again.
 - **A script names a key and gives values.** A value out of range returns `bad_value`; an unknown key is an error with its line.
-- **Nothing a script reads reaches chat as text.** A script can't put a position, a name or lore into a message.
+- **Nothing a script reads reaches chat as text.** A script can't put a position, a name or lore into a message. A number a pattern read from chat can fill a typed value, inside that value's range ([ADR-0037](0037-scripts-read-system-chat.md), C6).
 
 **Alternatives considered:**
 - **Fixed messages only** (the plan's first draft). `/ah sell <price>` would be impossible, the user's finding.
@@ -269,7 +274,7 @@ The limiter is per bot and outlives a hook, a reconnect and a mode change, as AD
 - **The anchor** is where the bot was put: its position at a join, a respawn, a world change, and after a server teleport of more than 8 blocks. Only fleet-mc sets it; no action moves it.
 - **Beyond the radius** (horizontal distance), a tick that takes the bot further from the anchor releases every movement key and reports it; the limiter then answers `leashed` for keys until the bot is inside again. Walking back is allowed: the rule is about getting further, not about being outside.
 - **It applies to a riding bot too,** since movement keys steer some vehicles.
-- **The radius is a mode setting** next to the script, 1 to 64 blocks, 8 by default; no "off" in this phase (question 5).
+- **The radius is a mode setting** next to the script, 1 to 64 blocks, 8 by default; no "off" (the user's answer 5).
 
 **What else can go wrong, and what covers it:**
 
@@ -297,7 +302,7 @@ The user's decision that it's in; mine that it fits this phase, in group C.
 - **azalea 0.16.0 has hold-to-mine** (docs.rs): `Client::left_click_mine(enabled)`, "When enabled, the bot will mine any block that it is looking at if it is reachable", with `is_mining()` and `start_mining(position)`.
 - **As vanilla:** held on a block, it mines block after block. An entity under the crosshair when the button goes down is attacked once, never again during the hold.
 - **Guard 1, the floor:** never a block whose top is at or below the bot's feet, which includes the one it stands on and everything under it. A hold that meets such a block pauses; a new hold on one returns `mining_guard`.
-- **Guard 2, the tool:** when the held item has a durability and only N uses are left, mining stops and the hold ends; a new hold returns `tool_guard`. N is a mode setting, 2 by default, 0 to turn it off (question 6). `bot.held.durability` is the fact.
+- **Guard 2, the tool:** when the held item has a durability and only N uses are left, mining stops and the hold ends; a new hold returns `tool_guard`. N is a mode setting, 2 by default, 0 to turn it off (the user's answer 6: on, at 2 uses left). `bot.held.durability` is the fact.
 - **Both guards are decisions in fleet-core,** applied by fleet-mc each tick before azalea's mining system runs.
 - **Known limits to state after the live tests:** azalea predicts the broken block itself, so a break the server refuses (spawn protection, a claim) must be seen to resync; the guards say nothing about blocks beside or above the bot.
 
@@ -311,7 +316,7 @@ A snapshot fleet-mc builds on the host thread right before a hook:
 
 **Everything a server controls arrives as a registry identifier or a number,** never as free text, in this phase. Custom names and lore come in Phase 16, sanitized.
 
-**The bot's-eyes panel isn't in these phases.** The fact types and the reader are the part it shares; the panel needs a wire message, live events, a screen and a decision on who may see a bot's position. Recommended as a phase of its own (question 7).
+**The bot's-eyes panel isn't in these phases.** The fact types and the reader are the part it shares; the panel needs a wire message, live events, a screen and a decision on who may see a bot's position. A phase of its own, after these two (the user's answer 7).
 
 ### D13. A scripted mode in storage and on the wire
 - **A mode's body is steps or a script.** In JSON a scripted mode has `script` (the source and its settings: leash, tool guard, messages) and no `steps`, so a server older than Phase 15 can't read it, as with every new step type (ADR-0010). The runbook's "Going back" covers it.
@@ -334,14 +339,15 @@ The answer is 422 with line, column and Rhai's message, shown at the line in the
 **Top-level statements** are never run (hooks are called with `eval_ast(false)`). Rhai 1.27.0's public API has no direct way to tell whether a script has any; group B refuses them at save if it finds one, and otherwise the reference says a script is functions only.
 
 ### D15. Who may write a scripted mode
-Recommended, the user's to decide (question 1): Admins and the Owner create and edit scripted modes; a Member runs a shared one on bots they control. It's stricter than step modes (any Member writes private ones) because a sandbox is new code that hostile input reaches, and because a script moves a bot. A server setting can widen it later without a migration.
+**The user's decision** (answer 1): Admins and the Owner create and edit scripted modes; a Member runs a shared one on bots they control. It's stricter than step modes (any Member writes private ones) because a sandbox is new code that hostile input reaches, and because a script moves a bot. A server setting can widen it later without a migration.
 
 ### D16. The editor
 **CodeMirror 6, mounted in a shadow root,** with the CSP unchanged (measured above).
 - **Why CodeMirror:** line numbers, error markers at a line, highlighting and above all autocomplete, which the user asked for.
 - **What it needs:** the packages named in the measurement, each pinned at a version at least 7 days old; a Rhai tokenizer of our own through `StreamLanguage` (no Rhai language package is needed); a theme made only of the app's colour tokens.
 - **What changes in the rules:** `.claude/rules/frontend.md` says a constructed stylesheet is blocked. Measured, Edge blocks the `<style>` element and not a constructed sheet inside a shadow root. The rule gets that one exception by name, and the style guards keep refusing everything in the document (`document.adoptedStyleSheets` stays 0). The CSP itself isn't touched.
-- **Open for group F:** the focus outline (the app's one rule doesn't reach into a shadow root, so the host element shows it) and the check exe.
+- **Open for group F:** the focus outline (the app's one rule doesn't reach into a shadow root, so the host element shows it).
+- **Verified in the built app, not only in Edge** (the user's reviewer, 2026-11-16): group F runs `just app-build-check` and starts `target/app-check/afkfleet-check.exe` with the editor open before the group is done. If WebView2 there disagrees with Edge, the textarea below is the fallback.
 
 **Alternatives considered:**
 - **CodeMirror in the document with a nonce.** The app's CSP is a fixed string, so a nonce would be a public constant that any injected `<style>` could carry. Rejected.
@@ -351,7 +357,7 @@ Recommended, the user's to decide (question 1): Admins and the Owner create and 
 ### D17. The stopgap
 - **Phase 15 adds "Convert to script"** for any step mode: every step becomes a timer or a hook line, `enter_minecart` becomes `vehicle.mount("minecart")`, a chat step becomes a declared message. The converter is tested against the plan it replaces, schedule for schedule.
 - **`enter_minecart` is marked as going away:** a mode that holds it keeps running, saving a new one with it is refused with a text that points at the conversion.
-- **Removed one release later** (question 8), as ADR-0034 set out: the server refuses to start while a stored mode still uses it, naming each; the wire's case 11 is reserved.
+- **Removed one release later** (the user's answer 8), as ADR-0034 set out: the server refuses to start while a stored mode still uses it, naming each; the wire's case 11 is reserved.
 
 ### D18. Tests
 - **Property tests** on the instance: a hook never exceeds its budget; no sequence of events makes two actions of a kind closer than its minimum; after any stop, nothing is held; state survives exactly what D5 says.
@@ -376,7 +382,7 @@ A click carries what the hook saw: the window ID, the state ID, the slot and tha
 
 1. the same window ID, or the answer is `screen_changed`;
 2. the same state ID, or `content_changed`;
-3. the same item in the slot, or `slot_changed`.
+3. the same item in the slot, or `slot_changed`. **The same item is the whole item** (the user's reviewer, 2026-11-16): its ID, count, custom name, lore and data components, not the ID alone. Two listings of one kind of item differ only in name, lore and components, and a click meant for one must not land on the other.
 
 Only then one `ServerboundContainerClick` goes out, with azalea's own prediction of the result. The comparison is a pure function in fleet-core with property tests; fleet-mc only feeds it.
 
@@ -397,7 +403,7 @@ A class of its own in the limiter, **sized from measurements in group A:** how f
 A vanilla client's own rate can't be read off a bot. The harness's plugin logs every click's time, and the user can join the local test server with their own client and click: a step only they run, and optional.
 
 ### M6. Number helpers
-`slot.lore_number(label)` and `number(text)` are native functions in fleet-script over a parser in fleet-core: thousands separators, decimals, the suffixes k, M and B. Measured: the scan with the helper costs 1,437 operations, without it 5,271. The parser is fuzzed.
+`slot.lore_number(label)` and `number(text)` are native functions in fleet-script over a parser in fleet-core: thousands separators, decimals, the suffixes k, M and B. It's the parser Phase 15 builds for a chat pattern's amounts ([ADR-0037](0037-scripts-read-system-chat.md), C3). Measured: the scan with the helper costs 1,437 operations, without it 5,271. The parser is fuzzed.
 
 ### M7. Special screens
 - **Villager trades:** `menu.select_trade(n)`, with the offers as facts.
@@ -409,7 +415,7 @@ A vanilla client's own rate can't be read off a bot. The harness's plugin logs e
 Every key and mouse button is released, as a vanilla client's are, and the limiter answers `screen_open` for them. It also keeps anti-cheat's checks for moving with an open inventory quiet.
 
 ### M9. The harness
-A Paper server in the slow suite with a small test plugin, built in Docker: an auction menu whose listings carry prices in their lore, a sell menu, and a second player who can buy a listing first. **Java is a new language in the repository,** test-only, never shipped. If Paper has no build for the pinned Minecraft version when group A starts, the group says what works instead.
+A Paper server in the slow suite with a small test plugin, built in Docker: an auction menu whose listings carry prices in their lore, a sell menu, and a second player who can buy a listing first. **Java is a new language in the repository,** test-only, never shipped. **Pinned and built like the rest of the supply chain** (the user's reviewer, 2026-11-16): the Paper server's download and the plugin's build toolchain (the JDK image, the build tool and every dependency) are pinned by checksum, and the plugin is built without network, from what was fetched and verified before. If Paper has no build for the pinned Minecraft version when group A starts, the group says what works instead.
 
 **Live tests:** the auction script and the sell script of the reference; the other player buying a listing between the scan and the click; a long run that counts double buys and unlogged misses, both of which must be zero. Trades, the anvil and the enchanting table run on the vanilla test server.
 
@@ -417,7 +423,7 @@ A Paper server in the slow suite with a small test plugin, built in Docker: an a
 Lore steers a script's clicks, so a server, or a player who can list an item, steers a bot's purchases: a price written to be misread by the number helper; a bait listing; a screen that changes between the scan and the click (M3's case); a title that imitates another menu. The script's author decides what to trust; the runtime guarantees only that a click lands on the item the script saw.
 
 ## Consequences
-- **Two phases, fourteen groups,** each a pull request, each after the last one's merge.
+- **Two phases, thirteen groups,** each a pull request, each after the last one's merge.
 - **A new crate and a new dependency** with two `deny.toml` exceptions, an API Rhai calls volatile, and an unmaintained crate inside the sandbox.
 - **A new language for authors.** A misspelled method is found only when it runs.
 - **Agents must be updated before a scripted mode is used;** the server enforces it instead of the runbook asking for it.
@@ -425,18 +431,29 @@ Lore steers a script's clicks, so a server, or a player who can list an item, st
 - **Scripts can walk and mine.** The leash and the guards bound what a mistake costs; they don't make a bot safe on a server its owner doesn't know.
 - **What a server allows** (automated farming, trading, auction buying) is checked by the user for each server, and the reference tells every author the same.
 
-## Questions that are the user's
-1. **Who may write scripted modes?** Recommended: Admins and the Owner write them; a Member runs a shared one on bots they control (D15).
-2. **May scripts read chat?** A server often confirms a sale only in chat.
-   - **(a) Inventory and menu state only.** Nothing a player types or causes can move a bot. A sale confirmed only in chat can't be confirmed by the script; it sees the item or the money change, or it doesn't.
-   - **(b) System messages that match declared patterns, never player chat,** told apart with the server's chat formats (ADR-0020, S80). The script gets the pattern's key and its typed numbers, never text, through a hook of its own. The risk that stays: a player gets the server to print a matching line (a renamed item in a broadcast, a nickname, a private message a plugin sends as a system line), and a chat format that misses a plugin's way of printing player chat lets that chat through as a system line.
-   - Recommended: (a) as the default; (b) designed as above and built as Phase 16's last group only on a yes.
-3. **Message templates with typed values?** Recommended: yes (D8).
-4. **How often may a script send a command?** A mode's chat needs 30 s between sends today, which makes a sell macro slow. Recommended: plain chat keeps 30 s; a templated command goes by the bot's own chat rate, as a command typed in the app does.
-5. **The leash's default.** Recommended: 8 blocks, 1 to 64 per mode, no "off" in Phase 15.
-6. **The tool guard's default.** Recommended: on, at 2 uses left.
-7. **The bot's-eyes panel.** Recommended: a phase of its own, after these.
-8. **When does `enter_minecart` go?** Recommended: marked in Phase 15, removed one release later.
+## The user's answers
+The plan ended with eight questions that were the user's. Their answers, of 2026-11-16:
+
+1. **Who may write scripted modes?** Admins and the Owner write them; a Member runs a shared one on bots they control (D15).
+2. **May scripts read chat?** **Yes, and in Phase 15:** system messages by declared patterns, never player chat, under six guards the user set. The plan had recommended inventory and menu state only, with patterns as Phase 16's last group on a yes; that group is gone. The user's case: every 10 hours, and at every join, a script sends `/balance`, reads the reply, and pays what's above a threshold to their main account with `/pay`. The guards, the design and where each part is built are [ADR-0037](0037-scripts-read-system-chat.md).
+3. **Message templates with typed values?** Yes (D8).
+4. **How often may a script send a command?** A templated command goes by the bot's own chat rate; plain chat keeps 30 s (D7).
+5. **The leash's default.** 8 blocks, 1 to 64 per mode, no "off" (D10).
+6. **The tool guard's default.** On, at 2 uses left (D11).
+7. **The bot's-eyes panel.** A phase of its own, after these two (D12).
+8. **When does `enter_minecart` go?** Marked in Phase 15, removed one release later (D17).
+
+**Also the user's, with the answers:** timers must allow intervals of at least 10 hours. They reach 24 hours (D3).
+
+**Four notes from the user's reviewer,** each recorded at its decision and in its group's task:
+- **Group B:** the state's size is checked while a hook runs, not only after it (D5; P15.7).
+- **Group F:** the editor is verified in the built app, not only in Edge (D16; P15.24).
+- **Phase 16, group A:** the Paper server and the plugin's toolchain are pinned by checksum, and the plugin is built without network (M9; P16.1).
+- **Phase 16, group B:** "the same item in the slot" is the whole item (M3; P16.6).
+
+**Mine, where an answer left a detail open:**
+- **A declared command without values goes by the chat rate too,** as one with values: the answer names templated commands, and both are commands the mode declares.
+- **Chat reading is built in Phase 15's groups,** not as a group of its own (ADR-0037, C1).
 
 ## Alternatives considered for the whole
 - **More step types instead of scripts** (a condition, a branch). Every new need is a new type, a wire case, an editor state. ADR-0034 was the first, and it already needed patience, a click by ID and a look that doesn't stick.
