@@ -6,5 +6,16 @@ packages:
 # (ADR-0017). A fix that can't wait goes into `minimumReleaseAgeExclude`, with a comment
 # saying why and the user's approval.
 minimumReleaseAge: 4320
+
+# Advisories `pnpm audit` passes over, each by its one ID, with its reason and what removes
+# it (ADR-0041). Nothing else goes here.
+audit:
+  ignore:
+    # picomatch <= 4.0.7, a regular expression that backtracks without end on a crafted
+    # glob pattern. No fixed release exists. It reaches only build and test tools (vite,
+    # vitest, tinyglobby, fdir), never the app (`pnpm audit --prod` is clean), and every
+    # pattern they read is one of this repository's own. Remove once a fixed picomatch is
+    # released and locked.
+    - GHSA-fc5q-39xc-vjpf
 patchedDependencies:
   sonner@2.0.8: patches/sonner@2.0.8.patch

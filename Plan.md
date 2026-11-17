@@ -291,7 +291,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Concern | Package | Notes |
 |---|---|---|
 | Package manager / workspaces | pnpm | |
-| Bundler & dev server | `vite` | 8.3.4, with `@vitejs/plugin-react` 6.1.2 (oxc on Vite 8, no Babel or SWC; approved in P8.2, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
+| Bundler & dev server | `vite` | 8.3.4, with `@vitejs/plugin-react` 6.1.2 (oxc on Vite 8, no Babel or SWC; approved in P8.2, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)). *Its `picomatch` 4.0.7 (vitest's and tinyglobby's too) has GHSA-fc5q-39xc-vjpf, a ReDoS on a crafted glob pattern with no fixed release; ignored in `pnpm-workspace.yaml`'s `audit.ignore` since 2026-11-17: build and test tools only, and every pattern is our own ([ADR-0041](docs/adr/0041-picomatch-advisory-in-the-build-tools.md))* |
 | UI framework | `react`, `react-dom` 19 | 19.3.0, with `@types/react` and `@types/react-dom` 19.3.0 (approved in P8.2) |
 | Language | `typescript` | `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`. 7.0.2, the Go port: a native `tsc`, but no JavaScript compiler API until 7.1, so no tool that needs it (typescript-eslint, ts-node, vite-plugin-checker); each tsconfig lists `vite/client` in `types` ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
 | Server state & caching | `@tanstack/react-query` | 5.104.1 (approved in P8.6): no retries and no refetch on focus or reconnect; no query or mutation ever carries a secret ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
