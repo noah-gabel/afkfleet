@@ -54,3 +54,4 @@ Each architecture decision record (ADR) holds one decision with its context, its
 - [0035. The reviews: the threat model, the dependencies, the history and ASVS Level 2](adr/0035-the-reviews-and-phase-13s-end.md)
 - [0036. Scripted modes: a virtual vanilla client in Rhai, and menus after it](adr/0036-scripted-modes.md)
 - [0037. Scripts read chat: system lines, by declared patterns with typed values](adr/0037-scripts-read-system-chat.md)
+- [0038. `chrono` is unmaintained: ignored for now, and what would end that](adr/0038-chrono-is-unmaintained.md)

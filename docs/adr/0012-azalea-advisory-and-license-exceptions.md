@@ -95,9 +95,26 @@ Every azalea bump (ADR-0003's procedure, step 5):
 
 **Not done:** the same two as above.
 
+### 2026-11-17: three more advisories about DNSSEC validation *(decided under [ADR-0025](0025-a-simpler-workflow.md))*
+**What happened.** RUSTSEC-2026-0549, 0550 and 0551 were published against `hickory-proto`, four days after the three above. `just deny` failed on `main` and on the branch in work, with nothing changed in the workspace. (The same run showed RUSTSEC-2026-0543, which says `chrono` is unmaintained; that one is [ADR-0038](0038-chrono-is-unmaintained.md)'s.)
+
+**No fix can be taken,** for the same reason: each advisory says that no `hickory-proto` release contains a fix (from 0.26.0-beta.1 the validation code lives in `hickory-net`, fixed in 0.26.2), and azalea-protocol 0.16.0 asks for `hickory-resolver` 0.25.
+
+**All three are about DNSSEC validation, which isn't compiled here.** `hickory-proto` 0.25.2 compiles its `dnssec` module only with its `dnssec-aws-lc-rs` or `dnssec-ring` feature (checked on docs.rs on 2026-11-13, above; a published version doesn't change), and on 2026-11-17 `cargo tree -i hickory-proto -e features --target all` shows `std`, `tokio` and `futures-io`, and for `hickory-resolver` `default`, `system-config` and `tokio`.
+
+| Advisory | What it is | Why it's acceptable | Removal trigger |
+|---|---|---|---|
+| RUSTSEC-2026-0549 | An NSEC3 "no such record type" answer at a zone's apex taken as secure though no NSEC3 record matched the query's name | `hickory-proto`'s `dnssec` module: not compiled | Removed once azalea uses hickory 0.26.2 or newer |
+| RUSTSEC-2026-0550 | An unsigned NSEC or NSEC3 record used in a proof that a name doesn't exist, because another record of the same owner name had validated | The same module: not compiled | The same |
+| RUSTSEC-2026-0551 | Records of a DNS class other than the query's marked secure without being validated | The same module: not compiled | The same |
+
+**What it doesn't change:** as with the eight above, the agent never relied on DNSSEC, and these three make a forged DNS answer no easier.
+
+**Not done:** the same two as above.
+
 ## Consequences
 - **Easier:** azalea builds in the workspace, and `cargo deny` stays strict everywhere else. Each exception carries its reason and its removal trigger in `deny.toml` itself.
-- **Harder:** every azalea bump has to revisit five entries (nine since 2026-11-11, fourteen since 2026-11-12, seventeen since 2026-11-13). A new advisory against `rsa` or `hickory-proto` still fails the build, because the ignores name single advisory IDs.
+- **Harder:** every azalea bump has to revisit five entries (nine since 2026-11-11, fourteen since 2026-11-12, seventeen since 2026-11-13, twenty since 2026-11-17). A new advisory against `rsa` or `hickory-proto` still fails the build, because the ignores name single advisory IDs.
 - **Accepted risk:** the `rsa` advisory has no fix in sight. The analysis above holds only as long as azalea never decrypts with RSA, so each bump checks that again.
 
 ## Alternatives considered
