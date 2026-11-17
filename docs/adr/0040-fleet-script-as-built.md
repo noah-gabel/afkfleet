@@ -77,6 +77,7 @@ A thread of the async runtime has 2 MiB. A debug build was within a few hundred 
 - **An error's place where Rhai gives none.** Rhai's function metadata has no position without `internals`. A small scan of the text (`scan.rs`), which skips comments and texts as Rhai's tokenizer does, finds where each function is defined, the first thing outside every function, and the variables `for` and `catch` name.
 - **`for keys in …` and `catch (state)` are refused** by that scan: Rhai's definition filter isn't asked for them, and the resolver's object would silently win over the loop's own value, as for a parameter.
 - **Refused beyond D14's list:** an anonymous function (E3); a text, an array or a map written out past its limit (Rhai's own, as a syntax error).
+- **A name in an error is cut at 200 characters,** like Rhai's own message. Rhai puts no bound on a name's length, so a function named `on_` and 400 letters is refused as no hook with the first 200 characters of its name (E12's finding).
 - A script's source size and characters, its settings and declarations are the type `Script`'s own checks (group A) and aren't repeated.
 
 ### E8. What the limits are, exactly
@@ -127,6 +128,8 @@ Five more in `fleet-fuzz` (fifteen in all), each a plain function whose properti
 | `chat_pattern` | A declared pattern's JSON, then a line | A declaration reads back as itself; a match gives exactly the declared captures, each a value its declaration allows |
 
 Each property's check has a test that shows it failing, and with the limiter switched off in a trial, `script_run` failed on its seeds ("two LeftButton within 176ms"). The Fuzz workflow now also runs on pull requests that touch `crates/fleet-script`.
+
+**Its first finding, on CI on 2026-11-17.** The workflow's first run on this branch passed; its second, on the same tree after `main` was merged in, failed in `script_compile` after 38 seconds: a function whose name starts with `on_` and is 246 characters long. It's refused as no hook, as it should be, but the error carried the whole name, so the line an author reads was longer than the bound the target holds. No panic of ours, no limit passed: a script's text is at most 16 KiB, so the name was too. The name is now cut like every other (E7). The input is a test of `compile` and, byte for byte, a seed of the target, so `just check` runs it.
 
 ### E13. The two `deny.toml` exceptions, and the wrapper
 As ADR-0036's D3 named them, pinned like the others:

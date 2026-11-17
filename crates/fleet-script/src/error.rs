@@ -24,8 +24,9 @@ impl fmt::Display for SourcePosition {
 /// What's wrong with a script that can't be saved (ADR-0036, D14).
 ///
 /// The names it holds are the script's own identifiers, written by its
-/// author. Rhai's message in [`Syntax`](Self::Syntax) is one line of at
-/// most [`CompileError::MAX_MESSAGE_CHARS`] characters.
+/// author. A name, like Rhai's message in [`Syntax`](Self::Syntax), is one
+/// line of at most [`CompileError::MAX_MESSAGE_CHARS`] characters: a longer
+/// one is cut there.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CompileErrorKind {
     /// The text isn't a Rhai program: Rhai's own message.
@@ -94,8 +95,8 @@ pub struct CompileError {
 }
 
 impl CompileError {
-    /// The longest message of Rhai's own that an error carries, in
-    /// characters.
+    /// The longest message of Rhai's own, and the longest name, that an
+    /// error carries, in characters.
     pub const MAX_MESSAGE_CHARS: usize = 200;
 }
 

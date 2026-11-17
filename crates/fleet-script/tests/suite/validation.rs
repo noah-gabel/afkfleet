@@ -305,6 +305,34 @@ fn a_function_named_on_something_that_is_no_hook_is_refused() {
     );
 }
 
+// Found by the `script_compile` fuzz target on CI (2026-11-17): Rhai puts
+// no bound on a name's length, and the error carried the whole name.
+#[test]
+fn an_unknown_hooks_long_name_is_cut_to_the_messages_bound() {
+    let written = format!("on_{}", "m".repeat(400));
+    let error = refused(&format!("fn on_join(first) {{ }}\nfn {written}() {{ }}\n"));
+
+    let CompileErrorKind::UnknownHook { name } = &error.kind else {
+        panic!("{error:?}");
+    };
+    assert_eq!(name.chars().count(), CompileError::MAX_MESSAGE_CHARS);
+    assert!(written.starts_with(name.as_str()));
+    assert_eq!(error.at, Some(at(2, 1)));
+    // The whole line an author reads: the place, the name and the reason.
+    assert!(error.to_string().chars().count() <= CompileError::MAX_MESSAGE_CHARS + 128);
+}
+
+#[test]
+fn an_unknown_hooks_name_as_long_as_the_bound_is_shown_whole() {
+    let written = format!(
+        "on_{}",
+        "m".repeat(CompileError::MAX_MESSAGE_CHARS - "on_".len())
+    );
+    let error = refused(&format!("fn {written}() {{ }}"));
+
+    assert_eq!(error.kind, CompileErrorKind::UnknownHook { name: written });
+}
+
 #[rstest]
 #[case("fn on_join() { }", Hook::Join, 0)]
 #[case("fn on_join(first, again) { }", Hook::Join, 2)]

@@ -160,8 +160,10 @@ fn functions(ast: &AST, scanned: &Scanned) -> Result<[bool; Hook::ALL.len()], Co
         }
         let Some(hook) = Hook::from_name(function.name) else {
             return Err(CompileError {
+                // Rhai puts no bound on a name's length; a reserved name
+                // above is a game object's and short by itself.
                 kind: CompileErrorKind::UnknownHook {
-                    name: function.name.to_owned(),
+                    name: message(function.name, CompileError::MAX_MESSAGE_CHARS),
                 },
                 at,
             });

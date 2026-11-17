@@ -103,6 +103,7 @@ fn scripted(name: &str) -> Vec<Vec<u8>> {
                 b"fn on_join() { }\nfn on_reconnect() { }",
                 b"fn on_join(first) { let f = |x| x; eval(\"1\"); import \"a\" as b; }",
                 b"fn f(state) { for bot in [1] { } try { } catch (world) { } }",
+                LONG_HOOK_NAME.as_bytes(),
                 b"fn f() { `a ${ `b ${ \"c\" }` }` + 'x' /* /* nested */ */ }",
             ])
             .map(<[u8]>::to_vec)
@@ -172,6 +173,11 @@ fn scripts() -> Vec<&'static str> {
         .map(|example| example.source)
         .collect()
 }
+
+/// A function named like a hook that is none, its name 246 characters
+/// long: the input the fuzzer found on CI on 2026-11-17, byte for byte,
+/// where the error carried the whole name and its line grew past its bound.
+const LONG_HOOK_NAME: &str = "fn on_inconnecton_recojoimmmmmmmmmmmmmtmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmemmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmemmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmnconnecton_reconnect() { }";
 
 /// A script that does something of everything in every hook, picked by
 /// its own random numbers.
@@ -355,12 +361,28 @@ mod tests {
             .iter()
             .map(|seed| compiled(seed).unwrap_err())
             .collect();
-        assert_eq!(reasons.len(), 7);
+        assert_eq!(reasons.len(), 8);
         // Each for a reason of its own.
         let mut distinct = reasons.clone();
         distinct.sort();
         distinct.dedup();
-        assert!(distinct.len() >= 6, "{reasons:?}");
+        assert!(distinct.len() >= 7, "{reasons:?}");
+    }
+
+    #[test]
+    fn the_long_hook_name_is_the_input_the_fuzzer_found() {
+        let input = seeds("script_compile")
+            .into_iter()
+            .find(|seed| seed.starts_with(b"fn on_inconnecton_"))
+            .unwrap();
+        let name = input
+            .strip_prefix(b"fn ")
+            .and_then(|rest| rest.strip_suffix(b"() { }"))
+            .unwrap();
+
+        assert_eq!((input.len(), name.len()), (255, 246));
+        assert!(name.len() > fleet_script::CompileError::MAX_MESSAGE_CHARS);
+        assert!(compiled(&input).unwrap_err().contains("isn't a hook"));
     }
 
     #[test]
