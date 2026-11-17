@@ -37,6 +37,8 @@ None may panic. Beyond that:
 | `vault_envelope` | `Vault::open` and `key_id_of` over any bytes; a sealed secret with one byte changed | Nothing the vault didn't seal opens; both call the same envelopes malformed; a secret opens only unchanged, for its record and purpose |
 | `agent_metrics` | The agent's metrics endpoint, through its own `serve` over an in-memory pipe, time paused | The answer is nothing, or one whole response with one of the responder's four statuses; the series only for a `GET` of `/metrics` |
 
+**Since Phase 15's group B, five more** for scripted modes, in `fleet-fuzz`'s `script` module: `script_compile`, `script_run`, `script_api`, `message_template` and `chat_pattern`. What each reads and holds is in [ADR-0040](0040-fleet-script-as-built.md), E12.
+
 **Each property's check has a test that shows it failing** on a value built to break it (a type that writes what its parser refuses, a hello over the bound that was let through, an answer with another status), so a target that silently checks nothing fails the build.
 
 ### Seeds

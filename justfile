@@ -18,7 +18,7 @@ linux_exclude := if os() == "linux" { "--exclude " + desktop } else { "" }
 # The stable toolchain for `stable-check`, and the crates it checks: every crate
 # that doesn't depend on azalea or azalea-auth (the desktop crate only off Linux).
 stable := "1.99.0"
-stable_crates := "-p fleet-core -p fleet-testkit -p fleet-runtime -p fleet-startup -p fleet-proto -p fleet-server -p fleet-api-types -p fleet-client" +(if os() == "linux" { "" } else { " -p " + desktop })
+stable_crates := "-p fleet-core -p fleet-script -p fleet-testkit -p fleet-runtime -p fleet-startup -p fleet-proto -p fleet-server -p fleet-api-types -p fleet-client" +(if os() == "linux" { "" } else { " -p " + desktop })
 
 # The release's image labels (ADR-0022, S22, R24): the release workflow sets them for the whole
 # image job, so `just images` and `just test-stack`'s own build make the same image; empty here.
@@ -664,6 +664,17 @@ mutants scope="all" shards="4":
 # Remove the mutation runs' worktrees and target/mutants. Not while `just mutants` runs.
 mutants-clean:
     node scripts/mutants-clean.mjs
+
+# Cargo never removes what it built, and one group of work filled 120 GB of target/debug
+# (ADR-0039). scripts/tidy.mjs removes what the next build writes again: every profile's
+# incremental data and this workspace's own crates' build units, in target/, in
+# cargo-llvm-cov's folder and in fuzz/target/; the coverage data and reports; and the
+# mutation runs' trees, through mutants-clean's script. Every dependency's build stays. It
+# never enters target/dod-run or target/dev-server and never removes target/ as a whole.
+# `just tidy --dry-run` only measures. Not while a build runs.
+# Free the disk space builds leave behind; run it at the start of every group of work.
+tidy *args:
+    node scripts/tidy.mjs {{ args }}
 
 # Tests for the scripts in scripts/.
 scripts-test:

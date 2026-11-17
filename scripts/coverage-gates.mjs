@@ -33,6 +33,9 @@ export const GATES = [
   { name: "workspace", min: 80, pattern: /^/, required: true },
   { name: "fleet-core", min: 90, pattern: /^crates\/fleet-core\// },
   { name: "fleet-runtime", min: 85, pattern: /^crates\/fleet-runtime\// },
+  // The script engine: a sandbox is new code that a program of someone's own reaches
+  // (ADR-0036, D2). Required, so a report without the crate fails.
+  { name: "fleet-script", min: 90, pattern: /^crates\/fleet-script\//, required: true },
   {
     name: "auth",
     min: 90,

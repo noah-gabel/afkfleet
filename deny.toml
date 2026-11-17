@@ -49,6 +49,9 @@ ignore = [
     { id = "RUSTSEC-2026-0551", reason = "hickory-proto 0.25 via azalea: DNSSEC validation is hickory-proto's dnssec module, compiled only with its dnssec-ring or dnssec-aws-lc-rs feature, which nothing here enables. No 0.25 fix exists. Remove once azalea uses hickory 0.26.2 or newer (ADR-0012)" },
     # chrono's notice, decided under ADR-0025 (ADR-0038): unmaintained, not vulnerable.
     { id = "RUSTSEC-2026-0543", reason = "chrono 0.4.45, the workspace's time type and azalea-auth's and azalea-client's: its maintainer filed it as unmaintained on 2026-11-17, with no vulnerability and no patched version. Remove once neither the workspace nor azalea depends on chrono; a vulnerability in chrono is a new advisory and fails the check again (ADR-0038)" },
+    # Rhai's short strings, decided under ADR-0025 (ADR-0036, D3; ADR-0040): the price of
+    # the Rhai requirement, inside the sandbox and under its fuzz targets.
+    { id = "RUSTSEC-2026-0249", reason = "smartstring 1.0.1 via rhai 1.27.0, the type behind Rhai's identifiers and object map keys, in fleet-script alone: unmaintained (its repository was archived on 2026-05-03), not vulnerable, no fix. Rhai's compact_str feature adds compact_str and keeps smartstring in the graph. Remove at a Rhai release without smartstring (ADR-0036, ADR-0040)" },
     # testcontainers' advisory, accepted by the user (ADR-0021): it reaches only the
     # container tests, never a shipped binary.
     { id = "RUSTSEC-2026-0440", reason = "astral-tokio-tar via testcontainers 0.28.0, a dev-dependency of fleet-mc's and fleet-integration's container tests, never built into a shipped binary: unmaintained, not vulnerable, no fix. Remove once a testcontainers release drops it (ADR-0021)" },
@@ -70,11 +73,16 @@ allow = [
 ]
 # The allowlist is meant for future dependencies too, so unused entries are expected.
 unused-allowed-license = "allow"
-# Two unconditional azalea dependencies, excepted per crate and version instead of
-# widening the allowlist (ADR-0011, ADR-0012). Both licenses are GPL-compatible.
+# Excepted per crate and version instead of widening the allowlist. Two unconditional
+# azalea dependencies (ADR-0011, ADR-0012); both licenses are GPL-compatible.
 exceptions = [
     { crate = "minecraft_folder_path@0.1.2", allow = ["Unlicense"] },
     { crate = "socks5-impl@0.8.7", allow = ["GPL-3.0-or-later"] },
+    # A public-domain dedication, GPL-compatible. It reaches Rhai through ahash's
+    # compile-time seed (ahash, const-random, const-random-macro, a proc macro), so it runs
+    # at build time and is in no binary; only fleet-script's graph holds it (ADR-0036, D3;
+    # ADR-0040).
+    { crate = "tiny-keccak@2.0.2", allow = ["CC0-1.0"] },
     # libFuzzer's own license, GPL-compatible. Only fuzz/ depends on it, a workspace of
     # its own whose binaries are never shipped (ADR-0030).
     { crate = "libfuzzer-sys@0.4.13", allow = ["NCSA"] },
@@ -98,6 +106,9 @@ deny = [
     # (ADR-0018). azalea-auth enters only through the azalea crates that depend on it
     # in azalea 0.16.0; an azalea bump that adds one updates this list (ADR-0003).
     { crate = "azalea-auth", wrappers = ["azalea", "azalea-client", "azalea-inventory", "azalea-protocol"], reason = "Microsoft auth is fleet-server's own adapter; azalea-auth enters only through azalea's crates (ADR-0018)" },
+    # The script engine is fleet-script's alone: the sandbox, its limits and the pin on
+    # Rhai's volatile API live in one crate (ADR-0036, D2).
+    { crate = "rhai", wrappers = ["fleet-script"], reason = "only fleet-script depends on Rhai; everything else uses fleet-script's own types (ADR-0036)" },
 ]
 
 [sources]

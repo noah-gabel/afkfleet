@@ -42,6 +42,9 @@ fleet-mc = { path = "crates/fleet-mc" }
 # fleet-proto: the control plane's wire format and its conversions to core types (ADR-0019).
 fleet-proto = { path = "crates/fleet-proto" }
 fleet-runtime = { path = "crates/fleet-runtime" }
+# fleet-script: the script engine of scripted modes (Rhai), alone (ADR-0036, D2). The server
+# and the agent validate with it; fleet-runtime runs its instances.
+fleet-script = { path = "crates/fleet-script" }
 # fleet-server: fleet-client's integration tests run it in-process (ADR-0017).
 fleet-server = { path = "crates/fleet-server" }
 fleet-startup = { path = "crates/fleet-startup" }
@@ -154,6 +157,14 @@ protox = "0.9.1"
 qrcodegen = "1.8.0"
 # rand: no `sys_rng`/`thread_rng`; fleet-core takes an RNG as a parameter (ADR-0010).
 rand = { version = "0.10.3", default-features = false }
+# rhai: the language of scripted modes, in fleet-script alone, which a deny.toml wrapper entry
+# enforces (ADR-0036, D2, D3). An exact pin: Rhai calls the variable resolver's API volatile,
+# and fleet-script's tests of Rhai's own behaviour are the check at a bump (ADR-0040). `sync`:
+# an engine and a compiled script cross threads. `no_module`: no `import` and no module
+# resolver in the build. `no_time`: no clock but the one a hook is given. `no_custom_syntax`.
+# Never `unchecked`, which removes every limit, nor `internals`. Its defaults stay: `std`,
+# and ahash seeded at run time.
+rhai = { version = "=1.27.0", features = ["sync", "no_module", "no_time", "no_custom_syntax"] }
 # rcgen: the control plane's PKI. fleet-server makes the CA and the server certificate
 # (`pki init`) and signs agents' CSRs; fleet-agent makes its key and CSR (Plan.md P10.2,
 # P10.3). Without default features, which select ring: members enable `aws_lc_rs` (which
@@ -304,6 +315,11 @@ insta = "1.49.0"
 # ipnet: dev only, fleet-server's property test that checks its own IpNet against it;
 # production code never uses it. Already in Cargo.lock through reqwest (ADR-0016).
 ipnet = "2.12.2"
+# peak_alloc: fleet-script's memory test alone, a test binary of its own. A global allocator
+# that counts what the process holds and held at most, so "a script never takes more than a
+# few MiB" is measured on real allocations; our own code has no `unsafe` to write one with.
+# It has no dependencies (ADR-0040).
+peak_alloc = "0.3.0"
 # proptest and rstest: members enable only what they need (ADR-0010). proptest's
 # `std` keeps `PROPTEST_CASES` working.
 proptest = { version = "1.11.0", default-features = false }

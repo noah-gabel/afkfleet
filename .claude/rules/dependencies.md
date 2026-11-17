@@ -25,6 +25,7 @@ Moved from `CLAUDE.md` word for word; it points here. CLAUDE.md keeps the rule: 
 |---|---|---|
 | Domain & runtime | Minecraft | `azalea` (fleet-mc only) |
 | | Chat components, translations | `azalea-chat`, `azalea-language` (fleet-mc only, for its bounded renderer) |
+| | Script engine | `rhai` `=1.27.0` (fleet-script only, by a `deny.toml` wrapper entry; `sync`, `no_module`, `no_time`, `no_custom_syntax`, never `unchecked` or `internals`; ADR-0036, ADR-0040) |
 | | MS auth | fleet-server's own adapter over `reqwest`; never `azalea-auth` directly (ADR-0018) |
 | | Async runtime | `tokio` |
 | | Cancellation | `tokio-util` (`CancellationToken`, `TaskTracker`) |
@@ -69,7 +70,7 @@ Moved from `CLAUDE.md` word for word; it points here. CLAUDE.md keeps the rule: 
 | Desktop | Shell | `tauri` ≥ 2.11.1, `tauri-build` |
 | | Plugins | `tauri-plugin-opener`, `tauri-plugin-single-instance`, `tauri-plugin-updater` |
 | | Keychain | `keyring-core` + `windows-native-keyring-store` |
-| Tests | Testing crates | `rstest`, `proptest`, `insta`, `mockall`, `testcontainers`, `sysinfo` (fleet-integration's load test only: its own process's CPU time and memory, ADR-0032), `sqlx` as fleet-integration's dev-dependency (the crash cases' child process only: SQLite's hooks on the server's write connection, ADR-0033), tokio `test-util`, `log` (dev only: fleet-testkit's log capture and fleet-agent's telemetry, each to prove the `log` bridge; fleet-server's one normal use is sqlx's `LevelFilter`, and its logging macros are banned there), `tempfile` (fleet-server's database tests, fleet-integration's cases), `ipnet` (dev only: fleet-server's property test of fleet-core's `IpNet`), `hyper-util` (dev only, `tokio`: fleet-server's in-memory control-plane test hands tonic's client a pipe through `rt::TokioIo`) |
+| Tests | Testing crates | `rstest`, `proptest`, `insta`, `mockall`, `testcontainers`, `sysinfo` (fleet-integration's load test only: its own process's CPU time and memory, ADR-0032), `sqlx` as fleet-integration's dev-dependency (the crash cases' child process only: SQLite's hooks on the server's write connection, ADR-0033), tokio `test-util`, `log` (dev only: fleet-testkit's log capture and fleet-agent's telemetry, each to prove the `log` bridge; fleet-server's one normal use is sqlx's `LevelFilter`, and its logging macros are banned there), `tempfile` (fleet-server's database tests, fleet-integration's cases), `ipnet` (dev only: fleet-server's property test of fleet-core's `IpNet`), `hyper-util` (dev only, `tokio`: fleet-server's in-memory control-plane test hands tonic's client a pipe through `rt::TokioIo`), `peak_alloc` (dev only: fleet-script's memory test, a binary of its own, counts real allocations; ADR-0040) |
 | | Fuzzing | `libfuzzer-sys`, in `fuzz/` alone (its own workspace and lockfile; ADR-0030) |
 
 **Frontend packages**
