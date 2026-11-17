@@ -17,10 +17,15 @@ workspace = true
 fleet-agent.workspace = true
 # The API's mode requests, which garde checks.
 fleet-api-types.workspace = true
-# The value objects, the sanitizer, the chat formats, the private targets.
+# A script's moments: it has no clock but the one it's given.
+chrono.workspace = true
+# The value objects, the sanitizer, the chat formats, the private targets; a scripted
+# mode's declarations.
 fleet-core.workspace = true
 # The control plane's messages, their codec's bound and their conversions.
 fleet-proto.workspace = true
+# Scripted modes: compiling a script, running one, the script API.
+fleet-script.workspace = true
 # The vault and its envelope's header.
 fleet-server.workspace = true
 # `Validate`, to check a request as the API's extractors do.

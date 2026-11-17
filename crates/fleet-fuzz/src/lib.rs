@@ -13,6 +13,9 @@
 //! - [`text`]: the value objects, the sanitizer, the chat formats and the
 //!   private targets;
 //! - [`mode`]: mode definitions, as stored and as the API takes them;
+//! - [`script`]: scripted modes: a script's text, a running script, the
+//!   script API's arguments, a declared message and a declared chat
+//!   pattern (ADR-0036, D18; ADR-0037, C9);
 //! - [`wire`]: the control plane's messages, both ways;
 //! - [`vault`]: the vault's envelopes;
 //! - [`metrics`]: the agent's metrics responder.
@@ -24,6 +27,7 @@
 pub mod kept;
 pub mod metrics;
 pub mod mode;
+pub mod script;
 pub mod seeds;
 pub mod text;
 pub mod vault;
@@ -35,13 +39,18 @@ use std::borrow::Cow;
 pub type Target = (&'static str, fn(&[u8]));
 
 /// Every target.
-pub const TARGETS: [Target; 10] = [
+pub const TARGETS: [Target; 15] = [
     ("value_objects", text::value_objects),
     ("chat_sanitizer", text::chat_sanitizer),
     ("chat_formats", text::chat_formats),
     ("chat_sender", text::chat_sender),
     ("private_targets", text::private_targets),
     ("mode_definition", mode::mode_definition),
+    ("script_compile", script::script_compile),
+    ("script_run", script::script_run),
+    ("script_api", script::script_api),
+    ("message_template", script::message_template),
+    ("chat_pattern", script::chat_pattern),
     ("agent_message", wire::agent_message),
     ("server_message", wire::server_message),
     ("vault_envelope", vault::vault_envelope),

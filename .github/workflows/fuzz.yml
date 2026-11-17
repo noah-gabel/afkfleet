@@ -17,6 +17,7 @@ on:
     paths:
       - "fuzz/**"
       - "crates/fleet-fuzz/**"
+      - "crates/fleet-script/**"
       - "scripts/fuzz.mjs"
       - ".github/workflows/fuzz.yml"
 

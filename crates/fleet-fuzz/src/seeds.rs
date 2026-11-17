@@ -83,9 +83,169 @@ pub fn seeds(name: &str) -> Vec<Vec<u8>> {
             "GET / HTTP/1.1\r\n\r\n",
             "GET /metrics HTTP/1.1\r\n",
         ]),
+        _ => scripted(name),
+    }
+}
+
+/// The seeds of the scripted modes' targets (Phase 15); none for another
+/// name.
+fn scripted(name: &str) -> Vec<Vec<u8>> {
+    match name {
+        "script_compile" => scripts()
+            .into_iter()
+            .map(str::as_bytes)
+            .chain([
+                // What validation refuses, each for its own reason.
+                &b"fn on_join(first) {\n  let b = ;\n}"[..],
+                b"let x = 1;\nfn on_join(first) { }",
+                b"fn on_join(first) { let keys = 1; }",
+                b"fn on_join(first) { kees.jump.tap(); }",
+                b"fn on_join() { }\nfn on_reconnect() { }",
+                b"fn on_join(first) { let f = |x| x; eval(\"1\"); import \"a\" as b; }",
+                b"fn f(state) { for bot in [1] { } try { } catch (world) { } }",
+                b"fn f() { `a ${ `b ${ \"c\" }` }` + 'x' /* /* nested */ */ }",
+            ])
+            .map(<[u8]>::to_vec)
+            .collect(),
+        "script_run" => scripts()
+            .into_iter()
+            .chain([BUSY_SCRIPT, GREEDY_SCRIPT])
+            .map(|script| {
+                let mut seed = script.as_bytes().to_vec();
+                seed.push(0);
+                // A first join, then every event in turn with pauses from
+                // none to minutes, and a reconnect.
+                seed.extend_from_slice(&[
+                    0, 1, 0, 16, 3, 4, 18, 7, 5, 2, 9, 1, 30, 4, 2, 9, 4, 3, 250, 22, 4, 0, 1, 0,
+                    8, 13, 5, 4, 2, 4, 12, 8, 4, 40, 1, 6,
+                ]);
+                seed
+            })
+            .collect(),
+        "script_api" => {
+            // Every member in turn, with one to four arguments that move
+            // through the whole list; then the facts' shape.
+            let mut calls: Vec<Vec<u8>> = (0..4_u8)
+                .map(|round| {
+                    let mut seed: Vec<u8> = (0..40_u8)
+                        .flat_map(|pick| {
+                            let member = pick.wrapping_add(round.wrapping_mul(40));
+                            let first = pick.wrapping_mul(7).wrapping_add(round);
+                            [
+                                member,
+                                round + 1,
+                                first,
+                                first.wrapping_add(11),
+                                first.wrapping_add(19),
+                                first.wrapping_add(23),
+                            ]
+                        })
+                        .collect();
+                    seed.extend_from_slice(&[0, 6 + round]);
+                    seed
+                })
+                .collect();
+            calls.push(vec![0, 0]);
+            calls
+        }
+        "message_template" => texts(&[
+            "{\"key\":\"pay\",\"text\":\"/pay AfkMain {amount}\",\"values\":[{\"name\":\"amount\",\"type\":\"decimal\",\"min\":1.0,\"max\":1000000.0,\"places\":2}]}\0amount=2500.5",
+            "{\"key\":\"sell\",\"text\":\"/ah sell {price} x{n}\",\"values\":[{\"name\":\"price\",\"type\":\"integer\",\"min\":1,\"max\":1000000},{\"name\":\"n\",\"type\":\"integer\",\"min\":1,\"max\":64}]}\0price=1500\nn=64",
+            "{\"key\":\"warp\",\"text\":\"/warp {place}\",\"values\":[{\"name\":\"place\",\"type\":\"word\",\"options\":[\"farm\",\"spawn\"]}]}\0place=farm",
+            "{\"key\":\"hello\",\"text\":\"Hello {{there}}\",\"values\":[]}\0",
+            "{\"key\":\"pay\",\"text\":\"/pay AfkMain {amount}\",\"values\":[{\"name\":\"amount\",\"type\":\"decimal\",\"min\":1.0,\"max\":1000000.0,\"places\":2}]}\0amount=NaN\nto=Other",
+        ]),
+        "chat_pattern" => texts(&[
+            "{\"key\":\"balance\",\"when\":\"reply\",\"text\":\"Balance: ${amount}\",\"captures\":[{\"name\":\"amount\",\"type\":\"amount\",\"min\":0,\"max\":1000000000,\"decimal_mark\":\".\"}]}\0Balance: $12,500.50",
+            "{\"key\":\"balance\",\"when\":\"reply\",\"text\":\"Balance: ${amount}\",\"captures\":[{\"name\":\"amount\",\"type\":\"amount\",\"min\":0,\"max\":1000000000,\"decimal_mark\":\".\"}]}\0<Steve> Balance: $3M",
+            "{\"key\":\"shop\",\"when\":\"any_time\",\"text\":\"Shop is {state} with {n} items\",\"captures\":[{\"name\":\"state\",\"type\":\"word\",\"options\":[\"open\",\"closed\"]},{\"name\":\"n\",\"type\":\"integer\",\"min\":0,\"max\":64}]}\0  Shop is closed with 64 items \n",
+            "{\"key\":\"euro\",\"when\":\"reply\",\"text\":\"Kontostand: {amount} Taler\",\"captures\":[{\"name\":\"amount\",\"type\":\"amount\",\"min\":-1000,\"max\":1000,\"decimal_mark\":\",\"}]}\0Kontostand: -1.000,0 Taler",
+        ]),
         _ => Vec::new(),
     }
 }
+
+/// The reference's examples: scripts that compile and act.
+fn scripts() -> Vec<&'static str> {
+    fleet_script::EXAMPLES
+        .iter()
+        .map(|example| example.source)
+        .collect()
+}
+
+/// A script that does something of everything in every hook, picked by
+/// its own random numbers.
+const BUSY_SCRIPT: &str = r#"fn on_join(first) { act(); }
+fn on_world_change() { act(); }
+fn on_death() { act(); }
+fn on_respawn() { act(); }
+fn on_timer(name) { act(); }
+fn on_chat(key, values) { act(); pay(values); }
+fn on_stop() { chat.send("balance"); keys.forward.hold(); }
+
+fn act() {
+    if !("n" in state) { state.n = 0; }
+    state.n += 1;
+    press(random.between(0, 14));
+    let ms = random.between(250, 3000);
+    let which = random.between(0, 20);
+    if random.chance(40) { timer.after(ms, `t${which}`); }
+    if random.chance(20) { timer.every(ms, "again"); }
+    if random.chance(15) { mouse.left.release(); mouse.right.release(); }
+    if random.chance(20) { ask(); }
+    log.info(`${state.n} ${bot.riding} ${world.nearest_free("minecart") == ()}`);
+}
+
+fn ask() {
+    if chat.send("balance").ok { chat.expect("balance", 1000); }
+}
+
+fn pay(values) {
+    chat.send("pay", #{ amount: values.amount - 1000 });
+}
+
+fn press(pick) {
+    let a = random.between(-180, 180);
+    let b = random.between(-90, 90);
+    let ms = random.between(50, 2000);
+    let slot = random.between(1, 9);
+    switch pick {
+        0 => keys.forward.hold(),
+        1 => keys.forward.tap(),
+        2 => keys.jump.hold_for(ms),
+        3 => mouse.left.tap(),
+        4 => mouse.left.hold(),
+        5 => mouse.right.tap(),
+        6 => mouse.right.hold(),
+        7 => look.at(a, b),
+        8 => look.turn(1, 1),
+        9 => hotbar.select(slot),
+        10 => vehicle.mount("minecart"),
+        11 => vehicle.dismount(),
+        12 => keys.release_all(),
+        13 => mouse.right.hold_until_used(),
+        _ => keys.sneak.hold_for(60),
+    }
+}
+"#;
+
+/// A script that wants more than it may have: every hook holds a key and
+/// then fills the state, loops for ever or calls itself for ever.
+const GREEDY_SCRIPT: &str = r#"fn on_join(first) { keys.sprint.hold(); grow(); }
+fn on_world_change() { mouse.left.hold(); loop { } }
+fn on_death() { down(1); }
+fn on_respawn() { keys.jump.hold_for(500); state = 5; }
+fn on_timer(name) { state.f = Fn("grow"); }
+fn on_chat(key, values) { let s = "x"; loop { s += s; } }
+fn on_stop() { loop { } }
+
+fn grow() {
+    let i = 0;
+    loop { state[`k${i}`] = state; i += 1; }
+}
+
+fn down(n) { down(n + 1) }
+"#;
 
 /// `texts` as byte strings.
 fn texts(texts: &[&str]) -> Vec<Vec<u8>> {
@@ -149,6 +309,82 @@ mod tests {
             assert!(!seeds(name).is_empty(), "{name}");
         }
         assert_eq!(seeds("no_such_target"), Vec::<Vec<u8>>::new());
+    }
+
+    /// The scripted mode a seed's text is, under the balance example's
+    /// declarations, compiled.
+    fn compiled(source: &[u8]) -> Result<fleet_script::Program, String> {
+        let declared = fleet_script::EXAMPLES
+            .iter()
+            .find(|example| example.id == "balance")
+            .unwrap();
+        let script = fleet_core::script::Script::try_from(fleet_core::script::ScriptDraft {
+            source: String::from_utf8(source.to_vec()).unwrap(),
+            ..declared.draft()
+        })
+        .map_err(|error| error.to_string())?;
+        fleet_script::compile(&script).map_err(|error| error.to_string())
+    }
+
+    // A seed that didn't compile would pass every property of its target
+    // without running a line.
+    #[test]
+    fn the_script_seeds_that_are_meant_to_run_compile() {
+        for seed in seeds("script_run") {
+            let (source, steps) = crate::halves(&seed);
+
+            assert!(compiled(source).is_ok(), "{:?}", compiled(source).err());
+            assert!(steps.len() >= 30);
+        }
+        assert_eq!(seeds("script_run").len(), 6);
+    }
+
+    #[test]
+    fn the_compile_seeds_are_the_examples_and_one_script_for_each_refusal() {
+        let seeds = seeds("script_compile");
+        let (examples, refused) = seeds.split_at(4);
+
+        for seed in examples {
+            assert!(compiled(seed).is_ok(), "{:?}", compiled(seed).err());
+        }
+        // The last is no refusal: texts in texts and comments in
+        // comments, for the scan that finds an error's place.
+        let (scanned, refused) = refused.split_last().unwrap();
+        assert!(compiled(scanned).is_ok());
+        let reasons: Vec<String> = refused
+            .iter()
+            .map(|seed| compiled(seed).unwrap_err())
+            .collect();
+        assert_eq!(reasons.len(), 7);
+        // Each for a reason of its own.
+        let mut distinct = reasons.clone();
+        distinct.sort();
+        distinct.dedup();
+        assert!(distinct.len() >= 6, "{reasons:?}");
+    }
+
+    #[test]
+    fn the_declaration_seeds_are_declarations_fleet_core_takes() {
+        use fleet_core::script::{ChatPattern, MessageDraft, MessageTemplate, PatternDraft};
+
+        for seed in seeds("message_template") {
+            let (declaration, _) = crate::halves(&seed);
+            let draft: MessageDraft = serde_json::from_slice(declaration).unwrap();
+
+            assert!(MessageTemplate::try_from(draft).is_ok());
+        }
+        let fits: Vec<bool> = seeds("chat_pattern")
+            .iter()
+            .map(|seed| {
+                let (declaration, line) = crate::halves(seed);
+                let draft: PatternDraft = serde_json::from_slice(declaration).unwrap();
+                let pattern = ChatPattern::try_from(draft).unwrap();
+                pattern.matches(&String::from_utf8_lossy(line)).is_some()
+            })
+            .collect();
+        // A reply, the same line as a player's, a line with spaces around
+        // it, and another decimal mark at its range's very end.
+        assert_eq!(fits, [true, false, true, true]);
     }
 
     #[test]

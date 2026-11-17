@@ -89,3 +89,38 @@ path = "fuzz_targets/agent_metrics.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "script_compile"
+path = "fuzz_targets/script_compile.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "script_run"
+path = "fuzz_targets/script_run.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "script_api"
+path = "fuzz_targets/script_api.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "message_template"
+path = "fuzz_targets/message_template.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "chat_pattern"
+path = "fuzz_targets/chat_pattern.rs"
+test = false
+doc = false
+bench = false
