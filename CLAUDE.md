@@ -81,6 +81,7 @@ The full table, with every recipe and how to write one, is in `.claude/rules/com
 - `fleet-core` is pure: no IO, no tokio, no azalea. It contains domain types, the bot state machine, policies, `authorize()` and the Minecraft port traits.
 - **Only `fleet-mc` may depend on `azalea`. No member depends on `azalea-auth` directly**: it enters only through azalea's own crates, and a `deny.toml` wrapper entry enforces it (ADR-0018).
 - azalea code runs only on the MC host threads in `fleet-mc` (current-thread runtime + `LocalSet`). Never call azalea from a normal tokio task.
+- **Only `fleet-script` may depend on `rhai`** (a `deny.toml` wrapper entry enforces it; ADR-0036). It's pure and synchronous like `fleet-core`: no IO, no tokio, no clock. Its rules are in `.claude/rules/rust.md`.
 
 **Bot lifecycle:**
 - Every lifecycle change goes through `fleet_core::bot::transition()`. Actors execute the effects it returns and never decide state themselves.
@@ -105,7 +106,7 @@ The full table, with every recipe and how to write one, is in `.claude/rules/com
 
 ## Crate registry: one crate per concern
 **Adding or swapping a dependency is yours to decide:** list it under **Decided myself**, write an ADR, and update Plan.md §5 and the registry in `.claude/rules/dependencies.md`. A new pin is at least 7 days old; a security fix may be newer, noted in the PR.
-- Before using any crate API, **check it on docs.rs for the pinned version**. These crates changed recently: sqlx 0.9, tonic 0.14 (+ `tonic-prost`), rand 0.10, argon2 0.6, chacha20poly1305 0.11, sha2 0.11, reqwest 0.13, keyring v4, azalea.
+- Before using any crate API, **check it on docs.rs for the pinned version**. These crates changed recently: sqlx 0.9, tonic 0.14 (+ `tonic-prost`), rand 0.10, argon2 0.6, chacha20poly1305 0.11, sha2 0.11, reqwest 0.13, keyring v4, azalea, rhai 1.27.
 - The registry's tables (every Rust crate and npm package allowed, by concern) and how to declare a dependency are in `.claude/rules/dependencies.md`.
 
 ## Rust rules
@@ -225,7 +226,7 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 **Hard rules**
 - `unwrap` and `expect` are allowed in tests, via `clippy.toml`.
 - **Never delete, `#[ignore]`, or weaken a failing test to get to green.** Fix the code; a test that is itself wrong is fixed with its reason under **Decided myself**.
-- Coverage gates: `fleet-core` ≥ 90 %, `fleet-runtime` ≥ 85 %, auth and vault modules ≥ 90 %, the Microsoft accounts' modules ≥ 90 % (`msauth`), the control plane ≥ 90 % (`control-plane`: fleet-server's `infra/pki/`, `app/enrollment.rs`, `app/agents/` and `grpc/`; ADR-0019), the agent's control plane ≥ 90 % (`agent-control-plane`: fleet-agent's `managed/` and `enroll/`; ADR-0019, U20), `fleet-client` ≥ 90 %, the desktop crate ≥ 90 % (Windows, `just cov-desktop`), workspace ≥ 80 %.
+- Coverage gates: `fleet-core` ≥ 90 %, `fleet-runtime` ≥ 85 %, auth and vault modules ≥ 90 %, the Microsoft accounts' modules ≥ 90 % (`msauth`), the control plane ≥ 90 % (`control-plane`: fleet-server's `infra/pki/`, `app/enrollment.rs`, `app/agents/` and `grpc/`; ADR-0019), the agent's control plane ≥ 90 % (`agent-control-plane`: fleet-agent's `managed/` and `enroll/`; ADR-0019, U20), `fleet-script` ≥ 90 % (ADR-0036), `fleet-client` ≥ 90 %, the desktop crate ≥ 90 % (Windows, `just cov-desktop`), workspace ≥ 80 %.
 
 ## Frontend rules
 The frontend's rules (structure, data and state, safety, quality, and every place a new Tauri command changes) are in `.claude/rules/frontend.md`, which loads when you open a file under `packages/` or `apps/desktop/`. Read it before planning frontend work.
