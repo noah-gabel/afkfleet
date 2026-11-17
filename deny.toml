@@ -26,8 +26,8 @@ yanked = "deny"
 # holds none of the crates below (justfile, `deny`).
 unused-ignored-advisory = "deny"
 # azalea's advisories: the first three accepted by the user (ADR-0011, ADR-0012), the four
-# of 2026-11-11, the five of 2026-11-12 and the three of 2026-11-13 decided under ADR-0025 and
-# recorded in ADR-0012's amendments. Every azalea bump re-checks them.
+# of 2026-11-11, the five of 2026-11-12, the three of 2026-11-13 and the three of 2026-11-17
+# decided under ADR-0025 and recorded in ADR-0012's amendments. Every azalea bump re-checks them.
 ignore = [
     { id = "RUSTSEC-2023-0071", reason = "rsa via azalea: we never decrypt with RSA; chat signing uses the blinded sign_with_rng, the handshake only encrypts with the server's public key. No fix exists; re-check at every azalea bump (ADR-0012)" },
     { id = "RUSTSEC-2026-0118", reason = "hickory-proto 0.25 via azalea: the NSEC3 code needs hickory's DNSSEC features, which aren't compiled. Remove at the next azalea bump (ADR-0012)" },
@@ -44,6 +44,11 @@ ignore = [
     { id = "RUSTSEC-2026-0530", reason = "hickory-proto 0.25 via azalea: DNSSEC validation is hickory-proto's dnssec module, compiled only with its dnssec-ring or dnssec-aws-lc-rs feature, which nothing here enables. No 0.25 fix exists. Remove once azalea uses hickory 0.26.2 or newer (ADR-0012)" },
     { id = "RUSTSEC-2026-0531", reason = "hickory-proto 0.25 via azalea: DNSSEC validation is hickory-proto's dnssec module, compiled only with its dnssec-ring or dnssec-aws-lc-rs feature, which nothing here enables. No 0.25 fix exists. Remove once azalea uses hickory 0.26.2 or newer (ADR-0012)" },
     { id = "RUSTSEC-2026-0532", reason = "hickory-proto 0.25 via azalea: DNSSEC validation is hickory-proto's dnssec module, compiled only with its dnssec-ring or dnssec-aws-lc-rs feature, which nothing here enables. No 0.25 fix exists. Remove once azalea uses hickory 0.26.2 or newer (ADR-0012)" },
+    { id = "RUSTSEC-2026-0549", reason = "hickory-proto 0.25 via azalea: DNSSEC validation is hickory-proto's dnssec module, compiled only with its dnssec-ring or dnssec-aws-lc-rs feature, which nothing here enables. No 0.25 fix exists. Remove once azalea uses hickory 0.26.2 or newer (ADR-0012)" },
+    { id = "RUSTSEC-2026-0550", reason = "hickory-proto 0.25 via azalea: DNSSEC validation is hickory-proto's dnssec module, compiled only with its dnssec-ring or dnssec-aws-lc-rs feature, which nothing here enables. No 0.25 fix exists. Remove once azalea uses hickory 0.26.2 or newer (ADR-0012)" },
+    { id = "RUSTSEC-2026-0551", reason = "hickory-proto 0.25 via azalea: DNSSEC validation is hickory-proto's dnssec module, compiled only with its dnssec-ring or dnssec-aws-lc-rs feature, which nothing here enables. No 0.25 fix exists. Remove once azalea uses hickory 0.26.2 or newer (ADR-0012)" },
+    # chrono's notice, decided under ADR-0025 (ADR-0038): unmaintained, not vulnerable.
+    { id = "RUSTSEC-2026-0543", reason = "chrono 0.4.45, the workspace's time type and azalea-auth's and azalea-client's: its maintainer filed it as unmaintained on 2026-11-17, with no vulnerability and no patched version. Remove once neither the workspace nor azalea depends on chrono; a vulnerability in chrono is a new advisory and fails the check again (ADR-0038)" },
     # testcontainers' advisory, accepted by the user (ADR-0021): it reaches only the
     # container tests, never a shipped binary.
     { id = "RUSTSEC-2026-0440", reason = "astral-tokio-tar via testcontainers 0.28.0, a dev-dependency of fleet-mc's and fleet-integration's container tests, never built into a shipped binary: unmaintained, not vulnerable, no fix. Remove once a testcontainers release drops it (ADR-0021)" },
