@@ -33,7 +33,7 @@ Where things are:
    - **Privacy:** never name the user's hosting provider, host, address or DNS name anywhere in git, PRs or CI (ADR-0022, U2).
    - **No paid services.**
    - **Your own limits:** Claude Code's settings (`.claude/settings*.json`, `~/.claude/settings*.json`) are the user's: propose a change under **Decided myself** in the PR description, and the user makes it.
-   - **Irreversible cleanups:** never delete `target/` as a whole (it holds `target/dod-run` and the dev vault key), and never remove Docker volumes, images or networks outside your own project names (so never `cargo clean`, `docker system prune` or `docker volume prune`).
+   - **Irreversible cleanups:** never delete `target/` as a whole (it holds `target/dod-run` and the dev vault key), and never remove Docker volumes, images or networks outside your own project names (so never `cargo clean`, `docker system prune` or `docker volume prune`). `just tidy` is how build output is removed (ADR-0039).
 4. **Everything else is allowed without asking:** any build, test, Docker under your own project names, package installs, and file changes anywhere in this repository, `CLAUDE.md`, `.claude/` and CI included: the PR shows them. Stay in this repository: library and crate sources are read on docs.rs or the crate's own repository on the web, never from the cargo registry or the toolchain folders.
 5. **One PR per task or group;** the user reviews and merges it. CI is watched after every push (step 8 below).
 6. **Subagents** when they help. Each brief says the subagent is read-only (it creates, edits, moves or deletes no file, and runs no command that writes, installs, builds or changes git state) and stays in this repository.
@@ -41,7 +41,7 @@ Where things are:
 ## A task
 1. **Find the current phase:** the first phase with unchecked tasks. Don't work on later phases unless the user asks.
 2. **Plan it in the chat:** the task's goal, its acceptance criteria and your approach, in a few lines; then build.
-3. **Branch** from an up-to-date `main` (`git switch main`, `git pull`): `p<phase>/<task-id>-<slug>`, e.g. `p2/p2.6-bot-state-machine`, or the group branch Plan.md names. One task or group per branch; if it needs an unmerged PR, say so in its description.
+3. **Branch** from an up-to-date `main` (`git switch main`, `git pull`): `p<phase>/<task-id>-<slug>`, e.g. `p2/p2.6-bot-state-machine`, or the group branch Plan.md names. One task or group per branch; if it needs an unmerged PR, say so in its description. **Then run `just tidy`,** at the start of every task or group and before its first build: it gives back the disk space the last one's builds took (ADR-0039), and the PR says how much it freed.
 4. **TDD.**
    1. Write the tests first.
    2. **Run them and show they fail for the right reason.** A Rust test that doesn't compile doesn't count. First add a stub with the real signature that compiles and returns a wrong value (an empty `Vec`, a default value, a fixed error variant), so the run ends in a failed assertion. `todo!()` is not a stub: it's banned by the lints.
@@ -72,6 +72,7 @@ The full table, with every recipe and how to write one, is in `.claude/rules/com
 - `just test-slow`: the container tests (needs Docker), after touching `fleet-mc`, Docker files or anything container-based.
 - `just fmt`; `just gen` after changing a DTO; `just db-prepare` after changing a query or adding a migration.
 - `just cov` (the coverage gates) and, on Windows, `just cov-desktop` (the desktop crate's gate).
+- `just tidy`: frees the disk space builds leave behind (incremental data, this workspace's own crates' build units, coverage data, the mutation runs), at the start of every task or group; `just tidy --dry-run` only measures.
 
 **The user only; the AI never runs them:** `just test-real-account`, `just test-ms-account`, `just test-managed-account`, every `just dod-*` recipe, `just updater-sign` (the release's signature, with the maintainer's private key; ADR-0022, S24), `just update-rehearsal` (installs and updates an app on the user's PC; R20), and the `manual` nextest profile. `just dev-bots` needs a terminal, so the AI doesn't run it either. Nor does the AI run `just dev-app` or launch an exe from `just app-build`: the only file it launches is `target/app-check/afkfleet-check.exe`, built by `just app-build-check`, under its own identifier, so it can never reach the user's running app (ADR-0020, U87, S99).
 

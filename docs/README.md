@@ -55,3 +55,4 @@ Each architecture decision record (ADR) holds one decision with its context, its
 - [0036. Scripted modes: a virtual vanilla client in Rhai, and menus after it](adr/0036-scripted-modes.md)
 - [0037. Scripts read chat: system lines, by declared patterns with typed values](adr/0037-scripts-read-system-chat.md)
 - [0038. `chrono` is unmaintained: ignored for now, and what would end that](adr/0038-chrono-is-unmaintained.md)
+- [0039. `just tidy`: what a build leaves behind, and what is safe to remove](adr/0039-just-tidy.md)

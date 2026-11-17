@@ -665,6 +665,17 @@ mutants scope="all" shards="4":
 mutants-clean:
     node scripts/mutants-clean.mjs
 
+# Cargo never removes what it built, and one group of work filled 120 GB of target/debug
+# (ADR-0039). scripts/tidy.mjs removes what the next build writes again: every profile's
+# incremental data and this workspace's own crates' build units, in target/, in
+# cargo-llvm-cov's folder and in fuzz/target/; the coverage data and reports; and the
+# mutation runs' trees, through mutants-clean's script. Every dependency's build stays. It
+# never enters target/dod-run or target/dev-server and never removes target/ as a whole.
+# `just tidy --dry-run` only measures. Not while a build runs.
+# Free the disk space builds leave behind; run it at the start of every group of work.
+tidy *args:
+    node scripts/tidy.mjs {{ args }}
+
 # Tests for the scripts in scripts/.
 scripts-test:
     node --test "scripts/*.test.mjs"
