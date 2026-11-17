@@ -57,3 +57,4 @@ Each architecture decision record (ADR) holds one decision with its context, its
 - [0038. `chrono` is unmaintained: ignored for now, and what would end that](adr/0038-chrono-is-unmaintained.md)
 - [0039. `just tidy`: what a build leaves behind, and what is safe to remove](adr/0039-just-tidy.md)
 - [0040. `fleet-script` as built: an engine an instance, a sandbox tighter than planned, and what was measured](adr/0040-fleet-script-as-built.md)
+- [0041. `picomatch`'s advisory in the build tools: ignored by its one ID, and how `pnpm audit` ignores](adr/0041-picomatch-advisory-in-the-build-tools.md)
