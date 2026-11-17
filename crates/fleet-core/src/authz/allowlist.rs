@@ -108,14 +108,13 @@ impl CommandAllowlist {
         }
     }
 
-    /// Checks a mode a bot is to run: it needs Manage if any of its chat
-    /// steps sends a command off the allowlist (ADR-0010).
+    /// Checks a mode a bot is to run: it needs Manage if it can send a
+    /// command off the allowlist, by a chat step or, for a scripted mode,
+    /// by a declared message (ADR-0010; ADR-0036, D8).
     #[must_use]
     pub fn check_mode(&self, mode: &ModeDefinition) -> CommandCheck {
         CommandCheck {
-            unlisted_command: mode
-                .commands()
-                .any(|command| self.check(command).unlisted_command),
+            unlisted_command: mode.command_names().any(|name| !self.names.contains(name)),
         }
     }
 }
@@ -167,6 +166,7 @@ impl CommandCheck {
 mod tests {
     use super::*;
     use crate::mode::{Action, ModeDraft, Schedule, Step};
+    use crate::script::{MessageDraft, Script, ScriptDraft, ValueDraft, ValueKind, draft_of};
     use core::time::Duration;
     use proptest::prelude::*;
     use rstest::rstest;
@@ -187,6 +187,33 @@ mod tests {
             schedule,
             probability: 100,
         }
+    }
+
+    /// A scripted mode that declares `texts` as its messages; a `{n}` in
+    /// one is a whole number from 1 to 9.
+    fn scripted(texts: &[&str]) -> ModeDefinition {
+        let messages = texts
+            .iter()
+            .enumerate()
+            .map(|(at, text)| MessageDraft {
+                key: format!("m{at}"),
+                text: (*text).to_owned(),
+                values: if text.contains("{n}") {
+                    vec![ValueDraft {
+                        name: "n".to_owned(),
+                        kind: ValueKind::Integer { min: 1, max: 9 },
+                    }]
+                } else {
+                    Vec::new()
+                },
+            })
+            .collect();
+        let script = Script::try_from(ScriptDraft {
+            messages,
+            ..draft_of("")
+        })
+        .unwrap();
+        ModeDefinition::scripted(script)
     }
 
     /// A mode that sends `at_start` once and `repeating` every minute.
@@ -320,6 +347,12 @@ mod tests {
         ModeDraft { steps: vec![chat_step("/spawn", Schedule::OnRespawn)] }.validate().unwrap(),
         false
     )]
+    #[case::a_script_that_declares_nothing(scripted(&[]), false)]
+    #[case::a_script_with_plain_chat(scripted(&["hello all", "not /a command"]), false)]
+    #[case::a_script_with_listed_commands(scripted(&["/spawn", "/afk now", "hello"]), false)]
+    #[case::a_script_with_an_unlisted_command(scripted(&["/spawn", "/home farm"]), true)]
+    #[case::a_script_whose_value_follows_a_listed_name(scripted(&["/spawn {n}"]), false)]
+    #[case::a_script_whose_value_follows_an_unlisted_name(scripted(&["/pay AfkMain {n}"]), true)]
     fn check_mode_needs_manage_for_any_unlisted_command(
         #[case] mode: ModeDefinition,
         #[case] needs_manage: bool,

@@ -1,6 +1,6 @@
 # Scripted modes: the script reference
 
-> **Draft, nothing here is built yet.** This is the reference as a script author would read it, written with the plan for Phases 15 and 16 ([Plan.md](../Plan.md), [ADR-0036](adr/0036-scripted-modes.md)). Part 1 is Phase 15's API. Part 2 is Phase 16's, inventory and menus. Names and numbers can still change at the plan's review and while each group is built; whatever changes, changes here in the same pull request.
+> **Draft: Phase 15 is being built, group by group, and no script runs yet.** This is the reference as a script author would read it, written with the plan for Phases 15 and 16 ([Plan.md](../Plan.md), [ADR-0036](adr/0036-scripted-modes.md), [ADR-0037](adr/0037-scripts-read-system-chat.md)). Part 1 is Phase 15's API. Part 2 is Phase 16's, inventory and menus. Names and numbers can still change while each group is built; whatever changes, changes here in the same pull request.
 
 A scripted mode is a mode whose behaviour is a small program instead of a list of steps. The program is written in [Rhai](https://rhai.rs/book/), a small language that looks like JavaScript and Rust.
 
@@ -9,7 +9,7 @@ A scripted mode is a mode whose behaviour is a small program instead of a list o
 **Whether a server allows what your script does is yours to check.** Many servers have rules about automated farming, trading and auction buying.
 
 ## Three things to know
-1. **Hooks.** The script defines functions the runtime calls when something happens: the bot joined, it died, a timer is due. A hook runs to its end at once; there is no `wait()`. To do something later, set a timer or hold a key for a time.
+1. **Hooks.** The script defines functions the runtime calls when something happens: the bot joined, it died, a timer is due, the server answered a command. A hook runs to its end at once; there is no `wait()`. To do something later, set a timer or hold a key for a time.
 2. **One state object.** `state` holds whatever the script wants to remember between hooks: counters, flags, the step it's at.
 3. **The game objects.** `keys`, `mouse`, `look`, `hotbar`, `vehicle`, `chat`, `timer`, `random` and `log` do things; `bot` and `world` say how things are.
 
@@ -41,6 +41,7 @@ A script defines the hooks it needs and leaves the others out. A function whose 
 | `fn on_death()` | The bot died. It can't act until it's back |
 | `fn on_respawn()` | The bot lives again after a death |
 | `fn on_timer(name)` | A timer the script set is due |
+| `fn on_chat(key, values)` | The server printed a line that fits one of the mode's declared patterns (see [`chat`](#chat)) |
 | `fn on_stop()` | The script stops in an orderly way: the bot is stopped, its mode is changed, or the mode was edited. It can change `state` and send one declared message; every key and button is released by the runtime right after it. It doesn't run after an error or a disconnect |
 
 **Nothing is held at the start of `on_join`, `on_world_change`, `on_death` and `on_respawn`.** Each of them puts the bot somewhere new, so the runtime lets go of every key and button first, and the hook decides again.
@@ -60,7 +61,7 @@ fn on_join(first) {
 ```
 
 - Set a property before reading it: reading one that was never set is an error with its line, so a typo shows.
-- It holds numbers, text, `true` and `false`, arrays and maps, up to 64 entries in all.
+- It holds numbers, text, `true` and `false`, arrays and maps, up to 64 entries and 4 KiB in all. A script that grows it past that stops at once, in the middle of its hook.
 
 ### Results
 **Every action returns a result.** `result.ok` is `true` when the runtime took the action, and `result.reason` says why not otherwise. A simple script ignores it:
@@ -79,10 +80,11 @@ if !mouse.left.tap().ok {
 | `dead` | The bot is dead |
 | `not_in_world` | The bot is between worlds, or its session is ending |
 | `leashed` | The bot is at the end of its leash, and this would take it further |
-| `mining_guard` | The block is below the bot's feet |
+| `mining_guard` | The block reaches below the bot's feet |
 | `tool_guard` | The held tool is nearly used up |
 | `bad_value` | A number outside its range, an angle that isn't a number, an unknown kind |
 | `too_many` | No room for another timer |
+| `no_command` | `chat.expect` without a declared command sent before it in the same hook |
 
 A release is never refused.
 
@@ -117,7 +119,7 @@ keys.sprint.hold_for(3000);
 keys.forward.hold_for(3000);
 ```
 
-**The leash.** A bot walks at most a set number of blocks from where it was put: where it joined, respawned, changed worlds or was teleported by the server. At the end of the leash, a key that would take it further is released and returns `leashed`; walking back works. The radius is a setting of the mode (8 blocks unless changed), not of the script, and a script can't move the anchor.
+**The leash.** A bot walks at most a set number of blocks from where it was put: where it joined, respawned, changed worlds or was teleported by the server. At the end of the leash, a direction key that would take it further, by where it looks, is released and returns `leashed`; walking back and along the edge works. The radius is a setting of the mode (8 blocks unless changed), not of the script, and a script can't move the anchor.
 
 ### `mouse`
 `mouse.left` and `mouse.right`, with the same four methods and `held`.
@@ -125,7 +127,7 @@ keys.forward.hold_for(3000);
 **Left button**
 - `tap()` on an entity attacks it once. On anything else it swings the arm.
 - `hold()` mines the block the bot looks at, and then the next one that appears there, as a held button does in vanilla. An entity in front of the bot is attacked once when the button goes down, never again while it's held.
-- **The bot never mines a block below its feet,** which includes the one it stands on: the hold returns `mining_guard`, and a hold that's already down pauses while the bot looks at such a block.
+- **The bot never mines a block that reaches below its feet:** the one it stands on, whatever its shape, everything under it, and the blocks beside it at that height. The hold returns `mining_guard`, and a hold that's already down pauses while the bot looks at such a block. So aim at feet level or higher from solid ground: a bot standing on a slab, on soul sand or on a carpet mines at eye level only, and so does one in mid-jump.
 - **The tool guard.** When the held tool has only a few uses left (2 unless the mode's setting says otherwise), mining stops, `held` turns `false`, and a new hold returns `tool_guard` until another item is in hand. `bot.held.durability` says how many uses are left.
 
 **Right button**
@@ -159,15 +161,36 @@ A script sends only messages its mode declares, each with a key. A message can h
 | `home`: `/home farm` | `chat.send("home")` |
 | `sell`: `/ah sell {price}`, `price` a whole number from 1 to 1,000,000 | `chat.send("sell", #{ price: 1500 })` |
 
-- A value is a whole number in a range, a decimal number in a range with a set number of places, or one of a closed list of texts.
+- A value is a whole number in a range, a decimal number in a range with a set number of places, or one of a closed list of words.
 - A command's name is always written out in the declaration, never a value. Whoever sets the mode on a bot needs the same rights as for a step mode that sends those commands.
-- A script can't build text of its own, and it can't read chat.
+- A script can't build text of its own.
+
+**Reading the server's answer.** A script never sees chat as text. The mode declares patterns, each with a key, and a script gets the key and the numbers of a line that fits one:
+
+| In the mode's settings | In the script |
+|---|---|
+| `balance`: `Balance: ${amount}`, a reply; `amount` an amount from 0 to 1,000,000,000 | `chat.expect("balance", 5000)` after the command; then `fn on_chat(key, values)` with `values.amount` |
+
+- **Only the server's own lines count,** never what a player writes: not chat, not a private message, not `/me`. On a server whose plugins print player chat as server lines, the server's chat formats (in the app's server settings) tell those lines apart; set them before a script reads chat there.
+- **The whole line must fit the pattern,** letter for letter. A pattern has no "any text" part. What changes in a line is a capture, and a capture is one of three kinds:
+
+  | Capture | Reads | The script gets |
+  |---|---|---|
+  | `integer` | `42`, `-7` | A whole number |
+  | `amount` | `1,234.56`, `12.5k`, `3M`, `2B`; the declaration says whether `.` or `,` is the decimal mark | A decimal number |
+  | `word` | One of the words the declaration lists | That word |
+
+  Every number has a range in the declaration, and a line whose number is outside it doesn't fit.
+- **A reply counts only when the script asked.** `chat.expect(key, ms)` right after `chat.send` of a declared command opens a window of `ms` milliseconds (250 to 30,000) for that pattern, from the moment the command is sent. The first line that fits closes it. Without an open window, a reply pattern fits nothing.
+- **A pattern can be declared to count at any time** instead. It then needs no `chat.expect`, the app marks the mode as riskier, and it's delivered at most once a second. Prefer a reply wherever a command causes the line.
+- **A value from chat is a number or one of your own words.** It can go into a declared message's value, inside that value's range, and nowhere else: a recipient or a command is always written in the declaration.
+- Every message sent, every window and every match is a line in the script's log.
 
 ### `timer`
 | | |
 |---|---|
-| `timer.after(ms, name)` | Calls `on_timer(name)` once, `ms` milliseconds from now (at least 250) |
-| `timer.every(ms, name)` | Calls it every `ms` milliseconds (at least 250), first after `ms` |
+| `timer.after(ms, name)` | Calls `on_timer(name)` once, `ms` milliseconds from now (250 to 86,400,000, which is 24 hours) |
+| `timer.every(ms, name)` | Calls it every `ms` milliseconds (the same range), first after `ms` |
 | `timer.cancel(name)` | Removes that timer |
 
 A name holds one timer: setting it again replaces the old one. Timers wait while the bot is dead or between worlds, and they're cleared when it disconnects, so `on_join` is where a script starts them.
@@ -204,7 +227,8 @@ A script is never faster than a step mode. The limits sit below the script, so n
 | Each key, each look, hotbar, mount, dismount, drop, swap | Once every 250 ms |
 | Right button `tap()` | Once every 200 ms (4 ticks) |
 | Left button `tap()`, and holding or releasing the right button | Once every 500 ms |
-| `chat.send` | Once every 30 s (see the open question in the ADR for commands) |
+| `chat.send` of plain chat | Once every 30 s |
+| `chat.send` of a declared command | As fast as the bot's own chat rate allows, the server's setting that also paces what's typed in the app |
 
 A script itself is limited too:
 
@@ -215,7 +239,8 @@ A script itself is limited too:
 | Work in one second | 30,000 operations |
 | Functions, call depth | 64, 16 deep |
 | A text, an array, a map | 1,024 characters, 256 items, 64 entries |
-| Timers | 16 |
+| Timers | 16, each 250 ms to 24 hours |
+| Patterns, declared messages | 8, 16 |
 
 **When a script hits a limit or fails,** it stops, every key and button is released, and the bot stays online doing nothing. The app shows the error with its line. It starts again when the bot is started again or its mode is saved or changed.
 
@@ -331,6 +356,43 @@ fn next_pickaxe() {
     hotbar.select(state.slot);
 }
 ```
+
+#### Paying out a balance
+The mode declares two messages and one pattern:
+
+| | Key | Text | Values and captures |
+|---|---|---|---|
+| Message | `balance` | `/balance` | |
+| Message | `pay` | `/pay AfkMain {amount}` | `amount`: a decimal number from 1 to 1,000,000 with 2 places |
+| Pattern, a reply | `balance` | `Balance: ${amount}` | `amount`: an amount from 0 to 1,000,000,000 |
+
+```rhai
+// Every 10 hours, and at every join: asks for the balance and pays what's
+// above 10,000 to the main account, which the declared message names.
+fn on_join(first) {
+    ask();
+    timer.every(36000000, "balance");
+}
+
+fn on_timer(name) {
+    ask();
+}
+
+fn ask() {
+    if chat.send("balance").ok {
+        chat.expect("balance", 5000);
+    }
+}
+
+fn on_chat(key, values) {
+    let over = values.amount - 10000;
+    if over >= 1 {
+        chat.send("pay", #{ amount: over });
+    }
+}
+```
+
+The recipient is text of the declaration: nothing the server prints can change who is paid. A line a player writes never reaches `on_chat`.
 
 ## Part 2: inventory and menus (Phase 16, planned)
 

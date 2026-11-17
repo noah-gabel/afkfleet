@@ -692,7 +692,7 @@ fn edited(
 fn commands(definition: &ModeDefinition, check: CommandCheck) -> &'static str {
     if check.needs_manage() {
         "unlisted"
-    } else if definition.commands().next().is_some() {
+    } else if definition.command_names().next().is_some() {
         "allowlisted"
     } else {
         "none"

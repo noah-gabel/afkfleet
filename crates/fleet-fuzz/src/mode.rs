@@ -18,9 +18,10 @@ fn holds_what_the_handlers_expect(name: &str, steps: &ModeSteps) {
     );
 }
 
-/// A mode definition's JSON over any bytes: no panic; a stored definition
-/// that's accepted reads back as itself; and a request garde accepts holds
-/// what the handlers then take for granted.
+/// A mode definition's JSON over any bytes, a step mode's or a scripted
+/// one's: no panic; a stored definition that's accepted reads back as
+/// itself, and a scripted one has no steps; and a request garde accepts
+/// holds what the handlers then take for granted.
 ///
 /// # Panics
 /// When a property breaks.
@@ -35,6 +36,10 @@ pub fn mode_definition(data: &[u8]) {
             again.as_ref(),
             Some(&definition),
             "a definition doesn't read back from what it writes"
+        );
+        assert!(
+            definition.script().is_none() || definition.steps().is_empty(),
+            "a scripted mode has steps"
         );
     }
     if let Ok(request) = serde_json::from_slice::<CreateModeRequest>(data)

@@ -7,8 +7,11 @@
 //! - **Times** are stored as `YYYY-MM-DDTHH:MM:SS.mmmZ`: UTC, milliseconds,
 //!   always 24 characters, so text order is time order and `expires_at > ?`
 //!   compares correctly.
+//! - **A mode's definition** is read by [`stored_mode`], wherever a row
+//!   holds one.
 
 use chrono::{DateTime, Datelike, NaiveDateTime, SubsecRound, Utc};
+use fleet_core::mode::ModeDefinition;
 use uuid::Uuid;
 use uuid::fmt::Hyphenated;
 
@@ -17,6 +20,23 @@ const TIME_FORMAT: &str = "%Y-%m-%dT%H:%M:%S%.3fZ";
 
 /// The length of every stored time.
 const TIME_LEN: usize = 24;
+
+/// Reads a stored mode's definition. `None` for JSON that isn't a mode
+/// this version runs; `serde_json`'s error can quote the stored text, so it's
+/// dropped here.
+///
+/// **A scripted mode is one of them, for now.** fleet-core reads one since
+/// Phase 15's group A, but the server can't validate a script yet and the
+/// wire can't carry one (Plan.md P15.20, P15.21). Read as a mode, it would
+/// reach an agent as a mode without steps, and the bot would do nothing,
+/// which is the silent failure ADR-0036 (D13) rules out. So until then it's
+/// read as a server from before scripts reads it: not at all. No route can
+/// store one yet; this covers a row written by hand or by a newer version.
+pub(super) fn stored_mode(json: &str) -> Option<ModeDefinition> {
+    serde_json::from_str::<ModeDefinition>(json)
+        .ok()
+        .filter(|mode| mode.script().is_none())
+}
 
 /// The text form an ID is bound as.
 pub(super) fn id_text(id: impl Into<Uuid>) -> Hyphenated {

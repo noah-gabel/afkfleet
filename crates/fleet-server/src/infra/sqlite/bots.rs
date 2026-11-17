@@ -19,12 +19,11 @@ use fleet_core::account::{AccountKind, AccountStatus};
 use fleet_core::authz::{Actor, GrantLevel, Role};
 use fleet_core::bot::{BotAccount, DesiredRunState, LastReport, LastState};
 use fleet_core::id::{AccountId, AgentId, BotId, ModeId, UserId};
-use fleet_core::mode::ModeDefinition;
 use fleet_core::placement::McIdentity;
 use fleet_core::value::{McUsername, McUuid, ServerAddress, ServerKey};
 use sqlx::SqliteConnection;
 
-use super::convert::{id_text, parse_id, parse_time, time_text};
+use super::convert::{id_text, parse_id, parse_time, stored_mode, time_text};
 use super::error::store_error;
 use super::{accounts, server_settings};
 use crate::ports::bots::{
@@ -1157,13 +1156,11 @@ fn record_from_row(row: &RecordRow) -> Result<BotRecord, StoreError> {
             });
         }
     };
-    // serde_json's error can quote the stored text: it's dropped here.
-    let mode: ModeDefinition =
-        serde_json::from_str(&row.definition_json).map_err(|_| StoreError::Corrupt {
-            table: "modes",
-            column: "definition_json",
-            rowid: row.mode_rowid,
-        })?;
+    let mode = stored_mode(&row.definition_json).ok_or(StoreError::Corrupt {
+        table: "modes",
+        column: "definition_json",
+        rowid: row.mode_rowid,
+    })?;
     Ok(BotRecord {
         bot,
         account: spec_account,
