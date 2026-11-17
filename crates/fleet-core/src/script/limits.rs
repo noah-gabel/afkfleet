@@ -25,8 +25,10 @@ pub const MAX_EXPRESSION_DEPTH: usize = 32;
 pub const MAX_FUNCTION_EXPRESSION_DEPTH: usize = 16;
 /// The most functions a script defines.
 pub const MAX_FUNCTIONS: usize = 64;
-/// The longest text a script holds, in characters.
-pub const MAX_STRING_CHARS: usize = 1024;
+/// The longest text a script holds, in bytes of UTF-8: Rhai counts a text's
+/// bytes, not its characters, so a text of letters outside ASCII is shorter
+/// than this in characters.
+pub const MAX_STRING_BYTES: usize = 1024;
 /// The most items an array holds.
 pub const MAX_ARRAY_ITEMS: usize = 256;
 /// The most entries a map holds.
@@ -41,7 +43,7 @@ pub const STATE_MAX_BYTES: usize = 4096;
 /// could double the state again and again; checked only after the hook,
 /// 10,000 operations could fill an agent's memory. Between two checks a
 /// script adds at most what this many operations add, each bounded by
-/// [`MAX_STRING_CHARS`], [`MAX_ARRAY_ITEMS`] and [`MAX_MAP_ENTRIES`].
+/// [`MAX_STRING_BYTES`], [`MAX_ARRAY_ITEMS`] and [`MAX_MAP_ENTRIES`].
 pub const STATE_CHECK_EVERY_OPERATIONS: u64 = 256;
 
 /// The most timers a script holds at once.
@@ -84,7 +86,7 @@ mod tests {
         );
         assert_eq!(MAX_FUNCTIONS, 64);
         assert_eq!(
-            (MAX_STRING_CHARS, MAX_ARRAY_ITEMS, MAX_MAP_ENTRIES),
+            (MAX_STRING_BYTES, MAX_ARRAY_ITEMS, MAX_MAP_ENTRIES),
             (1024, 256, 64)
         );
         assert_eq!((STATE_MAX_ENTRIES, STATE_MAX_BYTES), (64, 4096));

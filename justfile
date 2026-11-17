@@ -18,7 +18,7 @@ linux_exclude := if os() == "linux" { "--exclude " + desktop } else { "" }
 # The stable toolchain for `stable-check`, and the crates it checks: every crate
 # that doesn't depend on azalea or azalea-auth (the desktop crate only off Linux).
 stable := "1.99.0"
-stable_crates := "-p fleet-core -p fleet-testkit -p fleet-runtime -p fleet-startup -p fleet-proto -p fleet-server -p fleet-api-types -p fleet-client" +(if os() == "linux" { "" } else { " -p " + desktop })
+stable_crates := "-p fleet-core -p fleet-script -p fleet-testkit -p fleet-runtime -p fleet-startup -p fleet-proto -p fleet-server -p fleet-api-types -p fleet-client" +(if os() == "linux" { "" } else { " -p " + desktop })
 
 # The release's image labels (ADR-0022, S22, R24): the release workflow sets them for the whole
 # image job, so `just images` and `just test-stack`'s own build make the same image; empty here.

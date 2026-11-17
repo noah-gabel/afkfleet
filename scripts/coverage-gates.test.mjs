@@ -318,6 +318,26 @@ describe("listed files without a covered line", () => {
 });
 
 describe("the project's gates", () => {
+  it("hold the script engine to 90 %, and fail a report without it (ADR-0036, D2)", () => {
+    const gate = GATES_IN_USE.find(({ name }) => name === "fleet-script");
+
+    assert.equal(gate.min, 90);
+    assert.equal(gate.required, true);
+    const low = byName(
+      evaluateGates(
+        report([["/repo/crates/fleet-script/src/instance.rs", 89, 100]]),
+        ROOT,
+        GATES_IN_USE,
+      ),
+    );
+    const none = byName(
+      evaluateGates(report([["/repo/crates/fleet-core/src/lib.rs", 99, 100]]), ROOT, GATES_IN_USE),
+    );
+    assert.equal(low["fleet-script"].status, "fail");
+    assert.equal(low["fleet-script"].percent, 89);
+    assert.equal(none["fleet-script"].status, "fail");
+  });
+
   it("make the auth, vault, msauth, control-plane, agent-control-plane and fleet-client gates required lists of prefixes", () => {
     for (const name of [
       "auth",
