@@ -448,8 +448,10 @@ const SPAM_KICK: &str = "disconnect.spam";
 
 /// Respawn: `Respawned` comes once the server respawned the bot and its
 /// client loaded, at full health, and the next death is reported again. A
-/// dimension change gives neither `Respawned` nor `Died`, and a death there
-/// respawns as any other (ADR-0020, S22, S26).
+/// dimension change gives neither `Respawned` nor `Died`: it's a world
+/// change, reported as one since Phase 15 (ADR-0042, G6). A death there
+/// respawns as any other, with no world change of its own (ADR-0020, S22,
+/// S26).
 async fn respawn(scene: &mut Scene) {
     scene.kill("the first death").await;
     scene.respawned("the first respawn").await;
@@ -478,9 +480,14 @@ async fn respawn(scene: &mut Scene) {
     })
     .await;
     // The watch tells the bridge in the same frame as the load, so a
-    // `Respawned` for it would be queued by now.
+    // `Respawned` for it would be queued by now. What comes is the world
+    // change, once the bot is placed there.
     let lifecycle = scene.ready_lifecycle_events().await;
-    assert_eq!(lifecycle, [], "the dimension change");
+    assert_eq!(
+        lifecycle,
+        [SessionEvent::WorldChanged],
+        "the dimension change"
+    );
 
     scene.kill("the death in the nether").await;
     scene.respawned("the respawn from the nether").await;
