@@ -792,6 +792,27 @@ async fn incoming_chat_and_deaths_are_published() {
     assert_eq!(controller.log(), [Performed::Respawn]);
 }
 
+// A scripted mode's runner reads a world change and what the session let
+// go of (Plan.md P15.14, P15.16). For the bot's lifecycle and a step mode
+// they change nothing: the bot stays online, nothing is published, and the
+// session is asked for nothing.
+#[tokio::test(start_paused = true)]
+async fn a_world_change_and_a_let_go_leave_the_bot_as_it_was() {
+    let (mut bot, controller) = Bot::online(Setup::new(running())).await;
+
+    emit(&controller, SessionEvent::WorldChanged);
+    for reason in fleet_core::mc::LetGo::ALL {
+        emit(&controller, SessionEvent::LetGo(reason));
+    }
+    settle().await;
+
+    assert!(matches!(bot.state(), BotState::Online { .. }));
+    assert_eq!(bot.last_disconnect(), None);
+    assert_eq!(bot.kinds(), []);
+    assert_eq!(controller.log(), []);
+    assert_eq!(bot.connects(), 1);
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_session_request_that_never_answers_times_out_at_its_bound() {
     let setup = Setup::new(running());
@@ -1714,6 +1735,19 @@ impl SessionHandle for PanickySession {
         message: ChatMessage,
     ) -> impl Future<Output = Result<(), SessionError>> + Send {
         self.0.send_chat(message)
+    }
+
+    fn observe(
+        &self,
+    ) -> impl Future<Output = Result<fleet_core::mc::Observation, SessionError>> + Send {
+        self.0.observe()
+    }
+
+    fn set_guards(
+        &self,
+        guards: fleet_core::mc::Guards,
+    ) -> impl Future<Output = Result<(), SessionError>> + Send {
+        self.0.set_guards(guards)
     }
 
     fn respawn(&self) -> impl Future<Output = Result<(), SessionError>> + Send {

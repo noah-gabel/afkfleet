@@ -39,7 +39,7 @@ use fleet_core::mc::SessionError;
 use fleet_core::mode::GameAction;
 use tracing::debug;
 
-use crate::riding;
+use crate::{riding, script};
 
 /// A look direction, in degrees.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -75,7 +75,17 @@ pub(crate) fn has_finite_angles(action: &GameAction) -> bool {
         | GameAction::HoldUse { .. }
         | GameAction::AttackFacingEntity
         | GameAction::SelectHotbarSlot { .. }
-        | GameAction::EnterMinecart => true,
+        | GameAction::EnterMinecart
+        // A position holds only numbers.
+        | GameAction::LookAtPosition(_)
+        | GameAction::Press(_)
+        | GameAction::Tap(_)
+        | GameAction::HoldUntilUsed
+        | GameAction::Release(_)
+        | GameAction::ReleaseKeys
+        | GameAction::ReleaseAll
+        | GameAction::Mount
+        | GameAction::Dismount => true,
     }
 }
 
@@ -204,6 +214,16 @@ pub(crate) fn perform(client: &Client, action: GameAction) -> Result<(), Session
         // Only marks the bot; the click comes with a game tick that has a
         // minecart within reach (ADR-0034).
         GameAction::EnterMinecart => riding::enter_minecart(&mut client.ecs.write(), client.entity),
+        // A scripted mode's inputs (ADR-0036, D9 to D12).
+        GameAction::Press(_)
+        | GameAction::Tap(_)
+        | GameAction::HoldUntilUsed
+        | GameAction::Release(_)
+        | GameAction::ReleaseKeys
+        | GameAction::ReleaseAll
+        | GameAction::LookAtPosition(_)
+        | GameAction::Mount
+        | GameAction::Dismount => script::perform(client, action),
     }
 }
 
@@ -278,7 +298,7 @@ fn swing(client: &Client) {
 /// Attacks the entity the bot looks at, if one is within reach: azalea's
 /// target already respects the reach (ADR-0008 §8). Nothing in reach is no
 /// error, just nothing to do.
-fn attack(client: &Client) -> Result<(), SessionError> {
+pub(crate) fn attack(client: &Client) -> Result<(), SessionError> {
     let target = client
         .get_component::<HitResultComponent>()
         .ok_or(SessionError::NotInWorld)?

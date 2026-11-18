@@ -1,5 +1,6 @@
 //! Tells the session's bridge of the bot's deaths and respawns (ADR-0020,
-//! S22, S27).
+//! S22, S27), and of the packets that put it into another world (ADR-0036,
+//! D6).
 //!
 //! azalea's Respawn packet handler removes `Dead` and `HasClientLoaded`
 //! together, and `HasClientLoaded` comes back on the first tick the client
@@ -16,6 +17,12 @@
 //! pass, before the session loop reads azalea's event channel, and the old
 //! life's second death report must reach the bridge before that load, where
 //! it's dropped as a duplicate.
+//!
+//! **A world change** is a Login after the join's own, or a Respawn that
+//! answers no death. Both packets are read here, right after the frame's
+//! deaths, so a Respawn that comes in its death's own frame finds that death
+//! in the bridge and counts as its respawn. The bridge reports the change
+//! once the bot is placed in the new world (`crate::script`).
 
 use azalea::app::{App, Plugin, Update};
 use azalea::ecs::lifecycle::{Add, Remove};
@@ -26,12 +33,13 @@ use azalea::ecs::schedule::IntoScheduleConfigs as _;
 use azalea::ecs::system::Query;
 use azalea::entity::{Dead, HasClientLoaded, LocalEntity};
 use azalea::packet::death_event_on_0_health;
-use azalea::packet::game::DeathEvent;
+use azalea::packet::game::{DeathEvent, ReceiveGamePacketEvent};
+use azalea::protocol::packets::game::ClientboundGamePacket;
 
-use super::BridgeControl;
+use super::{BridgeControl, WorldPacket};
 
 /// Tells the session's bridge of the bot's deaths, of each removal of its
-/// `Dead` and of each load. One App runs one session, so its observers and
+/// `Dead`, of each load, and of each Login and Respawn packet. One App runs one session, so its observers and
 /// its system hold that session's bridge control, which doesn't count as an
 /// event source.
 pub(crate) struct RespawnWatchPlugin(pub(crate) BridgeControl);
@@ -54,17 +62,43 @@ impl Plugin for RespawnWatchPlugin {
                 }
             },
         );
-        let control = self.0.clone();
-        app.add_systems(
+        let deaths = self.0.clone();
+        let worlds = self.0.clone();
+        // azalea registers the message too; registering it again is a no-op,
+        // and it lets the plugin work on its own.
+        app.add_message::<ReceiveGamePacketEvent>().add_systems(
             Update,
-            (move |mut deaths: MessageReader<DeathEvent>, local: Query<(), With<LocalEntity>>| {
-                for death in deaths.read() {
-                    if local.contains(death.entity) {
-                        control.died();
+            (
+                (move |mut died: MessageReader<DeathEvent>,
+                       local: Query<(), With<LocalEntity>>| {
+                    for death in died.read() {
+                        if local.contains(death.entity) {
+                            deaths.died();
+                        }
                     }
-                }
-            })
-            .after(death_event_on_0_health),
+                })
+                .after(death_event_on_0_health),
+                // After the deaths: a Respawn in its death's own frame is
+                // that death's.
+                move |mut packets: MessageReader<ReceiveGamePacketEvent>,
+                      local: Query<(), With<LocalEntity>>| {
+                    for received in packets.read() {
+                        if !local.contains(received.entity) {
+                            continue;
+                        }
+                        match &*received.packet {
+                            ClientboundGamePacket::Login(_) => {
+                                worlds.world_packet(WorldPacket::Login);
+                            }
+                            ClientboundGamePacket::Respawn(_) => {
+                                worlds.world_packet(WorldPacket::Respawn);
+                            }
+                            _ => {}
+                        }
+                    }
+                },
+            )
+                .chain(),
         );
     }
 }
@@ -125,6 +159,69 @@ mod tests {
             .await
             .ok()
             .flatten()
+    }
+
+    // --- A world change (Plan.md P15.14; ADR-0036, D6) ---
+
+    use azalea::core::entity_id::MinecraftEntityId;
+
+    use crate::testing::{login, receive, respawn};
+
+    const BOT: MinecraftEntityId = MinecraftEntityId(1);
+
+    #[tokio::test]
+    async fn a_second_login_is_a_world_change_once_the_bot_is_placed() {
+        let (sink, mut events, mut app) = joined().await;
+        let bot = app.world_mut().spawn(LocalEntity).id();
+
+        receive(&mut app, bot, login(BOT));
+        app.update();
+        let before_it_is_placed = ready(&mut events).await;
+        sink.control().placed();
+
+        assert_eq!(before_it_is_placed, None);
+        assert_eq!(ready(&mut events).await, Some(SessionEvent::WorldChanged));
+    }
+
+    #[tokio::test]
+    async fn a_respawn_packet_without_a_death_is_a_world_change() {
+        let (sink, mut events, mut app) = joined().await;
+        let bot = app.world_mut().spawn(LocalEntity).id();
+
+        receive(&mut app, bot, respawn());
+        app.update();
+        sink.control().placed();
+
+        assert_eq!(ready(&mut events).await, Some(SessionEvent::WorldChanged));
+    }
+
+    /// The death and its Respawn in one frame: the death is read first, so
+    /// the Respawn is the death's and no world change (ADR-0020, S27).
+    #[tokio::test]
+    async fn a_respawn_packet_in_its_deaths_own_frame_is_no_world_change() {
+        let (sink, mut events, mut app) = joined().await;
+        let bot = app.world_mut().spawn(LocalEntity).id();
+
+        receive(&mut app, bot, respawn());
+        death(&mut app, bot);
+        sink.control().placed();
+
+        assert_eq!(ready(&mut events).await, Some(SessionEvent::Died));
+        assert_eq!(ready(&mut events).await, None);
+    }
+
+    #[tokio::test]
+    async fn another_entitys_packets_change_no_world() {
+        let (sink, mut events, mut app) = joined().await;
+        let _bot = app.world_mut().spawn(LocalEntity).id();
+        let other = app.world_mut().spawn_empty().id();
+
+        receive(&mut app, other, login(BOT));
+        receive(&mut app, other, respawn());
+        app.update();
+        sink.control().placed();
+
+        assert_eq!(ready(&mut events).await, None);
     }
 
     fn load(app: &mut App, entity: Entity) {

@@ -240,7 +240,7 @@ proptest! {
     ) {
         let mut world = World::new();
         world.minecart(at(1.5, 64.0, 0.5));
-        let mut instance = Instance::new(program_of(balance_draft(&busy(None))), seed);
+        let mut instance = Instance::new(program_of(balance_draft(&busy(None))), seed, crate::support::still());
 
         let trace = run(&mut world, &mut instance, &steps);
 
@@ -271,7 +271,7 @@ proptest! {
     ) {
         let mut world = World::new();
         world.minecart(at(1.5, 64.0, 0.5));
-        let mut instance = Instance::new(program_of(balance_draft(&busy(None))), seed);
+        let mut instance = Instance::new(program_of(balance_draft(&busy(None))), seed, crate::support::still());
 
         let trace = run(&mut world, &mut instance, &steps);
 
@@ -299,8 +299,8 @@ proptest! {
         // the same limiter.
         let mut world = World::new();
         let half = steps.len() / 2;
-        let mut one = Instance::new(program_of(balance_draft(&busy(None))), seed);
-        let mut two = Instance::new(program_of(balance_draft(&busy(None))), seed);
+        let mut one = Instance::new(program_of(balance_draft(&busy(None))), seed, crate::support::still());
+        let mut two = Instance::new(program_of(balance_draft(&busy(None))), seed, crate::support::still());
 
         let mut trace = run(&mut world, &mut one, steps.get(..half).unwrap_or_default());
         let stop = world.run(&mut one, &HookEvent::Stop);
@@ -333,7 +333,7 @@ proptest! {
             busy(None)
         );
         let mut world = World::new();
-        let mut instance = Instance::new(program_of(balance_draft(&source)), seed);
+        let mut instance = Instance::new(program_of(balance_draft(&source)), seed, crate::support::still());
 
         let trace = run(&mut world, &mut instance, &steps);
         let stop = world.run(&mut instance, &HookEvent::Stop);
@@ -364,7 +364,7 @@ proptest! {
         // One of its hooks holds a key and runs for ever.
         let source = busy(Some(usize::from(at_hook)));
         let mut world = World::new();
-        let mut instance = Instance::new(program_of(balance_draft(&source)), seed);
+        let mut instance = Instance::new(program_of(balance_draft(&source)), seed, crate::support::still());
 
         let trace = run(&mut world, &mut instance, &steps);
 
@@ -385,7 +385,7 @@ proptest! {
     #[test]
     fn state_survives_everything_but_a_new_start(steps in steps()) {
         let mut world = World::new();
-        let mut instance = Instance::new(program(COUNTER), 7);
+        let mut instance = Instance::new(program(COUNTER), 7, crate::support::still());
         // The first event is always the first join, which sets the
         // counter up.
         world.run(&mut instance, &HookEvent::Join { first: true });

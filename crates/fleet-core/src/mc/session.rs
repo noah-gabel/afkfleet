@@ -2,7 +2,7 @@
 
 use core::future::Future;
 
-use super::Liveness;
+use super::{Guards, Liveness, Observation};
 use crate::chat::ChatMessage;
 use crate::mode::GameAction;
 
@@ -59,6 +59,23 @@ pub trait SessionHandle: Clone + Send + Sync + 'static {
         &self,
         message: ChatMessage,
     ) -> impl Future<Output = Result<(), SessionError>> + Send;
+
+    /// Takes a snapshot of the game as the bot sees it right now, with
+    /// where its leash is anchored: what a scripted mode's hook is given
+    /// (ADR-0036, D12).
+    ///
+    /// # Errors
+    /// As for [`perform`](Self::perform); [`SessionError::NotInWorld`] also
+    /// while the bot is between worlds, where it has no position yet.
+    fn observe(&self) -> impl Future<Output = Result<Observation, SessionError>> + Send;
+
+    /// Sets the leash's radius and the tool guard for this session. A new
+    /// session starts with [`Guards::default`]; the leash's anchor stays
+    /// where it is (ADR-0036, D10, D11).
+    ///
+    /// # Errors
+    /// As for [`perform`](Self::perform).
+    fn set_guards(&self, guards: Guards) -> impl Future<Output = Result<(), SessionError>> + Send;
 
     /// Asks the server to respawn the bot after it died. `Ok` means it was
     /// asked, not that the bot lives: [`SessionEvent::Respawned`] confirms

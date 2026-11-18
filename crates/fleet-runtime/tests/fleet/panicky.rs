@@ -375,6 +375,19 @@ impl SessionHandle for PanickySession {
         self.session.send_chat(message)
     }
 
+    fn observe(
+        &self,
+    ) -> impl Future<Output = Result<fleet_core::mc::Observation, SessionError>> + Send {
+        self.session.observe()
+    }
+
+    fn set_guards(
+        &self,
+        guards: fleet_core::mc::Guards,
+    ) -> impl Future<Output = Result<(), SessionError>> + Send {
+        self.session.set_guards(guards)
+    }
+
     fn respawn(&self) -> impl Future<Output = Result<(), SessionError>> + Send {
         self.session.respawn()
     }

@@ -7,6 +7,7 @@ use rand::{Rng, RngExt};
 
 use super::{Action, HotbarSlot, ModeDefinition, Schedule};
 use crate::chat::ChatMessage;
+use crate::script::{Input, Position};
 use crate::time;
 
 /// A game action resolved for the session to perform: random choices are
@@ -59,6 +60,43 @@ pub enum GameAction {
     /// already. See [`Action::EnterMinecart`] for what it does and how long
     /// it looks for one (ADR-0034).
     EnterMinecart,
+    /// Press a key or a mouse button and keep it down, as a scripted mode's
+    /// `hold()` does (ADR-0036, D4, D9 to D11).
+    ///
+    /// - A direction, jump, sneak or sprint key stays down until it's
+    ///   released; the session's leash lets go of the movement keys by
+    ///   itself ([`LetGo::Leash`](crate::mc::LetGo::Leash)).
+    /// - The left button attacks an entity under the crosshair once, and
+    ///   mines the block there and each one that appears after it, held
+    ///   back by the mining guard and ended by the tool guard.
+    /// - The right button uses, and uses again every 4 game ticks, unless
+    ///   the held item is one that's used over time: then it's one long
+    ///   use.
+    /// - A key that only taps (drop, drop a stack, swap) is tapped.
+    Press(Input),
+    /// Press a key or a mouse button and let go: one game tick of a held
+    /// key, one dropped item, one attack or swing, one use.
+    Tap(Input),
+    /// Hold the right button until the held item is used up once, then
+    /// let go ([`LetGo::ItemUsed`](crate::mc::LetGo::ItemUsed)).
+    HoldUntilUsed,
+    /// Let go of a key or a mouse button. Letting go of one that's up is
+    /// fine.
+    Release(Input),
+    /// Let go of every key; the mouse buttons stay as they are.
+    ReleaseKeys,
+    /// Let go of every key and both buttons, and stop mining. Doing it
+    /// twice is as good as once (ADR-0036, D9).
+    ReleaseAll,
+    /// Look at a point in the world.
+    LookAtPosition(Position),
+    /// Get into the nearest free minecart within reach, unless the bot
+    /// rides already: as [`GameAction::EnterMinecart`], but past a minecart
+    /// someone sits in (ADR-0036, D12).
+    Mount,
+    /// Get out of the vehicle, as sneaking does. A bot on foot does
+    /// nothing.
+    Dismount,
 }
 
 /// One thing the runtime does for a mode: a game action, or a chat message

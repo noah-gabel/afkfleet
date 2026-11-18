@@ -30,6 +30,11 @@ static ALLOCATOR: PeakAlloc = PeakAlloc;
 /// One measurement at a time: the counter is the whole process's.
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
+/// A stopwatch that stands still.
+fn still() -> Arc<dyn fleet_core::script::Stopwatch> {
+    Arc::new(fleet_testkit::stopwatch::ManualStopwatch::standing())
+}
+
 const MIB: usize = 1024 * 1024;
 
 /// The most a hook that attacks the state may add to the process's
@@ -88,7 +93,7 @@ fn measure(program: &Arc<Program>) -> (usize, Outcome, usize) {
     let facts = facts();
     let mut limiter = ActionLimiter::new();
     let before = ALLOCATOR.current_usage();
-    let mut instance = Instance::new(program.clone(), 7);
+    let mut instance = Instance::new(program.clone(), 7, still());
     ALLOCATOR.reset_peak_usage();
     let ran = instance.handle(
         &HookEvent::Join { first: true },
@@ -291,7 +296,7 @@ fn an_instance_that_ends_or_is_dropped_frees_its_state() {
 
     for round in 0..2_000 {
         let mut limiter = ActionLimiter::new();
-        let mut instance = Instance::new(program.clone(), 7);
+        let mut instance = Instance::new(program.clone(), 7, still());
         let moment = Moment {
             facts: &facts,
             now: start(),
@@ -316,11 +321,11 @@ fn two_hundred_instances_of_one_program_cost_little() {
     let program = program(
         "fn on_join(first) { state.n = 1; timer.every(1000, \"t\"); }\nfn on_timer(name) { state.n += 1; }",
     );
-    drop(Instance::new(program.clone(), 0));
+    drop(Instance::new(program.clone(), 0, still()));
     let before = ALLOCATOR.current_usage();
 
     let instances: Vec<Instance> = (0..200)
-        .map(|seed| Instance::new(program.clone(), seed))
+        .map(|seed| Instance::new(program.clone(), seed, still()))
         .collect();
     let held = ALLOCATOR.current_usage().saturating_sub(before);
 

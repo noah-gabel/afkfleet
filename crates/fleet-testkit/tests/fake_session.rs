@@ -10,10 +10,14 @@ use core::time::Duration;
 use fleet_core::chat::{ChatMessage, IncomingChat};
 use fleet_core::disconnect::{ConnectFailure, DisconnectReason};
 use fleet_core::mc::{
-    ConnectParams, MinecraftConnector, SessionCredentials, SessionError, SessionEvent,
-    SessionEvents, SessionHandle,
+    ConnectParams, Guards, LetGo, MinecraftConnector, Observation, SessionCredentials,
+    SessionError, SessionEvent, SessionEvents, SessionHandle,
 };
-use fleet_core::mode::GameAction;
+use fleet_core::mode::{GameAction, HotbarSlot};
+use fleet_core::script::{
+    BlockPosition, Blocks, BotFacts, Identifier, Input, Key, LeashRadius, MouseButton, Position,
+    Snapshot, ToolGuard,
+};
 use fleet_testkit::mc::{
     EmitOutcome, FakeConnector, FakeEvents, FakeSession, Performed, SessionController,
 };
@@ -641,4 +645,149 @@ async fn hang_freezes_both_stamps_for_good() {
     controller.unfreeze();
 
     assert_eq!(session.liveness(), hung_at);
+}
+
+// --- Scripted modes: the inputs, the snapshot, the guards (Plan.md P15.10) ---
+
+/// What a bot standing at `x` in the overworld sees, anchored at the origin.
+fn observation(x: f64) -> Observation {
+    let bot = BotFacts {
+        health: 20.0,
+        food: 20,
+        position: Position::try_new(x, 64.0, 0.5).unwrap(),
+        yaw: 0.0,
+        pitch: 0.0,
+        dimension: Identifier::try_from("overworld").unwrap(),
+        riding: None,
+        held: None,
+        selected: HotbarSlot::FIRST,
+        looking_at: None,
+    };
+    let blocks = Blocks::read(BlockPosition { x: 0, y: 64, z: 0 }, |_| None);
+    Observation {
+        facts: Snapshot::new(bot, Vec::new(), blocks),
+        anchor: Some(Position::try_new(0.5, 64.0, 0.5).unwrap()),
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn every_input_action_is_recorded_as_it_was_asked() {
+    let (session, _events, controller) = start_joined().await;
+    let actions = [
+        GameAction::Press(Input::Key(Key::Forward)),
+        GameAction::Press(Input::Key(Key::Sprint)),
+        GameAction::Tap(Input::Key(Key::Jump)),
+        GameAction::Tap(Input::Key(Key::Drop)),
+        GameAction::Tap(Input::Key(Key::DropStack)),
+        GameAction::Tap(Input::Key(Key::SwapOffhand)),
+        GameAction::Press(Input::Mouse(MouseButton::Left)),
+        GameAction::HoldUntilUsed,
+        GameAction::Release(Input::Key(Key::Sneak)),
+        GameAction::LookAtPosition(Position::try_new(1.5, 65.0, -3.5).unwrap()),
+        GameAction::Mount,
+        GameAction::Dismount,
+        GameAction::ReleaseKeys,
+        GameAction::ReleaseAll,
+    ];
+
+    for action in actions {
+        assert_eq!(session.perform(action).await, Ok(()));
+    }
+
+    assert_eq!(controller.log(), actions.map(Performed::Action));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_session_shown_nothing_has_nothing_to_observe() {
+    let (session, _events, controller) = start_joined().await;
+
+    assert_eq!(session.observe().await, Err(SessionError::NotInWorld));
+    assert_eq!(controller.log(), []);
+}
+
+#[tokio::test(start_paused = true)]
+async fn observing_answers_with_what_the_test_last_showed_and_is_logged() {
+    let (session, _events, controller) = start_joined().await;
+
+    controller.show(observation(1.5));
+    let first = session.observe().await;
+    controller.show(observation(7.5));
+    let second = session.observe().await;
+
+    assert_eq!(first, Ok(observation(1.5)));
+    assert_eq!(second, Ok(observation(7.5)));
+    assert_eq!(controller.log(), [Performed::Observed, Performed::Observed]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn setting_the_guards_is_logged_with_what_was_set() {
+    let (session, _events, controller) = start_joined().await;
+    let guards = Guards {
+        leash: LeashRadius::try_from(16).unwrap(),
+        tool_guard: ToolGuard::OFF,
+    };
+
+    assert_eq!(session.set_guards(guards).await, Ok(()));
+
+    assert_eq!(controller.log(), [Performed::Guards(guards)]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_new_calls_fail_like_every_other_before_the_join_and_after_the_end() {
+    let (session, mut events, controller) = start().await;
+    controller.show(observation(1.5));
+
+    assert_eq!(session.observe().await, Err(SessionError::NotInWorld));
+    assert_eq!(
+        session.set_guards(Guards::default()).await,
+        Err(SessionError::NotInWorld)
+    );
+
+    assert_eq!(controller.emit(SessionEvent::Joined), EmitOutcome::Queued);
+    assert_eq!(next(&mut events).await, Some(SessionEvent::Joined));
+    controller.fail_actions(SessionError::QueueFull);
+    assert_eq!(session.observe().await, Err(SessionError::QueueFull));
+    assert_eq!(
+        session.set_guards(Guards::default()).await,
+        Err(SessionError::QueueFull)
+    );
+    controller.succeed_actions();
+    controller.hang();
+    assert_eq!(session.observe().await, Err(SessionError::TimedOut));
+
+    session.disconnect().await;
+    assert_eq!(session.observe().await, Err(SessionError::Closed));
+    assert_eq!(
+        session.set_guards(Guards::default()).await,
+        Err(SessionError::Closed)
+    );
+    assert_eq!(controller.log(), [Performed::Disconnect]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_world_change_and_a_let_go_are_delivered_in_order() {
+    let (_session, mut events, controller) = start_joined().await;
+
+    assert_eq!(
+        controller.emit(SessionEvent::LetGo(LetGo::Leash)),
+        EmitOutcome::Queued
+    );
+    assert_eq!(
+        controller.emit(SessionEvent::WorldChanged),
+        EmitOutcome::Queued
+    );
+    assert_eq!(
+        controller.emit(SessionEvent::LetGo(LetGo::ItemUsed)),
+        EmitOutcome::Queued
+    );
+
+    assert_eq!(
+        next(&mut events).await,
+        Some(SessionEvent::LetGo(LetGo::Leash))
+    );
+    assert_eq!(next(&mut events).await, Some(SessionEvent::WorldChanged));
+    assert_eq!(
+        next(&mut events).await,
+        Some(SessionEvent::LetGo(LetGo::ItemUsed))
+    );
 }

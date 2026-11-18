@@ -54,8 +54,16 @@ pub(crate) struct Server {
 }
 
 impl Server {
-    /// Starts a server and waits until it's healthy.
+    /// Starts a server and waits until it's healthy. It protects no
+    /// block around its spawn.
     pub(crate) async fn start(mode: Mode) -> Self {
+        Self::start_with(mode, 0).await
+    }
+
+    /// [`start`](Self::start), with `spawn_protection` blocks around the
+    /// world's spawn that only an operator may change. A vanilla server
+    /// applies it only once it has an operator at all.
+    pub(crate) async fn start_with(mode: Mode, spawn_protection: u8) -> Self {
         let online = match mode {
             Mode::Offline => "FALSE",
             Mode::Online => "TRUE",
@@ -70,7 +78,7 @@ impl Server {
             .with_env_var("LEVEL_TYPE", "minecraft:flat")
             .with_env_var("VIEW_DISTANCE", "4")
             .with_env_var("SIMULATION_DISTANCE", "4")
-            .with_env_var("SPAWN_PROTECTION", "0")
+            .with_env_var("SPAWN_PROTECTION", spawn_protection.to_string())
             .with_env_var("MODE", "survival")
             .with_env_var("DIFFICULTY", "peaceful")
             .with_env_var("ENABLE_AUTOPAUSE", "FALSE")

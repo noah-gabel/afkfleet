@@ -7,7 +7,9 @@
 //!   that happens on the network arrives as a [`SessionEvent`].
 //! - The [`SessionHandle`] performs [`GameAction`](crate::mode::GameAction)s,
 //!   sends chat, respawns, reads the session's [`Liveness`] and tears the
-//!   session down. Its calls fail with a [`SessionError`].
+//!   session down. Its calls fail with a [`SessionError`]. For a scripted
+//!   mode it also takes an [`Observation`] of the game and applies the
+//!   mode's [`Guards`]; what it lets go of by itself is a [`LetGo`].
 //! - [`SessionCredentials`] carry the Minecraft access token as a secret. A
 //!   [`SessionCredentialProvider`] hands them out for each connection
 //!   attempt.
@@ -35,7 +37,10 @@
 //!             SessionEvent::Died => {
 //!                 let _ = session.respawn().await;
 //!             }
-//!             SessionEvent::Respawned | SessionEvent::Chat(_) => {}
+//!             SessionEvent::Respawned
+//!             | SessionEvent::WorldChanged
+//!             | SessionEvent::LetGo(_)
+//!             | SessionEvent::Chat(_) => {}
 //!             SessionEvent::Disconnected(_) | SessionEvent::ConnectionFailed(_) => break,
 //!         }
 //!     }
@@ -54,6 +59,7 @@ mod connector;
 mod credentials;
 mod event;
 mod liveness;
+mod observe;
 mod session;
 
 pub use connector::{ConnectError, ConnectParams, MinecraftConnector};
@@ -62,4 +68,5 @@ pub use credentials::{
 };
 pub use event::{SessionEvent, SessionEvents};
 pub use liveness::Liveness;
+pub use observe::{Guards, LetGo, Observation};
 pub use session::{SessionError, SessionHandle};

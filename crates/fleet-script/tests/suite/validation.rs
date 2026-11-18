@@ -422,15 +422,15 @@ fn an_expression_nested_too_deep_is_refused_in_a_hook_and_in_a_helper() {
     assert!(compile(&script_of(draft(&allowed))).is_ok());
 }
 
-/// The deepest `depth` at which `script(depth)` compiles, up to 40.
+/// The deepest `depth` at which `script(depth)` compiles, up to 80.
 fn deepest(script: impl Fn(usize) -> String) -> usize {
-    (0..=40)
+    (0..=80)
         .rev()
         .find(|depth| compile(&script_of(draft(&script(*depth)))).is_ok())
         .expect("nothing nested compiles")
 }
 
-// What "16 levels inside a function" means in a script's own terms, as
+// What "32 levels inside a function" means in a script's own terms, as
 // the reference says it (docs/scripting.md, "Limits"). Rhai counts levels
 // its own way; these are the numbers an author meets.
 #[test]
@@ -445,10 +445,10 @@ fn the_nesting_limit_in_a_scripts_own_terms() {
         }
     };
 
-    assert_eq!(deepest(wrapped("if first { ", "1;", " }")), 4);
-    assert_eq!(deepest(wrapped("for i in 0..1 { ", "1;", " }")), 4);
-    assert_eq!(deepest(wrapped("(", "1", ")")), 6);
-    assert_eq!(deepest(wrapped("pass(", "1", ")")), 6);
+    let ifs = deepest(wrapped("if first { ", "1;", " }"));
+    let loops = deepest(wrapped("for i in 0..1 { ", "1;", " }"));
+    let parentheses = deepest(wrapped("(", "1", ")"));
+    let calls = deepest(wrapped("pass(", "1", ")"));
     // A sum of that many terms, and an `if … else if` chain of that many
     // branches before its `else`.
     let sum = |terms: usize| {
@@ -463,8 +463,10 @@ fn the_nesting_limit_in_a_scripts_own_terms() {
             "if name == \"a\" { } else ".repeat(branches)
         )
     };
-    assert_eq!(deepest(sum), 13);
-    assert_eq!(deepest(chain), 11);
+    assert_eq!(
+        (ifs, loops, parentheses, calls, deepest(sum), deepest(chain)),
+        (9, 9, 14, 14, 29, 27)
+    );
     // A `switch` isn't a chain: it takes as many cases as an author likes.
     let cases = (0..40).fold(String::new(), |mut cases, case| {
         let _ = write!(cases, "{case} => {case}, ");

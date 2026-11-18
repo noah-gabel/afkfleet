@@ -23,7 +23,11 @@ fn example(name: &str) -> &'static Example {
 /// An instance of the example `name`.
 fn instance_of(name: &str) -> Instance {
     let script = Script::try_from(example(name).draft()).unwrap();
-    Instance::new(Arc::new(compile(&script).unwrap()), 7)
+    Instance::new(
+        Arc::new(compile(&script).unwrap()),
+        7,
+        crate::support::still(),
+    )
 }
 
 /// Whether every wake in `wakes` ran to its end.
@@ -383,7 +387,11 @@ fn the_balance_example_never_pays_more_than_its_declaration_allows() {
 fn no_example_presses_a_key_it_then_leaves_down_at_a_stop() {
     for example in &EXAMPLES {
         let script = Script::try_from(example.draft()).unwrap();
-        let mut instance = Instance::new(Arc::new(compile(&script).unwrap()), 7);
+        let mut instance = Instance::new(
+            Arc::new(compile(&script).unwrap()),
+            7,
+            crate::support::still(),
+        );
         let mut world = World::new();
         world.minecart(at(1.5, 64.0, 0.5));
         world.run(&mut instance, &HookEvent::Join { first: true });

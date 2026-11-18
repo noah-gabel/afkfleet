@@ -2,12 +2,13 @@
 //! D6).
 
 use core::fmt;
+use core::time::Duration;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use chrono::{DateTime, Utc};
 use fleet_core::script::{
-    ActionLimiter, Captured, Hook, HookEvent, Input, Leash, Snapshot, TimerName, limits,
+    ActionLimiter, Captured, Hook, HookEvent, Input, Leash, Snapshot, Stopwatch, TimerName, limits,
 };
 use rhai::{CallFnOptions, Dynamic, Engine, EvalAltResult, FLOAT, Map, Position, Scope};
 
@@ -117,31 +118,37 @@ enum Ended {
     State(Fault),
     /// The hook took more of the stack than it may.
     Stack,
+    /// The hook ran longer than it may.
+    Time,
 }
 
 impl Ended {
     /// [`Ended::Stack`] as a number; a state's fault is its own, from 1.
     const STACK: u8 = 200;
+    /// [`Ended::Time`] as a number.
+    const TIME: u8 = 201;
 
     /// The reason as a number that's never 0, to keep in an atomic.
     fn code(self) -> u8 {
         match self {
             Self::State(fault) => fault.code(),
             Self::Stack => Self::STACK,
+            Self::Time => Self::TIME,
         }
     }
 
     /// The reason `code` stands for; `None` for 0, which is "none".
     fn from_code(code: u8) -> Option<Self> {
-        if code == Self::STACK {
-            Some(Self::Stack)
-        } else {
-            Fault::from_code(code).map(Self::State)
+        match code {
+            Self::STACK => Some(Self::Stack),
+            Self::TIME => Some(Self::Time),
+            _ => Fault::from_code(code).map(Self::State),
         }
     }
 
-    /// The reason as a script's error.
-    const fn kind(self) -> ScriptErrorKind {
+    /// The reason as a script's error. `time_by_second` says whether the
+    /// hook's time was cut to what was left of the second.
+    const fn kind(self, time_by_second: bool) -> ScriptErrorKind {
         match self {
             Self::State(Fault::NotAMap) => ScriptErrorKind::StateNotAMap,
             Self::State(Fault::NotPlain) => ScriptErrorKind::StateNotPlain,
@@ -149,6 +156,8 @@ impl Ended {
             Self::State(Fault::Bytes) => ScriptErrorKind::Limit(Limit::StateBytes),
             Self::State(Fault::InUse) => ScriptErrorKind::StateInUse,
             Self::Stack => ScriptErrorKind::Limit(Limit::Stack),
+            Self::Time if time_by_second => ScriptErrorKind::Limit(Limit::TimePerSecond),
+            Self::Time => ScriptErrorKind::Limit(Limit::HookTime),
         }
     }
 }
@@ -171,6 +180,19 @@ struct Running {
     stack_top: AtomicUsize,
     /// How much of the stack a hook may take.
     stack_budget: usize,
+    /// What the running hook's time is read from.
+    stopwatch: Arc<dyn Stopwatch>,
+    /// The stopwatch's last reading, in nanoseconds.
+    time_read: AtomicU64,
+    /// The time the running hook has taken so far, in nanoseconds.
+    time_taken: AtomicU64,
+    /// The time the running hook may take, in nanoseconds.
+    time_allowed: AtomicU64,
+}
+
+/// `time` in nanoseconds; the longest a number holds, 584 years, for more.
+fn nanos(time: Duration) -> u64 {
+    u64::try_from(time.as_nanos()).unwrap_or(u64::MAX)
 }
 
 impl Running {
@@ -184,6 +206,36 @@ impl Running {
     /// What ended the running hook, if something did.
     fn ended_for(&self) -> Option<Ended> {
         Ended::from_code(self.ended.load(Ordering::Relaxed))
+    }
+
+    /// Starts the running hook's time: it may take `allowed`.
+    fn start_time(&self, allowed: Duration) {
+        self.time_read
+            .store(nanos(self.stopwatch.elapsed()), Ordering::Relaxed);
+        self.time_taken.store(0, Ordering::Relaxed);
+        self.time_allowed.store(nanos(allowed), Ordering::Relaxed);
+    }
+
+    /// Reads the stopwatch and counts the time since its last reading
+    /// towards the running hook's, at most [`limits::LONGEST_STRETCH`] of
+    /// it: a longer gap is the host's, not the script's. A stopwatch that
+    /// went back counts nothing. Returns whether the hook has now run
+    /// longer than it may.
+    fn count_time(&self) -> bool {
+        let now = nanos(self.stopwatch.elapsed());
+        let last = self.time_read.swap(now, Ordering::Relaxed);
+        let stretch = now.saturating_sub(last).min(nanos(limits::LONGEST_STRETCH));
+        let taken = self
+            .time_taken
+            .load(Ordering::Relaxed)
+            .saturating_add(stretch);
+        self.time_taken.store(taken, Ordering::Relaxed);
+        taken > self.time_allowed.load(Ordering::Relaxed)
+    }
+
+    /// The time the running hook has taken, as counted.
+    fn time_taken(&self) -> Duration {
+        Duration::from_nanos(self.time_taken.load(Ordering::Relaxed))
     }
 
     /// Notes where the stack is as the hook starts.
@@ -226,7 +278,9 @@ enum Run {
 /// passes outside.
 ///
 /// **What bounds a hook:** [`OPERATIONS_PER_HOOK`] operations, and
-/// [`OPERATIONS_PER_SECOND`] over all of a second's hooks; Rhai's limits
+/// [`OPERATIONS_PER_SECOND`] over all of a second's hooks; its time, read
+/// from the instance's [`Stopwatch`] every few operations, a hook and a
+/// second ([`limits::HOOK_TIME`], [`limits::TIME_PER_SECOND`]); Rhai's limits
 /// for calls, texts, arrays, maps and variables; and the state's own, as
 /// a small map of plain data, checked every
 /// [`STATE_CHECK_EVERY_OPERATIONS`] operations while the hook runs and
@@ -267,14 +321,20 @@ impl fmt::Debug for Instance {
 impl Instance {
     /// A new start of `program`: an empty state, no timer, nothing held.
     /// `seed` is what its random numbers come from; two instances with
-    /// one seed draw the same.
+    /// one seed draw the same. `stopwatch` is what its hooks' time is
+    /// read from, every few operations while one runs.
     #[must_use]
-    pub fn new(program: Arc<Program>, seed: u64) -> Self {
-        Self::with_stack_budget(program, seed, STACK_BUDGET)
+    pub fn new(program: Arc<Program>, seed: u64, stopwatch: Arc<dyn Stopwatch>) -> Self {
+        Self::with_stack_budget(program, seed, stopwatch, STACK_BUDGET)
     }
 
     /// [`new`](Self::new), with how much of the stack a hook may take.
-    fn with_stack_budget(program: Arc<Program>, seed: u64, stack_budget: usize) -> Self {
+    fn with_stack_budget(
+        program: Arc<Program>,
+        seed: u64,
+        stopwatch: Arc<dyn Stopwatch>,
+        stack_budget: usize,
+    ) -> Self {
         let turn: SharedTurn =
             Arc::new(std::sync::Mutex::new(Turn::new(Arc::clone(&program), seed)));
         let running = Arc::new(Running {
@@ -283,6 +343,10 @@ impl Instance {
             ended: AtomicU8::new(0),
             stack_top: AtomicUsize::new(0),
             stack_budget,
+            stopwatch,
+            time_read: AtomicU64::new(0),
+            time_taken: AtomicU64::new(0),
+            time_allowed: AtomicU64::new(u64::MAX),
         });
 
         let resolver = {
@@ -312,6 +376,11 @@ impl Instance {
                 }
                 if running.stack_used() > running.stack_budget {
                     return Some(running.end(Ended::Stack));
+                }
+                if operations.is_multiple_of(limits::TIME_CHECK_EVERY_OPERATIONS)
+                    && running.count_time()
+                {
+                    return Some(running.end(Ended::Time));
                 }
                 if !operations.is_multiple_of(limits::STATE_CHECK_EVERY_OPERATIONS) {
                     return None;
@@ -570,13 +639,15 @@ impl Instance {
         };
         // Nothing left of this second: the hook isn't run at all. A
         // budget of 0 is never handed to Rhai, which takes it for none.
-        let Some(allowance) = self.budget.allowance(moment.now) else {
-            return Run::Failed(limit(Limit::OperationsPerSecond));
+        let allowance = match self.budget.allowance(moment.now) {
+            Ok(allowance) => allowance,
+            Err(spent) => return Run::Failed(limit(spent)),
         };
         self.engine.set_max_operations(allowance.operations.get());
         self.running.operations.store(0, Ordering::Relaxed);
         self.running.ended.store(0, Ordering::Relaxed);
         self.running.mark_stack();
+        self.running.start_time(allowance.time);
         lock(&self.turn).begin(moment, core::mem::take(limiter), stopping);
 
         let options = CallFnOptions::new().eval_ast(false);
@@ -621,13 +692,16 @@ impl Instance {
             .operations
             .load(Ordering::Relaxed)
             .min(allowance.operations.get());
-        self.budget.spend(moment.now, operations);
+        // The time since the hook's last reading counts too.
+        let overtime = self.running.count_time();
+        self.budget
+            .spend(moment.now, operations, self.running.time_taken());
 
         // One of the instance's own guards ended the hook: that's why it
         // stopped, whatever the script made of the error on its way out.
         if let Some(ended) = self.running.ended_for() {
             return Run::Failed(ScriptError {
-                kind: ended.kind(),
+                kind: ended.kind(allowance.time_by_second),
                 hook,
                 at: None,
             });
@@ -635,11 +709,18 @@ impl Instance {
         if let Err(error) = returned {
             return Run::Failed(failure(&error, hook, allowance.by_second));
         }
+        if overtime {
+            return Run::Failed(ScriptError {
+                kind: Ended::Time.kind(allowance.time_by_second),
+                hook,
+                at: None,
+            });
+        }
         // And once more after the hook, for what it did since the last
         // check while it ran.
         match state::check(&self.running.state) {
             Checked::Faulty(fault) => Run::Failed(ScriptError {
-                kind: Ended::State(fault).kind(),
+                kind: Ended::State(fault).kind(false),
                 hook,
                 at: None,
             }),
@@ -751,7 +832,12 @@ mod tests {
     /// for the hook.
     fn join(source: &str, stack_budget: usize) -> (Ran, Instance) {
         let facts = facts();
-        let mut instance = Instance::with_stack_budget(program(source), 7, stack_budget);
+        let mut instance = Instance::with_stack_budget(
+            program(source),
+            7,
+            Arc::new(fleet_testkit::stopwatch::ManualStopwatch::standing()),
+            stack_budget,
+        );
         let ran = instance.handle(
             &HookEvent::Join { first: true },
             &Moment {
@@ -858,6 +944,7 @@ mod tests {
             Ended::State(Fault::Bytes),
             Ended::State(Fault::InUse),
             Ended::Stack,
+            Ended::Time,
         ];
 
         for reason in reasons {
@@ -866,7 +953,7 @@ mod tests {
         }
         assert_eq!(Ended::from_code(0), None);
         assert_eq!(
-            reasons.map(Ended::kind),
+            reasons.map(|reason| reason.kind(false)),
             [
                 ScriptErrorKind::StateNotAMap,
                 ScriptErrorKind::StateNotPlain,
@@ -874,7 +961,16 @@ mod tests {
                 ScriptErrorKind::Limit(Limit::StateBytes),
                 ScriptErrorKind::StateInUse,
                 ScriptErrorKind::Limit(Limit::Stack),
+                ScriptErrorKind::Limit(Limit::HookTime),
             ]
+        );
+        assert_eq!(
+            Ended::Time.kind(true),
+            ScriptErrorKind::Limit(Limit::TimePerSecond)
+        );
+        assert_eq!(
+            Ended::Stack.kind(true),
+            ScriptErrorKind::Limit(Limit::Stack)
         );
     }
 

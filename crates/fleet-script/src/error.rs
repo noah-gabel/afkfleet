@@ -116,6 +116,10 @@ pub enum Limit {
     OperationsPerHook,
     /// The operations a script may run in one second, over all its hooks.
     OperationsPerSecond,
+    /// How long one hook may run.
+    HookTime,
+    /// How long a script's hooks may run in one second, together.
+    TimePerSecond,
     /// How deep a script's own functions call each other.
     CallDepth,
     /// How much of its thread's stack a hook may take: calls and
@@ -141,6 +145,8 @@ impl fmt::Display for Limit {
         f.write_str(match self {
             Self::OperationsPerHook => "the hook ran more operations than one hook may",
             Self::OperationsPerSecond => "the script ran more operations than it may in one second",
+            Self::HookTime => "the hook ran longer than one hook may",
+            Self::TimePerSecond => "the script's hooks ran longer than they may in one second",
             Self::CallDepth => "the script's functions called each other too deeply",
             Self::Stack => "the script's calls and expressions nested deeper than a hook may",
             Self::TextBytes => "a text grew longer than a text may be",
@@ -287,7 +293,7 @@ mod tests {
         );
         assert_eq!(
             CompileErrorKind::ExpressionTooDeep.to_string(),
-            "an expression is nested more than 16 deep"
+            "an expression is nested more than 32 deep"
         );
     }
 

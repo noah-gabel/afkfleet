@@ -394,7 +394,7 @@ fn a_dead_bot_and_one_between_worlds_act_on_nothing(#[case] call: &str) {
         world.presence = presence;
         // The balance mode declares the message `hello`.
         let program = crate::support::program_of(crate::support::balance_draft(&source));
-        let mut instance = fleet_script::Instance::new(program, 7);
+        let mut instance = fleet_script::Instance::new(program, 7, crate::support::still());
 
         let ran = world.run(&mut instance, &HookEvent::Timer(timer("t")));
 
@@ -599,7 +599,11 @@ fn random_gives_whole_numbers_in_its_range_and_the_same_for_the_same_seed() {
     let source = "fn on_join(first) {\n  let all = [];\n  for i in 0..50 { all.push(random.between(-3, 3)); }\n  log.info(`${all}`);\n  log.info(`${random.between(5, 5)} ${random.between(9, 7) >= 7} ${random.chance(0)} ${random.chance(100)} ${random.chance(-5)} ${random.chance(250.5)}`);\n}";
     let run = |seed: u64| {
         let mut world = World::new();
-        let mut instance = fleet_script::Instance::new(crate::support::program(source), seed);
+        let mut instance = fleet_script::Instance::new(
+            crate::support::program(source),
+            seed,
+            crate::support::still(),
+        );
         world.run(&mut instance, &HookEvent::Join { first: true });
         world.log
     };
@@ -849,7 +853,11 @@ fn a_hold_of_the_left_button_with_a_nearly_used_tool_is_refused() {
         world.bot.held = Some(pickaxe(durability));
         let mut draft = crate::support::draft(source);
         draft.tool_guard = guard;
-        let mut instance = fleet_script::Instance::new(crate::support::program_of(draft), 7);
+        let mut instance = fleet_script::Instance::new(
+            crate::support::program_of(draft),
+            7,
+            crate::support::still(),
+        );
         world.run(&mut instance, &HookEvent::Join { first: true });
         world.log
     };

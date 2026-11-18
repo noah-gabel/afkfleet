@@ -117,7 +117,7 @@ A script defines hooks. The runtime calls one when its event happens, the hook r
 
 **What follows from it:**
 - **A hook can't wait for an answer.** So it gets a snapshot of facts taken right before it runs, and its actions are applied after it returns. A script sees what its own action did at its next hook.
-- **Hooks run on the bot's runner task,** as `ModePlan::tick` does. The worst case of one hook is its budget: 10,000 operations, 0.2 to 0.45 ms at the rates measured. That's a bounded computation, not blocking IO; compiling runs in `spawn_blocking` on the server and the agent.
+- **Hooks run on the bot's runner task,** as `ModePlan::tick` does. The worst case of one hook is its budget: 10,000 operations, 0.2 to 0.45 ms at the rates measured. *(Corrected by [ADR-0040](0040-fleet-script-as-built.md)'s amendment, A1: that holds for plain operations only; a hook is bounded in time too, at 5 ms.)* That's a bounded computation, not blocking IO; compiling runs in `spawn_blocking` on the server and the agent.
 
 **Alternatives considered:**
 - **A thread a bot with a blocking `wait()`.** Measured above; affordable, rejected for the three reasons.
@@ -148,10 +148,10 @@ A script defines hooks. The runtime calls one when its event happens, the hook r
 | | Limit | Why this number |
 |---|---|---|
 | Script size | 16 KiB | Compiles in about half a millisecond; the longest example is under 2 KiB |
-| Operations a hook | 10,000 | Seven times the auction scan with the helper, twice the scan without it; at most about 0.45 ms |
+| Operations a hook | 10,000 | Seven times the auction scan with the helper, twice the scan without it; at most about 0.45 ms *(of plain operations; ADR-0040's amendment, A1, adds 5 ms a hook and 20 ms a second)* |
 | Operations a second | 30,000 | A scan every game tick for a second; 200 bots at this ceiling are 12 to 27 % of one core |
 | Call depth | 16 | Rhai's native stack use grows with it |
-| Expression depth | 32, and 16 inside functions | |
+| Expression depth | 32, and 16 inside functions *(32 there too: the user's answer, ADR-0040's amendment, A3)* | |
 | Functions | 64 | |
 | Text, array, map | 1,024 characters, 256 items, 64 entries | |
 | State | 64 entries and 4 KiB, checked by the runtime **while a hook runs** (every 256 operations) and after it | Rhai's own limits don't hold through the shared map (measured); D5 says why after the hook is too late |

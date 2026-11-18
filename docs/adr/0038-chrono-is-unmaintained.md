@@ -1,6 +1,6 @@
 # 0038. `chrono` is unmaintained: ignored for now, and what would end that
 
-- **Status:** Accepted. Decided under ADR-0025; whether and when the workspace moves to another time crate is left open for the user (below)
+- **Status:** Accepted. Decided under ADR-0025. Whether and when the workspace moves to another time crate was left to the user, who answered on 2026-11-18: no move for now (C3)
 - **Date:** 2026-11-17
 - **Related:** Plan.md §5 (Time: `chrono`); ADR-0010 (time is a parameter in fleet-core), ADR-0013, ADR-0014, ADR-0015 (where a clock is read); ADR-0012, ADR-0021, ADR-0024 (the other ignored advisories); ADR-0035 (a dependency with an advisory is handled first); `deny.toml`
 
@@ -29,10 +29,14 @@ On 2026-11-17 `just deny` failed on `main`, with nothing changed in the workspac
 ### C2. Removal trigger
 **Once neither the workspace nor azalea depends on chrono.** With `unused-ignored-advisory = "deny"` (ADR-0024), the ignore then fails the check by itself and is removed.
 
-### C3. Not decided here: moving to another time crate
+### C3. Moving to another time crate: not for now *(the user's answer, 2026-11-18)*
+**The user's answer:** no move for now. azalea keeps chrono in the graph anyway (`azalea-auth` and `azalea-client` 0.16.0), so moving the workspace's own crates wouldn't remove the advisory, only add a second time crate beside it. **It's looked at again when azalea drops chrono, or when an advisory names a real fault in chrono.** The rule below stays: nothing new deepens the dependency.
+
+**What was put to them:**
+
 It's a change to Plan.md §5's registry and touches every crate: the domain types, the stored and wire formats' timestamps, ts-rs's and utoipa's and sqlx's support for the type, and every test that builds a time. It isn't urgent (C1), and it shouldn't ride in a pull request whose job is to make `main` green again.
 
-**Proposed for the user:** a task of its own after Phase 15, with a short comparison of `jiff` and `time` first: which the crates we depend on (sqlx, ts-rs, utoipa, serde) support, what the stored formats need, and what azalea does. Until then nothing new should deepen the dependency: no `chrono-tz`, no new feature of chrono's.
+**Proposed at the time:** a task of its own after Phase 15, with a short comparison of `jiff` and `time` first: which the crates we depend on (sqlx, ts-rs, utoipa, serde) support, what the stored formats need, and what azalea does. Until then nothing new should deepen the dependency: no `chrono-tz`, no new feature of chrono's.
 
 ## Alternatives considered
 - **Moving now.** See C3: large, and not what an advisory pull request is for.
@@ -41,5 +45,5 @@ It's a change to Plan.md §5's registry and touches every crate: the domain type
 
 ## Consequences
 - **`deny.toml` holds one more ignore,** listed under Weakened in its pull request.
-- **chrono gets no fixes any more.** A fault found in it stays until the workspace has moved; C1 says why that's bearable for what it does here, and C3 what ends it.
+- **chrono gets no fixes any more.** A fault found in it stays until the workspace has moved; C1 says why that's bearable for what it does here, and C3 when a move is looked at again.
 - **azalea's bumps check it too:** when azalea drops chrono, the workspace's own move is all that's left.

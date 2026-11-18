@@ -26,6 +26,8 @@
 //!   the test moves it, and a seeded
 //!   [`SecureRandom`](fleet_core::system::SecureRandom), which is why this
 //!   crate must never be more than a dev-dependency (`just testkit-check`).
+//! - [`stopwatch`]: a [`Stopwatch`](fleet_core::script::Stopwatch) that moves
+//!   only as the test says, to time a script's hook with.
 //!
 //! Fakes are preferred over mocks; `mockall` is only for checking interactions
 //! (CLAUDE.md, testing conventions).
@@ -38,4 +40,5 @@ pub mod justfile;
 pub mod log_buffer;
 pub mod log_capture;
 pub mod mc;
+pub mod stopwatch;
 pub mod system;

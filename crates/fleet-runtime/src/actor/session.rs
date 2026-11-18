@@ -50,6 +50,15 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
                 self.feed(BotEvent::Died).await;
             }
             Some(SessionEvent::Respawned) => self.respawned(),
+            // A scripted mode's runner is what reads these two (Plan.md
+            // P15.16). For the bot's lifecycle and a step mode nothing
+            // changed: the bot is online as it was.
+            Some(SessionEvent::WorldChanged) => {
+                debug!("the server put the bot into another world");
+            }
+            Some(SessionEvent::LetGo(reason)) => {
+                debug!(?reason, "the session let go of inputs by itself");
+            }
             Some(SessionEvent::Disconnected(reason)) => {
                 self.ended(reason.clone(), BotEvent::Disconnected(reason))
                     .await;
