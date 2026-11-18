@@ -9,7 +9,8 @@
 //!
 //! - [`Script`] is a scripted mode's body: its [`ScriptSource`], the API
 //!   level it was validated at, its leash and tool guard, and what it
-//!   declares. [`limits`] holds a script's limits as constants.
+//!   declares. [`limits`] holds a script's limits as constants, and a
+//!   [`Stopwatch`] is how the engine reads the time a hook takes.
 //! - [`Ident`], [`Word`] and [`WordList`] are the names and the closed
 //!   lists of text a mode's declaration holds.
 //! - [`Input`] names the keys and mouse buttons of a vanilla client,
@@ -44,6 +45,7 @@ mod pattern;
 mod placeholder;
 mod settings;
 mod source;
+mod stopwatch;
 mod template;
 mod watch;
 mod word;
@@ -70,6 +72,7 @@ pub use settings::{
     ScriptError, ToolGuard, ToolGuardError,
 };
 pub use source::{ScriptSource, ScriptSourceError};
+pub use stopwatch::Stopwatch;
 pub use template::{
     Given, MessageDraft, MessageTemplate, MessageValue, RenderError, TemplateError, ValueDraft,
     ValueKind,

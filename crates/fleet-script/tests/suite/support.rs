@@ -9,10 +9,12 @@ use fleet_core::mode::HotbarSlot;
 use fleet_core::script::{
     ActionLimiter, BlockPosition, Blocks, BotFacts, CaptureDraft, CaptureKind, DecimalMark,
     EntityFact, HeldItem, HookEvent, Identifier, Input, Leash, MessageDraft, MouseButton,
-    PatternDraft, Position, Script, ScriptDraft, Snapshot, TimerName, ValueDraft, ValueKind, When,
+    PatternDraft, Position, Script, ScriptDraft, Snapshot, Stopwatch, TimerName, ValueDraft,
+    ValueKind, When,
 };
 use fleet_core::time;
 use fleet_script::{Action, Instance, Moment, Outcome, Presence, PressKind, Program, Ran, compile};
+use fleet_testkit::stopwatch::ManualStopwatch;
 
 /// A scripted mode's body as written, with nothing declared.
 pub(crate) fn draft(source: &str) -> ScriptDraft {
@@ -97,9 +99,19 @@ pub(crate) fn program_of(draft: ScriptDraft) -> Arc<Program> {
     Arc::new(compile(&script_of(draft)).expect("the script compiles"))
 }
 
+/// A stopwatch that stands still: no hook it times ever takes any time.
+pub(crate) fn still() -> Arc<dyn Stopwatch> {
+    Arc::new(ManualStopwatch::standing())
+}
+
+/// An instance of `source` with a fixed seed, timed by `stopwatch`.
+pub(crate) fn timed(source: &str, stopwatch: &ManualStopwatch) -> Instance {
+    Instance::new(program(source), 7, Arc::new(stopwatch.clone()))
+}
+
 /// An instance of `source` with a fixed seed.
 pub(crate) fn instance(source: &str) -> Instance {
-    Instance::new(program(source), 7)
+    Instance::new(program(source), 7, crate::support::still())
 }
 
 /// A registry identifier from text.

@@ -27,7 +27,7 @@ fn two_instances_on_two_threads_each_stop_only_for_their_own_state() {
         let start = start.clone();
         thread::spawn(move || {
             let mut world = World::new();
-            let mut instance = Instance::new(program, 7);
+            let mut instance = Instance::new(program, 7, crate::support::still());
             world.run(&mut instance, &HookEvent::Join { first: fills });
             start.wait();
             let mut outcomes = Vec::new();
@@ -74,8 +74,8 @@ fn one_instances_second_is_not_another_instances_second() {
     // its own 30,000 operations.
     let program = program("fn on_timer(name) { let n = 0; while n < 1000 { n += 1; } }");
     let mut world = World::new();
-    let mut one = Instance::new(program.clone(), 1);
-    let mut two = Instance::new(program, 2);
+    let mut one = Instance::new(program.clone(), 1, crate::support::still());
+    let mut two = Instance::new(program, 2, crate::support::still());
     let each = match world.run(&mut one, &HookEvent::Timer(timer("t"))).outcome {
         Outcome::Ran { operations } => operations,
         other => panic!("{other:?}"),
@@ -104,6 +104,7 @@ fn an_instance_can_move_to_another_thread_between_hooks() {
             "fn on_join(first) { state.n = 1; }\nfn on_timer(name) { state.n += 1; log.info(`${state.n}`); }",
         ),
         7,
+        crate::support::still(),
     );
     world.run(&mut instance, &HookEvent::Join { first: true });
 

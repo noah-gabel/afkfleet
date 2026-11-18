@@ -380,3 +380,124 @@ fn the_last_hook_of_a_second_gets_only_what_is_left() {
         ScriptErrorKind::Limit(Limit::OperationsPerSecond)
     );
 }
+
+/// The ways a function nests the call that goes one level down: what
+/// stands before it, the call itself (`NEXT` is the function called) or
+/// what stands there in the last function, and what stands after it.
+const NESTS: [(&str, &str, &str, &str, &str); 9] = [
+    ("parentheses", "(", "NEXT()", "1", ")"),
+    ("blocks", "if true { ", "NEXT();", "1;", " }"),
+    ("loops", "for i in 0..1 { ", "NEXT();", "1;", " }"),
+    ("arguments", "pass(", "NEXT()", "1", ")"),
+    ("texts", "`${", "NEXT()", "1", "}`"),
+    ("arrays", "[", "NEXT()", "1", "]"),
+    ("sums", "1 + (", "NEXT()", "1", ")"),
+    (
+        "functions handed to an array's method",
+        "(",
+        "[1].map(Fn(\"NEXT\"))",
+        "1",
+        ")",
+    ),
+    (
+        "functions called by name",
+        "(",
+        "call(Fn(\"NEXT\"))",
+        "1",
+        ")",
+    ),
+];
+
+/// A script whose hook calls `chain` functions, one inside the other, each
+/// nesting its call `depth` deep in one of [`NESTS`]' ways.
+fn nested_all_the_way(nest: (&str, &str, &str, &str, &str), depth: usize, chain: usize) -> String {
+    let (_, open, call, last, close) = nest;
+    let body = |inside: &str| format!("{}{inside}{}", open.repeat(depth), close.repeat(depth));
+    let mut source = format!(
+        "fn on_join(first) {{ {} }}\nfn pass(x) {{ x }}\n",
+        body(&call.replace("NEXT", "f1"))
+    );
+    for level in 1..=chain {
+        let inside = if level == chain {
+            last.to_owned()
+        } else {
+            call.replace("NEXT", &format!("f{}", level + 1))
+        };
+        let _ = writeln!(source, "fn f{level}() {{ {} }}", body(&inside));
+    }
+    source
+}
+
+// The user's answer to ADR-0040: 32 levels of nesting inside a function,
+// Rhai's own default for a release build, now that the instance bounds the
+// stack by measuring. So the most deeply nested script the limits allow
+// must be safe on a thread of the async runtime, 2 MiB, in whatever build
+// this is: it's compiled there and run there, and a stack that ran out
+// would end this whole test binary. In a release build such a script
+// runs; in a debug build, where a level takes several times the stack,
+// the stack guard ends it.
+#[test]
+fn the_most_deeply_nested_script_never_overflows_a_runtime_threads_stack() {
+    const RUNTIME_THREAD_STACK: usize = 2 * 1024 * 1024;
+
+    let ended = std::thread::Builder::new()
+        .stack_size(RUNTIME_THREAD_STACK)
+        .spawn(|| {
+            let compiled = |nest, depth, chain| {
+                // Too long to be a script at all, or nested too deep: `None`.
+                let draft = crate::support::draft(&nested_all_the_way(nest, depth, chain));
+                let script = fleet_core::script::Script::try_from(draft).ok()?;
+                fleet_script::compile(&script).ok()
+            };
+            NESTS
+                .iter()
+                .map(|nest| {
+                    // The deepest nesting that compiles, found by compiling
+                    // here.
+                    let depth = (0..=80)
+                        .rev()
+                        .find(|depth| compiled(*nest, *depth, 1).is_some())
+                        .expect("some depth compiles");
+                    // And the longest chain of calls the call limit lets
+                    // run: a nest that calls a function of its own (an
+                    // argument's `pass`, an array's method) takes a level
+                    // of the limit itself.
+                    let (chain, outcome) = (1..=limits::MAX_CALL_DEPTH)
+                        .rev()
+                        .find_map(|chain| {
+                            let program = compiled(*nest, depth, chain)?;
+                            let mut world = World::new();
+                            let mut instance = Instance::new(
+                                std::sync::Arc::new(program),
+                                7,
+                                crate::support::still(),
+                            );
+                            let ran = world.run(&mut instance, &HookEvent::Join { first: true });
+                            let too_many_calls = matches!(
+                                &ran.outcome,
+                                Outcome::Stopped(error) if error == &hit(Limit::CallDepth)
+                            );
+                            (!too_many_calls).then_some((chain, ran.outcome))
+                        })
+                        .expect("some chain of calls is within the call limit");
+                    (nest.0, depth, chain, outcome)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap()
+        .join()
+        .expect("no nest overflowed the thread's stack");
+
+    for (name, depth, chain, outcome) in ended {
+        println!("STACK {depth} nested {name} in each of {chain} calls: {outcome:?}");
+        assert!(depth >= 4, "{name}: {depth}");
+        assert!(chain >= 4, "{name}: {chain}");
+        match outcome {
+            Outcome::Ran { .. } => {}
+            Outcome::Stopped(error) => {
+                assert_eq!(error, hit(Limit::Stack), "{name}");
+            }
+            other => panic!("{name}: {other:?}"),
+        }
+    }
+}

@@ -22,18 +22,19 @@
 //!   shows.
 //!
 //! **Pure and synchronous:** no IO, no tokio, no clock. A hook is given
-//! its time and its facts ([`Moment`]), and a script's random numbers come
-//! from a seed. A hook is a bounded computation, at most a few hundred
-//! microseconds; compiling takes about half a millisecond and belongs off
-//! the async runtime.
+//! its time and its facts ([`Moment`]), a script's random numbers come
+//! from a seed, and how long a hook has run is read from a stopwatch its
+//! caller hands in. A hook is a bounded computation: a few microseconds
+//! as a rule, and never more than 5 ms. Compiling takes about half a
+//! millisecond and belongs off the async runtime.
 //!
 //! **What the sandbox is** (ADR-0036, D3; ADR-0040): Rhai without modules,
 //! without a clock, without `eval`, without anonymous functions, with
 //! packages picked by hand so that nothing a script can call blocks or
-//! reaches outside; an operation budget a hook and a second; limits on
-//! calls, nesting, texts, arrays, maps and variables; and a state that is
-//! checked while a hook runs. A script that fails or hits a limit stops,
-//! and everything it held is released.
+//! reaches outside; an operation budget and a time budget, each a hook
+//! and a second; limits on calls, nesting, texts, arrays, maps and
+//! variables; and a state that is checked while a hook runs. A script
+//! that fails or hits a limit stops, and everything it held is released.
 //!
 //! [`Script`]: fleet_core::script::Script
 

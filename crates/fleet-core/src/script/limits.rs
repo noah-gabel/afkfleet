@@ -6,8 +6,8 @@
 //! that type's own constants: [`ScriptSource::MAX_BYTES`], the leash's and
 //! the tool guard's ranges, how many messages and patterns a mode declares.
 //!
-//! The two operation budgets are proposals until Phase 15's load test
-//! confirms or changes them (P15.19).
+//! The two operation budgets and the two time budgets are proposals until
+//! Phase 15's load test confirms or changes them (P15.19).
 //!
 //! [`ScriptSource::MAX_BYTES`]: super::ScriptSource::MAX_BYTES
 
@@ -17,12 +17,36 @@ use core::time::Duration;
 pub const OPERATIONS_PER_HOOK: u64 = 10_000;
 /// The most operations a script runs in any one second, over all its hooks.
 pub const OPERATIONS_PER_SECOND: u64 = 30_000;
+/// The longest one hook runs, as its [`Stopwatch`] counts it.
+///
+/// Operations alone don't bound a hook's time: one that calls a function
+/// of the script's through an array's method costs a hundred times a plain
+/// one, and Rhai builds a text or an array past its limit before it
+/// refuses it (measured by the user's reviewer: 41 to 120 ms for one
+/// hook's operations; ADR-0040's amendment). A hook of plain operations
+/// that runs to [`OPERATIONS_PER_HOOK`] takes about a tenth of this.
+///
+/// [`Stopwatch`]: super::Stopwatch
+pub const HOOK_TIME: Duration = Duration::from_millis(5);
+/// The longest a script's hooks run in any one second, together: 2 % of
+/// one core.
+pub const TIME_PER_SECOND: Duration = Duration::from_millis(20);
+/// After how many operations a running hook reads its stopwatch again.
+pub const TIME_CHECK_EVERY_OPERATIONS: u64 = 8;
+/// The most that the time between two readings of the stopwatch counts
+/// for. No step of a script takes this long, so a longer gap is the
+/// host's: the thread was set aside, or the whole process was. A hook
+/// pays one such gap in full and no more for each, so a busy host doesn't
+/// stop a script that did nothing wrong.
+pub const LONGEST_STRETCH: Duration = Duration::from_millis(1);
 /// How deep a script's own functions call each other.
 pub const MAX_CALL_DEPTH: usize = 16;
 /// How deeply an expression nests at the top level.
 pub const MAX_EXPRESSION_DEPTH: usize = 32;
-/// How deeply an expression nests inside a function.
-pub const MAX_FUNCTION_EXPRESSION_DEPTH: usize = 16;
+/// How deeply an expression nests inside a function: Rhai's own default
+/// for a release build (the user's answer to ADR-0040). What it lets a
+/// script take of its thread's stack is bounded by measuring, not by this.
+pub const MAX_FUNCTION_EXPRESSION_DEPTH: usize = 32;
 /// The most functions a script defines.
 pub const MAX_FUNCTIONS: usize = 64;
 /// The longest text a script holds, in bytes of UTF-8: Rhai counts a text's
@@ -82,7 +106,11 @@ mod tests {
                 MAX_EXPRESSION_DEPTH,
                 MAX_FUNCTION_EXPRESSION_DEPTH
             ),
-            (16, 32, 16)
+            (16, 32, 32)
+        );
+        assert_eq!(
+            (HOOK_TIME, TIME_PER_SECOND),
+            (Duration::from_millis(5), Duration::from_millis(20))
         );
         assert_eq!(MAX_FUNCTIONS, 64);
         assert_eq!(
@@ -113,5 +141,14 @@ mod tests {
     fn the_state_is_checked_many_times_within_one_hook() {
         assert_eq!(STATE_CHECK_EVERY_OPERATIONS, 256);
         assert_eq!(OPERATIONS_PER_HOOK / STATE_CHECK_EVERY_OPERATIONS, 39);
+    }
+
+    /// A hook's time is read often, a gap counts for far less than a
+    /// hook's time, and a second holds several hooks of the longest kind.
+    #[test]
+    fn the_time_budgets_fit_each_other() {
+        assert_eq!(TIME_CHECK_EVERY_OPERATIONS, 8);
+        assert_eq!(HOOK_TIME.as_micros() / LONGEST_STRETCH.as_micros(), 5);
+        assert_eq!(TIME_PER_SECOND.as_micros() / HOOK_TIME.as_micros(), 4);
     }
 }

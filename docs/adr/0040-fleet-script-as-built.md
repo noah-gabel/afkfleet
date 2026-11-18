@@ -1,6 +1,6 @@
 # 0040. `fleet-script` as built: an engine an instance, a sandbox tighter than planned, and what was measured
 
-- **Status:** Accepted. Decided under ADR-0025; two points are put to the user at the end
+- **Status:** Accepted. Decided under ADR-0025. The two points put to the user are answered, and a hook is bounded in time, in the [amendment](#amendment-2026-11-18-a-hooks-time-and-the-users-answers) of 2026-11-18, which puts one new point to them
 - **Date:** 2026-11-17
 - **Related:** Plan.md Phase 15 (P15.5 to P15.9, P15.31); [ADR-0036](0036-scripted-modes.md) (D3 to D6, D14, D18) and [ADR-0037](0037-scripts-read-system-chat.md) (C4, C6), whose decisions this builds; [the script reference](../scripting.md); ADR-0010 (time and randomness are parameters), ADR-0030 (fuzz targets); `deny.toml`; `crates/fleet-script`, `crates/fleet-fuzz/src/script.rs`
 
@@ -54,7 +54,7 @@ Without anonymous functions nothing captures, so **the state is a script's only 
 - **Nothing left means the hook isn't run,** and the script stops for the second's budget. A budget of 0 never reaches Rhai. A hook that gets less than a hook's own budget and runs out of it stops for the second's.
 
 ### E6. A stack guard *(new)*
-Rhai bounds a script's use of the thread's stack by counting levels: 16 calls, 16 levels of nesting in a function. A level's size depends on the build.
+Rhai bounds a script's use of the thread's stack by counting levels: 16 calls, 16 levels of nesting in a function. A level's size depends on the build. *(The amendment's A3 raises the nesting to 32 and has the numbers for it.)*
 
 **Measured,** the deepest script those limits allow (six nested call arguments in each of 17 calls), on the development PC:
 
@@ -83,7 +83,7 @@ A thread of the async runtime has 2 MiB. A debug build was within a few hundred 
 ### E8. What the limits are, exactly
 - **A text is 1,024 bytes,** not characters (finding 2).
 - **Calls: 16 below the hook.** Rhai's `set_max_call_levels(16)` lets the hook's functions nest 16 deep.
-- **Nesting: 16 levels as Rhai counts them,** which in a script's terms is 4 `if`s or loops inside each other, 6 calls or parentheses, a sum of 13 terms, an `if … else if` chain of 11 branches; a `switch` isn't a chain. A test holds these numbers, and the reference says them.
+- **Nesting: 16 levels as Rhai counts them,** which in a script's terms is 4 `if`s or loops inside each other, 6 calls or parentheses, a sum of 13 terms, an `if … else if` chain of 11 branches; a `switch` isn't a chain. A test holds these numbers, and the reference says them. *(32 levels since the amendment's A3: 9, 14, 29 and 27.)*
 - **Variables: 64 alive at once in a function** (`set_max_variables`). Not in ADR-0036's table; Rhai has no limit by default, and each variable can hold a value as large as the data limits allow.
 - **A map's 64 entries are checked where Rhai checks them:** when a map is passed to a function or assigned as a value, not when an index assignment adds an entry. So a script's own (not the state's) map can pass 64 entries. What bounds it is the hook's operations and the limit on each value; the memory test measures it.
 
@@ -140,6 +140,8 @@ As ADR-0036's D3 named them, pinned like the others:
 `fuzz/`'s check reads the same `deny.toml`, and `fuzz/Cargo.lock` gained the same crates. Both lockfiles also name `no-std-compat` and `spin` 0.5.2, which are never built: Rhai's `sync` names a feature of an optional dependency, and cargo records it.
 
 ## Put to the user
+**Answered on 2026-11-18** (the amendment's A3 and A4): 1. raise it to 32; 2. anonymous functions stay off.
+
 1. **Nesting of 16 levels is tight.** It's ADR-0036's number and unchanged. In practice: a log line with two interpolated calls inside an `if` didn't compile, and neither did `timer.after(random.between(…), …)` with an interpolated name inside an `if`. An author splits such a function in two. Rhai's own default for a release build is 32. Raising it is possible now that E6 bounds the stack by measuring; it would be a change to D3's table, so it's yours.
 2. **E3 takes anonymous functions away,** which D3 didn't plan. I'd keep it: it's what makes the 50 ms waits impossible instead of unlikely.
 
@@ -157,3 +159,85 @@ As ADR-0036's D3 named them, pinned like the others:
 - **A script can't stall, overflow or outgrow its thread:** operations, the state, the stack and memory are each bounded by a measurement or a count that tests hold.
 - **Three `deny.toml` entries,** two of them weaker rules, listed under Weakened.
 - **For groups C and D:** `Action` maps onto `GameAction`'s new cases; the runner hands in the limiter, a snapshot, the presence and the leash; hooks run on runtime threads; compiling belongs in `spawn_blocking`.
+
+## Amendment (2026-11-18): a hook's time, and the user's answers
+The user's reviewer built this crate as merged and timed it, and the user answered the two points above and ADR-0038's. Built as the first commit of group C's pull request.
+
+### A1. A hook is bounded in time as well as in operations
+**The finding.** ADR-0036 counted on a hook's operations bounding its time: 10,000 operations, "at most about 0.45 ms" (D1, D3's table). The reviewer's hooks, each run to those 10,000 operations (a release build, Linux):
+
+| A hook that… | Took |
+|---|---|
+| runs a plain loop | 0.38 ms |
+| calls `a.map(Fn("id"))` over 30 items, in a loop | 41 ms |
+| calls `[1].map(Fn("bomb"))` in a loop, where `bomb` builds a text of 1 MiB with `replace` or splits a text of 1 KiB, and catches the refusal | 106 to 120 ms |
+
+**Why operations don't bound time:**
+- **An operation's cost varies by a factor of several hundred.** A call of a script's function through an array's method is one operation and costs about a hundred plain ones.
+- **Rhai builds a value past its limit before it refuses it** (a text of 1 MiB from one of 1 KiB, an array of 1,024 from a text), and inside a function that an array's method calls, the refusal can be caught (A2), so a loop pays for it again and again.
+
+**So ADR-0036's numbers are corrected:** a hook's operations bound a hook of *plain* operations to about 0.1 to 0.45 ms. They don't bound a hook's time. Group D runs hooks on the async runtime's threads, where 120 ms is far too long.
+
+**What's built:**
+- **`fleet_core::script::Stopwatch`,** a port: `elapsed()`, monotonic. An instance is given one when it's made (`Instance::new(program, seed, stopwatch)`). The real one, which reads the OS's monotonic clock, belongs to whoever runs scripts (group D); fleet-testkit has `ManualStopwatch`, which stands still or moves by a fixed step at each reading, so a test says how long a hook took and gets the same answer on any machine. fleet-script itself still reads no clock.
+- **Read in Rhai's progress callback, every 8 operations,** and once at a hook's start and end. A hook past its time ends like one past the stack guard: the stop sticks (E4), so a script can't catch its way past it.
+- **Two limits of their own,** in fleet-core's `limits` and beside the operation budgets in the same 50 ms slices (E5):
+
+  | Limit | | Stops the script with |
+  |---|---|---|
+  | A hook | **5 ms** | `Limit::HookTime` |
+  | A second's hooks, together | **20 ms,** 2 % of one core | `Limit::TimePerSecond` |
+
+  With nothing left of the second's time, the hook isn't run at all, as for operations. A hook that gets less than a hook's own time and runs past it stops for the second's.
+- **A gap between two readings counts for at most 1 ms** (`limits::LONGEST_STRETCH`). No step of a script takes that long, so a longer gap is the host's: the thread was set aside, or the whole process was (a container at its CPU limit stands still for up to 100 ms). A hook pays 1 ms for each such gap and no more. That's what keeps the two limits low without stopping a script that did nothing wrong on a busy host: a hook would have to be set aside five times to meet its limit, and a normal hook is over before it's set aside twice.
+- **A stopwatch that goes back counts as one that stands still.**
+
+**Why these numbers.** A hook of plain operations that runs to its 10,000 takes 0.1 to 0.4 ms in a release build, so 5 ms is twelve to fifty times that; the minecart farm's swing takes 3 µs (ADR-0036). A second of plain operations at its 30,000 takes about 1.4 ms, a fourteenth of 20 ms. In a debug build a plain hook at its budget took 1.1 ms. Like the two operation budgets, they're proposals until group D's load test (P15.19).
+
+**Measured** (the development PC, with the OS's clock; the same three scripts as tests of the suite):
+
+| | Without the bound, a debug build | With it, a debug build | With it, a release build |
+|---|---|---|---|
+| A plain loop | | 1.15 ms, ended by its operations | 0.10 ms, ended by its operations |
+| `map` over 30 items, in a loop | about 500 ms | 5.1 ms | 5.0 ms |
+| The text of 1 MiB, caught, in a loop | about 450 ms | 5.1 ms | 5.0 ms |
+| The text split into 1,024, caught, in a loop | about 450 ms | 5.2 ms | 5.0 ms |
+
+**What bounds the overshoot:** a hook ends at the first reading past its time, so it runs at most 8 operations longer. Where each of those is one of the slowest a script has (the text of 1 MiB), the 1 ms cap can undercount a stretch; a release build stayed within 0.05 ms of the limit in every case above.
+
+**Tests:** the suite's `time` module (each limit at its exact edge, the second's budget, the cap, a stopwatch that goes back, a caught end, `on_stop`, and the reviewer's three cases against the OS's clock, asserting why each stops and printing how long it took); the budget's own tests and a property test that no second holds more time than its budget; and the fuzz target `script_run`, whose runs are timed by a stopwatch of 0 to 127 µs a reading and held to both limits.
+
+**Not changed:** `Outcome::Ran` still reports operations only. A hook's time is the runner's to measure for its metrics (P15.18, P15.19).
+
+### A2. A caught data-size error can't be made to end the hook
+The user asked for it "if Rhai allows it". **It doesn't,** in 1.27.0:
+- A script's `catch` takes an error when the *outer* error says it's catchable (`Stmt::TryCatch` in `src/eval/stmt.rs`: `Err(err) if !err.is_catchable() => Err(err)`). "Data too large" isn't. But a function called through a function pointer has its error wrapped (`_call_with_extra_args` in `src/types/fn_ptr.rs`: `ErrorInFunctionCall`), and the wrapper is catchable whatever is inside.
+- **Nothing tells the host that an error was raised or caught.** The progress callback gets an operation count; there is no hook on errors without the `debugging` feature, and the size check itself (after a native call returns) isn't ours to replace.
+- So the instance can make its *own* stops stick (E4), because it knows when it stopped a hook. It can't know that Rhai refused a value.
+
+**What holds instead:** such a loop is bounded by the hook's operations and now by its time (A1), and what it built is freed at once (E11's memory test). Outside a function pointer's call the refusal can't be caught and stops the script as before; a test holds both.
+
+**The three ways to close it, none taken:**
+- **No `try` and `catch` at all** (`disable_symbol("try")`). Every error would then end the hook, which is what ADR-0036's D3 says in so many words ("a script that fails or hits a limit stops"). But the reference tells authors they can catch their own errors, so it's the user's to decide: put below.
+- **No function pointers.** E3 tells authors to write `list.filter(Fn("is_big"))`.
+- **Our own copies of every array method that takes a function,** unwrapping the error. Some twenty functions to keep equal to Rhai's at every bump.
+
+### A3. Nesting inside a function: 32 levels *(the user's answer to point 1)*
+Rhai's own default for a release build. `limits::MAX_FUNCTION_EXPRESSION_DEPTH` is 32; E8's bullet and the reference now read: **9 `if`s or loops inside each other, 14 calls or parentheses, a sum of 29 terms, an `if … else if` chain of 27 branches.**
+
+**The stack guard (E6) is what makes it safe, and now it's needed in earnest.** The deepest script Rhai's limits allow, measured without the guard on a thread large enough (the development PC):
+
+| | A release build | A debug build |
+|---|---|---|
+| Before: 6 nested arguments in each of 17 calls | 309 KiB | 1,797 KiB |
+| Now: 14 nested arguments in each of 17 calls | **624 KiB** | **3,580 KiB** |
+
+A debug build would now run past a runtime thread's 2 MiB. **The test the user asked for** (`the_most_deeply_nested_script_never_overflows_a_runtime_threads_stack`): on a thread of exactly 2 MiB, for each of nine ways to nest a call, the deepest nesting that compiles is found by compiling there, in each of as many calls as the call limit lets run, and run through an instance. Each one runs, or ends with `Limit::Stack`; a stack that ran out would end the whole test binary. In a release build all nine run. In a debug build five end with `Limit::Stack` (blocks, loops, arguments, texts, sums) and four run.
+
+**The guard reads the stack at every operation,** and every level of nesting is at least one, so between two readings the stack grows by one level's frames (tens of KiB in a debug build), far less than the 1 MiB between the guard's limit and the thread's end.
+
+### A4. Anonymous functions stay off *(the user's answer to point 2)*
+E3 stands.
+
+### Put to the user
+- **A script's `try` and `catch` (A2).** Keeping them means a script can catch a refusal of Rhai's own inside a function pointer's call (a data size, the call depth) and go on until its operations or its time end the hook; nothing is lost by it but that hook's 5 ms at most. Taking them away would make every error stop the script, and take from an author the way to survive a mistake of their own (an index past an array's end, a missing property) on a farm that runs for days. I'd keep them.

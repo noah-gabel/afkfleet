@@ -242,8 +242,10 @@ A script itself is limited too:
 | Size | 16 KiB |
 | Work in one hook | 10,000 operations: far more than any example here uses, and a loop that never ends stops there |
 | Work in one second | 30,000 operations, over all of a script's hooks |
+| Time in one hook | 5 ms. A hook that counts, compares and calls the API takes a few microseconds; a hook that runs a loop to its 10,000 operations about a fifth of a millisecond. What takes long is calling a function of your own through an array's method (`list.map(Fn("f"))`) many thousand times, or building texts and arrays past their limits |
+| Time in one second | 20 ms, over all of a script's hooks |
 | Functions, call depth | 64; a hook's functions call each other 16 deep |
-| Nesting inside a function | 16 levels as Rhai counts them: 4 `if`s or loops inside each other, 6 calls or parentheses inside each other, a sum of 13 terms, an `if … else if` chain of 11 branches (use `switch` for more). Give a deep part a function of its own |
+| Nesting inside a function | 32 levels as Rhai counts them: 9 `if`s or loops inside each other, 14 calls or parentheses inside each other, a sum of 29 terms, an `if … else if` chain of 27 branches (use `switch` for more). Give a deep part a function of its own |
 | A text, an array, a map | 1,024 bytes (letters outside ASCII take two or more), 256 items, 64 entries |
 | Variables in one function | 64 |
 | State | 64 entries and 4 KiB (see [State](#state)) |
@@ -262,7 +264,7 @@ A script itself is limited too:
 - **When the mode is saved,** the server checks the script: its syntax, the hook names and their parameters, every variable name, that no variable or parameter is called like a game object, that nothing stands outside a function, and the limits for functions and nesting. An error names its line and column.
 - **A misspelled method** (`keys.forward.hodl()`) can only be found when that line runs: Rhai doesn't know a value's type before. The script stops there, with the line.
 - **A wrong value is a result, a wrong program an error.** A number out of range or a text where a number belongs returns `bad_value`, and the script goes on. A key the mode doesn't declare (`chat.send("nope")`), `chat.expect` for a pattern that isn't a reply, a hold of a key that only taps: these stop the script with their line.
-- A script can catch its own errors with `try` and `catch`. It can't catch its way past a limit: the work in a hook, the state's limits and the depth of its calls end the hook whatever it catches.
+- A script can catch its own errors with `try` and `catch`. It can't catch its way past a limit: the work and the time in a hook, the state's limits and the depth of its calls end the hook whatever it catches. (One exception that gains a script nothing: a text or an array that grows past its limit inside a function called through `Fn(…)` by an array's method can be caught. The hook's work and time still end it.)
 
 ### Examples
 #### An AFK farm

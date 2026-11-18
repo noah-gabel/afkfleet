@@ -26,6 +26,7 @@ Under CLAUDE.md's "Only `fleet-mc` may depend on `azalea`":
 - **A function of the API is registered in `api.rs` and described in `api/describe.rs`;** a test holds the two equal. It returns plain data (a map, a number, a text), never a type of ours, so a script can keep it in its state.
 - **The examples are the files in `crates/fleet-script/scripts/`.** The reference shows them word for word; a test holds that.
 - **A hook runs on a thread with at least 2 MiB of stack** (a runtime worker or a test's thread): the instance ends a hook at 1 MiB.
+- **An instance is handed a `Stopwatch`** (fleet-core's port) and ends a hook at 5 ms and a second's hooks at 20 ms: a hook's operations don't bound its time (ADR-0040's amendment). fleet-script itself reads no clock; tests time a hook with fleet-testkit's `ManualStopwatch`, never with the OS's clock, except the three tests of the reviewer's cases, which assert why a hook stopped and never how long it took.
 
 ## Crate-local `clippy.toml` files
 **Crate-local `clippy.toml` files** (`fleet-core`, `fleet-mc`, …) must repeat every setting of the root `clippy.toml`: the test allowances and the `disallowed-methods` bans. Clippy reads only the nearest file and doesn't merge them. `just scripts-test` fails when one is missing (`scripts/clippy-config.mjs`, ADR-0011).

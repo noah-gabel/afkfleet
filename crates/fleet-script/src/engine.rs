@@ -227,7 +227,7 @@ mod tests {
         assert_eq!(engine.max_operations(), 10_000);
         assert_eq!(engine.max_call_levels(), 16);
         assert_eq!(engine.max_expr_depth(), 32);
-        assert_eq!(engine.max_function_expr_depth(), 16);
+        assert_eq!(engine.max_function_expr_depth(), 32);
         assert_eq!(engine.max_functions(), 64);
         assert_eq!(engine.max_variables(), 64);
         assert_eq!(engine.max_string_size(), 1024);
@@ -436,7 +436,7 @@ mod tests {
         NESTS
             .iter()
             .filter_map(|(name, open, call, close)| {
-                (0..=12).rev().find_map(|depth| {
+                (0..=40).rev().find_map(|depth| {
                     let source = format!(
                         "fn down() {{ {}{call}{} }}\nfn pass(x) {{ x }}",
                         open.repeat(depth),
@@ -453,12 +453,14 @@ mod tests {
     const RUNTIME_THREAD_STACK: usize = 2 * 1024 * 1024;
 
     // What Rhai's own limits let a script take of the stack, measured in
-    // whatever build the tests are: 0.3 MiB in a release build, 1.8 MiB in
-    // a debug build (ADR-0040). The limits count levels, and a level's
-    // size is the build's; so the instance measures the stack itself and
-    // ends a hook at half a runtime thread's (`instance::STACK_BUDGET`).
-    // This holds only what must be true in every build: that some nest
-    // is possible, and that what it takes isn't the whole thread's.
+    // whatever build the tests are, on a thread large enough for it. The
+    // limits count levels, and a level's size is the build's: with 32
+    // levels of nesting in each of 17 calls, a debug build takes more than
+    // a runtime thread has (ADR-0040's amendment has the numbers). So the
+    // instance measures the stack itself and ends a hook at half a runtime
+    // thread's (`instance::STACK_BUDGET`); the suite's test of the most
+    // deeply nested script holds that on a thread of 2 MiB. This one only
+    // measures, and holds that Rhai's limits end the nest at all.
     #[test]
     fn what_the_deepest_script_takes_of_the_stack_is_measured() {
         let (name, depth, used) = std::thread::Builder::new()
@@ -474,7 +476,7 @@ mod tests {
             limits::MAX_CALL_DEPTH + 1
         );
         assert!(depth >= 2, "{name}: {depth}");
-        assert!(used < RUNTIME_THREAD_STACK, "{name}: {used} bytes");
+        assert!(used < 16 * RUNTIME_THREAD_STACK, "{name}: {used} bytes");
     }
 
     #[test]

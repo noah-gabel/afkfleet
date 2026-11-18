@@ -43,8 +43,8 @@ fn state_survives_a_death_a_respawn_a_world_change_and_a_disconnect() {
 fn a_new_instance_starts_with_an_empty_state() {
     let program = program("fn on_join(first) { log.info(`${state.len()}`); state.seen = true; }");
     let mut world = World::new();
-    let mut first = Instance::new(program.clone(), 1);
-    let mut second = Instance::new(program, 1);
+    let mut first = Instance::new(program.clone(), 1, crate::support::still());
+    let mut second = Instance::new(program, 1, crate::support::still());
 
     let one = world.run(&mut first, &HookEvent::Join { first: true });
     let two = world.run(&mut second, &HookEvent::Join { first: true });

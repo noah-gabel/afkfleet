@@ -18,6 +18,8 @@ rhai.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+# The stopwatch a test times a hook with (ADR-0040's amendment).
+fleet-testkit.workspace = true
 # The memory test's counting allocator, in its own test binary (ADR-0040).
 peak_alloc.workspace = true
 proptest = { workspace = true, features = ["std"] }

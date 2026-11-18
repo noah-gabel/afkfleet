@@ -9,6 +9,7 @@
 //! nothing held after a stop.
 
 use core::fmt::Write as _;
+use core::sync::atomic::{AtomicU64, Ordering};
 use core::time::Duration;
 use std::sync::Arc;
 
@@ -18,7 +19,7 @@ use fleet_core::script::{
     ActionLimiter, BlockPosition, Blocks, BotFacts, Captured, ChatMatch, ChatPattern, ChatPatterns,
     EntityFact, Given, HeldItem, HookEvent, Ident, Identifier, Input, Key, Leash, LeashRadius,
     Limited, LookingAt, MessageDraft, MessageTemplate, MouseButton, PatternDraft, Position, Press,
-    Script, ScriptDraft, Snapshot, TimerName, limits,
+    Script, ScriptDraft, Snapshot, Stopwatch, TimerName, limits,
 };
 use fleet_core::time;
 use fleet_script::{
@@ -158,6 +159,36 @@ fn inputs() -> impl Iterator<Item = Input> {
         .chain(MouseButton::ALL.into_iter().map(Input::Mouse))
 }
 
+/// A stopwatch that moves on by a fixed step at each reading: a run's own
+/// measure of how long its hooks take, the same on every machine. (The
+/// one tests use is fleet-testkit's, which is a dev-dependency only.)
+#[derive(Debug)]
+struct Ticking {
+    /// What it shows, in nanoseconds.
+    shown: AtomicU64,
+    /// How far each reading moves it, in nanoseconds.
+    step: u64,
+}
+
+impl Ticking {
+    /// What it shows, without moving it.
+    fn shown(&self) -> Duration {
+        Duration::from_nanos(self.shown.load(Ordering::Relaxed))
+    }
+
+    /// How far each reading moves it.
+    const fn step(&self) -> Duration {
+        Duration::from_nanos(self.step)
+    }
+}
+
+impl Stopwatch for Ticking {
+    fn elapsed(&self) -> Duration {
+        let before = self.shown.fetch_add(self.step, Ordering::Relaxed);
+        Duration::from_nanos(before.saturating_add(self.step))
+    }
+}
+
 /// One bot's script, run step by step, with everything it did judged as
 /// it happens: the properties of ADR-0036's D18.
 struct Run {
@@ -170,14 +201,32 @@ struct Run {
     last: Vec<(Limited, DateTime<Utc>)>,
     /// Each hook's moment and operations, of the last second.
     hooks: Vec<(DateTime<Utc>, u64)>,
+    /// What the script's hooks are timed by.
+    stopwatch: Arc<Ticking>,
+    /// Each call's moment and what the stopwatch moved by in it, of the
+    /// last second.
+    times: Vec<(DateTime<Utc>, Duration)>,
     /// Whether the script stopped or ended.
     over: bool,
 }
 
 impl Run {
     fn new(program: Arc<Program>, seed: u64) -> Self {
+        // A stretch between two readings takes 0 to 127 µs, by the seed:
+        // at 0 no hook ever takes any time, at a few microseconds a busy
+        // hook's operations end it, above that its time does.
+        let stopwatch = Arc::new(Ticking {
+            shown: AtomicU64::new(0),
+            step: (seed % 128).saturating_mul(1_000),
+        });
         Self {
-            instance: Instance::new(Arc::clone(&program), seed),
+            instance: Instance::new(
+                Arc::clone(&program),
+                seed,
+                Arc::<Ticking>::clone(&stopwatch),
+            ),
+            stopwatch,
+            times: Vec::new(),
             program,
             limiter: ActionLimiter::new(),
             now: start(),
@@ -205,7 +254,9 @@ impl Run {
                         presence: self.presence,
                         leash: Some(leash),
                     };
+                    let before = self.stopwatch.shown();
                     let ran = self.instance.wake(&moment, &mut self.limiter);
+                    self.judge_time(before, limits::MAX_TIMERS);
                     self.judge(&ran);
                 }
                 _ => break,
@@ -226,8 +277,43 @@ impl Run {
             presence: self.presence,
             leash: Some(leash),
         };
+        let before = self.stopwatch.shown();
         let ran = self.instance.handle(event, &moment, &mut self.limiter);
+        self.judge_time(before, 1);
         self.judge(&ran);
+    }
+
+    /// Holds the time one call took to a hook's and a second's budget.
+    /// The stopwatch showed `before` when the call began, and the call ran
+    /// at most `hooks` hooks.
+    ///
+    /// A hook ends at the first reading that finds it past its time, and
+    /// is read once more at its end: it takes at most its time and two
+    /// stretches more. The stopwatch also moves at the hook's first
+    /// reading, which is no stretch of the hook's.
+    fn judge_time(&mut self, before: Duration, hooks: usize) {
+        let step = self.stopwatch.step();
+        let took = self.stopwatch.shown().saturating_sub(before);
+        let hooks = u32::try_from(hooks).unwrap_or(u32::MAX);
+        let most = limits::HOOK_TIME
+            .saturating_add(step.saturating_mul(3))
+            .saturating_mul(hooks);
+        assert!(took <= most, "a call's hooks took {took:?}");
+        if took.is_zero() {
+            return;
+        }
+        self.times.push((self.now, took));
+        self.times
+            .retain(|(at, _)| time::elapsed(*at, self.now) < Duration::from_secs(1));
+        // A second's hooks take its budget at most, and the one that went
+        // past it two stretches more. Each hook that read the stopwatch
+        // took at least one stretch, so the first readings, which are no
+        // hook's, are at most as much again.
+        let second: Duration = self.times.iter().map(|(_, took)| *took).sum();
+        let most = limits::TIME_PER_SECOND
+            .saturating_add(step.saturating_mul(2))
+            .saturating_mul(2);
+        assert!(second <= most, "a second's hooks took {second:?}");
     }
 
     /// Holds one call's answer to every property.
@@ -761,6 +847,56 @@ mod tests {
         run.judge_action(&mount);
         run.now = time::add(run.now, Duration::from_millis(100));
         run.judge_action(&mount);
+    }
+
+    /// A run of `source` whose stopwatch moves 100 µs at each reading.
+    fn timed(source: &str) -> Run {
+        let program = script(source).and_then(|script| compile(&script).ok());
+        let run = Run::new(Arc::new(program.unwrap()), 100);
+        assert_eq!(run.stopwatch.step(), Duration::from_micros(100));
+        run
+    }
+
+    #[test]
+    #[should_panic(expected = "a call's hooks took 6ms")]
+    fn a_hook_that_took_longer_than_a_hook_may_fails() {
+        let mut run = timed("fn on_join(first) { }");
+        let before = run.stopwatch.shown();
+
+        // What an instance that didn't end its hook in time would show.
+        for _ in 0..60 {
+            let _ = run.stopwatch.elapsed();
+        }
+        run.judge_time(before, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "a second's hooks took 41ms")]
+    fn a_second_whose_hooks_took_longer_than_they_may_fails() {
+        let mut run = timed("fn on_join(first) { }");
+
+        // Each within a hook's time; eleven of them in one second aren't.
+        for _ in 0..11 {
+            let before = run.stopwatch.shown();
+            for _ in 0..41 {
+                let _ = run.stopwatch.elapsed();
+            }
+            run.now = time::add(run.now, Duration::from_millis(10));
+            run.judge_time(before, 1);
+        }
+    }
+
+    #[test]
+    fn a_busy_script_on_a_slow_stopwatch_stops_for_its_time_within_the_properties() {
+        let mut run = timed("fn on_join(first) { loop { } }");
+
+        run.step(Duration::ZERO, 0, Some(&HookEvent::Join { first: true }));
+
+        assert!(run.over);
+        assert_eq!(
+            run.instance.error().map(|error| &error.kind),
+            Some(&ScriptErrorKind::Limit(fleet_script::Limit::HookTime))
+        );
     }
 
     #[test]

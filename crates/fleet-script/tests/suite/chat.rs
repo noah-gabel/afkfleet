@@ -15,7 +15,11 @@ use crate::support::{World, balance_draft, logged, program_of, stopped, timer};
 /// in a fresh world.
 fn joined(source: &str) -> (fleet_script::Ran, World, Instance) {
     let mut world = World::new();
-    let mut instance = Instance::new(program_of(balance_draft(source)), 7);
+    let mut instance = Instance::new(
+        program_of(balance_draft(source)),
+        7,
+        crate::support::still(),
+    );
     let ran = world.run(&mut instance, &HookEvent::Join { first: true });
     (ran, world, instance)
 }
@@ -117,7 +121,7 @@ fn a_word_value_takes_one_of_its_declared_words_only() {
         }],
     });
     let mut world = World::new();
-    let mut instance = Instance::new(program_of(draft), 7);
+    let mut instance = Instance::new(program_of(draft), 7, crate::support::still());
 
     let ran = world.run(&mut instance, &HookEvent::Join { first: true });
 

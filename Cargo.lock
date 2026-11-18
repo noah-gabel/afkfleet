@@ -2791,6 +2791,7 @@ version = "0.1.3"
 dependencies = [
  "chrono",
  "fleet-core",
+ "fleet-testkit",
  "peak_alloc",
  "proptest",
  "rand 0.10.3",
