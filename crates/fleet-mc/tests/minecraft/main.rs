@@ -21,6 +21,8 @@
 #[cfg(feature = "fault-injection")]
 mod actions;
 #[cfg(feature = "fault-injection")]
+mod chat_lines;
+#[cfg(feature = "fault-injection")]
 mod checks;
 #[cfg(feature = "fault-injection")]
 mod containment;
@@ -31,5 +33,7 @@ mod pins;
 mod real_account;
 #[cfg(feature = "fault-injection")]
 mod riding;
+#[cfg(feature = "fault-injection")]
+mod scripted;
 mod teardown;
 mod threads;
