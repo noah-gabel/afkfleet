@@ -28,6 +28,12 @@ Under CLAUDE.md's "Only `fleet-mc` may depend on `azalea`":
 - **A hook runs on a thread with at least 2 MiB of stack** (a runtime worker or a test's thread): the instance ends a hook at 1 MiB.
 - **An instance is handed a `Stopwatch`** (fleet-core's port) and ends a hook at 5 ms and a second's hooks at 20 ms: a hook's operations don't bound its time (ADR-0040's amendment). fleet-script itself reads no clock; tests time a hook with fleet-testkit's `ManualStopwatch`, never with the OS's clock, except the three tests of the reviewer's cases, which assert why a hook stopped and never how long it took.
 
+## fleet-mc and a scripted mode's inputs (ADR-0042)
+- **`Held` on the bot is the one place that says which keys and buttons are down.** A game action only changes it; `script/tick.rs` writes azalea's key state from it each game tick. Don't call azalea's `walk`, `sprint`, `set_jumping`, `set_crouching` or `left_click_mine` for a script's input: they act a frame late, and the leash and the guards must act inside the tick.
+- **The leash, the key state and the mining guards run before azalea's own systems in the same game tick,** and `connector::app`'s probe test pins it. A new system that touches what's held joins their chain in `script/mod.rs`; every system declares its place among azalea's, as for riding (ADR-0026).
+- **Everything a snapshot holds is a registry identifier or a number** (`script/facts.rs`): never a name, lore or other text a server chose. A server's own name of a world that is no identifier becomes `minecraft:unknown`.
+- **What a server can grow, has a bound:** the passengers index (512, swept), a pending world change and each let-go (one).
+
 ## Crate-local `clippy.toml` files
 **Crate-local `clippy.toml` files** (`fleet-core`, `fleet-mc`, …) must repeat every setting of the root `clippy.toml`: the test allowances and the `disallowed-methods` bans. Clippy reads only the nearest file and doesn't merge them. `just scripts-test` fails when one is missing (`scripts/clippy-config.mjs`, ADR-0011).
 

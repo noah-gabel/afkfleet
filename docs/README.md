@@ -58,3 +58,4 @@ Each architecture decision record (ADR) holds one decision with its context, its
 - [0039. `just tidy`: what a build leaves behind, and what is safe to remove](adr/0039-just-tidy.md)
 - [0040. `fleet-script` as built: an engine an instance, a sandbox tighter than planned, and what was measured](adr/0040-fleet-script-as-built.md)
 - [0041. `picomatch`'s advisory in the build tools: ignored by its one ID, and how `pnpm audit` ignores](adr/0041-picomatch-advisory-in-the-build-tools.md)
+- [0042. A scripted mode's inputs in fleet-mc, as built: one place for what's held, guards before azalea's own systems, and what the live scenarios found](adr/0042-scripted-inputs-in-fleet-mc.md)

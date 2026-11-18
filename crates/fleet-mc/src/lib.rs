@@ -27,6 +27,10 @@
 //!   server under a timeout and reports a refused join to the session, since
 //!   azalea raises no event for it. Offline sessions use azalea's offline
 //!   account.
+//! - A scripted mode's inputs are translated here and held to fleet-core's
+//!   rules on the host thread: which keys and buttons are down, the leash
+//!   and the two guards of mining each game tick before azalea's own
+//!   systems, and the snapshot a hook sees (ADR-0042).
 //! - [`McConfig`] holds the tuning values that ADR-0011 decided.
 //!
 //! Like all library code here, it never panics: failures are errors, and

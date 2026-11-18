@@ -134,6 +134,8 @@ keys.forward.hold_for(3000);
 - `hold()` mines the block the bot looks at, and then the next one that appears there, as a held button does in vanilla. An entity in front of the bot is attacked once when the button goes down, never again while it's held.
 - **The bot never mines a block that reaches below its feet:** the one it stands on, whatever its shape, everything under it, and the blocks beside it at that height. The hold returns `mining_guard`, and a hold that's already down pauses while the bot looks at such a block. So aim at feet level or higher from solid ground: a bot standing on a slab, on soul sand or on a carpet mines at eye level only, and so does one in mid-jump.
 - **The tool guard.** When the held tool has only a few uses left (2 unless the mode's setting says otherwise), mining stops, `held` turns `false`, and a new hold returns `tool_guard` until another item is in hand. `bot.held.durability` says how many uses are left.
+- **A held button mines whatever the crosshair lands on next.** Once a block is gone, that's the block behind it, exactly as in vanilla: a bot at a cobblestone generator mines the wall behind the generator's block while the next one forms. Put something its tool can't break there, or let go and look (`bot.looking_at`) before holding again.
+- **A block the server won't let the bot break** (a spawn protection, a claim) is mined to its end, put back by the server, and mined again, for as long as the button is held. Nothing is gained and the tool isn't worn, and a script can't tell it from a block that grows back.
 
 **Right button**
 - `tap()` uses the held item, or the block or entity the bot looks at.
