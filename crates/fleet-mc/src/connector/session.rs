@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use azalea::Client;
 use fleet_core::chat::ChatMessage;
 use fleet_core::id::BotId;
-use fleet_core::mc::{Liveness, SessionError, SessionHandle};
+use fleet_core::mc::{Guards, Liveness, Observation, SessionError, SessionHandle};
 use fleet_core::mode::GameAction;
 use tokio::sync::{oneshot, watch};
 use tokio::time;
@@ -20,6 +20,7 @@ use crate::actions;
 use crate::command_tree::MessageCommands;
 use crate::events::{BridgeControl, LivenessStamps, Phase};
 use crate::host::HostThread;
+use crate::script;
 use crate::signing::{self, Decision, Kind, SigningState};
 
 /// How much longer than the driver's own wait for azalea's runner
@@ -260,6 +261,14 @@ impl SessionHandle for McSession {
                 SessionError::ChatUnavailable
             })
         }
+    }
+
+    fn observe(&self) -> impl Future<Output = Result<Observation, SessionError>> + Send {
+        self.call(script::observe)
+    }
+
+    fn set_guards(&self, guards: Guards) -> impl Future<Output = Result<(), SessionError>> + Send {
+        self.call(move |client| script::set_guards(client, guards))
     }
 
     fn respawn(&self) -> impl Future<Output = Result<(), SessionError>> + Send {

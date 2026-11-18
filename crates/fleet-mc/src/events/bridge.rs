@@ -12,7 +12,7 @@ use azalea::Event;
 use fleet_core::chat::{ChatSender, IncomingChat};
 use fleet_core::disconnect::DisconnectReason;
 use fleet_core::id::BotId;
-use fleet_core::mc::{SessionEvent, SessionEvents};
+use fleet_core::mc::{LetGo, SessionEvent, SessionEvents};
 use tokio::sync::Notify;
 use tracing::{debug, warn};
 
@@ -62,6 +62,9 @@ pub(crate) enum Delivery {
     DuplicateDeath,
     /// Nothing the session reports, such as a second spawn.
     Ignored,
+    /// A world change, or a let-go for this reason, is queued already and
+    /// not yet read: one is enough.
+    AlreadyPending,
     /// The session already ended or was closed, so nothing is delivered.
     SessionEnded,
 }
@@ -118,6 +121,18 @@ struct State {
     revived: bool,
     /// Chat is being dropped: the next drop continues the burst.
     dropping_chat: bool,
+    /// A packet put the bot into another world, and the bot isn't placed
+    /// there yet (ADR-0036, D6).
+    world_awaited: bool,
+}
+
+/// A packet that puts the bot into a world.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorldPacket {
+    /// A login: the join's own, or a proxy's move to another server.
+    Login,
+    /// A respawn: a death's, or a change of dimension.
+    Respawn,
 }
 
 /// Where the session is, as far as its events go.
@@ -284,11 +299,69 @@ impl State {
         Delivery::Queued
     }
 
+    /// A packet that puts the bot into a world arrived (ADR-0036, D6). The
+    /// join's own login and a death's respawn are no world change; any
+    /// other is one, reported once the bot is placed there
+    /// ([`placed`](Self::placed)).
+    ///
+    /// Deaths are read inside the frame, before this (`events::respawn`),
+    /// so a death the Respawn answers is in the bridge by now.
+    fn world_packet(&mut self, packet: WorldPacket) -> Delivery {
+        if matches!(self.phase, Phase::Ended | Phase::Closed) {
+            return Delivery::SessionEnded;
+        }
+        let changes = match packet {
+            WorldPacket::Login => true,
+            WorldPacket::Respawn => self.death == Death::None,
+        };
+        // Before `Joined` it's the join's own world.
+        if changes && self.phase == Phase::Joined {
+            self.world_awaited = true;
+        }
+        Delivery::Ignored
+    }
+
+    /// The server has placed the bot in its world and the client has
+    /// loaded there: a world change that was waiting for it is queued.
+    fn placed(&mut self) -> Delivery {
+        if matches!(self.phase, Phase::Ended | Phase::Closed) {
+            return Delivery::SessionEnded;
+        }
+        if !core::mem::take(&mut self.world_awaited) {
+            return Delivery::Ignored;
+        }
+        self.queue_once(SessionEvent::WorldChanged)
+    }
+
+    /// The session let go of inputs by itself, for `reason`.
+    fn let_go(&mut self, reason: LetGo) -> Delivery {
+        if matches!(self.phase, Phase::Ended | Phase::Closed) {
+            return Delivery::SessionEnded;
+        }
+        if self.phase != Phase::Joined {
+            return Delivery::Ignored;
+        }
+        self.queue_once(SessionEvent::LetGo(reason))
+    }
+
+    /// Queues `event` unless one equal to it is queued and unread: a
+    /// second world change, or a second let-go for one reason, tells its
+    /// reader nothing the first doesn't, and a server that sends a bot
+    /// back and forth can't fill the queue this way.
+    fn queue_once(&mut self, event: SessionEvent) -> Delivery {
+        if self.queue.contains(&event) {
+            return Delivery::AlreadyPending;
+        }
+        self.queue.push_back(event);
+        Delivery::Queued
+    }
+
     /// Tears the bridge down and drops what's queued.
     fn close(&mut self) {
         self.phase = Phase::Closed;
         self.death = Death::None;
         self.revived = false;
+        self.world_awaited = false;
         self.queue.clear();
     }
 
@@ -372,8 +445,8 @@ impl Shared {
         ended
     }
 
-    /// Applies a respawn signal with `apply`, waking the consumer when it
-    /// queued `Respawned`.
+    /// Applies a signal from inside the frame with `apply`, waking the
+    /// consumer when it queued an event.
     fn respawn_signal(&self, apply: impl FnOnce(&mut State) -> Delivery) -> Delivery {
         let delivery = apply(&mut self.lock());
         if delivery == Delivery::Queued {
@@ -506,6 +579,26 @@ impl BridgeControl {
         self.shared.respawn_signal(State::loaded)
     }
 
+    /// A Login or a Respawn packet arrived, read inside the frame after
+    /// the frame's deaths (ADR-0036, D6).
+    pub(crate) fn world_packet(&self, packet: WorldPacket) -> Delivery {
+        self.shared
+            .respawn_signal(|state| state.world_packet(packet))
+    }
+
+    /// The server placed the bot in its world and the client has loaded:
+    /// `WorldChanged` follows if a packet moved the bot to another world
+    /// since the join.
+    pub(crate) fn placed(&self) -> Delivery {
+        self.shared.respawn_signal(State::placed)
+    }
+
+    /// The session let go of inputs by itself: `LetGo` follows, once for
+    /// each reason until it's read (ADR-0036, D10, D11).
+    pub(crate) fn let_go(&self, reason: LetGo) -> Delivery {
+        self.shared.respawn_signal(|state| state.let_go(reason))
+    }
+
     /// Tears the bridge down: queued events are dropped, and
     /// [`McEvents::next`] returns `None`.
     pub(crate) fn close(&self) {
@@ -532,6 +625,19 @@ impl core::fmt::Debug for McEvents {
         f.debug_struct("McEvents")
             .field("bot_id", &self.shared.bot_id)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+impl McEvents {
+    /// Everything queued right now, without waiting: for the unit tests of
+    /// what a session's App reports.
+    pub(crate) fn queued(&self) -> Vec<SessionEvent> {
+        let mut out = Vec::new();
+        while let Next::Event(event) = self.shared.next() {
+            out.push(event);
+        }
+        out
     }
 }
 
@@ -1246,5 +1352,263 @@ mod tests {
                 SessionEvent::Disconnected(DisconnectReason::ConnectionClosed),
             ]
         );
+    }
+
+    // --- A world change (Plan.md P15.14; ADR-0036, D6) ---
+
+    /// A session whose bot joined, with `Joined` read.
+    fn joined() -> (EventSink, McEvents) {
+        let (sink, events, ..) = start(8);
+        apply(&sink, Mapped::Spawn);
+        assert_eq!(queued(&events), [SessionEvent::Joined]);
+        (sink, events)
+    }
+
+    #[test]
+    fn the_joins_own_login_is_no_world_change() {
+        let (sink, events, ..) = start(8);
+
+        assert_eq!(
+            sink.control().world_packet(WorldPacket::Login),
+            Delivery::Ignored
+        );
+        apply(&sink, Mapped::Spawn);
+        assert_eq!(sink.control().placed(), Delivery::Ignored);
+
+        assert_eq!(queued(&events), [SessionEvent::Joined]);
+    }
+
+    #[rstest]
+    #[case::a_second_login(WorldPacket::Login)]
+    #[case::a_respawn_without_a_death(WorldPacket::Respawn)]
+    fn a_packet_into_another_world_is_a_world_change_once_the_bot_is_placed(
+        #[case] packet: WorldPacket,
+    ) {
+        let (sink, events) = joined();
+
+        assert_eq!(sink.control().world_packet(packet), Delivery::Ignored);
+        let before_it_is_placed = queued(&events);
+        assert_eq!(sink.control().placed(), Delivery::Queued);
+
+        assert_eq!(before_it_is_placed, []);
+        assert_eq!(queued(&events), [SessionEvent::WorldChanged]);
+    }
+
+    #[test]
+    fn a_placement_without_a_packet_before_it_reports_nothing() {
+        let (sink, events) = joined();
+
+        assert_eq!(sink.control().placed(), Delivery::Ignored);
+        sink.control().world_packet(WorldPacket::Login);
+        assert_eq!(sink.control().placed(), Delivery::Queued);
+        // Used up: the next placement is a teleport's, not a world's.
+        assert_eq!(sink.control().placed(), Delivery::Ignored);
+
+        assert_eq!(queued(&events), [SessionEvent::WorldChanged]);
+    }
+
+    #[test]
+    fn a_deaths_respawn_is_no_world_change() {
+        let (sink, events) = joined();
+        sink.control().died();
+        assert_eq!(queued(&events), [SessionEvent::Died]);
+        sink.control().respawn_asked(false);
+
+        // What a death's Respawn does: the removal, the packet, the load.
+        sink.control().dead_removed();
+        assert_eq!(
+            sink.control().world_packet(WorldPacket::Respawn),
+            Delivery::Ignored
+        );
+        assert_eq!(sink.control().loaded(), Delivery::Queued);
+        assert_eq!(sink.control().placed(), Delivery::Ignored);
+
+        assert_eq!(queued(&events), [SessionEvent::Respawned]);
+    }
+
+    #[test]
+    fn a_respawn_packet_for_a_death_not_yet_read_is_no_world_change_either() {
+        let (sink, events) = joined();
+        sink.control().died();
+
+        sink.control().world_packet(WorldPacket::Respawn);
+        assert_eq!(sink.control().placed(), Delivery::Ignored);
+
+        assert_eq!(queued(&events), [SessionEvent::Died]);
+    }
+
+    #[test]
+    fn a_login_while_dead_is_a_world_change_all_the_same() {
+        // A proxy moves a dead bot to another server: it's somewhere new.
+        let (sink, events) = joined();
+        sink.control().died();
+        assert_eq!(queued(&events), [SessionEvent::Died]);
+
+        sink.control().world_packet(WorldPacket::Login);
+        assert_eq!(sink.control().placed(), Delivery::Queued);
+
+        assert_eq!(queued(&events), [SessionEvent::WorldChanged]);
+    }
+
+    #[test]
+    fn a_dimension_change_after_a_confirmed_respawn_is_a_world_change() {
+        let (sink, events) = joined();
+        sink.control().died();
+        assert_eq!(queued(&events), [SessionEvent::Died]);
+        sink.control().respawn_asked(false);
+        sink.control().dead_removed();
+        sink.control().world_packet(WorldPacket::Respawn);
+        sink.control().loaded();
+        sink.control().placed();
+        assert_eq!(queued(&events), [SessionEvent::Respawned]);
+
+        sink.control().world_packet(WorldPacket::Respawn);
+        sink.control().loaded();
+        assert_eq!(sink.control().placed(), Delivery::Queued);
+
+        assert_eq!(queued(&events), [SessionEvent::WorldChanged]);
+    }
+
+    #[test]
+    fn two_packets_before_one_placement_are_one_world_change() {
+        let (sink, events) = joined();
+
+        sink.control().world_packet(WorldPacket::Login);
+        sink.control().world_packet(WorldPacket::Respawn);
+        assert_eq!(sink.control().placed(), Delivery::Queued);
+        assert_eq!(sink.control().placed(), Delivery::Ignored);
+
+        assert_eq!(queued(&events), [SessionEvent::WorldChanged]);
+    }
+
+    #[test]
+    fn a_world_change_not_yet_read_isnt_queued_twice() {
+        let (sink, events) = joined();
+        sink.control().world_packet(WorldPacket::Respawn);
+        assert_eq!(sink.control().placed(), Delivery::Queued);
+
+        sink.control().world_packet(WorldPacket::Respawn);
+        assert_eq!(sink.control().placed(), Delivery::AlreadyPending);
+        assert_eq!(queued(&events), [SessionEvent::WorldChanged]);
+        // Read: the next one is reported again.
+        sink.control().world_packet(WorldPacket::Respawn);
+        assert_eq!(sink.control().placed(), Delivery::Queued);
+
+        assert_eq!(queued(&events), [SessionEvent::WorldChanged]);
+    }
+
+    // --- What the session let go of (Plan.md P15.11, P15.12) ---
+
+    #[test]
+    fn a_let_go_is_reported_once_for_each_reason_until_it_is_read() {
+        let (sink, events) = joined();
+        let control = sink.control();
+
+        assert_eq!(control.let_go(LetGo::Leash), Delivery::Queued);
+        assert_eq!(control.let_go(LetGo::Leash), Delivery::AlreadyPending);
+        assert_eq!(control.let_go(LetGo::ToolGuard), Delivery::Queued);
+        assert_eq!(control.let_go(LetGo::ItemUsed), Delivery::Queued);
+        assert_eq!(control.let_go(LetGo::ItemUsed), Delivery::AlreadyPending);
+
+        assert_eq!(
+            queued(&events),
+            [
+                SessionEvent::LetGo(LetGo::Leash),
+                SessionEvent::LetGo(LetGo::ToolGuard),
+                SessionEvent::LetGo(LetGo::ItemUsed),
+            ]
+        );
+        assert_eq!(control.let_go(LetGo::Leash), Delivery::Queued);
+        assert_eq!(queued(&events), [SessionEvent::LetGo(LetGo::Leash)]);
+    }
+
+    #[test]
+    fn nothing_is_let_go_of_before_the_bot_joined() {
+        let (sink, events, ..) = start(8);
+
+        assert_eq!(sink.control().let_go(LetGo::Leash), Delivery::Ignored);
+        apply(&sink, Mapped::Spawn);
+
+        assert_eq!(queued(&events), [SessionEvent::Joined]);
+    }
+
+    #[test]
+    fn a_flood_of_world_changes_and_let_gos_never_fills_the_queue() {
+        // Whatever a server makes a session report, and however slowly its
+        // actor reads: one world change and one let-go a reason are pending
+        // at most, in a queue that holds one event before chat is dropped.
+        let (sink, events, ..) = start(1);
+        apply(&sink, Mapped::Spawn);
+        let control = sink.control();
+
+        for _ in 0..1_000 {
+            control.world_packet(WorldPacket::Respawn);
+            control.placed();
+            for reason in LetGo::ALL {
+                control.let_go(reason);
+            }
+        }
+
+        assert_eq!(
+            queued(&events),
+            [
+                SessionEvent::Joined,
+                SessionEvent::WorldChanged,
+                SessionEvent::LetGo(LetGo::Leash),
+                SessionEvent::LetGo(LetGo::ToolGuard),
+                SessionEvent::LetGo(LetGo::ItemUsed),
+            ]
+        );
+    }
+
+    #[rstest]
+    #[case::after_a_terminal_event(false)]
+    #[case::after_a_close(true)]
+    fn nothing_new_is_reported_once_the_session_ended(#[case] closed: bool) {
+        let (sink, events) = joined();
+        let control = sink.control();
+        control.world_packet(WorldPacket::Login);
+        if closed {
+            control.close();
+        } else {
+            sink.terminate(kicked());
+        }
+
+        assert_eq!(
+            control.world_packet(WorldPacket::Login),
+            Delivery::SessionEnded
+        );
+        assert_eq!(control.placed(), Delivery::SessionEnded);
+        assert_eq!(control.let_go(LetGo::Leash), Delivery::SessionEnded);
+
+        let left = queued(&events);
+        assert!(
+            !left.contains(&SessionEvent::WorldChanged)
+                && !left.contains(&SessionEvent::LetGo(LetGo::Leash)),
+            "{left:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_world_change_and_a_let_go_wake_a_waiting_consumer() {
+        let (sink, mut events) = joined();
+        let control = sink.control();
+        let waiting = tokio::spawn(async move {
+            let first = events.next().await;
+            let second = events.next().await;
+            (first, second)
+        });
+        tokio::task::yield_now().await;
+
+        control.let_go(LetGo::ToolGuard);
+        control.world_packet(WorldPacket::Login);
+        control.placed();
+
+        let (first, second) = tokio::time::timeout(Duration::from_secs(5), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first, Some(SessionEvent::LetGo(LetGo::ToolGuard)));
+        assert_eq!(second, Some(SessionEvent::WorldChanged));
     }
 }

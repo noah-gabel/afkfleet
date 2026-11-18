@@ -60,7 +60,7 @@ use azalea::ecs as bevy_ecs;
 use fleet_core::mc::SessionError;
 use tracing::debug;
 
-use super::Riding;
+use super::{Passengers, Riding};
 
 /// How many game ticks a bot keeps looking for a minecart within reach: ten
 /// seconds. On the test server the click came 26 to 96 ms after an action
@@ -73,6 +73,10 @@ pub(crate) const PATIENCE: u32 = 200;
 pub(crate) struct Entering {
     /// How many more game ticks it looks for one.
     ticks_left: u32,
+    /// Whether a minecart someone sits in is passed over: a scripted
+    /// mode's `vehicle.mount`. The stopgap action takes the nearest,
+    /// whoever sits in it (ADR-0034).
+    free_only: bool,
 }
 
 /// Where eyes at `eye` click the box `aabb`, and how far that is, squared:
@@ -104,6 +108,27 @@ pub(crate) fn enter_minecart(world: &mut World, bot: Entity) -> Result<(), Sessi
     }
     own.insert(Entering {
         ticks_left: PATIENCE,
+        free_only: false,
+    });
+    Ok(())
+}
+
+/// Marks `bot` as wanting into the nearest free minecart, as a scripted
+/// mode's `vehicle.mount` does (ADR-0036, D12).
+///
+/// # Errors
+/// [`SessionError::NotInWorld`] if the bot's entity is gone.
+pub(crate) fn mount(world: &mut World, bot: Entity) -> Result<(), SessionError> {
+    let mut own = world
+        .get_entity_mut(bot)
+        .map_err(|_| SessionError::NotInWorld)?;
+    if own.contains::<Riding>() {
+        debug!("the bot rides already");
+        return Ok(());
+    }
+    own.insert(Entering {
+        ticks_left: PATIENCE,
+        free_only: true,
     });
     Ok(())
 }
@@ -120,6 +145,7 @@ type Wanting = (
     &'static mut LastSentLookDirection,
     &'static Physics,
     &'static PhysicsState,
+    Option<&'static Passengers>,
 );
 
 /// The entities a bot may get into: every entity but a bot itself.
@@ -151,6 +177,7 @@ pub(super) fn enter_when_in_reach(
         last_sent,
         physics,
         state,
+        passengers,
     ) in &mut bots
     {
         if riding.contains(bot) {
@@ -165,6 +192,13 @@ pub(super) fn enter_when_in_reach(
             .filter(|(_, _, kind)| ***kind == EntityKind::Minecart)
             .filter_map(|(cart, position, _)| {
                 let id = index.get_by_ecs_entity(cart)?;
+                // A scripted mode's bot passes over a minecart someone
+                // sits in, and takes it once it's free.
+                if entering.free_only
+                    && passengers.is_some_and(|passengers| passengers.is_occupied(id))
+                {
+                    return None;
+                }
                 let (at, distance_squared) =
                     click_point(eye, &size.make_bounding_box(**position), range)?;
                 Some((distance_squared, id, at - **position, at))
@@ -436,6 +470,147 @@ mod tests {
         fn wants_in(&self) -> bool {
             self.app.world().get::<Entering>(self.bot).is_some()
         }
+
+        /// The action of a scripted mode's `vehicle.mount`.
+        fn mount(&mut self) -> Result<(), SessionError> {
+            mount(self.app.world_mut(), self.bot)
+        }
+
+        /// The server says who sits in `vehicle`: `riders` of them.
+        fn seats(&mut self, vehicle: MinecraftEntityId, riders: usize) {
+            let riders: Vec<_> = (0..riders)
+                .map(|rider| MinecraftEntityId(900 + i32::try_from(rider).unwrap()))
+                .collect();
+            crate::testing::receive(
+                &mut self.app,
+                self.bot,
+                crate::testing::passengers(vehicle, &riders),
+            );
+            self.app.update();
+        }
+
+        /// The minecarts the bot clicked, in order.
+        fn clicked(&self) -> Vec<MinecraftEntityId> {
+            self.did()
+                .into_iter()
+                .filter_map(|did| match did {
+                    Did::Clicked(cart, ..) => Some(cart),
+                    Did::Looked(_) | Did::Other => None,
+                })
+                .collect()
+        }
+    }
+
+    // --- Mounting, past a minecart someone sits in (Plan.md P15.13) ---
+
+    /// A second minecart, two blocks south of the bot: further than the
+    /// one [`BESIDE`] it, and within its reach.
+    const FURTHER: Vec3 = Vec3::new(0.5, 64.0625, 2.5);
+
+    #[test]
+    fn mounting_takes_the_nearest_free_minecart_past_one_someone_sits_in() {
+        let mut scene = Scene::new();
+        let near = scene.spawn(EntityKind::Minecart, BESIDE);
+        let far = scene.spawn(EntityKind::Minecart, FURTHER);
+        scene.seats(near, 1);
+
+        assert_eq!(scene.mount(), Ok(()));
+        scene.tick();
+
+        assert_eq!(scene.clicked(), [far]);
+        assert!(!scene.wants_in());
+    }
+
+    #[test]
+    fn mounting_takes_the_nearest_minecart_when_nobody_sits_in_it() {
+        let mut scene = Scene::new();
+        let near = scene.spawn(EntityKind::Minecart, BESIDE);
+        let _far = scene.spawn(EntityKind::Minecart, FURTHER);
+
+        scene.mount().unwrap();
+        scene.tick();
+
+        assert_eq!(scene.clicked(), [near]);
+    }
+
+    /// The stopgap action is as it was: it doesn't look at who sits where
+    /// (ADR-0034's known limit).
+    #[test]
+    fn the_stopgap_action_still_takes_the_nearest_whoever_sits_in_it() {
+        let mut scene = Scene::new();
+        let near = scene.spawn(EntityKind::Minecart, BESIDE);
+        let _far = scene.spawn(EntityKind::Minecart, FURTHER);
+        scene.seats(near, 1);
+
+        scene.enter().unwrap();
+        scene.tick();
+
+        assert_eq!(scene.clicked(), [near]);
+    }
+
+    #[test]
+    fn with_every_minecart_in_reach_taken_mounting_waits_for_one_to_be_freed() {
+        let mut scene = Scene::new();
+        let near = scene.spawn(EntityKind::Minecart, BESIDE);
+        let far = scene.spawn(EntityKind::Minecart, FURTHER);
+        scene.seats(near, 1);
+        scene.seats(far, 2);
+        scene.mount().unwrap();
+
+        for _ in 0..30 {
+            scene.tick();
+        }
+        let while_taken = scene.clicked();
+        scene.seats(far, 0);
+        scene.tick();
+
+        assert_eq!(while_taken, []);
+        assert_eq!(scene.clicked(), [far]);
+    }
+
+    #[test]
+    fn mounting_gives_up_after_its_patience_when_no_minecart_is_freed() {
+        let mut scene = Scene::new();
+        let near = scene.spawn(EntityKind::Minecart, BESIDE);
+        scene.seats(near, 1);
+        scene.mount().unwrap();
+
+        for _ in 0..PATIENCE - 1 {
+            scene.tick();
+        }
+        let still_looking = scene.wants_in();
+        scene.tick();
+        scene.seats(near, 0);
+        scene.tick();
+
+        assert!(still_looking);
+        assert!(!scene.wants_in());
+        assert_eq!(scene.clicked(), []);
+    }
+
+    #[test]
+    fn a_bot_that_rides_already_isnt_marked_by_mounting() {
+        let mut scene = Scene::new();
+        scene.spawn(EntityKind::Minecart, BESIDE);
+        let bot = scene.bot;
+        scene.app.world_mut().entity_mut(bot).insert(Riding {
+            vehicle: MinecraftEntityId(40),
+        });
+
+        assert_eq!(scene.mount(), Ok(()));
+        scene.tick();
+
+        assert!(!scene.wants_in());
+        assert_eq!(scene.clicked(), []);
+    }
+
+    #[test]
+    fn mounting_for_a_bot_that_is_gone_is_not_in_world() {
+        let mut scene = Scene::new();
+        let bot = scene.bot;
+        scene.app.world_mut().despawn(bot);
+
+        assert_eq!(scene.mount(), Err(SessionError::NotInWorld));
     }
 
     /// Whether `look` points from `eye` at `point`, within azalea's steps of

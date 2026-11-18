@@ -3,6 +3,7 @@
 
 use core::future::Future;
 
+use super::LetGo;
 use crate::chat::IncomingChat;
 use crate::disconnect::{ConnectFailure, DisconnectReason};
 
@@ -24,6 +25,15 @@ pub enum SessionEvent {
     /// server respawned it and the client has loaded (ADR-0020, S20, S22).
     /// Never for a dimension change.
     Respawned,
+    /// The server put the bot into another world on the same connection,
+    /// and the bot has loaded there: a second login, as a proxy sends when
+    /// it moves a player to another server, or a respawn packet without a
+    /// death, as a portal causes (ADR-0036, D6). Whatever the bot held is
+    /// let go.
+    WorldChanged,
+    /// The session let go of inputs by itself, below whoever pressed them
+    /// (ADR-0036, D10, D11).
+    LetGo(LetGo),
     /// The session ended: a kick, a closed connection, a rejected session or
     /// a crash.
     Disconnected(DisconnectReason),
@@ -39,6 +49,9 @@ pub enum SessionEvent {
 /// - Only [`SessionEvent::Chat`] may be dropped, when the consumer lags
 ///   behind; the adapter counts what it drops. `Joined`, `Died`, `Respawned`,
 ///   `Disconnected` and `ConnectionFailed` are always delivered.
+/// - `WorldChanged` and each reason of `LetGo` are pending at most once:
+///   a second one before the first was read adds nothing, so a server
+///   that sends a bot back and forth can't fill the queue.
 /// - `Died` comes once per death, though azalea can report it twice
 ///   (ADR-0008 §4), and the next `Died` only after `Respawned`.
 /// - `Respawned` comes at most once per `Died`, and only after

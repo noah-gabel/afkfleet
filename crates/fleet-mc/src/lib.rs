@@ -45,7 +45,10 @@ mod connector;
 mod events;
 mod host;
 mod riding;
+mod script;
 mod signing;
+#[cfg(test)]
+mod testing;
 
 pub use config::McConfig;
 pub use connector::{AzaleaConnector, McSession};

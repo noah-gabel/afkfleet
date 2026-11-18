@@ -30,6 +30,7 @@
 //! else, is left to azalea alone.
 
 mod enter;
+mod passengers;
 mod pick;
 
 use std::collections::HashMap;
@@ -41,7 +42,9 @@ use azalea::core::position::Vec3;
 use azalea::core::tick::GameTick;
 use azalea::ecs::component::Component;
 use azalea::ecs::entity::Entity;
+use azalea::ecs::lifecycle::Add;
 use azalea::ecs::message::MessageReader;
+use azalea::ecs::observer::On;
 use azalea::ecs::query::{With, Without};
 use azalea::ecs::schedule::IntoScheduleConfigs as _;
 use azalea::ecs::system::{Commands, Query, Res};
@@ -67,7 +70,8 @@ use azalea::world::{WorldName, Worlds};
 use azalea::ecs as bevy_ecs;
 use tracing::debug;
 
-pub(crate) use self::enter::enter_minecart;
+pub(crate) use self::enter::{enter_minecart, mount};
+pub(crate) use self::passengers::Passengers;
 use self::pick::Seated;
 
 /// On the bot while the server has it as a passenger.
@@ -160,6 +164,13 @@ impl Plugin for RidingPlugin {
         // sprinting packet, in azalea's own order, and before its position
         // packet.
         app.add_message::<ReceiveGamePacketEvent>()
+            // The bot has its index of who sits where from the moment
+            // azalea spawns it, and loses it with its entity.
+            .add_observer(|spawned: On<Add, LocalEntity>, mut commands: Commands| {
+                commands
+                    .entity(spawned.entity)
+                    .insert(Passengers::default());
+            })
             .add_systems(
                 Update,
                 (
@@ -181,18 +192,33 @@ impl Plugin for RidingPlugin {
     }
 }
 
-/// Reads the frame's packets and puts [`Riding`] on the bot or takes it off.
+/// What [`track_the_vehicle`] reads and writes of a bot.
+type Tracked = (
+    &'static MinecraftEntityId,
+    Option<&'static Riding>,
+    Option<&'static EntityIdIndex>,
+    Option<&'static mut Passengers>,
+);
+
+/// Reads the frame's packets and puts [`Riding`] on the bot or takes it
+/// off, and keeps the bot's index of who sits in which vehicle.
 fn track_the_vehicle(
     mut commands: Commands,
     mut packets: MessageReader<ReceiveGamePacketEvent>,
-    bots: Query<(&MinecraftEntityId, Option<&Riding>), With<LocalEntity>>,
+    mut bots: Query<Tracked, With<LocalEntity>>,
 ) {
     // A frame may hold several packets, and commands only apply after it.
     let mut rides: HashMap<Entity, Option<MinecraftEntityId>> = HashMap::new();
     for received in packets.read() {
-        let Ok((bot_id, riding)) = bots.get(received.entity) else {
+        let Ok((bot_id, riding, index, passengers)) = bots.get_mut(received.entity) else {
             continue;
         };
+        if let Some(mut passengers) = passengers {
+            // Only a vehicle the server showed the bot is indexed.
+            passengers.read(&received.packet, |vehicle| {
+                index.is_some_and(|index| index.get_by_minecraft_entity(vehicle).is_some())
+            });
+        }
         let ride = rides
             .entry(received.entity)
             .or_insert_with(|| riding.map(|riding| riding.vehicle));
@@ -548,6 +574,79 @@ mod tests {
 
         assert_eq!(left, None);
         assert_eq!(scene.riding(), Some(Riding { vehicle: OTHER }));
+    }
+
+    // --- Who sits in which vehicle (Plan.md P15.13) ---
+
+    fn index(scene: &Scene) -> Passengers {
+        scene
+            .app
+            .world()
+            .get::<Passengers>(scene.bot)
+            .cloned()
+            .expect("the bot has its index from the moment it's spawned")
+    }
+
+    #[test]
+    fn the_bot_knows_which_vehicles_someone_sits_in() {
+        let mut scene = Scene::new(EntityKind::Minecart);
+
+        let at_first = index(&scene);
+        scene.receives([passengers(CART, &[OTHER])]);
+        let taken = index(&scene).is_occupied(CART);
+        scene.receives([passengers(CART, &[])]);
+
+        assert_eq!(at_first, Passengers::default());
+        assert!(taken);
+        assert!(!index(&scene).is_occupied(CART));
+        assert_eq!(index(&scene).len(), 0);
+    }
+
+    #[test]
+    fn the_bots_own_vehicle_is_occupied_too() {
+        let mut scene = Scene::new(EntityKind::Minecart);
+
+        scene.receives([passengers(CART, &[BOT])]);
+
+        assert!(index(&scene).is_occupied(CART));
+    }
+
+    #[test]
+    fn a_removed_vehicle_and_a_world_change_take_their_entries_away() {
+        let mut scene = Scene::new(EntityKind::Minecart);
+
+        scene.receives([passengers(CART, &[OTHER]), removed(&[CART])]);
+        let after_the_removal = index(&scene).len();
+        scene.receives([passengers(CART, &[OTHER])]);
+        let again = index(&scene).len();
+        scene.receives([respawn()]);
+
+        assert_eq!((after_the_removal, again), (0, 1));
+        assert_eq!(index(&scene).len(), 0);
+    }
+
+    #[test]
+    fn a_vehicle_the_server_never_showed_the_bot_isnt_indexed() {
+        let mut scene = Scene::new(EntityKind::Minecart);
+
+        scene.receives([passengers(OTHER, &[BOT])]);
+
+        // The ride itself is the server's word, as before; the index
+        // holds only vehicles the bot knows.
+        assert_eq!(scene.riding(), Some(Riding { vehicle: OTHER }));
+        assert_eq!(index(&scene).len(), 0);
+    }
+
+    #[test]
+    fn the_index_goes_with_the_bots_entity() {
+        let mut scene = Scene::new(EntityKind::Minecart);
+        scene.receives([passengers(CART, &[OTHER])]);
+
+        let bot = scene.bot;
+        scene.app.world_mut().despawn(bot);
+
+        let world = scene.app.world_mut();
+        assert_eq!(world.query::<&Passengers>().iter(world).count(), 0);
     }
 
     #[test]

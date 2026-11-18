@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
 use fleet_core::chat::ChatMessage;
-use fleet_core::mc::{Liveness, SessionError, SessionEvent, SessionEvents, SessionHandle};
+use fleet_core::mc::{
+    Guards, Liveness, Observation, SessionError, SessionEvent, SessionEvents, SessionHandle,
+};
 use fleet_core::mode::GameAction;
 use tokio::sync::Notify;
 
@@ -21,6 +23,10 @@ pub enum Performed {
     Chat(ChatMessage),
     /// [`SessionHandle::respawn`] ran.
     Respawn,
+    /// [`SessionHandle::observe`] took a snapshot.
+    Observed,
+    /// [`SessionHandle::set_guards`] set these.
+    Guards(Guards),
     /// [`SessionHandle::disconnect`] tore the session down. It's logged once,
     /// however often it's called.
     Disconnect,
@@ -76,6 +82,9 @@ struct State {
     frozen_packet: Option<Instant>,
     dropped_chat: u64,
     log: Vec<Performed>,
+    /// What [`SessionHandle::observe`] answers with, once the test has
+    /// shown the session something.
+    shown: Option<Observation>,
 }
 
 /// Where a session is in its life.
@@ -175,7 +184,9 @@ impl Shared {
         let confirmed = {
             let mut state = self.lock();
             state.ready()?;
-            if let (Performed::Action(_), Some(error)) = (&call, state.failing_actions) {
+            if let (Performed::Action(_) | Performed::Guards(_), Some(error)) =
+                (&call, state.failing_actions)
+            {
                 return Err(error);
             }
             if let (Performed::Chat(_), Some(error)) = (&call, state.failing_chat) {
@@ -192,6 +203,20 @@ impl Shared {
             self.events_ready.notify_one();
         }
         Ok(())
+    }
+
+    /// Takes a snapshot: checks that the session can answer, logs it, and
+    /// answers with what the test last showed. A session shown nothing
+    /// has a bot that isn't placed in its world yet.
+    fn observe(&self) -> Result<Observation, SessionError> {
+        let mut state = self.lock();
+        state.ready()?;
+        if let Some(error) = state.failing_actions {
+            return Err(error);
+        }
+        let seen = state.shown.clone().ok_or(SessionError::NotInWorld)?;
+        state.log.push(Performed::Observed);
+        Ok(seen)
     }
 
     /// Tears the session down and returns how long the teardown still takes.
@@ -271,6 +296,16 @@ impl SessionHandle for FakeSession {
     ) -> impl Future<Output = Result<(), SessionError>> + Send {
         let shared = Arc::clone(&self.shared);
         async move { shared.run(Performed::Chat(message)) }
+    }
+
+    fn observe(&self) -> impl Future<Output = Result<Observation, SessionError>> + Send {
+        let shared = Arc::clone(&self.shared);
+        async move { shared.observe() }
+    }
+
+    fn set_guards(&self, guards: Guards) -> impl Future<Output = Result<(), SessionError>> + Send {
+        let shared = Arc::clone(&self.shared);
+        async move { shared.run(Performed::Guards(guards)) }
     }
 
     fn respawn(&self) -> impl Future<Output = Result<(), SessionError>> + Send {
@@ -368,7 +403,10 @@ impl SessionController {
                             SessionEvent::Disconnected(_) | SessionEvent::ConnectionFailed(_) => {
                                 state.phase = Phase::Ended;
                             }
-                            SessionEvent::Chat(_) | SessionEvent::Respawned => {}
+                            SessionEvent::Chat(_)
+                            | SessionEvent::Respawned
+                            | SessionEvent::WorldChanged
+                            | SessionEvent::LetGo(_) => {}
                         }
                         state.queue.push_back(event);
                         EmitOutcome::Queued
@@ -380,6 +418,14 @@ impl SessionController {
             self.shared.events_ready.notify_one();
         }
         outcome
+    }
+
+    /// Shows the session `observation`: what [`SessionHandle::observe`]
+    /// answers with from now on. Before the first, a bot that is in the
+    /// world still sees nothing, and `observe` fails with
+    /// [`SessionError::NotInWorld`].
+    pub fn show(&self, observation: Observation) {
+        self.shared.lock().shown = Some(observation);
     }
 
     /// Stops the tick stamp where it is now, as if the session hung. A stamp

@@ -1,8 +1,9 @@
 //! A session's Bevy App, as ADR-0008 §1 and §3 decided: azalea's plugins
 //! without auto-reconnect and auto-respawn, the packet-liveness and
 //! chat-signing plugins, the death and respawn watch (ADR-0020, S22, S27),
-//! the riding plugin (ADR-0026), the bot's event channel, and the
-//! single-threaded executor on every schedule.
+//! the riding plugin (ADR-0026), a scripted mode's inputs with its leash and
+//! guards (ADR-0036), the bot's event channel, and the single-threaded
+//! executor on every schedule.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -22,6 +23,7 @@ use tracing::warn;
 
 use crate::events::{LivenessStamps, PacketLivenessPlugin, RespawnWatchPlugin};
 use crate::riding::RidingPlugin;
+use crate::script::ScriptPlugin;
 use crate::signing::SigningPlugin;
 
 /// The channel azalea's `LocalPlayerEvents` sends a session's events on. The
@@ -47,6 +49,9 @@ pub(super) fn build_app(
     respawns: RespawnWatchPlugin,
     extra: impl FnOnce(&mut App),
 ) -> App {
+    // A scripted mode's inputs, its leash and its guards (ADR-0036); the
+    // same bridge hears of its placements as of its respawns.
+    let script = ScriptPlugin(respawns.0.clone());
     let mut app = App::new();
     app.add_plugins((
         DefaultPlugins,
@@ -60,6 +65,7 @@ pub(super) fn build_app(
         respawns,
         // What azalea lacks for a bot in a minecart (ADR-0026).
         RidingPlugin,
+        script,
     ));
     give_events_to_the_bot(&mut app, events);
     extra(&mut app);
@@ -227,6 +233,124 @@ mod tests {
         assert_eq!(
             fleet_testkit::log_capture::find(|line| line.contains("indeterminate execution order")),
             Ok(())
+        );
+    }
+
+    // --- The leash and the guards before azalea's own systems (ADR-0036,
+    // D10, D11) ---
+
+    use azalea::core::direction::Direction as Face;
+    use azalea::ecs::query::{Has, With};
+    use azalea::ecs::schedule::IntoScheduleConfigs as _;
+    use azalea::ecs::system::Query;
+    use azalea::entity::inventory::Inventory;
+    use azalea::entity::{Jumping, Position};
+    use azalea::mining::{MineProgress, Mining, MiningQueued, MiningSystems};
+    use azalea::physics::PhysicsSystems;
+    use azalea::{BlockPos, PhysicsState, Vec3, WalkDirection};
+    use fleet_core::mode::GameAction;
+    use fleet_core::script::{Input, Key, MouseButton};
+
+    use crate::script::{self, Arriving, Placement};
+
+    /// What probes inside azalea's own system sets saw of the bot in one
+    /// game tick: where azalea's physics found it walking, and what
+    /// azalea's mining found queued and being mined.
+    #[derive(Debug, Default, Clone, PartialEq)]
+    struct Probed {
+        walking: Vec<WalkDirection>,
+        mining: Vec<(bool, bool)>,
+    }
+
+    /// A game tick of the session's real App, for a bot that walks on past
+    /// its leash and is about to mine, and mines, the floor it stands on.
+    /// The probes are systems in azalea's `PhysicsSystems` and
+    /// `MiningSystems`: they stand where azalea's own systems stand, after
+    /// fleet-mc's by the same edges, and see what those systems see.
+    fn probed_tick() -> Probed {
+        let probed = Arc::new(Mutex::new(Probed::default()));
+        let (in_physics, in_mining) = (Arc::clone(&probed), Arc::clone(&probed));
+        let (events, _) = event_channel();
+        let mut app = build_app(stamps(), events, signing(), respawns(), |app| {
+            app.add_systems(
+                GameTick,
+                (
+                    (move |bots: Query<&PhysicsState, With<LocalEntity>>| {
+                        let mut probed = in_physics.lock().unwrap();
+                        probed
+                            .walking
+                            .extend(bots.iter().map(|state| state.move_direction));
+                    })
+                    .in_set(PhysicsSystems),
+                    (move |bots: Query<(Has<MiningQueued>, Has<Mining>), With<LocalEntity>>| {
+                        in_mining.lock().unwrap().mining.extend(bots.iter());
+                    })
+                    .in_set(MiningSystems),
+                ),
+            );
+        });
+        // Its feet on the block below y = 64, nine blocks from its anchor
+        // and further than a tick ago.
+        let floor = BlockPos::new(9, 63, 0);
+        let bot = app
+            .world_mut()
+            .spawn((
+                LocalEntity,
+                Position::new(Vec3::new(9.5, 64.0, 0.5)),
+                PhysicsState {
+                    move_direction: WalkDirection::Forward,
+                    ..PhysicsState::default()
+                },
+                Jumping(false),
+                Inventory::default(),
+                MineProgress(0.5),
+                MiningQueued {
+                    position: floor,
+                    direction: Face::Up,
+                    force: true,
+                },
+                Mining {
+                    pos: floor,
+                    dir: Face::Up,
+                    force: true,
+                },
+            ))
+            .id();
+        let origin = fleet_core::script::Position::try_new(0.5, 64.0, 0.5).unwrap();
+        *app.world_mut().get_mut::<Placement>(bot).unwrap() = Placement {
+            anchor: Some(origin),
+            last: Some(fleet_core::script::Position::try_new(9.0, 64.0, 0.5).unwrap()),
+            arriving: Arriving::Placed,
+        };
+        for input in [Input::Key(Key::Forward), Input::Mouse(MouseButton::Left)] {
+            assert_eq!(
+                script::act(app.world_mut(), bot, GameAction::Press(input)),
+                Ok(())
+            );
+        }
+
+        app.world_mut().run_schedule(GameTick);
+
+        let seen = probed.lock().unwrap();
+        seen.clone()
+    }
+
+    /// The leash lets go of the keys before azalea's physics read them, and
+    /// the mining guard takes away what azalea would mine before azalea's
+    /// mining runs, **in the same game tick**. Were either of fleet-mc's
+    /// systems to run after azalea's, a probe would see the bot still
+    /// walking, or the floor still queued and being mined: one more tick of
+    /// walking past the leash, one more tick of mining the floor.
+    #[test]
+    fn the_leash_and_the_guards_act_before_azaleas_physics_and_mining_in_the_same_tick() {
+        let probed = probed_tick();
+
+        assert_eq!(
+            probed,
+            Probed {
+                walking: vec![WalkDirection::None],
+                mining: vec![(false, false)],
+            }
         );
     }
 

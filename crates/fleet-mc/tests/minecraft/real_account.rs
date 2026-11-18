@@ -172,6 +172,8 @@ fn kind(event: &SessionEvent) -> String {
         SessionEvent::Chat(_) => "Chat".to_owned(),
         SessionEvent::Died => "Died".to_owned(),
         SessionEvent::Respawned => "Respawned".to_owned(),
+        SessionEvent::WorldChanged => "WorldChanged".to_owned(),
+        SessionEvent::LetGo(reason) => format!("LetGo({reason:?})"),
         SessionEvent::Disconnected(reason) => format!("Disconnected({:?})", reason.classify()),
         SessionEvent::ConnectionFailed(failure) => format!("ConnectionFailed({failure:?})"),
     }
