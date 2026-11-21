@@ -3,9 +3,11 @@
 
 use core::num::NonZeroUsize;
 
+use chrono::{DateTime, Utc};
 use fleet_core::chat::ChatMessage;
 use fleet_core::id::BotId;
 use fleet_core::mc::{SessionError, SessionHandle};
+use fleet_core::script::{Ident, SendId};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -26,6 +28,31 @@ enum Outgoing {
     },
     /// Chat from the bot's mode.
     Mode { message: ChatMessage },
+    /// A declared message of the bot's script, whose runner hears what
+    /// became of it.
+    Script {
+        send: SendId,
+        key: Ident,
+        message: ChatMessage,
+        report: mpsc::Sender<SendOutcome>,
+    },
+}
+
+/// What became of a declared message a script asked to send
+/// (ADR-0037, C4): a reply's window opens only for a command the session
+/// took, at the moment it took it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SendOutcome {
+    /// The send, as the script's instance numbered it.
+    pub(crate) send: SendId,
+    /// The declared message's key.
+    pub(crate) key: Ident,
+    /// The finished text.
+    pub(crate) message: ChatMessage,
+    /// When the session answered, by the runtime's clock.
+    pub(crate) at: DateTime<Utc>,
+    /// Whether the session took it.
+    pub(crate) result: Result<(), ChatFailure>,
 }
 
 /// The open side of a [`ChatQueue`]: where messages go while the bot is
@@ -176,6 +203,36 @@ impl ModeChat {
         admit(&self.sender, &self.bucket)?.send(Outgoing::Mode { message });
         Ok(())
     }
+
+    /// Queues a declared message of the bot's script, at the bot's own
+    /// chat rate like every other message. What becomes of it comes on
+    /// `report`: sent, or why not. If `report` is full the outcome is
+    /// lost, and a window that waited for it never opens.
+    ///
+    /// # Errors
+    /// As for [`send`](Self::send); nothing is reported then.
+    pub(crate) fn send_script(
+        &self,
+        send: SendId,
+        key: Ident,
+        message: ChatMessage,
+        report: &mpsc::Sender<SendOutcome>,
+    ) -> Result<(), ChatError> {
+        admit(&self.sender, &self.bucket)?.send(Outgoing::Script {
+            send,
+            key,
+            message,
+            report: report.clone(),
+        });
+        Ok(())
+    }
+
+    /// Takes one message's worth of the bot's chat rate, for a message
+    /// that goes to the session past the queue: `on_stop`'s. `false` if
+    /// the rate is used up.
+    pub(crate) fn take_token(&self) -> bool {
+        self.bucket.try_take()
+    }
 }
 
 /// Sends one session's queued chat, one message at a time, and publishes the
@@ -249,6 +306,39 @@ impl<S: SessionHandle> ChatDelivery<S> {
                     }
                 }
             }
+            Outgoing::Script {
+                send,
+                key,
+                message,
+                report,
+            } => {
+                let result = self.session.send_chat(message.clone()).await;
+                if result.is_ok() {
+                    self.publish(FleetEventKind::ModeChatSent {
+                        message: message.clone(),
+                    });
+                } else if let Err(error) = result {
+                    debug!(%error, "a message of the bot's script wasn't sent");
+                }
+                Self::report(
+                    &report,
+                    SendOutcome {
+                        send,
+                        key,
+                        message,
+                        at: self.clock.now(),
+                        result: result.map_err(ChatFailure::from),
+                    },
+                );
+            }
+        }
+    }
+
+    /// Tells a script's runner what became of its send. A runner that's
+    /// gone, or too far behind to take it, opens no window for it.
+    fn report(report: &mpsc::Sender<SendOutcome>, outcome: SendOutcome) {
+        if report.try_send(outcome).is_err() {
+            debug!("a script's send outcome wasn't taken; its window stays closed");
         }
     }
 
@@ -263,6 +353,21 @@ impl<S: SessionHandle> ChatDelivery<S> {
                     reason: ChatFailure::Disconnected,
                 }),
                 Outgoing::Mode { .. } => debug!("mode chat dropped: the queue was closed"),
+                Outgoing::Script {
+                    send,
+                    key,
+                    message,
+                    report,
+                } => Self::report(
+                    &report,
+                    SendOutcome {
+                        send,
+                        key,
+                        message,
+                        at: self.clock.now(),
+                        result: Err(ChatFailure::Disconnected),
+                    },
+                ),
             }
         }
     }

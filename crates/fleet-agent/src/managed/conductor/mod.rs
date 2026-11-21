@@ -557,6 +557,10 @@ impl Conductor {
                     debug!(bot_id = %bot, "a chat outcome nobody waits for was dropped");
                 }
             }
+            // A script's status and log reach the server with the wire's
+            // messages for them (Plan.md P15.20, P15.23); until then they
+            // stay on the agent, in its `debug` log.
+            FleetEventKind::Script(_) => {}
             FleetEventKind::Removed => {
                 let _ = self.book.removed(bot);
                 self.credentials.forget(bot);

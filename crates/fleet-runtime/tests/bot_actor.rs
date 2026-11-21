@@ -210,6 +210,10 @@ struct Setup {
     start: Transition,
     /// The breaker the actor starts with; a new one if `None`.
     breaker: Option<CircuitBreaker>,
+    /// The bot's script slot, which outlives the actor.
+    script: fleet_runtime::ScriptSlot,
+    /// What a script's hooks are timed by.
+    stopwatch: fleet_testkit::stopwatch::ManualStopwatch,
 }
 
 impl Setup {
@@ -230,6 +234,8 @@ impl Setup {
             },
             start: new_start(),
             breaker: None,
+            script: fleet_runtime::ScriptSlot::new(),
+            stopwatch: fleet_testkit::stopwatch::ManualStopwatch::standing(),
         }
     }
 
@@ -259,6 +265,9 @@ impl Setup {
             events: events_tx,
             bucket,
             tickets: ChatTickets::new(),
+            script: self.script.clone(),
+            programs: fleet_runtime::ScriptPrograms::new(),
+            stopwatch: std::sync::Arc::new(self.stopwatch.clone()),
             snapshot: snapshot.publisher(),
             breaker: breaker_tx,
             start: self.start,

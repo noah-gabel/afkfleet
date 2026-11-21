@@ -1,13 +1,17 @@
 //! The bot's current session, and what its events do.
 
+use core::sync::atomic::AtomicBool;
 use fleet_core::bot::BotEvent;
 use fleet_core::disconnect::DisconnectReason;
+use std::sync::Arc;
+
 use fleet_core::mc::{MinecraftConnector, SessionCredentialProvider, SessionEvent, SessionEvents};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use super::BotActor;
 use crate::event::FleetEventKind;
+use crate::script::{Life, ScriptFeed};
 
 /// The session the bot is in, from a successful connect until the actor
 /// executes `Disconnect` for it.
@@ -20,8 +24,24 @@ pub(super) struct Session<S> {
     pub(super) generation: u64,
     /// The parent of the mode runner's and the chat delivery's tokens.
     pub(super) token: CancellationToken,
-    /// The mode runner's token, while the mode runs.
-    pub(super) runner: Option<CancellationToken>,
+    /// The mode runner, while the mode runs.
+    pub(super) runner: Option<Runner>,
+    /// Whether the session may still hold what a script pressed: the
+    /// runner sets it, and clears it once its own last `ReleaseAll` went
+    /// through (Plan.md P15.17).
+    pub(super) held: Arc<AtomicBool>,
+}
+
+/// The actor's hold on a session's mode runner.
+pub(super) struct Runner {
+    /// Ends the runner at once.
+    pub(super) cancel: CancellationToken,
+    /// Asks the runner to end its mode in an orderly way.
+    pub(super) stop: CancellationToken,
+    /// Cancelled when the runner's task has ended, however it ended.
+    pub(super) done: CancellationToken,
+    /// Where the actor puts what a script must hear of the session.
+    pub(super) feed: ScriptFeed,
 }
 
 /// Waits for the next event of `events`, or forever without a session.
@@ -44,9 +64,18 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
                     .await;
             }
             Some(SessionEvent::Joined) => self.feed(BotEvent::Joined).await,
-            Some(SessionEvent::Chat(chat)) => self.publish(FleetEventKind::ChatReceived(chat)),
+            Some(SessionEvent::Chat(chat)) => {
+                // Kept only while a script that reads chat runs; a line
+                // beyond its queue is dropped and counted there. Either
+                // way the actor has nothing more to do with it.
+                if let Some(feed) = self.script_feed() {
+                    let _kept = feed.chat(&chat);
+                }
+                self.publish(FleetEventKind::ChatReceived(chat));
+            }
             Some(SessionEvent::Died) => {
                 self.publish(FleetEventKind::Died);
+                self.tell_script(Life::Died);
                 self.feed(BotEvent::Died).await;
             }
             Some(SessionEvent::Respawned) => self.respawned(),
@@ -55,9 +84,11 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             // changed: the bot is online as it was.
             Some(SessionEvent::WorldChanged) => {
                 debug!("the server put the bot into another world");
+                self.tell_script(Life::WorldChanged);
             }
             Some(SessionEvent::LetGo(reason)) => {
                 debug!(?reason, "the session let go of inputs by itself");
+                self.tell_script(Life::LetGo(reason));
             }
             Some(SessionEvent::Disconnected(reason)) => {
                 self.ended(reason.clone(), BotEvent::Disconnected(reason))
@@ -88,6 +119,24 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
         // With no runner the bump is dropped: the next one subscribes later.
         self.respawns
             .send_modify(|count| *count = count.wrapping_add(1));
+        self.tell_script(Life::Respawned);
+    }
+
+    /// The current session's feed for its mode runner, while one runs.
+    fn script_feed(&self) -> Option<&ScriptFeed> {
+        self.session
+            .as_ref()
+            .and_then(|session| session.runner.as_ref())
+            .map(|runner| &runner.feed)
+    }
+
+    /// Hands the session's mode runner something a script has a hook or a
+    /// rule for. A step mode's runner never reads it, and each kind waits
+    /// there at most once.
+    fn tell_script(&self, life: Life) {
+        if let Some(feed) = self.script_feed() {
+            feed.life(life);
+        }
     }
 
     /// The session ended on its own for `reason`: records it in the

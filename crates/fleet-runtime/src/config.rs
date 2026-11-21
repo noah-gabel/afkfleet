@@ -81,6 +81,16 @@ pub struct RuntimeConfig {
     /// rest. The supervisor also uses it when its token is cancelled or every
     /// `Fleet` handle is dropped (Appendix A's `shutdown_timeout_secs`).
     pub shutdown_timeout: Duration,
+    /// How long a Stop waits for a scripted mode's orderly end: its
+    /// `on_stop` and the release of everything it holds. That's a hook of
+    /// at most 5 ms and a few session calls; a session that hangs can hold
+    /// a Stop only this long, and is released by its own end then
+    /// (ADR-0043).
+    pub script_stop_timeout: Duration,
+    /// How many chat lines wait for a bot's script at most. A line beyond
+    /// that is dropped and counted: a flood of lines can't grow the queue
+    /// (ADR-0043).
+    pub script_chat_lines: NonZeroUsize,
     /// How many crashes of a bot's actor within `restart_window` end in
     /// `CrashLoop` (Plan.md §6 row 7).
     pub restart_limit: NonZeroUsize,
@@ -108,6 +118,8 @@ impl Default for RuntimeConfig {
             event_buffer: NonZeroUsize::MIN.saturating_add(1023),
             reply_timeout: Duration::from_secs(5),
             shutdown_timeout: Duration::from_secs(10),
+            script_stop_timeout: Duration::from_secs(2),
+            script_chat_lines: NonZeroUsize::MIN.saturating_add(63),
             restart_limit: NonZeroUsize::MIN.saturating_add(5),
             restart_window: Duration::from_mins(10),
         }
@@ -137,6 +149,8 @@ mod tests {
         assert_eq!(config.event_buffer.get(), 1024);
         assert_eq!(config.reply_timeout, Duration::from_secs(5));
         assert_eq!(config.shutdown_timeout, Duration::from_secs(10));
+        assert_eq!(config.script_stop_timeout, Duration::from_secs(2));
+        assert_eq!(config.script_chat_lines.get(), 64);
         assert_eq!(config.restart_limit.get(), 6);
         assert_eq!(config.restart_window, Duration::from_mins(10));
     }

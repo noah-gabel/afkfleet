@@ -1,9 +1,11 @@
 //! The fleet's events in the agent's log (ADR-0014).
 //!
 //! In standalone mode nothing else consumes the fleet's events. One task
-//! logs the chat the bots receive and the chat their modes send, and how
-//! many events it missed when it fell behind, all at `debug`: chat is
-//! logged only at `debug` (CLAUDE.md). The actors already log every state
+//! logs the chat the bots receive, the chat their modes send and what
+//! their scripts report, and how many events it missed when it fell
+//! behind, all at `debug`: chat is logged only at `debug` (CLAUDE.md), and
+//! a script's log lines and errors are its own text, held to the same
+//! rule. The actors already log every state
 //! change, so nothing else is logged here.
 //!
 //! Chat text is untrusted. It's already sanitized, but it keeps its line
@@ -56,6 +58,12 @@ fn log(event: &FleetEvent) {
             bot_id = %event.bot_id,
             text = message.as_str(),
             "the bot's mode sent chat"
+        ),
+        // A script's status and log are its own text, like chat.
+        FleetEventKind::Script(script) => debug!(
+            bot_id = %event.bot_id,
+            script = ?script,
+            "the bot's script reported"
         ),
         FleetEventKind::StateChanged(_)
         | FleetEventKind::Died

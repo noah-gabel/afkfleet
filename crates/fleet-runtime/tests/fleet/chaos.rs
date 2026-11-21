@@ -576,6 +576,7 @@ impl<'r> Chaos<'r> {
             config,
             anchor: anchor(),
             seed: case.seed,
+            stopwatch: std::sync::Arc::new(fleet_testkit::stopwatch::ManualStopwatch::standing()),
         })
         .unwrap();
         connector.observe(fleet.subscribe());

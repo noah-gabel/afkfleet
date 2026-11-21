@@ -7,6 +7,11 @@
 //! - It asks for session credentials (bounded by the session-request
 //!   timeout), connects, opens the chat queue and starts the mode runner,
 //!   respawns the bot after a death, and tears sessions down.
+//! - It's the one reader of its session's events, so it hands a scripted
+//!   mode's runner what a script must hear of them, through the session's
+//!   feed. It ends a mode in an orderly way at a Stop, and **whenever a
+//!   mode runner's task ends, however it ended, it releases what a script
+//!   may still hold in the session** (Plan.md P15.17; ADR-0036, D9).
 //! - It tells the circuit breaker how each session went, and backs off for
 //!   `RetryPolicy::delay` or until the breaker's cool-down ends, whichever
 //!   is later.
@@ -45,6 +50,7 @@ use fleet_core::mc::{
 };
 use fleet_core::mode::ModeDefinition;
 use fleet_core::resilience::{CircuitBreaker, RetryPolicy};
+use fleet_core::script::Stopwatch;
 use rand::rngs::StdRng;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::{JoinError, JoinSet};
@@ -63,6 +69,7 @@ use crate::clock::RuntimeClock;
 use crate::config::RuntimeConfig;
 use crate::event::FleetEvent;
 use crate::metrics;
+use crate::script::{ScriptPrograms, ScriptSlot};
 use crate::snapshot::SnapshotPublisher;
 
 /// Everything a [`BotActor`] is built from (ADR-0013).
@@ -93,6 +100,15 @@ pub struct BotActorParts<C, P> {
     pub bucket: ChatBucket,
     /// The fleet's chat ticket counter.
     pub tickets: ChatTickets,
+    /// What of the bot's script outlives a session and an actor: its
+    /// instance with its state, the bot's limiter and its chat watch
+    /// (Plan.md P15.16). The actor ends the script's run at a Stop.
+    pub script: ScriptSlot,
+    /// The compiled scripts the fleet's bots share.
+    pub programs: ScriptPrograms,
+    /// What a script's hook is timed by: the OS's monotonic clock in an
+    /// agent, a manual one in tests (ADR-0040's amendment).
+    pub stopwatch: Arc<dyn Stopwatch>,
     /// Where the actor publishes the bot's snapshot. Its current value is
     /// the bot's last published snapshot, and each publish moves the bot in
     /// the `afkfleet_bots{state}` gauge (P4.9).
@@ -150,6 +166,8 @@ enum Input {
     TornDown(u64),
     /// A task ended normally.
     Nothing,
+    /// A mode runner ended without a panic.
+    RunnerEnded,
     Command(BotCommand),
     Answer(SessionAnswer),
     RetryDue,
@@ -181,6 +199,12 @@ pub struct BotActor<C: MinecraftConnector, P> {
     /// subscribes when it starts, so it sees only its own (ADR-0020, S23).
     respawns: watch::Sender<u64>,
     queue: ChatQueue,
+    script: ScriptSlot,
+    programs: ScriptPrograms,
+    stopwatch: Arc<dyn Stopwatch>,
+    /// Whether the event being applied is a Stop: the mode it ends is
+    /// ended in an orderly way (Plan.md P15.17).
+    orderly: bool,
     inbox: mpsc::Receiver<BotCommand>,
     span: Span,
     /// The parent of every session's token; a child of `run`'s token.
@@ -238,6 +262,9 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             events,
             bucket,
             tickets,
+            script,
+            programs,
+            stopwatch,
             snapshot,
             breaker,
             start,
@@ -265,6 +292,10 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             mode: watch::Sender::new(spec.mode.clone()),
             respawns: watch::Sender::new(0),
             queue: ChatQueue::new(spec.id, config.chat_queue, bucket, tickets),
+            script,
+            programs,
+            stopwatch,
+            orderly: false,
             inbox,
             span: info_span!("bot", bot_id = %spec.id),
             run_token: CancellationToken::new(),
@@ -328,7 +359,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             // respawn carries on. `next` is cancel-safe by the port contract.
             () = cancel.cancelled() => Input::End,
             Some(done) = self.runners.join_next(), if !self.runners.is_empty() => {
-                finished(done, CrashedTask::ModeRunner, |()| Input::Nothing)
+                finished(done, CrashedTask::ModeRunner, |()| Input::RunnerEnded)
             }
             Some(done) = self.deliveries.join_next(), if !self.deliveries.is_empty() => {
                 finished(done, CrashedTask::ChatDelivery, |()| Input::Nothing)
@@ -357,6 +388,9 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             Input::End => return ControlFlow::Break(self.finish().await),
             Input::Crashed(task) => return ControlFlow::Break(self.crash(task).await),
             Input::Nothing => {}
+            // It ended by itself. Whatever its script may still hold in a
+            // session that lives on is released.
+            Input::RunnerEnded => self.release_after_runner().await,
             Input::TornDown(generation) => self.torn_down(generation).await,
             Input::Command(command) => self.command(command).await,
             Input::Answer(answer) => {
@@ -607,6 +641,9 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
         self.respawn = None;
         self.death_open = false;
         self.watchdog = None;
+        // A runner that panicked let go of nothing: before the teardown,
+        // while the session still takes it.
+        self.release_after_runner().await;
         if let Some(session) = self.session.take() {
             self.close_session(session);
         }
@@ -693,6 +730,7 @@ mod tests {
     use fleet_testkit::mc::{
         EmitOutcome, FakeConnector, FakeCredentials, Performed, SessionController,
     };
+    use fleet_testkit::stopwatch::ManualStopwatch;
     use rand::SeedableRng as _;
 
     use super::*;
@@ -760,6 +798,9 @@ mod tests {
             events: broadcast::channel(64).0,
             bucket: ChatBucket::new(fleet_core::chat::ChatRate::default()),
             tickets: ChatTickets::new(),
+            script: ScriptSlot::new(),
+            programs: ScriptPrograms::new(),
+            stopwatch: Arc::new(ManualStopwatch::standing()),
             snapshot: snapshots.publisher(),
             breaker: watch::Sender::new(CircuitBreaker::new(policy)),
             start: Transition {
@@ -981,8 +1022,12 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn joining_the_tasks_reports_the_first_that_crashed() {
         let (mut actor, _snapshots, _controller) = online().await;
-        // The session's own runner and delivery end with its token.
-        actor.session.as_ref().unwrap().token.cancel();
+        // The session's own delivery ends with its token, and its runner
+        // with the runner's own, which the actor cancels wherever a
+        // session ends.
+        let session = actor.session.as_ref().unwrap();
+        session.token.cancel();
+        session.runner.as_ref().unwrap().cancel.cancel();
         actor
             .deliveries
             .spawn(async { panic!("a test panic in a delivery") });

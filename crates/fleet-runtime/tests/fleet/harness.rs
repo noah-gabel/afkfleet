@@ -15,6 +15,7 @@ use fleet_core::mode::{Action, ModeDefinition, ModeDraft, Schedule, Step};
 use fleet_core::resilience::{CircuitPolicy, RetryPolicy};
 use fleet_runtime::{Fleet, FleetEvent, FleetEventKind, FleetParts, RuntimeConfig};
 use fleet_testkit::mc::{EmitOutcome, FakeConnector, FakeCredentials, SessionController};
+use fleet_testkit::stopwatch::ManualStopwatch;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -163,6 +164,9 @@ pub(crate) struct Setup {
     pub(crate) circuit: CircuitPolicy,
     pub(crate) fake: FakeConnector,
     pub(crate) credentials: FakeCredentials,
+    /// What the fleet's scripts' hooks are timed by: standing still unless
+    /// a test moves it.
+    pub(crate) stopwatch: ManualStopwatch,
 }
 
 impl Setup {
@@ -172,6 +176,7 @@ impl Setup {
             circuit: circuit(8),
             fake: FakeConnector::new(),
             credentials: FakeCredentials::new(),
+            stopwatch: ManualStopwatch::standing(),
         }
     }
 
@@ -187,6 +192,7 @@ impl Setup {
             config: self.config,
             anchor: anchor(),
             seed: 1,
+            stopwatch: Arc::new(self.stopwatch.clone()),
         }
     }
 
