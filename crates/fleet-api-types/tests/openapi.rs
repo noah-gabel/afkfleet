@@ -68,6 +68,13 @@ use fleet_api_types::modes::{
     ModeScheduleRequest, ModeStep, ModeStepRequest, ModeVisibility, UpdateModeRequest,
     number_schema,
 };
+use fleet_api_types::script::{
+    ModeCapture, ModeCaptureKind, ModeCaptureRequest, ModeDecimalMark, ModeMessage,
+    ModeMessageRequest, ModePattern, ModePatternRequest, ModeScript, ModeScriptRequest, ModeValue,
+    ModeValueKind, ModeValueRequest, PatternWhen, SCRIPT_KEY_MAX_CHARS, SCRIPT_REPORT_MAX_CHARS,
+    SCRIPT_SOURCE_MAX_BYTES, SCRIPT_TEXT_MAX_CHARS, ScriptHookName, ScriptLogKind, ScriptLogLine,
+    ScriptProblem, ScriptProblemKind, ScriptStateKind, ScriptStatus,
+};
 use fleet_api_types::server_settings::{
     CHAT_FORMAT_MAX_CHARS, CHAT_PREVIEW_LINE_MAX_CHARS, CONFLICT_TEXT_MAX_CHARS,
     ConflictTextResponse, CreateServerSettingsRequest, PreviewChatFormatsRequest,
@@ -185,6 +192,7 @@ fn declarations() -> BTreeMap<String, String> {
     ]
     .into_iter()
     .chain(mode_declarations(&config))
+    .chain(script_declarations(&config))
     .chain(event_declarations(&config))
     .chain(admin_declarations(&config))
     .chain(server_settings_declarations(&config))
@@ -247,6 +255,34 @@ fn event_declarations(config: &Config) -> [(&'static str, String); 4] {
         ("EventMessage", EventMessage::decl(config)),
         ("EventMessageKind", EventMessageKind::decl(config)),
         ("EventTicketResponse", EventTicketResponse::decl(config)),
+    ]
+}
+
+/// ts-rs's declaration of every scripted mode's and script's type
+/// (Plan.md P15.21, P15.23).
+fn script_declarations(config: &Config) -> [(&'static str, String); 21] {
+    [
+        ("ModeScriptRequest", ModeScriptRequest::decl(config)),
+        ("ModeMessageRequest", ModeMessageRequest::decl(config)),
+        ("ModeValueRequest", ModeValueRequest::decl(config)),
+        ("ModeValueKind", ModeValueKind::decl(config)),
+        ("ModePatternRequest", ModePatternRequest::decl(config)),
+        ("ModeCaptureRequest", ModeCaptureRequest::decl(config)),
+        ("ModeCaptureKind", ModeCaptureKind::decl(config)),
+        ("ModeDecimalMark", ModeDecimalMark::decl(config)),
+        ("PatternWhen", PatternWhen::decl(config)),
+        ("ModeScript", ModeScript::decl(config)),
+        ("ModeMessage", ModeMessage::decl(config)),
+        ("ModeValue", ModeValue::decl(config)),
+        ("ModePattern", ModePattern::decl(config)),
+        ("ModeCapture", ModeCapture::decl(config)),
+        ("ScriptStatus", ScriptStatus::decl(config)),
+        ("ScriptStateKind", ScriptStateKind::decl(config)),
+        ("ScriptProblem", ScriptProblem::decl(config)),
+        ("ScriptProblemKind", ScriptProblemKind::decl(config)),
+        ("ScriptHookName", ScriptHookName::decl(config)),
+        ("ScriptLogLine", ScriptLogLine::decl(config)),
+        ("ScriptLogKind", ScriptLogKind::decl(config)),
     ]
 }
 
@@ -604,6 +640,22 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::held_account_name("AccountLabel", "name", MC_NAME_MAX_CHARS)]
 #[case::held_granted_at("HeldGrantResponse", "granted_at", TIMESTAMP_CHARS)]
 #[case::held_page_next("HeldGrantPage", "next", ID_CHARS)]
+#[case::script_request_source("ModeScriptRequest", "source", SCRIPT_SOURCE_MAX_BYTES)]
+#[case::message_request_key("ModeMessageRequest", "key", SCRIPT_KEY_MAX_CHARS)]
+#[case::message_request_text("ModeMessageRequest", "text", SCRIPT_TEXT_MAX_CHARS)]
+#[case::value_request_name("ModeValueRequest", "name", SCRIPT_KEY_MAX_CHARS)]
+#[case::pattern_request_key("ModePatternRequest", "key", SCRIPT_KEY_MAX_CHARS)]
+#[case::pattern_request_text("ModePatternRequest", "text", SCRIPT_TEXT_MAX_CHARS)]
+#[case::capture_request_name("ModeCaptureRequest", "name", SCRIPT_KEY_MAX_CHARS)]
+#[case::script_source("ModeScript", "source", SCRIPT_SOURCE_MAX_BYTES)]
+#[case::message_key("ModeMessage", "key", SCRIPT_KEY_MAX_CHARS)]
+#[case::message_text("ModeMessage", "text", SCRIPT_TEXT_MAX_CHARS)]
+#[case::value_name("ModeValue", "name", SCRIPT_KEY_MAX_CHARS)]
+#[case::pattern_key("ModePattern", "key", SCRIPT_KEY_MAX_CHARS)]
+#[case::pattern_text("ModePattern", "text", SCRIPT_TEXT_MAX_CHARS)]
+#[case::capture_name("ModeCapture", "name", SCRIPT_KEY_MAX_CHARS)]
+#[case::script_problem_message("ScriptProblem", "message", SCRIPT_REPORT_MAX_CHARS)]
+#[case::script_log_text("ScriptLogLine", "text", SCRIPT_REPORT_MAX_CHARS)]
 fn a_text_field_is_capped_at_its_constant(
     #[case] component: &str,
     #[case] field: &str,
@@ -618,7 +670,23 @@ fn a_text_field_is_capped_at_its_constant(
 }
 
 /// Every text field whose cap the cases above check.
-const CHECKED_TEXTS: [(&str, &str); 128] = [
+const CHECKED_TEXTS: [(&str, &str); 144] = [
+    ("ModeScriptRequest", "source"),
+    ("ModeMessageRequest", "key"),
+    ("ModeMessageRequest", "text"),
+    ("ModeValueRequest", "name"),
+    ("ModePatternRequest", "key"),
+    ("ModePatternRequest", "text"),
+    ("ModeCaptureRequest", "name"),
+    ("ModeScript", "source"),
+    ("ModeMessage", "key"),
+    ("ModeMessage", "text"),
+    ("ModeValue", "name"),
+    ("ModePattern", "key"),
+    ("ModePattern", "text"),
+    ("ModeCapture", "name"),
+    ("ScriptProblem", "message"),
+    ("ScriptLogLine", "text"),
     ("ErrorBody", "message"),
     ("ErrorBody", "request_id"),
     ("FieldError", "path"),
@@ -790,8 +858,13 @@ fn a_request_schema_refuses_unknown_fields_and_responses_dont() {
         "LoginRequest",
         "MfaConfirmRequest",
         "ModeActionRequest",
+        "ModeCaptureRequest",
+        "ModeMessageRequest",
+        "ModePatternRequest",
         "ModeScheduleRequest",
+        "ModeScriptRequest",
         "ModeStepRequest",
+        "ModeValueRequest",
         "PasswordChangeRequest",
         "PreviewChatFormatsRequest",
         "RefreshRequest",
@@ -988,6 +1061,33 @@ fn an_open_field_lists_exactly_its_enums_known_values() {
 #[case::event_failure("EventMessage", "failure")]
 #[case::event_mode_id("EventMessage", "mode_id")]
 #[case::event_mode("EventMessage", "mode")]
+#[case::create_mode_request_script("CreateModeRequest", "script")]
+#[case::update_mode_request_script("UpdateModeRequest", "script")]
+#[case::mode_response_script("ModeResponse", "script")]
+#[case::mode_value_request_min("ModeValueRequest", "min")]
+#[case::mode_value_request_max("ModeValueRequest", "max")]
+#[case::mode_value_request_places("ModeValueRequest", "places")]
+#[case::mode_value_request_options("ModeValueRequest", "options")]
+#[case::mode_capture_request_min("ModeCaptureRequest", "min")]
+#[case::mode_capture_request_max("ModeCaptureRequest", "max")]
+#[case::mode_capture_request_decimal_mark("ModeCaptureRequest", "decimal_mark")]
+#[case::mode_capture_request_options("ModeCaptureRequest", "options")]
+#[case::mode_value_min("ModeValue", "min")]
+#[case::mode_value_max("ModeValue", "max")]
+#[case::mode_value_places("ModeValue", "places")]
+#[case::mode_value_options("ModeValue", "options")]
+#[case::mode_capture_min("ModeCapture", "min")]
+#[case::mode_capture_max("ModeCapture", "max")]
+#[case::mode_capture_decimal_mark("ModeCapture", "decimal_mark")]
+#[case::mode_capture_options("ModeCapture", "options")]
+#[case::script_status_problem("ScriptStatus", "problem")]
+#[case::script_problem_hook("ScriptProblem", "hook")]
+#[case::script_problem_line("ScriptProblem", "line")]
+#[case::script_problem_column("ScriptProblem", "column")]
+#[case::event_message_script("EventMessage", "script")]
+#[case::event_message_log("EventMessage", "log")]
+#[case::field_error_line("FieldError", "line")]
+#[case::field_error_column("FieldError", "column")]
 fn every_new_optional_field_is_left_out_never_null(#[case] component: &str, #[case] field: &str) {
     let components = components_json();
     let schema = property(&components, component, field);
@@ -1046,6 +1146,14 @@ fn every_new_optional_field_is_left_out_never_null(#[case] component: &str, #[ca
 #[case::event_state("EventMessage", "state", "BotStateKind")]
 #[case::event_reason("EventMessage", "reason", "BotStateReason")]
 #[case::event_failure("EventMessage", "failure", "ChatFailure")]
+#[case::value_kind("ModeValue", "type", "ModeValueKind")]
+#[case::capture_kind("ModeCapture", "type", "ModeCaptureKind")]
+#[case::capture_decimal_mark("ModeCapture", "decimal_mark", "ModeDecimalMark")]
+#[case::pattern_when("ModePattern", "when", "PatternWhen")]
+#[case::script_state("ScriptStatus", "state", "ScriptStateKind")]
+#[case::script_problem_kind("ScriptProblem", "kind", "ScriptProblemKind")]
+#[case::script_problem_hook("ScriptProblem", "hook", "ScriptHookName")]
+#[case::script_log_kind("ScriptLogLine", "kind", "ScriptLogKind")]
 fn the_new_open_fields_list_exactly_their_known_values(
     #[case] component: &str,
     #[case] field: &str,
@@ -1087,6 +1195,14 @@ fn the_new_open_fields_list_exactly_their_known_values(
         "ModeScheduleKind" => names(ModeScheduleKind::ALL),
         "EventMessageKind" => names(EventMessageKind::ALL),
         "ChatFailure" => names(ChatFailure::ALL),
+        "ModeValueKind" => names(ModeValueKind::ALL),
+        "ModeCaptureKind" => names(ModeCaptureKind::ALL),
+        "ModeDecimalMark" => names(ModeDecimalMark::ALL),
+        "PatternWhen" => names(PatternWhen::ALL),
+        "ScriptStateKind" => names(ScriptStateKind::ALL),
+        "ScriptProblemKind" => names(ScriptProblemKind::ALL),
+        "ScriptHookName" => names(ScriptHookName::ALL),
+        "ScriptLogKind" => names(ScriptLogKind::ALL),
         _ => InviteState::ALL
             .iter()
             .map(|state| state.as_str())

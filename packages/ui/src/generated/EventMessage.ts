@@ -6,6 +6,8 @@ import type { ChatFailure } from "./ChatFailure";
 import type { ChatLine } from "./ChatLine";
 import type { EventMessageKind } from "./EventMessageKind";
 import type { ModeResponse } from "./ModeResponse";
+import type { ScriptLogLine } from "./ScriptLogLine";
+import type { ScriptStatus } from "./ScriptStatus";
 
 /**
  * One frame of the live events socket: what happened, by its `type`. The
@@ -27,7 +29,8 @@ bot_id?: string,
  */
 bot?: BotResponse, 
 /**
- * `bot_died`, `bot_alert`: when the server heard it.
+ * `bot_died`, `bot_alert`, `bot_script`, `bot_script_log`: when the
+ * server heard it.
  */
 at?: string, 
 /**
@@ -59,4 +62,12 @@ mode_id?: string,
 /**
  * `mode`: the mode as the viewer's `GET /modes` lists it now.
  */
-mode?: ModeResponse, };
+mode?: ModeResponse, 
+/**
+ * `bot_script`: the bot's script's status.
+ */
+script?: ScriptStatus, 
+/**
+ * `bot_script_log`: a line of the bot's script's log.
+ */
+log?: ScriptLogLine, };

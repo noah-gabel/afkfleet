@@ -1264,6 +1264,32 @@ fn known_event_line(kind: EventMessageKind, event: &EventMessage) -> String {
                 .map_or_else(|| "?".to_owned(), |id| id.to_string());
             format!("mode {id} removed")
         }
+        EventMessageKind::BotScript => {
+            let mut shown = format!("bot {bot} script");
+            if let Some(status) = &event.script {
+                let _ = write!(shown, " {}", status.state.as_str());
+                if let Some(problem) = &status.problem {
+                    let _ = write!(shown, ": {}", problem.kind.as_str());
+                    if let Some(hook) = &problem.hook {
+                        let _ = write!(shown, " in {}", hook.as_str());
+                    }
+                    if let (Some(line), Some(column)) = (problem.line, problem.column) {
+                        let _ = write!(shown, " at {line}:{column}");
+                    }
+                    let _ = write!(shown, ": {}", problem.message);
+                }
+            }
+            let _ = write!(shown, " at {at}");
+            shown
+        }
+        EventMessageKind::BotScriptLog => match &event.log {
+            Some(line) => format!(
+                "bot {bot} script log {}: {} at {at}",
+                line.kind.as_str(),
+                line.text
+            ),
+            None => format!("bot {bot} script log at {at}"),
+        },
     }
 }
 
