@@ -31,6 +31,9 @@
 //!   it reads, as typed values and never as text; [`candidate_line`] says
 //!   which received lines may be read at all, and [`ChatWatch`] which
 //!   patterns count right now (ADR-0037). [`amount`] reads the numbers.
+//! - [`ScriptState`] and [`ScriptLogLine`] are what an agent reports about a
+//!   bot's script, every text in them a [`ReportText`], cleaned as untrusted
+//!   text (Plan.md P15.20, P15.23).
 
 pub mod amount;
 mod event;
@@ -43,6 +46,7 @@ mod limiter;
 pub mod limits;
 mod pattern;
 mod placeholder;
+mod report;
 mod settings;
 mod source;
 mod stopwatch;
@@ -65,13 +69,16 @@ pub use pattern::{
     Capture, CaptureDraft, CaptureKind, Captured, ChatMatch, ChatPattern, ChatPatterns,
     ChatPatternsError, PatternDraft, PatternError, When, candidate_line,
 };
+pub use report::{
+    LogKind, ProblemKind, ReportText, ScriptLogLine, ScriptPlace, ScriptProblem, ScriptState,
+};
 #[cfg(test)]
 pub(crate) use settings::draft_of;
 pub use settings::{
     BlockGuard, BlockGuardError, LeashRadius, LeashRadiusError, Script, ScriptApiLevel,
     ScriptApiLevelError, ScriptDraft, ScriptError, ToolGuard, ToolGuardError,
 };
-pub use source::{ScriptSource, ScriptSourceError};
+pub use source::{ScriptSource, ScriptSourceError, clean_source};
 pub use stopwatch::Stopwatch;
 pub use template::{
     Given, MessageDraft, MessageTemplate, MessageValue, RenderError, TemplateError, ValueDraft,

@@ -3,7 +3,7 @@
 use core::str::FromStr;
 
 use super::{BotState, FailReason, PauseReason};
-use crate::chat::ChatRate;
+use crate::chat::{ChatFormats, ChatRate};
 use crate::disconnect::ConflictTexts;
 use crate::id::{AccountId, BotId};
 use crate::mode::ModeDefinition;
@@ -107,6 +107,10 @@ pub struct BotSpec {
     /// How fast it may chat: the server's `[rate_limits]` setting, or the
     /// default for a standalone agent (ADR-0020, S3).
     pub chat_rate: ChatRate,
+    /// How its server prints a player's chat as system text (ADR-0020,
+    /// S80): its server settings' formats, or none for a standalone agent.
+    /// A script never reads a line one of them fits (ADR-0037, C2).
+    pub chat_formats: ChatFormats,
 }
 
 /// A state that outlives the actor that reached it: the bot stopped by itself,

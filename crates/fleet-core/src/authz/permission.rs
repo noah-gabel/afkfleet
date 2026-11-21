@@ -1,7 +1,9 @@
-//! [`Permission`]: what an actor wants to do.
+//! [`Permission`]: what an actor wants to do, and [`ModeKind`], what a mode
+//! is made of.
 
 use super::{CommandCheck, GrantLevel, ModeVisibility, Role};
 use crate::id::UserId;
+use crate::mode::{ModeBody, ModeDefinition};
 
 /// Something an actor wants to do.
 ///
@@ -55,10 +57,13 @@ pub enum Permission {
     // Fleet-wide (`ResourceContext::Global`).
     /// Link a new Microsoft account (every role; P9.4 checks the quota).
     LinkAccount,
-    /// Create a mode (private: every role; shared: Admin+).
+    /// Create a mode (steps, private: every role; steps, shared: Admin+; a
+    /// script: Admin+, ADR-0036, D15).
     CreateMode {
         /// Who may see the new mode.
         visibility: ModeVisibility,
+        /// What it's made of.
+        kind: ModeKind,
     },
     /// List all users (Admin+).
     ListUsers,
@@ -96,10 +101,15 @@ pub enum Permission {
     /// See a mode and use it on a bot.
     ViewMode,
     /// Change a mode. Built-in modes are read-only. The actor needs the
-    /// rights to edit the mode both as it is and with its new visibility.
+    /// rights to edit the mode both as it is and as it will be, each asked
+    /// with that mode's visibility and kind; a script's needs Admin+
+    /// (ADR-0036, D15), so a Member never edits a scripted mode, not even
+    /// into steps.
     UpdateMode {
-        /// Who may see the mode after the change.
+        /// Who may see the mode, as it is or after the change.
         visibility: ModeVisibility,
+        /// What it's made of, as it is or after the change.
+        kind: ModeKind,
     },
     /// Delete a mode. Built-in modes are read-only.
     DeleteMode,
@@ -125,4 +135,36 @@ pub enum Permission {
     /// Use one's own profile, sessions, 2FA, link flows and event tickets
     /// (only the user they belong to).
     UsePersonal,
+}
+
+/// What a mode is made of, as [`authorize`](super::authorize) tells modes
+/// apart: only an Admin or the Owner writes a script, which is new code that
+/// hostile input reaches and which moves a bot (ADR-0036, D15). A Member
+/// runs a shared scripted mode on the bots they control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ModeKind {
+    /// Steps, each an action with its schedule.
+    Steps,
+    /// A script.
+    Script,
+}
+
+impl ModeKind {
+    /// What `mode` is made of.
+    #[must_use]
+    pub const fn of(mode: &ModeDefinition) -> Self {
+        match mode.body() {
+            ModeBody::Steps(_) => Self::Steps,
+            ModeBody::Script(_) => Self::Script,
+        }
+    }
+
+    /// Its stable name, for the audit log: `steps` or `script`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Steps => "steps",
+            Self::Script => "script",
+        }
+    }
 }

@@ -6,7 +6,9 @@
 //! whether the permission applies, whether the actor may see the resource,
 //! and only then whether they may do this.
 
-use super::{Actor, GrantLevel, ModeVisibility, Permission, ResourceContext, Role, UserRef};
+use super::{
+    Actor, GrantLevel, ModeKind, ModeVisibility, Permission, ResourceContext, Role, UserRef,
+};
 use crate::id::UserId;
 
 /// Why [`authorize`] denied a permission. Every denial tells the API what to
@@ -161,10 +163,10 @@ fn global(actor: &Actor, permission: Permission) -> Result<(), AuthzError> {
         Permission::LinkAccount
         | Permission::CreateMode {
             visibility: ModeVisibility::Private,
+            kind: ModeKind::Steps,
         } => true,
-        Permission::CreateMode {
-            visibility: ModeVisibility::Shared,
-        }
+        // A shared mode, and any script (ADR-0036, D15).
+        Permission::CreateMode { .. }
         | Permission::ListUsers
         | Permission::ListInvites
         | Permission::ViewAgents
@@ -258,8 +260,13 @@ fn mode(
     // change, if the permission changes it.
     let edited = match permission {
         Permission::ViewMode => None,
-        Permission::UpdateMode { visibility: after } => Some(after),
-        Permission::DeleteMode => Some(visibility),
+        Permission::UpdateMode {
+            visibility: after,
+            kind,
+        } => Some((after, kind)),
+        // Deleting needs no right to write a script: a Member deletes a
+        // scripted mode they own and could no longer edit.
+        Permission::DeleteMode => Some((visibility, ModeKind::Steps)),
         Permission::ViewBot
         | Permission::ControlBot
         | Permission::SendChat(_)
@@ -296,9 +303,12 @@ fn mode(
         return Err(AuthzError::NotFound);
     }
     // Editing needs the rights both as the mode is and as it will be, so an
-    // Admin can't share a Member's private mode.
-    allow(edited.is_none_or(|after| {
-        edits_mode(actor, owner, visibility) && edits_mode(actor, owner, after)
+    // Admin can't share a Member's private mode; and a script is written
+    // only by an Admin or the Owner (ADR-0036, D15).
+    allow(edited.is_none_or(|(after, kind)| {
+        edits_mode(actor, owner, visibility)
+            && edits_mode(actor, owner, after)
+            && (kind == ModeKind::Steps || actor.role >= Role::Admin)
     }))
 }
 
@@ -421,7 +431,9 @@ fn personal(actor: &Actor, permission: Permission, owner: UserId) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::authz::{CommandAllowlist, CommandCheck, GrantLevel, ModeVisibility, Role, UserRef};
+    use crate::authz::{
+        CommandAllowlist, CommandCheck, GrantLevel, ModeKind, ModeVisibility, Role, UserRef,
+    };
     use crate::chat::ChatMessage;
     use crate::id::UserId;
     use crate::mode::{Action, ModeDefinition, ModeDraft, Schedule, Step};
@@ -432,6 +444,7 @@ mod tests {
 
     use AuthzError::{Forbidden, NotFound, WrongResource};
     use GrantLevel::{Control, Manage, View};
+    use ModeKind::{Script, Steps};
     use ModeVisibility::{Private, Shared};
 
     // Fixtures.
@@ -573,6 +586,16 @@ mod tests {
         }
     }
 
+    /// `CreateMode` for a mode with `visibility` made of `kind`.
+    const fn create(visibility: ModeVisibility, kind: ModeKind) -> Permission {
+        Permission::CreateMode { visibility, kind }
+    }
+
+    /// `UpdateMode` to a mode with `visibility` made of `kind`.
+    const fn update(visibility: ModeVisibility, kind: ModeKind) -> Permission {
+        Permission::UpdateMode { visibility, kind }
+    }
+
     /// Every permission the matrix shows: each variant, with each value of
     /// its parameters that the rules tell apart.
     fn permission_cases() -> Vec<(&'static str, Permission)> {
@@ -608,16 +631,10 @@ mod tests {
             ("ReviewLink", Permission::ReviewLink),
             ("LeaveAccount", Permission::LeaveAccount),
             ("LinkAccount", Permission::LinkAccount),
-            (
-                "CreateMode private",
-                Permission::CreateMode {
-                    visibility: Private,
-                },
-            ),
-            (
-                "CreateMode shared",
-                Permission::CreateMode { visibility: Shared },
-            ),
+            ("CreateMode private", create(Private, Steps)),
+            ("CreateMode shared", create(Shared, Steps)),
+            ("CreateMode private, a script", create(Private, Script)),
+            ("CreateMode shared, a script", create(Shared, Script)),
             ("ListUsers", Permission::ListUsers),
             ("ListInvites", Permission::ListInvites),
             (
@@ -643,16 +660,10 @@ mod tests {
             ),
             ("RevokeInvite", Permission::RevokeInvite),
             ("ViewMode", Permission::ViewMode),
-            (
-                "UpdateMode to private",
-                Permission::UpdateMode {
-                    visibility: Private,
-                },
-            ),
-            (
-                "UpdateMode to shared",
-                Permission::UpdateMode { visibility: Shared },
-            ),
+            ("UpdateMode to private", update(Private, Steps)),
+            ("UpdateMode to shared", update(Shared, Steps)),
+            ("UpdateMode to private, a script", update(Private, Script)),
+            ("UpdateMode to shared, a script", update(Shared, Script)),
             ("DeleteMode", Permission::DeleteMode),
             ("SetRole member", Permission::SetRole { role: Role::Member }),
             ("SetRole admin", Permission::SetRole { role: Role::Admin }),
@@ -1451,8 +1462,13 @@ mod tests {
                 Err(Forbidden)
             );
             for after in [Private, Shared] {
-                let update = Permission::UpdateMode { visibility: after };
-                assert_eq!(authorize(&actor, update, &built_in), Err(Forbidden));
+                for kind in [Steps, Script] {
+                    let update = Permission::UpdateMode {
+                        visibility: after,
+                        kind,
+                    };
+                    assert_eq!(authorize(&actor, update, &built_in), Err(Forbidden));
+                }
             }
         }
     }
@@ -1465,7 +1481,10 @@ mod tests {
             visibility: Private,
         };
 
-        let update = |visibility| Permission::UpdateMode { visibility };
+        let update = |visibility| Permission::UpdateMode {
+            visibility,
+            kind: Steps,
+        };
         assert_eq!(authorize(&admin, update(Private), &mode), Ok(()));
         assert_eq!(authorize(&admin, update(Shared), &mode), Err(Forbidden));
     }
@@ -1512,9 +1531,96 @@ mod tests {
             Err(Forbidden)
         );
         for visibility in [Private, Shared] {
-            let update = Permission::UpdateMode { visibility };
-            assert_eq!(authorize(&member, update, &mode), Err(Forbidden));
+            for kind in [Steps, Script] {
+                let update = Permission::UpdateMode { visibility, kind };
+                assert_eq!(authorize(&member, update, &mode), Err(Forbidden));
+            }
         }
+    }
+
+    // Scripted modes (ADR-0036, D15).
+
+    #[rstest]
+    #[case::the_owner(Role::Owner, Ok(()))]
+    #[case::an_admin(Role::Admin, Ok(()))]
+    #[case::a_member(Role::Member, Err(Forbidden))]
+    fn only_an_admin_or_the_owner_creates_a_scripted_mode(
+        #[case] role: Role,
+        #[case] expected: Result<(), AuthzError>,
+    ) {
+        for visibility in [Private, Shared] {
+            let create = Permission::CreateMode {
+                visibility,
+                kind: Script,
+            };
+            assert_eq!(
+                authorize(&actor(role), create, &ResourceContext::Global),
+                expected,
+                "{visibility:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_member_never_edits_a_scripted_mode_not_even_their_own_private_one() {
+        let member = actor(Role::Member);
+        let mode = ResourceContext::Mode {
+            owner: Some(myself(&member)),
+            visibility: Private,
+        };
+        let update = |kind| Permission::UpdateMode {
+            visibility: Private,
+            kind,
+        };
+
+        // Their step mode stays theirs to edit; a script, before or after
+        // the edit, never is.
+        assert_eq!(authorize(&member, update(Steps), &mode), Ok(()));
+        assert_eq!(authorize(&member, update(Script), &mode), Err(Forbidden));
+    }
+
+    #[test]
+    fn a_member_sees_a_shared_scripted_mode_and_runs_it_where_they_have_control() {
+        let member = actor(Role::Member);
+        let shared = ResourceContext::Mode {
+            owner: Some(other(Role::Admin)),
+            visibility: Shared,
+        };
+        let theirs = account(myself(&member), None);
+
+        assert_eq!(authorize(&member, Permission::ViewMode, &shared), Ok(()));
+        assert_eq!(
+            authorize(&member, Permission::SetBotMode(chat("hello")), &theirs),
+            Ok(())
+        );
+    }
+
+    #[rstest]
+    #[case::a_members_private_one(Role::Member, Private, Ok(()))]
+    #[case::their_own_shared_one(Role::Admin, Shared, Err(Forbidden))]
+    fn an_admin_edits_the_scripted_modes_the_account_rule_lets_them(
+        #[case] owner: Role,
+        #[case] visibility: ModeVisibility,
+        #[case] expected: Result<(), AuthzError>,
+    ) {
+        let admin = actor(Role::Admin);
+        // Another Admin's shared mode is theirs alone, script or not.
+        let mode = ResourceContext::Mode {
+            owner: Some(other(owner)),
+            visibility,
+        };
+        let update = Permission::UpdateMode {
+            visibility,
+            kind: Script,
+        };
+
+        assert_eq!(authorize(&admin, update, &mode), expected);
+    }
+
+    #[test]
+    fn a_kind_has_its_stable_name() {
+        assert_eq!(Steps.as_str(), "steps");
+        assert_eq!(Script.as_str(), "script");
     }
 
     // Users.

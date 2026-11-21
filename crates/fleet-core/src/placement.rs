@@ -21,6 +21,13 @@
 //!   placed bot is never moved to rebalance. An agent back with less
 //!   capacity keeps the bots it runs first, then those not paused or failed,
 //!   then the lowest IDs; the rest move under the same rules (S42).
+//! - **A scripted mode only where it runs** (ADR-0036, D13): a bot whose
+//!   mode needs a script API level goes only to an agent whose hello
+//!   reported that level or a higher one. An agent below it is never sent
+//!   the bot's spec, not even one that stops it: a bot it runs is left out
+//!   of its welcome or sent an unassign ([`UnassignReason::AgentTooOld`]),
+//!   one it doesn't run is freed, and its undelivered assignment isn't sent
+//!   again.
 //! - **When:** right after serve starts, new placements wait until every
 //!   enabled agent has said hello, or a grace has passed ([`Facts::gate_open`],
 //!   S45).
@@ -34,6 +41,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use crate::account::{AccountKind, AccountStatus};
 use crate::bot::DesiredRunState;
 use crate::id::{AgentId, BotId};
+use crate::script::ScriptApiLevel;
 use crate::value::{AgentCapacity, McUsername, McUuid};
 
 /// A Minecraft account as a player sees it: two bots with the same identity
@@ -172,6 +180,9 @@ pub struct BotFacts {
     pub agent: Option<AgentId>,
     /// Whether its last known state is Paused or Failed.
     pub sticky: bool,
+    /// The script API level its mode needs: `None` for a step mode, which
+    /// every agent runs (ADR-0036, D13).
+    pub needs: Option<ScriptApiLevel>,
 }
 
 /// An open release record: an agent that may still run a bot whose row no
@@ -198,6 +209,9 @@ pub struct AgentFacts {
     pub plannable: bool,
     /// The capacity its hello reported.
     pub capacity: AgentCapacity,
+    /// The script API level its hello reported: 0 for an agent from before
+    /// scripts, which runs none.
+    pub script_api: u32,
     /// What the stream holds.
     pub phase: Phase,
 }
@@ -383,16 +397,20 @@ pub enum UndeliveredWhy {
     Unqualified(Unplaced),
     /// The agent has no room left for it.
     NoRoom,
+    /// The agent runs a lower script API level than the bot's mode needs
+    /// (ADR-0036, D13).
+    AgentTooOld,
 }
 
 impl UndeliveredWhy {
-    /// The reason's stable name, for the logs: an [`Unplaced`] name, or
-    /// `no_room`.
+    /// The reason's stable name, for the logs: an [`Unplaced`] name,
+    /// `no_room` or `agent_too_old`.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Unqualified(why) => why.as_str(),
             Self::NoRoom => "no_room",
+            Self::AgentTooOld => "agent_too_old",
         }
     }
 }
@@ -439,16 +457,22 @@ pub enum UnassignReason {
     Unqualified(Unplaced),
     /// Its agent came back with less capacity.
     Capacity,
+    /// Its agent runs a lower script API level than its mode needs: its
+    /// mode became a script's, or the agent came back older. It's let go
+    /// without a spec, so the mode never reaches that agent (ADR-0036,
+    /// D13).
+    AgentTooOld,
 }
 
 impl UnassignReason {
     /// The reason's stable name, for the audit log: an [`Unplaced`] name,
-    /// or `capacity`.
+    /// `capacity` or `agent_too_old`.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Unqualified(why) => why.as_str(),
             Self::Capacity => "capacity",
+            Self::AgentTooOld => "agent_too_old",
         }
     }
 }
@@ -494,8 +518,9 @@ struct Planner<'a> {
     fenced_accounts: HashSet<McIdentity>,
     /// Bots whose row loses its agent in this plan.
     detached: HashSet<BotId>,
-    /// Each plannable agent's part, and how many bots it may still be given.
-    parts: BTreeMap<AgentId, (AgentPlan, usize)>,
+    /// Each plannable agent's part, how many bots it may still be given,
+    /// and the script API level it runs.
+    parts: BTreeMap<AgentId, (AgentPlan, usize, u32)>,
     plan: Plan,
 }
 
@@ -599,6 +624,24 @@ impl<'a> Planner<'a> {
         let mut added = 0_usize;
         for facts in own {
             let bot = facts.id;
+            if !runs(facts.needs, agent.script_api) {
+                if listed.contains_key(&bot) {
+                    // Left out of the full reconcile, so the agent removes
+                    // it: no spec of its mode goes there, not even one that
+                    // stops it.
+                    part.release.push(Let {
+                        bot,
+                        unassign: Some(UnassignReason::AgentTooOld),
+                        send: false,
+                    });
+                } else {
+                    // The hello proves it doesn't run it: freed at once,
+                    // and placed on an agent that runs its mode if one has
+                    // room.
+                    self.detach_not_running(bot, agent.id);
+                }
+                continue;
+            }
             match (listed.get(&bot).copied(), facts.qualifies) {
                 (Some(rests), Ok(())) => {
                     if kept_listed < listed_room {
@@ -636,7 +679,7 @@ impl<'a> Planner<'a> {
             }
         }
         let free = new_room.saturating_sub(added);
-        self.parts.insert(agent.id, (part, free));
+        self.parts.insert(agent.id, (part, free, agent.script_api));
     }
 
     /// Lets go of the listed bots `agent`'s row doesn't give it, in `part`:
@@ -708,6 +751,16 @@ impl<'a> Planner<'a> {
                 });
                 continue;
             };
+            if !runs(facts.needs, agent.script_api) {
+                // Its mode became one this agent doesn't run: an unassign
+                // carries no spec, where a stop would carry the mode.
+                part.release.push(Let {
+                    bot,
+                    unassign: Some(UnassignReason::AgentTooOld),
+                    send: true,
+                });
+                continue;
+            }
             match (facts.qualifies, stop) {
                 (Ok(()), Some(Stopping::Move)) if rests => part.release.push(Let {
                     bot,
@@ -743,6 +796,7 @@ impl<'a> Planner<'a> {
                 continue;
             }
             let why = match facts.qualifies {
+                _ if !runs(facts.needs, agent.script_api) => UndeliveredWhy::AgentTooOld,
                 Ok(()) if resent < room => {
                     resent = resent.saturating_add(1);
                     part.run.push(running(facts.id, false));
@@ -754,7 +808,7 @@ impl<'a> Planner<'a> {
             part.undelivered.push(Undelivered { bot: facts.id, why });
         }
         let free = room.saturating_sub(resent);
-        self.parts.insert(agent.id, (part, free));
+        self.parts.insert(agent.id, (part, free, agent.script_api));
     }
 
     /// How many untouchable bots name `agent` without being `counted`
@@ -795,8 +849,14 @@ impl<'a> Planner<'a> {
             if self.fenced_accounts.contains(&facts.identity) {
                 continue;
             }
-            let Some((part, free)) = self.parts.values_mut().find(|(_, free)| *free > 0) else {
-                return;
+            // No agent with room runs this one's mode: a later one may
+            // still fit somewhere.
+            let Some((part, free, _)) = self
+                .parts
+                .values_mut()
+                .find(|(_, free, level)| *free > 0 && runs(facts.needs, *level))
+            else {
+                continue;
             };
             *free = free.saturating_sub(1);
             part.run.push(running(facts.id, true));
@@ -805,7 +865,7 @@ impl<'a> Planner<'a> {
     }
 
     fn finish(mut self) -> Plan {
-        for (mut part, _) in self.parts.into_values() {
+        for (mut part, _, _) in self.parts.into_values() {
             part.run.sort_by_key(|run| run.bot);
             part.release.sort_by_key(|release| release.bot);
             part.undelivered.sort_by_key(|undelivered| undelivered.bot);
@@ -819,6 +879,12 @@ impl<'a> Planner<'a> {
             .sort_by_key(|stray| (stray.bot, stray.agent));
         self.plan
     }
+}
+
+/// Whether an agent at script API level `agent` runs a mode that `needs`
+/// one: every agent runs a step mode (ADR-0036, D13).
+fn runs(needs: Option<ScriptApiLevel>, agent: u32) -> bool {
+    needs.is_none_or(|level| level.runs_on(agent))
 }
 
 /// `bot` running, `placed` now or already its agent's.
@@ -880,6 +946,24 @@ mod tests {
             qualifies: Ok(()),
             agent: None,
             sticky: false,
+            needs: None,
+        }
+    }
+
+    /// `facts` with a scripted mode of Phase 15's level.
+    fn scripted(facts: BotFacts) -> BotFacts {
+        BotFacts {
+            needs: Some(ScriptApiLevel::V1),
+            ..facts
+        }
+    }
+
+    /// `facts` of an agent from before scripts: its hello has no script
+    /// API level.
+    fn before_scripts(facts: AgentFacts) -> AgentFacts {
+        AgentFacts {
+            script_api: 0,
+            ..facts
         }
     }
 
@@ -897,6 +981,7 @@ mod tests {
             generation: u64::from(a),
             plannable: true,
             capacity: cap(capacity),
+            script_api: 1,
             phase: Phase::Welcomed {
                 listed: listed
                     .iter()
@@ -912,6 +997,7 @@ mod tests {
             generation: u64::from(a),
             plannable: true,
             capacity: cap(capacity),
+            script_api: 1,
             phase: Phase::Reconciled {
                 holds: holds
                     .iter()
@@ -1820,15 +1906,128 @@ mod tests {
         assert_eq!(part(&plan, 1).release, [left(1, None, false)]);
     }
 
+    // --- A scripted mode and the agent's script API level (ADR-0036, D13) ------------------
+
+    #[rstest]
+    #[case::at_the_level(1)]
+    #[case::a_newer_level(2)]
+    fn a_scripted_bot_is_placed_only_on_an_agent_that_runs_its_level(#[case] level: u32) {
+        let bots = [scripted(waiting(1))];
+        let agents = [
+            before_scripts(welcomed(1, 5, &[])),
+            AgentFacts {
+                script_api: level,
+                ..welcomed(2, 5, &[])
+            },
+        ];
+
+        let plan = plan_of(&bots, &[], &agents);
+
+        assert_eq!(part(&plan, 1).run, []);
+        assert_eq!(part(&plan, 2).run, [place(1)]);
+    }
+
+    #[test]
+    fn a_scripted_bot_waits_while_no_agent_runs_its_level_and_a_step_bot_behind_it_is_placed() {
+        let bots = [scripted(waiting(1)), waiting(2)];
+        let agents = [before_scripts(welcomed(1, 5, &[]))];
+
+        let plan = plan_of(&bots, &[], &agents);
+
+        assert_eq!(part(&plan, 1).run, [place(2)]);
+    }
+
+    #[rstest]
+    #[case::running(false)]
+    #[case::resting(true)]
+    fn a_welcome_too_old_for_a_scripted_bot_it_runs_leaves_it_out_without_a_spec(
+        #[case] rests: bool,
+    ) {
+        let bots = [scripted(on(1, 1)), on(2, 1)];
+        let agents = [before_scripts(welcomed(1, 5, &[(1, rests), (2, false)]))];
+
+        let plan = plan_of(&bots, &[], &agents);
+
+        assert_eq!(part(&plan, 1).run, [keep(2)]);
+        assert_eq!(
+            part(&plan, 1).release,
+            [left(1, Some(UnassignReason::AgentTooOld), false)]
+        );
+        assert_eq!(plan.detach, []);
+    }
+
+    #[test]
+    fn a_welcome_too_old_frees_a_scripted_bot_it_doesnt_run_for_an_agent_that_runs_it() {
+        let bots = [scripted(on(1, 1))];
+        let agents = [before_scripts(welcomed(1, 5, &[])), welcomed(2, 5, &[])];
+
+        let plan = plan_of(&bots, &[], &agents);
+
+        assert_eq!(plan.detach, [detach(1, 1)]);
+        assert_eq!(part(&plan, 1).run, []);
+        assert_eq!(part(&plan, 2).run, [place(1)]);
+    }
+
+    #[rstest]
+    #[case::running(Ok(()), ASSIGNED)]
+    #[case::moving(Ok(()), Held::Assigned { stopping: Some(Stopping::Move), rests: false })]
+    #[case::being_stopped(
+        Err(Unplaced::Stopped),
+        Held::Assigned { stopping: Some(Stopping::Unqualified { overdue: false }), rests: false }
+    )]
+    fn a_held_bot_whose_mode_needs_a_level_its_agent_lacks_is_unassigned_without_a_spec(
+        #[case] qualifies: Result<(), Unplaced>,
+        #[case] held: Held,
+    ) {
+        let bots = [BotFacts {
+            qualifies,
+            ..scripted(on(1, 1))
+        }];
+        let agents = [before_scripts(reconciled(1, 5, &[(1, held)]))];
+
+        let plan = plan_of(&bots, &[], &agents);
+
+        assert_eq!(part(&plan, 1).run, []);
+        assert_eq!(
+            part(&plan, 1).release,
+            [left(1, Some(UnassignReason::AgentTooOld), true)]
+        );
+    }
+
+    #[test]
+    fn an_undelivered_assignment_to_an_agent_too_old_is_recorded_not_sent() {
+        let bots = [scripted(on(1, 1))];
+        let agents = [before_scripts(reconciled(1, 5, &[]))];
+
+        let plan = plan_of(&bots, &[], &agents);
+
+        assert_eq!(part(&plan, 1).run, []);
+        assert_eq!(
+            part(&plan, 1).undelivered,
+            [Undelivered {
+                bot: bot(1),
+                why: UndeliveredWhy::AgentTooOld,
+            }]
+        );
+    }
+
+    #[test]
+    fn the_new_reasons_have_their_stable_names() {
+        assert_eq!(UnassignReason::AgentTooOld.as_str(), "agent_too_old");
+        assert_eq!(UndeliveredWhy::AgentTooOld.as_str(), "agent_too_old");
+    }
+
     // --- Properties -----------------------------------------------------------------------
 
-    /// A scenario of up to 8 bots over 4 accounts and up to 3 agents.
+    /// A scenario of up to 8 bots over 4 accounts and up to 3 agents; a bot's
+    /// mode may be a script, and an agent may run script API level 0 to 2.
     fn scenario() -> impl Strategy<Value = (Vec<BotFacts>, Vec<ReleaseFacts>, Vec<AgentFacts>)> {
         let bots = proptest::collection::vec(
             (
                 0..4_u8,
                 any::<bool>(),
                 prop::option::of(1..5_u8),
+                any::<bool>(),
                 any::<bool>(),
             ),
             0..8,
@@ -1840,6 +2039,7 @@ mod tests {
                 1..4_u32,
                 any::<bool>(),
                 proptest::collection::vec((0..14_u8, 0..4_u8), 0..5),
+                0..3_u32,
             ),
             0..4,
         );
@@ -1847,17 +2047,20 @@ mod tests {
             let bots = bots
                 .into_iter()
                 .enumerate()
-                .map(|(n, (account, qualifies, assigned, sticky))| BotFacts {
-                    id: bot(u8::try_from(n).unwrap()),
-                    identity: ms(account),
-                    qualifies: if qualifies {
-                        Ok(())
-                    } else {
-                        Err(Unplaced::Stopped)
+                .map(
+                    |(n, (account, qualifies, assigned, sticky, script))| BotFacts {
+                        id: bot(u8::try_from(n).unwrap()),
+                        identity: ms(account),
+                        qualifies: if qualifies {
+                            Ok(())
+                        } else {
+                            Err(Unplaced::Stopped)
+                        },
+                        agent: assigned.map(agent),
+                        sticky,
+                        needs: script.then_some(ScriptApiLevel::V1),
                     },
-                    agent: assigned.map(agent),
-                    sticky,
-                })
+                )
                 .collect();
             let releases = releases
                 .into_iter()
@@ -1870,7 +2073,7 @@ mod tests {
             let agents = agents
                 .into_iter()
                 .enumerate()
-                .map(|(n, (welcome, capacity, plannable, items))| {
+                .map(|(n, (welcome, capacity, plannable, items, script_api))| {
                     let id = u8::try_from(n + 1).unwrap();
                     let mut seen = BTreeSet::new();
                     let items: Vec<_> =
@@ -1906,6 +2109,7 @@ mod tests {
                         reconciled(id, capacity, &holds)
                     };
                     facts.plannable = plannable;
+                    facts.script_api = script_api;
                     facts
                 })
                 .collect();
@@ -1974,6 +2178,24 @@ mod tests {
                     occupied <= before.max(usize::from(agent.capacity.get())),
                     "an agent gets nothing beyond its capacity"
                 );
+            }
+        }
+
+        #[test]
+        fn no_agent_is_ever_sent_a_bot_whose_mode_needs_a_level_it_lacks(
+            (bots, releases, agents) in scenario(),
+        ) {
+            let plan = plan_of(&bots, &releases, &agents);
+
+            for part in &plan.agents {
+                let agent = agents.iter().find(|agent| agent.id == part.agent).unwrap();
+                for run in &part.run {
+                    let needs = bots.iter().find(|bot| bot.id == run.bot).and_then(|bot| bot.needs);
+                    prop_assert!(
+                        needs.is_none_or(|level| level.runs_on(agent.script_api)),
+                        "a spec, running or stopping, goes only to an agent that runs its mode"
+                    );
+                }
             }
         }
 

@@ -235,21 +235,23 @@ Member  the Owner       404       ok    ok       ok
 ## Fleet-wide
 Columns: the actor's role.
 
-permission                 Owner  Admin  Member
-LinkAccount                ok     ok     ok
-CreateMode private         ok     ok     ok
-CreateMode shared          ok     ok     403
-ListUsers                  ok     ok     403
-ListInvites                ok     ok     403
-CreateInvite for a Member  ok     ok     403
-CreateInvite for an Admin  ok     403    403
-CreateInvite for an Owner  403    403    403
-ViewAgents                 ok     ok     403
-DisableAgent               ok     ok     403
-ReleaseAgent               ok     ok     403
-ViewAuditLog               ok     ok     403
-ViewServerSettings         ok     ok     403
-ConfigureServerSettings    ok     ok     403
+permission                    Owner  Admin  Member
+LinkAccount                   ok     ok     ok
+CreateMode private            ok     ok     ok
+CreateMode shared             ok     ok     403
+CreateMode private, a script  ok     ok     403
+CreateMode shared, a script   ok     ok     403
+ListUsers                     ok     ok     403
+ListInvites                   ok     ok     403
+CreateInvite for a Member     ok     ok     403
+CreateInvite for an Admin     ok     403    403
+CreateInvite for an Owner     403    403    403
+ViewAgents                    ok     ok     403
+DisableAgent                  ok     ok     403
+ReleaseAgent                  ok     ok     403
+ViewAuditLog                  ok     ok     403
+ViewServerSettings            ok     ok     403
+ConfigureServerSettings       ok     ok     403
 
 ## Invites
 Rows: the role the invite gives. Columns: the actor's role.
@@ -263,32 +265,32 @@ Owner       403    403    404
 ## Modes
 Rows: the actor's role, and whose mode it is with its visibility. Columns: the permission.
 
-actor   mode                      ViewMode  UpdateMode to private  UpdateMode to shared  DeleteMode
-Owner   built-in                  ok        403                    403                   403
-Owner   own private               ok        ok                     ok                    ok
-Owner   own shared                ok        ok                     ok                    ok
-Owner   a Member's private        ok        ok                     ok                    ok
-Owner   a Member's shared         ok        ok                     ok                    ok
-Owner   an Admin's private        ok        ok                     ok                    ok
-Owner   an Admin's shared         ok        ok                     ok                    ok
-Admin   built-in                  ok        403                    403                   403
-Admin   own private               ok        ok                     ok                    ok
-Admin   own shared                ok        ok                     ok                    ok
-Admin   a Member's private        ok        ok                     403                   ok
-Admin   a Member's shared         ok        403                    403                   403
-Admin   another Admin's private   404       404                    404                   404
-Admin   another Admin's shared    ok        403                    403                   403
-Admin   the Owner's private       404       404                    404                   404
-Admin   the Owner's shared        ok        403                    403                   403
-Member  built-in                  ok        403                    403                   403
-Member  own private               ok        ok                     403                   ok
-Member  own shared                ok        403                    403                   403
-Member  another Member's private  404       404                    404                   404
-Member  another Member's shared   ok        403                    403                   403
-Member  an Admin's private        404       404                    404                   404
-Member  an Admin's shared         ok        403                    403                   403
-Member  the Owner's private       404       404                    404                   404
-Member  the Owner's shared        ok        403                    403                   403
+actor   mode                      ViewMode  UpdateMode to private  UpdateMode to shared  UpdateMode to private, a script  UpdateMode to shared, a script  DeleteMode
+Owner   built-in                  ok        403                    403                   403                              403                             403
+Owner   own private               ok        ok                     ok                    ok                               ok                              ok
+Owner   own shared                ok        ok                     ok                    ok                               ok                              ok
+Owner   a Member's private        ok        ok                     ok                    ok                               ok                              ok
+Owner   a Member's shared         ok        ok                     ok                    ok                               ok                              ok
+Owner   an Admin's private        ok        ok                     ok                    ok                               ok                              ok
+Owner   an Admin's shared         ok        ok                     ok                    ok                               ok                              ok
+Admin   built-in                  ok        403                    403                   403                              403                             403
+Admin   own private               ok        ok                     ok                    ok                               ok                              ok
+Admin   own shared                ok        ok                     ok                    ok                               ok                              ok
+Admin   a Member's private        ok        ok                     403                   ok                               403                             ok
+Admin   a Member's shared         ok        403                    403                   403                              403                             403
+Admin   another Admin's private   404       404                    404                   404                              404                             404
+Admin   another Admin's shared    ok        403                    403                   403                              403                             403
+Admin   the Owner's private       404       404                    404                   404                              404                             404
+Admin   the Owner's shared        ok        403                    403                   403                              403                             403
+Member  built-in                  ok        403                    403                   403                              403                             403
+Member  own private               ok        ok                     403                   403                              403                             ok
+Member  own shared                ok        403                    403                   403                              403                             403
+Member  another Member's private  404       404                    404                   404                              404                             404
+Member  another Member's shared   ok        403                    403                   403                              403                             403
+Member  an Admin's private        404       404                    404                   404                              404                             404
+Member  an Admin's shared         ok        403                    403                   403                              403                             403
+Member  the Owner's private       404       404                    404                   404                              404                             404
+Member  the Owner's shared        ok        403                    403                   403                              403                             403
 
 ## Users
 Rows: the actor's role, and the target user. Columns: the permission.

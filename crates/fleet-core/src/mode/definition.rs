@@ -7,7 +7,7 @@ use core::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use super::{Action, HotbarSlot};
-use crate::script::Script;
+use crate::script::{Script, ScriptApiLevel};
 
 /// When a [`Step`] runs.
 ///
@@ -325,6 +325,14 @@ impl ModeDefinition {
             ModeBody::Steps(_) => None,
             ModeBody::Script(script) => Some(script),
         }
+    }
+
+    /// The script API level an agent must run for this mode: a scripted
+    /// mode's own; `None` for a step mode, which every agent runs. The
+    /// server never sends a mode to an agent below it (ADR-0036, D13).
+    #[must_use]
+    pub fn script_api(&self) -> Option<ScriptApiLevel> {
+        self.script().map(Script::api)
     }
 
     /// Returns the names of the `/commands` the mode can send, for the
@@ -1522,6 +1530,23 @@ mod tests {
         assert_eq!(definition.script(), Some(&script));
         assert_eq!(definition.body(), &ModeBody::Script(Box::new(script)));
         assert_eq!(definition.steps(), []);
+    }
+
+    #[test]
+    fn a_scripted_mode_needs_its_scripts_api_level_and_a_step_mode_none() {
+        assert_eq!(
+            scripted(FARM_SCRIPT).script_api(),
+            Some(crate::script::ScriptApiLevel::V1)
+        );
+        assert_eq!(ModeDefinition::afk().script_api(), None);
+    }
+
+    #[test]
+    fn authorization_tells_a_scripted_mode_from_a_step_mode() {
+        use crate::authz::ModeKind;
+
+        assert_eq!(ModeKind::of(&scripted(FARM_SCRIPT)), ModeKind::Script);
+        assert_eq!(ModeKind::of(&ModeDefinition::farm()), ModeKind::Steps);
     }
 
     /// Its JSON has `script` and no `steps` (ADR-0036, D13).
