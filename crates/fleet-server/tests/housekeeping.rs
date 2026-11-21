@@ -285,6 +285,7 @@ async fn a_run_logs_one_line_per_agent_whose_reports_session_requests_or_chat_we
                 halt: Halt::default(),
                 connected_at: now,
                 capacity: fleet_core::value::AgentCapacity::try_from(10_u32).unwrap(),
+                script_api: 1,
                 running: Vec::new(),
                 welcome: fleet_proto::generated::ServerMessage::default(),
             },

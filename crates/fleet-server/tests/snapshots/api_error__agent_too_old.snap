@@ -1,0 +1,17 @@
+---
+source: crates/fleet-server/tests/api_error.rs
+expression: seen
+---
+{
+  "status": 409,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": {
+      "code": "agent_too_old",
+      "message": "This bot's agent runs a version that can't run this scripted mode. Update the agent first.",
+      "request_id": "test-request-id"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT MIN(rowid) AS \"rowid!: i64\", agent_id AS \"agent_id!\"\n           FROM bots WHERE mode_id = ? AND agent_id IS NOT NULL\n           GROUP BY agent_id ORDER BY agent_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "agent_id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "agent_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "3a700fa66b7ac736142e08c6cc04332bd4a392adbd993538da314136d02c0ed2"
+}

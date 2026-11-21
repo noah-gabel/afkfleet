@@ -685,7 +685,7 @@ async fn serve_on(
     }
 }
 
-fn setup_entry(now: DateTime<Utc>) -> NewAuditEntry {
+pub(crate) fn setup_entry(now: DateTime<Utc>) -> NewAuditEntry {
     NewAuditEntry::new(
         now,
         AuditAction::try_from(SETUP).unwrap(),
@@ -1223,6 +1223,17 @@ impl Port {
         self.db.bots().find(bot).await.unwrap()
     }
 
+    /// Opens `agent`'s stream, sends a hello at script API level
+    /// `script_api` (0: an agent from before scripts, whose hello has no
+    /// level) with `capacity`, and reads `Welcome`.
+    pub(crate) async fn welcomed_at(&self, agent: &Agent, script_api: u32, capacity: u32) -> Call {
+        let mut call = self.open(agent).await.unwrap();
+        call.send(hello_at(&agent.name, script_api, capacity, Vec::new()))
+            .await;
+        call.welcome().await;
+        call
+    }
+
     /// Opens `agent`'s stream, sends a hello with `capacity` that lists
     /// `running`, and reads `Welcome`.
     pub(crate) async fn welcomed_with(
@@ -1401,8 +1412,29 @@ pub(crate) fn hello_with(name: &str, protocol_version: u32, capacity: u32) -> wi
             protocol_version,
             capacity,
             running: Vec::new(),
+            script_api: 1,
         })),
     }
+}
+
+/// A hello for `name` with `capacity`, listing `running`, from an agent
+/// that runs script API level `script_api`: 0 is one from before scripts,
+/// whose hello has no level at all (ADR-0036, D13).
+pub(crate) fn hello_at(
+    name: &str,
+    script_api: u32,
+    capacity: u32,
+    running: Vec<BotSnapshot>,
+) -> wire::AgentMessage {
+    wire::AgentMessage::try_from(AgentMessage::Hello(Hello {
+        name: AgentName::try_from(name).unwrap(),
+        agent_version: AgentVersion::try_from(AGENT_VERSION).unwrap(),
+        protocol_version: PROTOCOL_VERSION,
+        capacity: AgentCapacity::try_from(capacity).unwrap(),
+        running,
+        script_api,
+    }))
+    .unwrap()
 }
 
 /// A hello for `name` with `capacity`, listing `running`.
@@ -1417,6 +1449,7 @@ pub(crate) fn hello_running(
         protocol_version: PROTOCOL_VERSION,
         capacity: AgentCapacity::try_from(capacity).unwrap(),
         running,
+        script_api: 1,
     }))
     .unwrap()
 }

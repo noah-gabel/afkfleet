@@ -52,6 +52,9 @@ pub struct UnreadableSettings {
     pub rowid: i64,
     /// The row's ID, when that much reads back.
     pub id: Option<ServerSettingsId>,
+    /// The first of its columns that doesn't: `conflict_texts` or
+    /// `chat_formats`.
+    pub column: &'static str,
 }
 
 /// A server's settings row whose key or chat formats don't read back, as
@@ -81,22 +84,34 @@ pub enum ServerFormats {
     Unreadable(UnreadableFormats),
 }
 
-/// Every server's conflict texts, read with the fleet in one snapshot
-/// (ADR-0020, S76, R132): what each bot's spec carries.
+/// Every server's conflict texts and chat formats, read with the fleet in
+/// one snapshot (ADR-0020, S76, R132; Plan.md P15.34): what each bot's spec
+/// carries.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ServerTexts {
     /// The texts of each server whose row reads back.
-    pub readable: HashMap<ServerKey, ConflictTexts>,
-    /// The servers whose row's texts don't read back, with the row: their
-    /// bots are left alone, never sent texts that fail open.
+    pub readable: HashMap<ServerKey, TextsOfServer>,
+    /// The servers whose row's texts or formats don't read back, with the
+    /// row: their bots are left alone, never sent texts or formats that
+    /// fail open.
     pub unreadable: HashMap<ServerKey, UnreadableSettings>,
+}
+
+/// One server's texts as a bot's spec carries them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TextsOfServer {
+    /// The kick texts that count as a duplicate login there.
+    pub conflict_texts: ConflictTexts,
+    /// How it prints a player's chat as system text: a script never reads
+    /// a line one of them fits (ADR-0037, C2).
+    pub chat_formats: ChatFormats,
 }
 
 impl ServerTexts {
     /// The texts a bot on `server` gets: none when the server has no
-    /// settings, and `None` when its row's texts don't read back.
+    /// settings, and `None` when its row's texts or formats don't read back.
     #[must_use]
-    pub fn of(&self, server: &ServerAddress) -> Option<ConflictTexts> {
+    pub fn of(&self, server: &ServerAddress) -> Option<TextsOfServer> {
         let key = ServerKey::from(server);
         if self.unreadable.contains_key(&key) {
             return None;
@@ -253,12 +268,23 @@ mod tests {
         ConflictTexts::try_new(entries).unwrap()
     }
 
+    fn of_server() -> TextsOfServer {
+        TextsOfServer {
+            conflict_texts: texts(&["Already connected"]),
+            chat_formats: ChatFormats::try_new(&["<{sender}> "]).unwrap(),
+        }
+    }
+
     fn server_texts() -> ServerTexts {
         ServerTexts {
-            readable: HashMap::from([(key("mc.example.com"), texts(&["Already connected"]))]),
+            readable: HashMap::from([(key("mc.example.com"), of_server())]),
             unreadable: HashMap::from([(
                 key("broken.example.com"),
-                UnreadableSettings { rowid: 7, id: None },
+                UnreadableSettings {
+                    rowid: 7,
+                    id: None,
+                    column: "conflict_texts",
+                },
             )]),
         }
     }
@@ -270,7 +296,7 @@ mod tests {
         for address in ["mc.example.com", "MC.example.com:25565"] {
             assert_eq!(
                 server_texts.of(&address.parse().unwrap()),
-                Some(texts(&["Already connected"])),
+                Some(of_server()),
                 "{address}"
             );
         }
@@ -282,7 +308,7 @@ mod tests {
 
         assert_eq!(
             server_texts.of(&"mc.example.com:25566".parse().unwrap()),
-            Some(ConflictTexts::default())
+            Some(TextsOfServer::default())
         );
         assert_eq!(
             server_texts.of(&"broken.example.com".parse().unwrap()),

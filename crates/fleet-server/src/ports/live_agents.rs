@@ -37,6 +37,9 @@ pub struct LiveStream {
     pub connected_at: DateTime<Utc>,
     /// When the server last heard from the agent on it, by its clock.
     pub last_seen: DateTime<Utc>,
+    /// The script API level its hello reported: 0 for an agent from before
+    /// scripts (ADR-0036, D13).
+    pub script_api: u32,
 }
 
 /// A bot an agent's live stream holds assigned, as the server knows it.

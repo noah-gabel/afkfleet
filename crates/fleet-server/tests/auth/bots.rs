@@ -199,7 +199,13 @@ impl Setup {
 
     /// Agent `n`'s live stream, reconciled, holding `bots` assigned.
     pub(crate) fn holding(&self, n: u8, bots: &[BotId]) -> Stream {
-        let (lease, queued, ended) = self.stream(n);
+        self.holding_at(n, 1, bots)
+    }
+
+    /// The same, its hello at script API level `script_api`: 0 for an
+    /// agent from before scripts.
+    pub(crate) fn holding_at(&self, n: u8, script_api: u32, bots: &[BotId]) -> Stream {
+        let (lease, queued, ended) = self.stream_at(n, script_api);
         self.registry
             .settle(
                 lease.agent(),
@@ -285,7 +291,7 @@ impl Setup {
         .await
     }
 
-    async fn set_mode(&self, bot: BotId, mode: ModeId, by: &Person) -> Seen {
+    pub(crate) async fn set_mode(&self, bot: BotId, mode: ModeId, by: &Person) -> Seen {
         self.request(
             axum::http::Method::PUT,
             &action_path(bot, "mode"),

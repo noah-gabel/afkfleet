@@ -412,6 +412,7 @@ async fn a_reconciler_pass_tells_the_bus_the_bots_it_held(
                 halt: Halt::default(),
                 connected_at: at(T0),
                 capacity: AgentCapacity::try_from(5_u32).unwrap(),
+                script_api: 1,
                 running: Vec::new(),
                 welcome,
             },

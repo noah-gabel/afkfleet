@@ -767,6 +767,7 @@ async fn an_edit_is_recorded_without_the_name_or_a_steps_text(
             ("commands".to_owned(), commands.to_owned()),
             ("route".to_owned(), route.to_owned()),
             ("bots_checked".to_owned(), "1".to_owned()),
+            ("body".to_owned(), "steps".to_owned()),
         ])
     };
     let mut shared = entry("2", "true", "shared", "allowlisted", "plain");

@@ -568,10 +568,9 @@ async fn the_records_page_newest_first(_pool: SqlitePoolOptions, options: Sqlite
 }
 
 /// A bot whose mode doesn't read back, an action or a schedule type this
-/// version doesn't know among them, is left alone: never run with the
-/// steps read as something else (ADR-0020, S25). A scripted mode is one of
-/// them until the server and the wire know scripts (Plan.md P15.20,
-/// P15.21): it's never sent to an agent as a mode without steps.
+/// version doesn't know among them, or a script of an API level it doesn't
+/// know, is left alone: never run with the steps read as something else
+/// (ADR-0020, S25).
 #[sqlx::test(migrations = false)]
 async fn a_bot_whose_mode_isnt_valid_reads_as_unreadable(
     _pool: SqlitePoolOptions,
@@ -584,7 +583,7 @@ async fn a_bot_whose_mode_isnt_valid_reads_as_unreadable(
     for definition in [
         r#"{"steps":[{"action":{"type":"nope"}}]}"#,
         r#"{"steps":[{"action":{"type":"jump"},"schedule":{"type":"on_teleport"},"probability":100}]}"#,
-        r#"{"script":{"api":1,"source":"fn on_join(first) {}","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}}"#,
+        r#"{"script":{"api":2,"source":"fn on_join(first) {}","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}}"#,
     ] {
         sqlx::query!(
             "UPDATE modes SET definition_json = ? WHERE id = ?",
@@ -605,6 +604,45 @@ async fn a_bot_whose_mode_isnt_valid_reads_as_unreadable(
             "{definition}"
         );
     }
+}
+
+/// A bot on a scripted mode is in the fleet's read with its script, which
+/// the reconciler carries to an agent that runs it (Plan.md P15.20, P15.21;
+/// group A's guard gone).
+#[sqlx::test(migrations = false)]
+async fn a_bot_on_a_scripted_mode_reads_with_its_script(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let (_, bot) = setup.bot(1, false).await;
+    let afk = ModePreset::Afk.id().to_string();
+    let scripted = r#"{"script":{"api":1,"source":"fn on_join(first) {}","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}}"#;
+    sqlx::query!(
+        "UPDATE modes SET definition_json = ? WHERE id = ?",
+        scripted,
+        afk
+    )
+    .execute(setup.db.write_pool())
+    .await
+    .unwrap();
+
+    let fleet = setup.db.bots().fleet().await.unwrap();
+
+    assert_eq!(fleet.unreadable, []);
+    let record = fleet
+        .bots
+        .iter()
+        .find(|record| record.bot.id == bot)
+        .unwrap();
+    assert_eq!(
+        record.mode.script_api(),
+        Some(fleet_core::script::ScriptApiLevel::V1)
+    );
+    assert_eq!(
+        record.mode,
+        serde_json::from_str::<fleet_core::mode::ModeDefinition>(scripted).unwrap()
+    );
 }
 
 #[sqlx::test(migrations = false)]
@@ -709,13 +747,15 @@ async fn the_fleet_reads_every_servers_texts(
     assert_eq!(
         fleet
             .server_texts
-            .of(&"mc.example.com:25565".parse().unwrap()),
+            .of(&"mc.example.com:25565".parse().unwrap())
+            .map(|texts| texts.conflict_texts),
         Some(ConflictTexts::try_new(&["Already connected"]).unwrap())
     );
     assert_eq!(
         fleet
             .server_texts
-            .of(&"[2001:db8::1]:25566".parse().unwrap()),
+            .of(&"[2001:db8::1]:25566".parse().unwrap())
+            .map(|texts| texts.conflict_texts),
         Some(ConflictTexts::try_new(&["One", "Two"]).unwrap())
     );
     assert_eq!(fleet.server_texts.readable.len(), 2);
@@ -777,15 +817,55 @@ async fn a_bot_whose_servers_texts_dont_read_back_is_unreadable_and_the_others_r
         Some(&UnreadableSettings {
             rowid: setup.settings_rowid(row).await,
             id: Some(row),
+            column: "conflict_texts",
         })
     );
 }
 
-/// A row's chat formats never reach the fleet's read: formats that don't
-/// read back leave its texts readable and its bots placed, since no agent
-/// is sent a format (ADR-0013, R139).
+/// Since a scripted mode reads chat by a server's formats, an agent is
+/// sent them in a bot's spec (Plan.md P15.34): the fleet's read carries
+/// each server's formats beside its texts.
 #[sqlx::test(migrations = false)]
-async fn a_settings_rows_chat_formats_never_reach_the_fleets_read(
+async fn the_fleets_read_carries_each_servers_chat_formats(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let (_, bot) = setup.bot(1, false).await;
+    setup.on_server(bot, "mc.example.com").await;
+    let row = setup.settings(1, "mc.example.com", &["One"]).await;
+    let id = row.to_string();
+    sqlx::query!(
+        r#"UPDATE server_settings SET chat_formats = '["[{sender}] "]' WHERE id = ?"#,
+        id
+    )
+    .execute(setup.db.write_pool())
+    .await
+    .unwrap();
+
+    let fleet = setup.db.bots().fleet().await.unwrap();
+
+    assert_eq!(fleet.unreadable, []);
+    let read = fleet
+        .server_texts
+        .of(&"mc.example.com".parse().unwrap())
+        .unwrap();
+    assert_eq!(
+        read.conflict_texts,
+        ConflictTexts::try_new(&["One"]).unwrap()
+    );
+    assert_eq!(
+        read.chat_formats,
+        ChatFormats::try_new(&["[{sender}] "]).unwrap()
+    );
+}
+
+/// A row whose chat formats don't read back leaves its bots alone, as one
+/// whose texts don't: they're never sent with no formats, which would let
+/// a scripted mode read a player's line as the server's (ADR-0037, C2;
+/// R132). Its column is named.
+#[sqlx::test(migrations = false)]
+async fn a_bot_whose_servers_chat_formats_dont_read_back_is_unreadable(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
@@ -804,18 +884,29 @@ async fn a_settings_rows_chat_formats_never_reach_the_fleets_read(
 
     let fleet = setup.db.bots().fleet().await.unwrap();
 
+    assert_eq!(fleet.bots, []);
     assert_eq!(
         fleet
-            .bots
+            .unreadable
             .iter()
-            .map(|record| record.bot.id)
+            .map(|unreadable| (
+                unreadable.bot,
+                unreadable.table,
+                unreadable.column,
+                unreadable.by_server
+            ))
             .collect::<Vec<_>>(),
-        [bot]
+        [(bot, "server_settings", "chat_formats", true)]
     );
-    assert!(fleet.unreadable.is_empty(), "{:?}", fleet.unreadable);
     assert_eq!(
-        fleet.server_texts.of(&"mc.example.com".parse().unwrap()),
-        Some(ConflictTexts::try_new(&["One"]).unwrap())
+        fleet.server_texts.unreadable.get(&ServerKey::from(
+            &"mc.example.com".parse::<ServerAddress>().unwrap()
+        )),
+        Some(&UnreadableSettings {
+            rowid: setup.settings_rowid(row).await,
+            id: Some(row),
+            column: "chat_formats",
+        })
     );
 }
 

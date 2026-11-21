@@ -173,6 +173,7 @@ pub(crate) async fn patch(
         (status = 401, description = "No valid access token.", body = ErrorResponse),
         (status = 403, description = "The caller may see the bot but not switch it to this mode: Control, or Manage for a mode that sends a command off the allowlist.", body = ErrorResponse),
         (status = 404, description = "No such bot, or one the caller may not see.", body = ErrorResponse),
+        (status = 409, description = "`agent_too_old`: a scripted mode, and the bot's agent is connected with a version that doesn't run its script API level.", body = ErrorResponse),
         (status = 422, description = "A mode that doesn't exist, or that the caller may not see.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
             headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
@@ -385,6 +386,7 @@ pub(super) fn writing(error: BotWriteError) -> ApiError {
         BotWriteError::UnusableMode => {
             ApiError::Validation(vec![FieldError::new("mode_id", UNUSABLE_MODE)])
         }
+        BotWriteError::AgentTooOld => ApiError::AgentTooOld,
         BotWriteError::Refused(refusal) => match refusal {
             CommandRefusal::NotRunning => ApiError::BotNotRunning,
             CommandRefusal::NotPaused => ApiError::BotNotPaused,

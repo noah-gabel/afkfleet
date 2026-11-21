@@ -58,6 +58,7 @@ use axum::response::Response;
 use fleet_api_types::bots::{BotStateKind, BotStateReason};
 use fleet_api_types::chat::ChatFailure;
 use fleet_api_types::events::{EventMessage, EventTicketResponse, EventsQuery};
+use fleet_api_types::script::{ScriptLogLine, ScriptStatus};
 use fleet_api_types::{ErrorResponse, SecretText};
 use fleet_core::authz::{Actor, GrantLevel, Permission, ResourceContext, Role, authorize};
 use fleet_core::bot::{BotNotification, LastState};
@@ -549,6 +550,17 @@ impl Viewer {
                 };
                 EventMessage::chat_failed(event.bot, *request, failure)
             }
+            // A bot's script's status and log reach every viewer who may see
+            // the bot, as plain text cleaned at the stream's edge; a sent
+            // message is named by its key alone there (P15.23).
+            LiveEventKind::ScriptStatus(state) => match timestamp(event.at) {
+                Ok(at) => EventMessage::bot_script(event.bot, at, ScriptStatus::from(state)),
+                Err(_) => return Step::Nothing,
+            },
+            LiveEventKind::ScriptLog(line) => match timestamp(event.at) {
+                Ok(at) => EventMessage::bot_script_log(event.bot, at, ScriptLogLine::from(line)),
+                Err(_) => return Step::Nothing,
+            },
             // Merged into the bots' reads as it's taken.
             LiveEventKind::Status(_) => return Step::Nothing,
         };

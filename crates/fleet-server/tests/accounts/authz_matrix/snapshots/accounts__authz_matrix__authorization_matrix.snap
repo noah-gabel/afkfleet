@@ -67,6 +67,7 @@ GET /api/v1/bots/{id}                                                           
 PATCH /api/v1/bots/{id}                                                                                 401        404                   403                   403                   200                   200                   200
 PUT /api/v1/bots/{id}/mode                        a mode with an allowlisted command                    401        404                   403                   200                   200                   200                   200
 PUT /api/v1/bots/{id}/mode                        a mode with a command off the allowlist               401        404                   403                   403                   200                   200                   200
+PUT /api/v1/bots/{id}/mode                        a shared scripted mode                                401        404                   403                   200                   200                   200                   200
 POST /api/v1/bots/{id}/start                                                                            401        404                   403                   200                   200                   200                   200
 POST /api/v1/bots/{id}/stop                                                                             401        404                   403                   200                   200                   200                   200
 POST /api/v1/bots/{id}/restart                    a bot that runs nowhere                               401        404                   403                   409 bot_not_running   409 bot_not_running   409 bot_not_running   409 bot_not_running
@@ -81,11 +82,15 @@ GET /api/v1/events                                an upgrade with the session's 
 GET /api/v1/modes                                                                                       401        200                   200                   200                   200                   200                   200
 POST /api/v1/modes                                a private mode                                        401        201                   201                   201                   201                   201                   201
 POST /api/v1/modes                                a shared mode                                         401        403                   403                   403                   403                   201                   201
+POST /api/v1/modes                                a private scripted mode                               401        403                   403                   403                   403                   201                   201
+POST /api/v1/modes                                a shared scripted mode                                401        403                   403                   403                   403                   201                   201
 POST /api/v1/modes/with-commands                  a private mode with a command off the allowlist       401        201                   201                   201                   201                   201                   201
 POST /api/v1/modes/with-commands                  a shared mode with a command off the allowlist        401        403                   403                   403                   403                   201                   201
 PUT /api/v1/modes/{id}                            the caller's own                                      401        200                   200                   200                   200                   200                   200
 PUT /api/v1/modes/{id}                            a Member's shared mode                                401        403                   403                   403                   403                   403                   200
 PUT /api/v1/modes/{id}                            a Member's private mode                               401        404                   404                   404                   404                   200                   200
+PUT /api/v1/modes/{id}                            the caller's own, into a script                       401        403                   403                   403                   403                   200                   200
+PUT /api/v1/modes/{id}                            a Member's shared mode, into a script                 401        403                   403                   403                   403                   403                   200
 PUT /api/v1/modes/{id}/with-commands              the caller's own, a command off the allowlist         401        200                   200                   200                   200                   200                   200
 PUT /api/v1/modes/{id}/with-commands              a Member's shared mode, a command off the allowlist   401        403                   403                   403                   403                   403                   200
 DELETE /api/v1/modes/{id}                         the caller's own                                      401        204                   204                   204                   204                   204                   204
@@ -119,6 +124,7 @@ GET /api/v1/bots/{id}                                                           
 PATCH /api/v1/bots/{id}                                                                           404     404    200
 PUT /api/v1/bots/{id}/mode                  a mode with an allowlisted command                    404     404    200
 PUT /api/v1/bots/{id}/mode                  a mode with a command off the allowlist               404     404    200
+PUT /api/v1/bots/{id}/mode                  a shared scripted mode                                404     404    200
 POST /api/v1/bots/{id}/start                                                                      404     404    200
 POST /api/v1/bots/{id}/stop                                                                       404     404    200
 POST /api/v1/bots/{id}/restart              a bot that runs nowhere                               404     404    409 bot_not_running

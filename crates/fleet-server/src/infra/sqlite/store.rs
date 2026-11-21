@@ -856,6 +856,10 @@ impl BotWrites for SqliteWriteTx {
         bots::set_mode(&mut self.tx, bot, mode).await
     }
 
+    async fn agents_with_mode(&mut self, mode: ModeId) -> Result<Vec<AgentId>, StoreError> {
+        bots::agents_with_mode(&mut self.tx, mode).await
+    }
+
     async fn accounts_with_mode(&mut self, mode: ModeId) -> Result<Vec<AccountId>, StoreError> {
         bots::accounts_with_mode(&mut self.tx, mode).await
     }

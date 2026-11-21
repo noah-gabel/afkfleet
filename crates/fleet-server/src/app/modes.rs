@@ -25,27 +25,43 @@
 //!   S17), writes the next version only over the version it read, records
 //!   `mode.update` and tells the reconciler (`Change::Store`), so the bots
 //!   get the edit.
+//! - **A scripted mode** (ADR-0036, D13 to D15): its body's rules were
+//!   checked at the API's edge; before any transaction the service checks
+//!   that its text is a program, with fleet-script's compiler in
+//!   `spawn_blocking` ([`Compiler`]), never running a hook: what isn't is
+//!   [`CreateModeError::Script`] with the error and its place, and a
+//!   compiler that fails is an internal fault. `authorize()` asks with the
+//!   mode's kind, so only an Admin or the Owner writes one. An edit that
+//!   makes the mode a script's is refused while a bot that uses it is
+//!   assigned to an agent whose live stream runs a lower script API level
+//!   ([`UpdateModeError::AgentTooOld`]). The audit entries say whether the
+//!   mode is steps or a script, and for a script how many of its chat
+//!   patterns count at any time (ADR-0037, C5).
 //! - **Deleting** ([`ModeService::delete`]): one write
 //!   transaction re-reads the acting user and the mode, asks `authorize()`
 //!   for `DeleteMode`, refuses a mode any bot uses, whoever's (S17), deletes
 //!   it and records `mode.delete` with the version and the visibility. No
 //!   bot used it, so the reconciler has nothing to do.
 
+use core::fmt;
 use core::num::NonZeroU32;
 use std::sync::Arc;
 
 use fleet_core::audit::{AuditAction, AuditError, AuditMetadata, AuditOutcome, AuditTarget};
 use fleet_core::authz::{
-    Actor, AuthzError, CommandAllowlist, CommandCheck, ModeVisibility, Permission, ResourceContext,
-    UserRef, authorize,
+    Actor, AuthzError, CommandAllowlist, CommandCheck, ModeKind, ModeVisibility, Permission,
+    ResourceContext, UserRef, authorize,
 };
 use fleet_core::id::{ModeId, UserId};
 use fleet_core::mode::{ModeDefinition, ModeName, mode_cap_reached};
+use fleet_core::script::{Script, ScriptDraft, When};
 use fleet_core::system::{Clock, MintError, SecureRandom, mint};
+use fleet_script::CompileError;
 use tracing::{debug, error, info};
 
 use super::audit::AuditService;
 use super::users::{ActingUser, recheck};
+use crate::ports::live_agents::LiveAgents;
 use crate::ports::live_hints::{LiveHints, ModeEvent, NoLiveHints};
 use crate::ports::modes::{ListedMode, ModeChange, ModeOwner, NewMode, StoredMode, WriteModeError};
 use crate::ports::page::{Page, Paged};
@@ -82,9 +98,55 @@ impl ModeRoute {
     }
 }
 
+/// What checks a scripted mode's text as a program at save: fleet-script's
+/// compiler, unless a test hands in another. It runs in `spawn_blocking`
+/// and never runs a hook (ADR-0036, D14).
+#[derive(Clone)]
+pub struct Compiler(Arc<CompileCheck>);
+
+/// A check of a script as a program.
+type CompileCheck = dyn Fn(&Script) -> Result<(), CompileError> + Send + Sync;
+
+impl Compiler {
+    /// fleet-script's compiler: the engine an agent runs, with its limits.
+    #[must_use]
+    pub fn fleet_script() -> Self {
+        Self(Arc::new(|script| fleet_script::compile(script).map(|_| ())))
+    }
+
+    /// `check` instead, for a test.
+    #[must_use]
+    pub fn new(
+        check: impl Fn(&Script) -> Result<(), CompileError> + Send + Sync + 'static,
+    ) -> Self {
+        Self(Arc::new(check))
+    }
+}
+
+impl fmt::Debug for Compiler {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Compiler")
+    }
+}
+
+/// Why a scripted mode's text wasn't taken as a program.
+#[derive(Debug, thiserror::Error)]
+pub enum ScriptCheckError {
+    /// It isn't one: the error, about the caller's own script, with its
+    /// place.
+    #[error("the script isn't a program: {0}")]
+    NotAProgram(CompileError),
+    /// The compiler's task failed: an internal fault, never the script's.
+    #[error("the script's compiler failed")]
+    CompilerFailed(#[source] tokio::task::JoinError),
+}
+
 /// Why a mode wasn't created.
 #[derive(Debug, thiserror::Error)]
 pub enum CreateModeError {
+    /// A scripted mode whose text isn't a program, or whose compiler failed.
+    #[error(transparent)]
+    Script(ScriptCheckError),
     /// The steps send a command off the allowlist, which only the twin
     /// route takes: the handler should have pointed there first, so this is
     /// a bug (S16).
@@ -153,6 +215,13 @@ impl Edited {
 /// Why a mode wasn't edited.
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateModeError {
+    /// A scripted mode whose text isn't a program, or whose compiler failed.
+    #[error(transparent)]
+    Script(ScriptCheckError),
+    /// The edit makes the mode need a script API level that the agent of a
+    /// bot that uses it doesn't run, by its live stream (ADR-0036, D13).
+    #[error("a bot that uses the mode is on an agent that doesn't run it")]
+    AgentTooOld,
     /// The steps send a command off the allowlist, which only the twin
     /// route takes: the handler should have pointed there first (S16).
     #[error("the {route:?} route doesn't take these steps")]
@@ -193,6 +262,17 @@ pub enum UpdateModeError {
     /// The database failed.
     #[error(transparent)]
     Store(#[from] StoreError),
+}
+
+impl From<WriteModeError> for UpdateModeError {
+    /// A write's refusal: a name that's taken (the database's own check), or
+    /// the database's failure.
+    fn from(error: WriteModeError) -> Self {
+        match error {
+            WriteModeError::NameTaken => Self::NameTaken,
+            WriteModeError::Store(error) => Self::Store(error),
+        }
+    }
 }
 
 /// Why a mode wasn't deleted.
@@ -247,6 +327,8 @@ pub struct ModeService {
     allowlist: CommandAllowlist,
     reconcile: Arc<dyn Reconcile>,
     live_hints: Arc<dyn LiveHints>,
+    compiler: Compiler,
+    live: Option<Arc<dyn LiveAgents>>,
 }
 
 impl ModeService {
@@ -268,7 +350,72 @@ impl ModeService {
             allowlist: CommandAllowlist::default(),
             reconcile: Arc::new(NoReconcile),
             live_hints: Arc::new(NoLiveHints),
+            compiler: Compiler::fleet_script(),
+            live: None,
         }
+    }
+
+    /// The same, checking a scripted mode's text with `compiler`.
+    #[must_use]
+    pub fn with_compiler(self, compiler: Compiler) -> Self {
+        Self { compiler, ..self }
+    }
+
+    /// The same, reading the agents' live streams in `live`: an edit that
+    /// makes a mode a script's is refused while a bot that uses it is on an
+    /// agent whose stream runs a lower script API level. Without it, the
+    /// reconciler alone holds the agents to their level.
+    #[must_use]
+    pub fn with_live_agents(self, live: Arc<dyn LiveAgents>) -> Self {
+        Self {
+            live: Some(live),
+            ..self
+        }
+    }
+
+    /// Refuses an edit, by `user`, that makes mode `id` need a script API
+    /// level that the live stream of the agent of a bot that uses it
+    /// doesn't run. An agent that's offline is held to the level by the
+    /// reconciler at its next hello.
+    ///
+    /// # Errors
+    /// [`UpdateModeError::AgentTooOld`], and the store's failures.
+    async fn agents_run(
+        &self,
+        tx: &mut dyn WriteTx,
+        (user, id): (UserId, ModeId),
+        definition: &ModeDefinition,
+    ) -> Result<(), UpdateModeError> {
+        let (Some(needs), Some(live)) = (definition.script_api(), &self.live) else {
+            return Ok(());
+        };
+        for agent in tx.bots().agents_with_mode(id).await? {
+            if live
+                .live(agent)
+                .is_some_and(|stream| !needs.runs_on(stream.script_api))
+            {
+                debug!(user_id = %user, mode_id = %id, agent_id = %agent, "a mode edit was refused: a bot that uses it is on an agent that doesn't run its script");
+                return Err(UpdateModeError::AgentTooOld);
+            }
+        }
+        Ok(())
+    }
+
+    /// Checks `definition`'s script, if it has one, as a program, in
+    /// `spawn_blocking`; never runs a hook.
+    async fn checked(&self, definition: &ModeDefinition) -> Result<(), ScriptCheckError> {
+        let Some(script) = definition.script() else {
+            return Ok(());
+        };
+        let script = script.clone();
+        let compiler = self.compiler.clone();
+        // A compile is CPU work, a few milliseconds for the longest script
+        // (ADR-0036, D3): off the async workers, and before the write
+        // transaction opens (ADR-0015).
+        tokio::task::spawn_blocking(move || (compiler.0)(&script))
+            .await
+            .map_err(ScriptCheckError::CompilerFailed)?
+            .map_err(ScriptCheckError::NotAProgram)
     }
 
     /// The same, telling the live events sockets through `live_hints` when a
@@ -307,7 +454,8 @@ impl ModeService {
     /// [`UpdateModeError::WrongRoute`], [`UpdateModeError::SessionGone`],
     /// [`UpdateModeError::NotFound`], [`UpdateModeError::Denied`],
     /// [`UpdateModeError::Changed`], [`UpdateModeError::NameTaken`],
-    /// [`UpdateModeError::InUseByOthers`],
+    /// [`UpdateModeError::InUseByOthers`], [`UpdateModeError::Script`],
+    /// [`UpdateModeError::AgentTooOld`],
     /// [`UpdateModeError::VersionExhausted`], [`UpdateModeError::Lost`], and
     /// the server's failures.
     pub async fn update(
@@ -321,6 +469,9 @@ impl ModeService {
         if !route.takes(check) {
             return Err(UpdateModeError::WrongRoute { route });
         }
+        self.checked(&edit.definition)
+            .await
+            .map_err(UpdateModeError::Script)?;
         let now = self.clock.now();
         let mut tx = self.store.write().await?;
         let Some(acting) = recheck(tx.as_mut(), by).await? else {
@@ -331,11 +482,17 @@ impl ModeService {
             return Err(UpdateModeError::NotFound);
         };
         let context = stored.context();
-        // The right to edit it as it is, then as it will be (ADR-0010).
-        for visibility in [stored.mode.visibility, edit.visibility] {
+        // The right to edit it as it is, then as it will be (ADR-0010): a
+        // script before or after is an Admin's or the Owner's (ADR-0036, D15).
+        let as_it_is = (
+            stored.mode.visibility,
+            ModeKind::of(&stored.mode.definition),
+        );
+        let as_it_will_be = (edit.visibility, ModeKind::of(&edit.definition));
+        for (visibility, kind) in [as_it_is, as_it_will_be] {
             authorize(
                 &acting.actor,
-                Permission::UpdateMode { visibility },
+                Permission::UpdateMode { visibility, kind },
                 &context,
             )
             .map_err(|error| {
@@ -369,6 +526,8 @@ impl ModeService {
             return Err(UpdateModeError::NameTaken);
         }
         let bots = checked_bots(tx.as_mut(), &acting.actor, id, check).await?;
+        self.agents_run(tx.as_mut(), (by.actor.id, id), &edit.definition)
+            .await?;
         let version = stored
             .mode
             .version
@@ -383,14 +542,7 @@ impl ModeService {
             definition: edit.definition,
             updated_at: now,
         };
-        let wrote = tx
-            .modes()
-            .update(&change)
-            .await
-            .map_err(|error| match error {
-                WriteModeError::NameTaken => UpdateModeError::NameTaken,
-                WriteModeError::Store(error) => UpdateModeError::Store(error),
-            })?;
+        let wrote = tx.modes().update(&change).await?;
         if !wrote {
             error!(mode_id = %id, "a mode's write matched no row at the version its transaction read; nothing was written");
             return Err(UpdateModeError::Lost);
@@ -426,7 +578,8 @@ impl ModeService {
     /// # Errors
     /// [`CreateModeError::WrongRoute`], [`CreateModeError::SessionGone`],
     /// [`CreateModeError::Denied`], [`CreateModeError::CapReached`],
-    /// [`CreateModeError::NameTaken`], and the server's failures.
+    /// [`CreateModeError::NameTaken`], [`CreateModeError::Script`], and the
+    /// server's failures.
     pub async fn create(
         &self,
         by: &ActingUser,
@@ -439,6 +592,9 @@ impl ModeService {
         if !route.takes(check) {
             return Err(CreateModeError::WrongRoute { route });
         }
+        self.checked(&definition)
+            .await
+            .map_err(CreateModeError::Script)?;
         let now = self.clock.now();
         let id: ModeId = mint(now, self.random.as_ref())?;
         let mut tx = self.store.write().await?;
@@ -448,7 +604,10 @@ impl ModeService {
         };
         authorize(
             &acting.actor,
-            Permission::CreateMode { visibility },
+            Permission::CreateMode {
+                visibility,
+                kind: ModeKind::of(&definition),
+            },
             &ResourceContext::Global,
         )
         .map_err(|error| {
@@ -482,10 +641,13 @@ impl ModeService {
                 WriteModeError::NameTaken => CreateModeError::NameTaken,
                 WriteModeError::Store(error) => CreateModeError::Store(error),
             })?;
-        let metadata = AuditMetadata::new()
-            .text("visibility", visibility.as_str())?
-            .text("commands", commands(&mode.definition, check))?
-            .text("route", route.as_str())?;
+        let metadata = body(
+            AuditMetadata::new()
+                .text("visibility", visibility.as_str())?
+                .text("commands", commands(&mode.definition, check))?
+                .text("route", route.as_str())?,
+            &mode.definition,
+        )?;
         let entry = self
             .audit
             .entry(AuditAction::MODE_CREATE, AuditOutcome::Success)
@@ -679,10 +841,37 @@ fn edited(
     } else {
         metadata.text("previous_visibility", stored.visibility.as_str())?
     };
-    Ok(metadata
+    let metadata = metadata
         .text("commands", commands(&change.definition, check))?
         .text("route", route.as_str())?
-        .int("bots_checked", bots)?)
+        .int("bots_checked", bots)?;
+    Ok(body(metadata, &change.definition)?)
+}
+
+/// `metadata` with what `definition` is made of (`body`: `steps` or
+/// `script`) and, for a script, how many of its chat patterns count at any
+/// time (`any_time_patterns`, ADR-0037, C5) and its API level; never its
+/// text (ADR-0016).
+///
+/// # Errors
+/// [`AuditError`].
+fn body(metadata: AuditMetadata, definition: &ModeDefinition) -> Result<AuditMetadata, AuditError> {
+    let metadata = metadata.text("body", ModeKind::of(definition).as_str())?;
+    let Some(script) = definition.script() else {
+        return Ok(metadata);
+    };
+    let draft = ScriptDraft::from(script.clone());
+    let any_time = draft
+        .patterns
+        .iter()
+        .filter(|pattern| pattern.when == When::AnyTime)
+        .count();
+    metadata
+        .int(
+            "any_time_patterns",
+            i64::try_from(any_time).unwrap_or(i64::MAX),
+        )?
+        .int("script_api", i64::from(script.api().get()))
 }
 
 /// What an audit entry says of the commands `definition`'s steps send,

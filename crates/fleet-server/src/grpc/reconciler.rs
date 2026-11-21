@@ -809,6 +809,7 @@ impl<'a> Known<'a> {
                 }),
                 agent: record.bot.agent,
                 sticky: self.restore(record).is_some(),
+                needs: record.mode.script_api(),
             })
             .collect()
     }
@@ -823,6 +824,7 @@ impl<'a> Known<'a> {
                 generation: view.generation,
                 plannable: !view.halted && fleet.enabled_agents.contains(&view.agent),
                 capacity: view.capacity,
+                script_api: view.script_api,
                 phase: match &view.phase {
                     ViewPhase::Listed(listed) => Phase::Welcomed {
                         listed: listed
@@ -871,6 +873,7 @@ fn untouchable(fleet: &Fleet) -> Vec<Untouchable> {
             server_settings_id = row.id.map(tracing::field::display),
             server = %server,
             rowid = row.rowid,
+            column = row.column,
             "a server's settings don't read back: the reconciler leaves its bots alone until they're fixed"
         );
     }
@@ -906,8 +909,8 @@ fn rests(report: &LatestReport) -> bool {
 }
 
 /// `run`'s spec from `record`, with the server of the spec last sent while
-/// the bot has none any more, that server's conflict texts from `texts`,
-/// and `chat_rate`.
+/// the bot has none any more, that server's conflict texts and chat
+/// formats from `texts`, and `chat_rate`.
 fn spec_of(
     record: &BotRecord,
     run: &Run,
@@ -920,17 +923,18 @@ fn spec_of(
         .server
         .clone()
         .or_else(|| sent.map(|spec| spec.server.clone()))?;
-    // A server whose row's texts don't read back is never sent empty ones:
-    // the last spec stays (R132).
-    let conflict_texts = texts.of(&server)?;
+    // A server whose row's texts or formats don't read back is never sent
+    // empty ones: the last spec stays (R132, P15.34).
+    let texts = texts.of(&server)?;
     Some(BotSpec {
         id: record.bot.id,
         account: record.account.clone(),
         server,
         mode: record.mode.clone(),
         desired: run.desired,
-        conflict_texts,
+        conflict_texts: texts.conflict_texts,
         chat_rate,
+        chat_formats: texts.chat_formats,
     })
 }
 
@@ -1081,6 +1085,13 @@ fn sent(agent: AgentId, result: Result<(), SendError>) {
             agent_id = %agent,
             error = %failure,
             "the reconciler's message for an agent can't be sent"
+        ),
+        // The plan never sends a scripted mode below its level (fleet-core's
+        // placement); the registry refused one anyway, so it never went.
+        Err(failure @ SendError::AgentTooOld) => error!(
+            agent_id = %agent,
+            error = %failure,
+            "the reconciler's plan sent a scripted mode to an agent that doesn't run it; the registry kept it back"
         ),
     }
 }

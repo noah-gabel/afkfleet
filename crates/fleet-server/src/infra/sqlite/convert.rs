@@ -22,20 +22,13 @@ const TIME_FORMAT: &str = "%Y-%m-%dT%H:%M:%S%.3fZ";
 const TIME_LEN: usize = 24;
 
 /// Reads a stored mode's definition. `None` for JSON that isn't a mode
-/// this version runs; `serde_json`'s error can quote the stored text, so it's
-/// dropped here.
-///
-/// **A scripted mode is one of them, for now.** fleet-core reads one since
-/// Phase 15's group A, but the server can't validate a script yet and the
-/// wire can't carry one (Plan.md P15.20, P15.21). Read as a mode, it would
-/// reach an agent as a mode without steps, and the bot would do nothing,
-/// which is the silent failure ADR-0036 (D13) rules out. So until then it's
-/// read as a server from before scripts reads it: not at all. No route can
-/// store one yet; this covers a row written by hand or by a newer version.
+/// this version runs, a script of an API level it doesn't know among them;
+/// `serde_json`'s error can quote the stored text, so it's dropped here. A
+/// scripted mode of a known level reads as itself: the wire carries it, and
+/// the reconciler sends it only to an agent that runs its level (ADR-0036,
+/// D13; ADR-0044).
 pub(super) fn stored_mode(json: &str) -> Option<ModeDefinition> {
-    serde_json::from_str::<ModeDefinition>(json)
-        .ok()
-        .filter(|mode| mode.script().is_none())
+    serde_json::from_str::<ModeDefinition>(json).ok()
 }
 
 /// The text form an ID is bound as.

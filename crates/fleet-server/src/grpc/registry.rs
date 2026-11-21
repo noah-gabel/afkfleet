@@ -21,6 +21,11 @@
 //! - **Sending** (S25): nothing here waits. A message over
 //!   [`MAX_SERVER_MESSAGE_BYTES`] is `TooLarge` and the stream stays; a full
 //!   queue is `QueueFull` and ends the stream, so the agent resyncs.
+//! - **A scripted mode only where it runs** (ADR-0036, D13): a stream keeps
+//!   the script API level its hello reported, and a message that carries a
+//!   spec whose mode needs a higher one is `AgentTooOld`: never queued, on
+//!   every path, whatever the caller planned. The planner never asks for
+//!   one; this is the last check before the wire.
 //! - **Holds** (S28, S37): only the reconciler fills them, from the server's
 //!   own assignments: a welcome's full reconcile with [`AgentRegistry::settle`],
 //!   then one bot at a time with [`AgentRegistry::hold_and_send`], each
@@ -68,6 +73,7 @@ use fleet_core::chat::ChatMessage;
 use fleet_core::id::ChatRequestId;
 use fleet_core::id::{AgentId, BotId};
 use fleet_core::pki::CertFingerprint;
+use fleet_core::script::ScriptApiLevel;
 use fleet_core::system::Clock;
 use fleet_core::value::{AgentCapacity, AgentName};
 use fleet_proto::control::{
@@ -177,6 +183,8 @@ struct Live {
     last_seen: DateTime<Utc>,
     /// The capacity its hello reported.
     capacity: AgentCapacity,
+    /// The script API level its hello reported (ADR-0036, D13).
+    script_api: u32,
     /// Whether its welcome was reconciled yet.
     welcome: Welcome,
     holds: HashMap<BotId, HoldEntry>,
@@ -256,6 +264,9 @@ pub struct LiveView {
     pub halted: bool,
     /// The capacity its hello reported.
     pub capacity: AgentCapacity,
+    /// The script API level its hello reported: 0 for an agent from before
+    /// scripts.
+    pub script_api: u32,
     /// Where it is.
     pub phase: ViewPhase,
 }
@@ -291,6 +302,8 @@ pub struct Activation {
     pub connected_at: DateTime<Utc>,
     /// The capacity its hello reported.
     pub capacity: AgentCapacity,
+    /// The script API level its hello reported.
+    pub script_api: u32,
     /// The bots its hello listed.
     pub running: Vec<BotSnapshot>,
     /// Its `Welcome`, queued first.
@@ -302,6 +315,7 @@ impl fmt::Debug for Activation {
         f.debug_struct("Activation")
             .field("connected_at", &self.connected_at)
             .field("capacity", &self.capacity)
+            .field("script_api", &self.script_api)
             .field("running", &self.running.len())
             .finish_non_exhaustive()
     }
@@ -439,6 +453,10 @@ pub enum SendError {
     /// The message doesn't convert to the wire.
     #[error("the message can't be written")]
     Unwritable,
+    /// The message carries a spec whose mode needs a script API level the
+    /// stream's agent doesn't run (ADR-0036, D13): it's never queued.
+    #[error("the agent doesn't run the script API level a spec needs")]
+    AgentTooOld,
 }
 
 /// What happens to a message an agent sent.
@@ -638,6 +656,7 @@ impl AgentRegistry {
                     connected_at: activation.connected_at,
                     last_seen: activation.connected_at,
                     capacity: activation.capacity,
+                    script_api: activation.script_api,
                     welcome: Welcome::Listed(listed),
                     holds: HashMap::new(),
                 });
@@ -664,6 +683,7 @@ impl AgentRegistry {
     /// # Errors
     /// [`SendError`].
     pub fn send(&self, agent: AgentId, message: ServerMessage) -> Result<(), SendError> {
+        let needs = needs(&message);
         let message = self.wire(message)?;
         let mut state = self.state();
         let Some(slot) = state.slots.get_mut(&agent) else {
@@ -675,6 +695,7 @@ impl AgentRegistry {
         if live.halt.is_halted() {
             return Err(SendError::NotConnected);
         }
+        runs(live, needs)?;
         queue(slot, message)
     }
 
@@ -693,6 +714,7 @@ impl AgentRegistry {
         holds: Vec<(BotId, HoldEntry)>,
         full: ServerMessage,
     ) -> Result<(), SendError> {
+        let needs = needs(&full);
         let full = self.wire(full)?;
         let mut guard = self.state();
         let state = &mut *guard;
@@ -705,7 +727,10 @@ impl AgentRegistry {
         };
         match &slot.phase {
             Phase::Live(live)
-                if !live.halt.is_halted() && matches!(live.welcome, Welcome::Listed(_)) => {}
+                if !live.halt.is_halted() && matches!(live.welcome, Welcome::Listed(_)) =>
+            {
+                runs(live, needs)?;
+            }
             _ => return Err(SendError::NotConnected),
         }
         queue(slot, full)?;
@@ -748,6 +773,7 @@ impl AgentRegistry {
         entry: HoldEntry,
         message: Option<ServerMessage>,
     ) -> Result<(), SendError> {
+        let needs = message.as_ref().and_then(needs);
         let message = message.map(|message| self.wire(message)).transpose()?;
         let mut state = self.state();
         let Some(slot) = state
@@ -759,7 +785,10 @@ impl AgentRegistry {
         };
         match &slot.phase {
             Phase::Live(live)
-                if !live.halt.is_halted() && matches!(live.welcome, Welcome::Reconciled) => {}
+                if !live.halt.is_halted() && matches!(live.welcome, Welcome::Reconciled) =>
+            {
+                runs(live, needs)?;
+            }
             _ => return Err(SendError::NotConnected),
         }
         if let Some(message) = message {
@@ -839,6 +868,7 @@ impl AgentRegistry {
                     generation: slot.generation,
                     halted: live.halt.is_halted(),
                     capacity: live.capacity,
+                    script_api: live.script_api,
                     phase,
                 })
             })
@@ -1140,7 +1170,9 @@ impl AgentRegistry {
         let unsendable = |error| match error {
             SendError::NotConnected => CommandRefused::NotConnected,
             SendError::QueueFull => CommandRefused::QueueFull,
-            SendError::TooLarge | SendError::Unwritable => CommandRefused::Unsendable,
+            SendError::TooLarge | SendError::Unwritable | SendError::AgentTooOld => {
+                CommandRefused::Unsendable
+            }
         };
         let message = self.wire(message).map_err(unsendable)?;
         let mut state = self.state();
@@ -1178,6 +1210,38 @@ fn lock(shared: &Shared) -> MutexGuard<'_, State> {
     shared.state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// The highest script API level a spec of `message` needs: `None` for a
+/// message without a scripted mode.
+fn needs(message: &ServerMessage) -> Option<ScriptApiLevel> {
+    let level = |spec: &BotSpec| spec.mode.script_api();
+    match message {
+        ServerMessage::Reconcile(assignments) => assignments
+            .iter()
+            .filter_map(|assignment| level(&assignment.spec))
+            .max(),
+        ServerMessage::Assign(assignment) => level(&assignment.spec),
+        ServerMessage::Update(spec) => level(spec),
+        ServerMessage::Welcome(_)
+        | ServerMessage::Unassign(_)
+        | ServerMessage::SendChat(_)
+        | ServerMessage::SessionGrant(_)
+        | ServerMessage::SessionDenied(_)
+        | ServerMessage::Reject(_)
+        | ServerMessage::Lifecycle(_) => None,
+    }
+}
+
+/// Whether `live`'s agent runs a mode that `needs` a script API level, by
+/// its hello: never a scripted mode to an agent below its level, whatever
+/// the caller decided (ADR-0036, D13).
+fn runs(live: &Live, needs: Option<ScriptApiLevel>) -> Result<(), SendError> {
+    if needs.is_none_or(|level| level.runs_on(live.script_api)) {
+        Ok(())
+    } else {
+        Err(SendError::AgentTooOld)
+    }
+}
+
 /// Queues `message` on `slot`'s live stream; a full queue ends it.
 fn queue(slot: &mut Slot, message: wire::ServerMessage) -> Result<(), SendError> {
     let Phase::Live(live) = &mut slot.phase else {
@@ -1203,6 +1267,7 @@ impl LiveAgents for AgentRegistry {
             Phase::Live(live) => Some(LiveStream {
                 connected_at: live.connected_at,
                 last_seen: live.last_seen,
+                script_api: live.script_api,
             }),
             Phase::Claimed { .. } => None,
         }
@@ -1289,7 +1354,9 @@ impl LiveAgents for AgentRegistry {
         let unsendable = |error| match error {
             SendError::NotConnected => AnswerRefused::NotConnected,
             SendError::QueueFull => AnswerRefused::QueueFull,
-            SendError::TooLarge | SendError::Unwritable => AnswerRefused::Unsendable,
+            SendError::TooLarge | SendError::Unwritable | SendError::AgentTooOld => {
+                AnswerRefused::Unsendable
+            }
         };
         let id = SessionRequestId::new(answer.number);
         let bot = answer.bot;
@@ -1547,7 +1614,7 @@ mod tests {
     use fleet_core::id::RequestId;
     use fleet_core::mc::SessionCredentials;
     use fleet_core::value::{AgentCapacity, AgentVersion};
-    use fleet_proto::control::{BotEvent, BotEventKind, SessionRequestId, Welcome};
+    use fleet_proto::control::{Assignment, BotEvent, BotEventKind, SessionRequestId, Welcome};
     use fleet_testkit::system::ManualClock;
 
     use super::*;
@@ -1601,6 +1668,7 @@ mod tests {
             halt: Halt::default(),
             connected_at: at(T0),
             capacity: AgentCapacity::try_from(10_u32).unwrap(),
+            script_api: 1,
             running,
             welcome: welcome(),
         }
@@ -1749,6 +1817,7 @@ mod tests {
                 generation: lease.generation,
                 halted: false,
                 capacity: AgentCapacity::try_from(10_u32).unwrap(),
+                script_api: 1,
                 phase: ViewPhase::Listed(vec![LatestReport {
                     agent: agent(1),
                     generation: lease.generation,
@@ -1865,6 +1934,7 @@ mod tests {
             Some(LiveStream {
                 connected_at: at(T0),
                 last_seen: at("2027-01-15T08:00:05Z"),
+                script_api: 1,
             })
         );
         assert_eq!(
@@ -2750,6 +2820,119 @@ mod tests {
         assert!(registry.latest(bot(2)).is_some());
     }
 
+    /// Bot `n`'s spec on a scripted mode of Phase 15's level.
+    fn scripted_spec(n: u8) -> BotSpec {
+        let script = fleet_core::script::Script::try_from(fleet_core::script::ScriptDraft {
+            api: 1,
+            source: "fn on_join(first) {}".to_owned(),
+            leash: 8,
+            tool_guard: 2,
+            block_guard: Vec::new(),
+            messages: Vec::new(),
+            patterns: Vec::new(),
+        })
+        .unwrap();
+        BotSpec {
+            id: bot(n),
+            account: fleet_core::bot::BotAccount::Offline(format!("AfkBot{n}").parse().unwrap()),
+            server: "play.example.com".parse().unwrap(),
+            mode: fleet_core::mode::ModeDefinition::scripted(script),
+            desired: DesiredRunState::Running,
+            conflict_texts: fleet_core::disconnect::ConflictTexts::default(),
+            chat_rate: fleet_core::chat::ChatRate::default(),
+            chat_formats: fleet_core::chat::ChatFormats::default(),
+        }
+    }
+
+    /// A stream whose hello has the script API level `script_api`, with a
+    /// queue of 8 and its `Welcome` taken off.
+    fn live_at(
+        registry: &AgentRegistry,
+        script_api: u32,
+    ) -> (Lease, mpsc::Receiver<wire::ServerMessage>) {
+        let lease = registry.claim(&admitted(1)).unwrap();
+        let (queue, mut queued) = mpsc::channel(8);
+        registry
+            .activate(
+                &lease,
+                Activation {
+                    script_api,
+                    ..activation(queue, Vec::new())
+                },
+            )
+            .unwrap();
+        let _welcome = queued.try_recv().unwrap();
+        (lease, queued)
+    }
+
+    /// No scripted mode reaches an agent below its level on any path, from
+    /// before scripts (no level in its hello) or a newer one's: the welcome's
+    /// full reconcile, an assignment, an update.
+    #[test]
+    fn a_spec_whose_mode_needs_a_level_the_stream_lacks_is_never_queued() {
+        let (registry, _) = registry();
+        let (lease, mut queued) = live_at(&registry, 0);
+        let assign = |n| Assignment {
+            spec: scripted_spec(n),
+            restore: None,
+        };
+
+        let reconcile = registry.settle(
+            agent(1),
+            lease.generation,
+            Vec::new(),
+            ServerMessage::Reconcile(vec![assign(1)]),
+        );
+        assert_eq!(reconcile, Err(SendError::AgentTooOld));
+        settle(&registry, &lease, &[]);
+        let assigned = registry.hold_and_send(
+            agent(1),
+            lease.generation,
+            bot(1),
+            entry(Hold::Assigned, None),
+            Some(ServerMessage::Assign(assign(1))),
+        );
+        let updated = registry.send(agent(1), ServerMessage::Update(scripted_spec(1)));
+
+        assert_eq!(assigned, Err(SendError::AgentTooOld));
+        assert_eq!(updated, Err(SendError::AgentTooOld));
+        // Only the empty reconcile went out, and bot 1 isn't held.
+        assert_eq!(queued.try_recv().map(|_| ()), Ok(()));
+        assert!(queued.try_recv().is_err());
+        assert!(
+            registry
+                .placement_view()
+                .iter()
+                .all(|view| matches!(&view.phase, ViewPhase::Reconciled(held) if held.is_empty()))
+        );
+    }
+
+    #[test]
+    fn a_stream_at_the_level_gets_the_scripted_spec_and_a_step_mode_goes_anywhere() {
+        let (registry, _) = registry();
+        let (lease, mut queued) = live_at(&registry, 1);
+        settle(&registry, &lease, &[]);
+        let _reconcile = queued.try_recv().unwrap();
+
+        let scripted = registry.send(agent(1), ServerMessage::Update(scripted_spec(1)));
+
+        assert_eq!(scripted, Ok(()));
+        assert!(queued.try_recv().is_ok());
+        assert_eq!(
+            registry
+                .placement_view()
+                .first()
+                .map(|view| view.script_api),
+            Some(1)
+        );
+        drop(lease);
+        let (_lease, mut older) = live_at(&registry, 0);
+        let mut step = scripted_spec(2);
+        step.mode = fleet_core::mode::ModeDefinition::afk();
+        assert_eq!(registry.send(agent(1), ServerMessage::Update(step)), Ok(()));
+        assert!(older.try_recv().is_ok());
+    }
+
     #[test]
     fn a_held_bots_entry_keeps_the_spec_last_sent() {
         let (registry, _) = registry();
@@ -2763,6 +2946,7 @@ mod tests {
             desired: DesiredRunState::Running,
             conflict_texts: fleet_core::disconnect::ConflictTexts::default(),
             chat_rate: fleet_core::chat::ChatRate::default(),
+            chat_formats: fleet_core::chat::ChatFormats::default(),
         };
 
         registry

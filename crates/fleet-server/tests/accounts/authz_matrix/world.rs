@@ -621,6 +621,17 @@ impl World {
         visibility: ModeVisibility,
         steps: &Value,
     ) -> ModeId {
+        self.mode_of(owner, visibility, &json!({ "steps": steps }))
+            .await
+    }
+
+    /// The same with the mode JSON `definition`: a scripted mode's, say.
+    pub(crate) async fn mode_of(
+        &self,
+        owner: UserId,
+        visibility: ModeVisibility,
+        definition: &Value,
+    ) -> ModeId {
         let created = at(T0 - 60_000);
         let id = ModeId::new_v7(created, [1; 10]).unwrap();
         let mut tx = self.server.db.write().await.unwrap();
@@ -630,8 +641,7 @@ impl World {
                 owner,
                 name: ModeName::try_from("The holder's mode").unwrap(),
                 visibility,
-                definition: serde_json::from_value::<ModeDefinition>(json!({ "steps": steps }))
-                    .unwrap(),
+                definition: serde_json::from_value::<ModeDefinition>(definition.clone()).unwrap(),
                 created_at: created,
             })
             .await

@@ -40,6 +40,7 @@ use fleet_core::authz::{
 use fleet_core::bot::{BotNotification, BotSnapshot};
 use fleet_core::chat::ChatFormats;
 use fleet_core::id::{AccountId, AgentId, BotId, ChatRequestId, UserId};
+use fleet_core::script::{ScriptLogLine, ScriptState};
 use fleet_proto::control::ChatFailedReason;
 use tokio::sync::{broadcast, watch};
 use tokio::time::Instant;
@@ -113,6 +114,12 @@ pub enum LiveEventKind {
     ChatSent(ChatRequestId),
     /// A chat message the server sent didn't, and why (P11.3).
     ChatFailed(ChatRequestId, ChatFailedReason),
+    /// Where the bot's script is in its life, its texts cleaned at the
+    /// stream's edge (P15.23).
+    ScriptStatus(ScriptState),
+    /// A line of the bot's script's log, cleaned at the stream's edge
+    /// (P15.23).
+    ScriptLog(ScriptLogLine),
     /// A chat message as its row stores it, the sender's username with a
     /// user's line.
     Chat {

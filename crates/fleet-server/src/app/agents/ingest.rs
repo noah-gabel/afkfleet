@@ -5,7 +5,10 @@
 //! - **The front** ([`IngestService`], the [`Ingest`] port): it takes only
 //!   what the registry judged held, and never waits. A status, a death, an
 //!   alert or a chat outcome is published at once and never queued, so chat
-//!   can't drop or delay them. A chat row goes into one bounded queue: at
+//!   can't drop or delay them. A bot's script's status and log are
+//!   published the same way, at most at their bot's rate ([`ScriptGate`]),
+//!   whatever the agent sends; what's over is dropped and counted (P15.23).
+//!   A chat row goes into one bounded queue: at
 //!   most [`INGEST_QUEUE`] rows held in all, queued, kept by a busy database
 //!   or being written, through one row budget (S74), and each stream at most
 //!   [`STREAM_ROWS`] of them through its [`StreamShare`], so one flooding
@@ -41,13 +44,16 @@
 use core::fmt;
 use core::num::NonZeroUsize;
 use core::time::Duration;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
+use chrono::{DateTime, Utc};
+use fleet_core::id::BotId;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio::time::{Instant, MissedTickBehavior, interval_at, timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 
+use super::script_gate::{ScriptGate, ScriptReportKind};
 use crate::app::events::{EventBus, LiveEvent, LiveEventKind};
 use crate::metrics::ServerMetrics;
 use crate::ports::chat::{ChatEntry, ChatMessageId, ChatRecord, ListedChat, NewChatMessage};
@@ -133,6 +139,8 @@ pub fn ingest(
     let held = bounds.queue.get().min(Semaphore::MAX_PERMITS);
     (
         IngestService {
+            scripts: Arc::new(Mutex::new(ScriptGate::new())),
+            metrics: ServerMetrics::off(),
             rows,
             budget: Arc::new(Semaphore::new(held)),
             queue: held,
@@ -164,6 +172,10 @@ struct Row {
 /// The ingest's front; clones share its queue. See the [module docs](self).
 #[derive(Clone)]
 pub struct IngestService {
+    /// What it takes in of each bot's script's reports, whichever stream
+    /// sent them (P15.23).
+    scripts: Arc<Mutex<ScriptGate>>,
+    metrics: ServerMetrics,
     rows: mpsc::Sender<Row>,
     /// The places of every row held, queued, kept or being written (S74).
     budget: Arc<Semaphore>,
@@ -171,6 +183,30 @@ pub struct IngestService {
     queue: usize,
     bus: EventBus,
     stream: NonZeroUsize,
+}
+
+impl IngestService {
+    /// The same front, counting the script reports it drops in `metrics`
+    /// (P15.23).
+    #[must_use]
+    pub fn with_metrics(self, metrics: ServerMetrics) -> Self {
+        Self { metrics, ..self }
+    }
+
+    /// Whether a report of `kind` about `bot`'s script, received `at`,
+    /// is within its bot's rate; one that isn't is counted.
+    fn admit(&self, bot: BotId, kind: ScriptReportKind, at: DateTime<Utc>) -> bool {
+        // The gate's state is two numbers a bot: a poisoned lock's is good.
+        let admitted = self
+            .scripts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .admit(bot, kind, at);
+        if !admitted {
+            self.metrics.script_report_dropped(kind);
+        }
+        admitted
+    }
 }
 
 impl fmt::Debug for IngestService {
@@ -214,6 +250,22 @@ impl Ingest for IngestService {
             Reported::ChatSent(request) => return publish(LiveEventKind::ChatSent(request)),
             Reported::ChatFailed(request, reason) => {
                 return publish(LiveEventKind::ChatFailed(request, reason));
+            }
+            // Over its bot's rate, a report is dropped and counted; a script
+            // that runs says its status again at its next join.
+            Reported::ScriptStatus(state) => {
+                return if self.admit(bot, ScriptReportKind::Status, received_at) {
+                    publish(LiveEventKind::ScriptStatus(state))
+                } else {
+                    Ok(())
+                };
+            }
+            Reported::ScriptLog(line) => {
+                return if self.admit(bot, ScriptReportKind::Log, received_at) {
+                    publish(LiveEventKind::ScriptLog(line))
+                } else {
+                    Ok(())
+                };
             }
             Reported::ChatReceived(chat) => ChatEntry::Received(chat),
             Reported::ModeChatSent(message) => ChatEntry::ModeSent(message),

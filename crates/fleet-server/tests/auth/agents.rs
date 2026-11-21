@@ -70,10 +70,25 @@ impl Setup {
         id
     }
 
-    /// Agent `n`'s live stream, welcomed now.
+    /// Agent `n`'s live stream, welcomed now, at Phase 15's script API
+    /// level.
     pub(super) fn stream(
         &self,
         n: u8,
+    ) -> (
+        Lease,
+        mpsc::Receiver<fleet_proto::generated::ServerMessage>,
+        oneshot::Receiver<StreamEnd>,
+    ) {
+        self.stream_at(n, 1)
+    }
+
+    /// Agent `n`'s live stream, welcomed now, its hello at `script_api`: 0
+    /// for an agent from before scripts.
+    pub(super) fn stream_at(
+        &self,
+        n: u8,
+        script_api: u32,
     ) -> (
         Lease,
         mpsc::Receiver<fleet_proto::generated::ServerMessage>,
@@ -100,6 +115,7 @@ impl Setup {
                     halt: Halt::default(),
                     connected_at: self.clock.now(),
                     capacity: fleet_core::value::AgentCapacity::try_from(10_u32).unwrap(),
+                    script_api,
                     running: Vec::new(),
                     welcome: fleet_proto::generated::ServerMessage::default(),
                 },

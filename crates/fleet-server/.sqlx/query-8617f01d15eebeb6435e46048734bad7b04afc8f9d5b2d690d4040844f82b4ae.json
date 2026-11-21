@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT rowid AS \"rowid!: i64\", id AS \"id!\", server AS \"server!\",\n                  conflict_texts AS \"conflict_texts!\"\n           FROM server_settings",
+  "query": "SELECT rowid AS \"rowid!: i64\", id AS \"id!\", server AS \"server!\",\n                  conflict_texts AS \"conflict_texts!\", chat_formats AS \"chat_formats!\"\n           FROM server_settings",
   "describe": {
     "columns": [
       {
@@ -46,6 +46,17 @@
             "name": "conflict_texts"
           }
         }
+      },
+      {
+        "name": "chat_formats!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "server_settings",
+            "name": "chat_formats"
+          }
+        }
       }
     ],
     "parameters": {
@@ -55,8 +66,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "adffad406574130d42de2cc7a9f2d70ce417290a886a356eecec28052ac5301f"
+  "hash": "8617f01d15eebeb6435e46048734bad7b04afc8f9d5b2d690d4040844f82b4ae"
 }

@@ -1,7 +1,8 @@
 //! The mode routes over HTTP (Plan.md P11.4; ADR-0020, S12–S16, S19):
 //! `GET /api/v1/modes` and what each viewer sees of a mode; `POST
 //! /api/v1/modes` and its twin, with the pointer, the cap, names,
-//! the re-checks and the audit entry. Editing is in [`edits`], deleting in [`deletion`].
+//! the re-checks and the audit entry. Editing is in [`edits`], deleting in [`deletion`],
+//! a scripted mode's routes in [`scripted`].
 
 use std::collections::BTreeMap;
 
@@ -20,6 +21,7 @@ use super::support::{Meanwhile, Options, Person, Seen, Setup, at, redacted, setu
 
 mod deletion;
 mod edits;
+mod scripted;
 
 /// The modes' list.
 const MODES: &str = "/api/v1/modes";
@@ -896,6 +898,7 @@ async fn a_create_is_recorded_without_the_name_or_a_steps_text(
                 ("visibility".to_owned(), visibility.to_owned()),
                 ("commands".to_owned(), commands.to_owned()),
                 ("route".to_owned(), route.to_owned()),
+                ("body".to_owned(), "steps".to_owned()),
             ])
         );
         assert!(!format!("{entry:?}").contains("hunter2"), "{entry:?}");

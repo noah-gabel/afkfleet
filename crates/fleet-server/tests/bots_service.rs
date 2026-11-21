@@ -441,6 +441,10 @@ impl BotWrites for FailingTx {
         self.inner.bots().set_mode(bot, mode).await
     }
 
+    async fn agents_with_mode(&mut self, mode: ModeId) -> Result<Vec<AgentId>, StoreError> {
+        self.inner.bots().agents_with_mode(mode).await
+    }
+
     async fn accounts_with_mode(&mut self, mode: ModeId) -> Result<Vec<AccountId>, StoreError> {
         self.inner.bots().accounts_with_mode(mode).await
     }
@@ -814,6 +818,7 @@ async fn a_bot_on_a_disabled_agent_reads_unknown_even_while_its_stream_lives(
         LiveStream {
             connected_at: at(T0),
             last_seen: seen,
+            script_api: 1,
         },
     );
 
@@ -849,6 +854,7 @@ async fn a_bot_on_a_live_agent_reads_its_report_on_that_stream(
         LiveStream {
             connected_at: at(T0),
             last_seen: at(T0),
+            script_api: 1,
         },
     );
     setup.live.held.lock().unwrap().insert(
@@ -882,6 +888,7 @@ async fn a_bot_on_a_live_agent_awaits_its_report_since_it_was_given(
         LiveStream {
             connected_at: connected,
             last_seen: connected,
+            script_api: 1,
         },
     );
     setup.live.held.lock().unwrap().insert(
@@ -1315,6 +1322,7 @@ impl Setup {
             LiveStream {
                 connected_at: at(T0),
                 last_seen: at(T0),
+                script_api: 1,
             },
         );
         self.live.held.lock().unwrap().insert(

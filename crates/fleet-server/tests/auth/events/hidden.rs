@@ -100,6 +100,11 @@ fn every_kind(setup: &Setup, watched: &Watched) {
             request: request(),
             why: NotSent::Unsendable,
         },
+        LiveEventKind::ScriptStatus(fleet_core::script::ScriptState::Crashed),
+        LiveEventKind::ScriptLog(fleet_core::script::ScriptLogLine {
+            kind: fleet_core::script::LogKind::Line,
+            text: fleet_core::script::ReportText::clean("a hidden line"),
+        }),
     ];
     for kind in kinds {
         agent_event(setup, watched.bot, watched.agent, kind);
