@@ -5,7 +5,9 @@
 // - The guards, on every browser spec: an init script records every CSP violation, then
 //   freezes `Object.prototype` as Tauri's `freezePrototype` does. At the end the page must
 //   hold no `<style>` element, no adopted stylesheet and no stylesheet from another origin,
-//   and there must have been no violation, no console error and no uncaught error. The page
+//   and there must have been no violation, no console error and no uncaught error. No shadow root
+//   holds a `<style>` either, and only the script editor's adopts a stylesheet: frontend.md's one
+//   exception, CodeMirror's constructed sheet (ADR-0036, D16; ADR-0045). The page
 //   is served with the release CSP (e2e/csp.ts), so a library that injects a style or
 //   evaluates code fails here, as it would in the app.
 // - While the theme sweep's Tab walk runs, the window's own focus and blur reach none of the
@@ -106,6 +108,10 @@ interface Found {
   readonly styles: number;
   readonly adopted: number;
   readonly foreignSheets: number;
+  /** `<style>` elements in any shadow root. */
+  readonly shadowStyles: number;
+  /** Shadow roots that adopted a stylesheet but aren't the script editor's. */
+  readonly strayAdopted: number;
 }
 
 /** The specs' `test`, with the guards on every page. */
@@ -149,15 +155,40 @@ export const test = base.extend<{ guards: undefined }>({
 
       await use(undefined);
 
-      const found: Found = await page.evaluate(() => ({
-        violations: (window as unknown as { __cspViolations?: string[] }).__cspViolations ?? [],
-        styles: document.querySelectorAll("style").length,
-        adopted: document.adoptedStyleSheets.length,
-        foreignSheets: [...document.styleSheets].filter(
-          (sheet) => sheet.href === null || new URL(sheet.href).origin !== location.origin,
-        ).length,
-      }));
-      expect(found).toEqual({ violations: [], styles: 0, adopted: 0, foreignSheets: 0 });
+      const found: Found = await page.evaluate(() => {
+        const roots: ShadowRoot[] = [];
+        const walk = (root: Document | ShadowRoot) => {
+          for (const element of root.querySelectorAll("*")) {
+            if (element.shadowRoot !== null) {
+              roots.push(element.shadowRoot);
+              walk(element.shadowRoot);
+            }
+          }
+        };
+        walk(document);
+        return {
+          violations: (window as unknown as { __cspViolations?: string[] }).__cspViolations ?? [],
+          styles: document.querySelectorAll("style").length,
+          adopted: document.adoptedStyleSheets.length,
+          foreignSheets: [...document.styleSheets].filter(
+            (sheet) => sheet.href === null || new URL(sheet.href).origin !== location.origin,
+          ).length,
+          shadowStyles: roots.reduce((sum, root) => sum + root.querySelectorAll("style").length, 0),
+          strayAdopted: roots.filter(
+            (root) =>
+              root.adoptedStyleSheets.length > 0 &&
+              !root.host.matches('[data-slot="script-editor"]'),
+          ).length,
+        };
+      });
+      expect(found).toEqual({
+        violations: [],
+        styles: 0,
+        adopted: 0,
+        foreignSheets: 0,
+        shadowStyles: 0,
+        strayAdopted: 0,
+      });
       expect(errors).toEqual([]);
     },
     { auto: true },

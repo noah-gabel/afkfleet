@@ -6,8 +6,9 @@
 //   into a shadow root, which Edge's CSP allows. The constructed stylesheet in this shadow root is
 //   frontend.md's one exception to "no runtime styles"; the document holds none, and the style
 //   guard checks both. CustomProperties cross the shadow root, so the theme's tokens follow the app.
-// - **The host** sits in the document: its border and corner are the app's classes, and the one
-//   focus rule draws its outline while the editor inside has the focus.
+// - **The host** sits in the document: its border, corner and fixed height are the app's classes
+//   (26rem, which an 800×600 window shows whole, so its focus outline is always in sight), the
+//   editor scrolls inside it, and the one focus rule draws its outline while the editor has the focus.
 // - **The text** starts from `value`, and a different `value` from outside (a template, a reload)
 //   replaces it; every change goes to `onChange`. `readOnly` keeps it focusable, searchable and
 //   copyable, never changed.
@@ -188,7 +189,7 @@ export function ScriptEditor(props: ScriptEditorProps) {
       <div
         ref={host}
         data-slot="script-editor"
-        className="min-w-0 rounded-md border border-input bg-card"
+        className="h-[26rem] min-w-0 rounded-md border border-input bg-card"
       />
       <p className="text-sm text-muted-foreground">{KEYBOARD_HINT}</p>
       <div role="status" className="flex flex-col gap-1">

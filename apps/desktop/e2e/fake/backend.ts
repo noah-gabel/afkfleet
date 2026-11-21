@@ -70,6 +70,8 @@ import type { ModeActionKind } from "@afkfleet/ui/generated/ModeActionKind";
 import type { ModeActionRequest } from "@afkfleet/ui/generated/ModeActionRequest";
 import type { ModePage } from "@afkfleet/ui/generated/ModePage";
 import type { ModeResponse } from "@afkfleet/ui/generated/ModeResponse";
+import type { ModeScript } from "@afkfleet/ui/generated/ModeScript";
+import type { ModeScriptRequest } from "@afkfleet/ui/generated/ModeScriptRequest";
 import type { ModeStepRequest } from "@afkfleet/ui/generated/ModeStepRequest";
 import type { ModeVisibility } from "@afkfleet/ui/generated/ModeVisibility";
 import type { PreviewChatFormatsResponse } from "@afkfleet/ui/generated/PreviewChatFormatsResponse";
@@ -340,6 +342,24 @@ interface StoredMode {
   readonly created_at: string;
   updated_at: string;
   steps: ModeStepRequest[];
+  /** A scripted mode's body, as its request sent it (P15.25). */
+  script?: ModeScriptRequest;
+}
+
+/** A scripted body as an editor of its mode reads it, at level 1 (ADR-0044, E6). */
+function shownScript(body: ModeScriptRequest): ModeScript {
+  return {
+    api: 1,
+    source: body.source,
+    leash: body.leash,
+    tool_guard: body.tool_guard,
+    block_guard: body.block_guard.map((block) =>
+      block.includes(":") ? block : `minecraft:${block}`,
+    ),
+    messages: body.messages.map((message) => ({ ...message, arguments_hidden: false })),
+    patterns: body.patterns,
+    any_time_chat: body.patterns.some((pattern) => pattern.when === "any_time"),
+  };
 }
 
 /** A stored mode's dates. */
@@ -1709,6 +1729,7 @@ export class FakeBackend {
       version: mode.version,
       created_at: mode.created_at,
       updated_at: mode.updated_at,
+      ...(mode.script === undefined ? {} : { script: shownScript(mode.script) }),
       steps: mode.steps.map((step) => {
         const message = step.action.message ?? "";
         // As the server's `without_arguments`: a bare command has nothing to cut.
@@ -1748,7 +1769,8 @@ export class FakeBackend {
       return body;
     }
     const visibility = request.visibility as ModeVisibility;
-    if (visibility === "shared" && user.role === "member") {
+    const script = request.script as ModeScriptRequest | undefined;
+    if ((visibility === "shared" || script !== undefined) && user.role === "member") {
       return api(403, "forbidden");
     }
     const steps = request.steps as ModeStepRequest[];
@@ -1773,6 +1795,7 @@ export class FakeBackend {
       created_at: MODE_TIME,
       updated_at: MODE_TIME,
       steps,
+      ...(script === undefined ? {} : { script }),
     };
     this.#modes = [mode, ...this.#modes];
     return value(this.#modeResponse(user, mode));
@@ -1813,6 +1836,10 @@ export class FakeBackend {
       return api(403, "forbidden");
     }
     const steps = request.steps as ModeStepRequest[];
+    const script = request.script as ModeScriptRequest | undefined;
+    if ((script !== undefined || mode.script !== undefined) && user.role === "member") {
+      return api(403, "forbidden");
+    }
     if (holdsUnlisted(steps) && !twin) {
       return api(403, "mode_needs_step_up");
     }
@@ -1820,7 +1847,8 @@ export class FakeBackend {
     if (
       name === mode.name &&
       visibility === mode.visibility &&
-      JSON.stringify(steps) === JSON.stringify(mode.steps)
+      JSON.stringify(steps) === JSON.stringify(mode.steps) &&
+      JSON.stringify(script) === JSON.stringify(mode.script)
     ) {
       return value(this.#modeResponse(user, mode));
     }
@@ -1838,6 +1866,11 @@ export class FakeBackend {
     mode.name = name;
     mode.visibility = visibility;
     mode.steps = steps;
+    if (script === undefined) {
+      delete mode.script;
+    } else {
+      mode.script = script;
+    }
     mode.version += 1;
     return value(this.#modeResponse(user, mode));
   }
@@ -1890,6 +1923,22 @@ export class FakeBackend {
   /** No mode at all, built-in ones included: for the list's empty state (L4). */
   clearModes(): void {
     this.#modes = [];
+  }
+
+  /** A scripted mode of `owner`'s, newest, `visibility` as given: for the script's screens (P15.25). */
+  addScriptedMode(
+    owner: string,
+    name: string,
+    script: ModeScriptRequest,
+    visibility: ModeVisibility = "private",
+  ): string {
+    const id = this.addMode(owner, name);
+    const mode = this.#modes.find((one) => one.id === id);
+    if (mode !== undefined) {
+      mode.script = script;
+      mode.visibility = visibility;
+    }
+    return id;
   }
 
   /** A private mode of `owner`'s, newest, with `steps`: for the long lists and editors (L4). */

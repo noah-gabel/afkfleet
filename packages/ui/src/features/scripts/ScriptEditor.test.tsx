@@ -129,6 +129,47 @@ describe("ScriptEditor", () => {
     expect(view().state.doc.toString()).toBe("fn on_stop() { }");
   });
 
+  it("types over a selection itself, so the browser never restyles the text it replaces", () => {
+    const { root, view } = renderEditor();
+    const content = root.querySelector(".cm-content") as HTMLElement;
+    view().dispatch({ selection: { anchor: 0, head: view().state.doc.length } });
+
+    const typed = new InputEvent("beforeinput", {
+      inputType: "insertText",
+      data: "(",
+      bubbles: true,
+      cancelable: true,
+    });
+    content.dispatchEvent(typed);
+
+    expect(typed.defaultPrevented).toBe(true);
+    // Through CodeMirror's own input handlers: closing brackets wrap the selection.
+    expect(view().state.doc.toString()).toBe(`(${SCRIPT})`);
+  });
+
+  it("leaves typing with a plain cursor to the browser, and refuses any into a read-only text", () => {
+    const { root, view } = renderEditor({ readOnly: true });
+    const content = root.querySelector(".cm-content") as HTMLElement;
+    const event = () =>
+      new InputEvent("beforeinput", {
+        inputType: "insertText",
+        data: "x",
+        bubbles: true,
+        cancelable: true,
+      });
+
+    const refused = event();
+    content.dispatchEvent(refused);
+    expect(refused.defaultPrevented).toBe(true);
+    expect(view().state.doc.toString()).toBe(SCRIPT);
+
+    view().dispatch({ effects: [] });
+    const { root: other } = renderEditor();
+    const plain = event();
+    (other.querySelector(".cm-content") as HTMLElement).dispatchEvent(plain);
+    expect(plain.defaultPrevented).toBe(false);
+  });
+
   it("keeps a read-only text from the keyboard", () => {
     const { view } = renderEditor({ readOnly: true });
 

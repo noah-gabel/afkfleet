@@ -22,10 +22,13 @@ export const scriptTheme = EditorView.theme({
     color: "var(--foreground)",
     backgroundColor: "transparent",
     fontSize: "0.875rem",
+    height: "100%",
   },
   "&.cm-focused": { outline: "none" },
-  ".cm-scroller": { fontFamily: "var(--font-mono)", lineHeight: "1.5" },
-  ".cm-content": { caretColor: "var(--foreground)", minHeight: "14rem", padding: "0.5rem 0" },
+  // The editor scrolls inside its host, which has a fixed height: a long script's host would
+  // otherwise be taller than the window, with part of its focus outline out of sight.
+  ".cm-scroller": { fontFamily: "var(--font-mono)", lineHeight: "1.5", overflow: "auto" },
+  ".cm-content": { caretColor: "var(--foreground)", padding: "0.5rem 0" },
   ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--foreground)" },
   "&.cm-focused > .cm-scroller > .cm-cursorLayer .cm-cursor": {
     borderLeftColor: "var(--foreground)",
