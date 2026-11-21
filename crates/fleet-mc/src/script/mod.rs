@@ -77,9 +77,9 @@ use crate::actions;
 use crate::events::BridgeControl;
 use crate::riding::{self, Riding};
 
-/// On the bot: the leash's radius and the tool guard its mode set, or a
-/// new session's defaults.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// On the bot: the leash's radius, the tool guard and the block guard its
+/// mode set, or a new session's defaults.
+#[derive(Component, Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct Guarded(pub(crate) Guards);
 
 /// Whether the server has placed the bot in its world.
@@ -376,7 +376,7 @@ pub(crate) fn observe(client: &Client) -> Result<Observation, SessionError> {
     facts::observe(&mut client.ecs.write(), client.entity)
 }
 
-/// Sets the leash's radius and the tool guard.
+/// Sets the leash's radius, the tool guard and the block guard.
 ///
 /// # Errors
 /// [`SessionError::NotInWorld`] if the bot's entity is gone.

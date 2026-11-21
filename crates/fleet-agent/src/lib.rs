@@ -22,6 +22,8 @@
 //! - [`healthcheck`]: the `healthcheck` command's check of that file.
 //! - [`managed`]: managed mode: the session credentials the server grants
 //!   (P10.6); the control stream's client comes with P10.7.
+//! - [`stopwatch`]: the OS's monotonic clock, which the fleet times a
+//!   script's hooks by.
 //! - [`run`]: the fleet's run, from the first bot to the exit code.
 //!
 //! The binary (`src/main.rs`) only wires these together: it loads the
@@ -40,4 +42,5 @@ pub mod managed;
 pub mod metrics_endpoint;
 pub mod run;
 pub mod signals;
+pub mod stopwatch;
 pub mod telemetry;

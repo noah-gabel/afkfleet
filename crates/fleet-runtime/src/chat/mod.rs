@@ -11,7 +11,10 @@
 //!   is taken, so a refused message uses up neither.
 //! - User chat gets a [`ChatTicket`] when it's queued. Its outcome comes later
 //!   as a `ChatSent` or `ChatFailed` [`FleetEvent`](crate::FleetEvent); mode
-//!   chat that's sent comes as `ModeChatSent`.
+//!   chat that's sent comes as `ModeChatSent`. A declared message of a
+//!   script is mode chat too, and its runner also hears what became of it:
+//!   a reply's window opens only for a command the session took
+//!   (ADR-0037, C4).
 //! - A failed send isn't retried, and its token isn't refunded. Closing the
 //!   queue fails what's still queued with [`ChatFailure::Disconnected`].
 
@@ -22,6 +25,7 @@ mod ticket;
 use fleet_core::mc::SessionError;
 
 pub use bucket::ChatBucket;
+pub(crate) use queue::SendOutcome;
 pub use queue::{ChatDelivery, ChatQueue, ModeChat};
 pub use ticket::{ChatTicket, ChatTickets};
 

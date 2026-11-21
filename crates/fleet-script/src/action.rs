@@ -4,7 +4,7 @@ use core::time::Duration;
 
 use fleet_core::chat::ChatMessage;
 use fleet_core::mode::HotbarSlot;
-use fleet_core::script::{Ident, Identifier, Input, Position, SendId};
+use fleet_core::script::{Ident, Identifier, Input, Position, Refusal, SendId};
 
 /// How an input goes down.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -18,6 +18,89 @@ pub enum PressKind {
     /// whoever performs it reports the release
     /// ([`Instance::let_go`](crate::Instance::let_go)).
     HoldUntilUsed,
+}
+
+/// A kind of thing a script asks for that can be refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Asked {
+    /// A tap or a hold of a key or a button.
+    Press,
+    /// A look in a direction, a turn, or a look at a point or an entity.
+    Look,
+    /// A hotbar slot.
+    Hotbar,
+    /// Getting into a vehicle, or out of it.
+    Vehicle,
+    /// A declared message: `chat.send`.
+    Send,
+    /// A reply's window: `chat.expect`.
+    Expect,
+    /// A timer.
+    Timer,
+    /// A line for the log.
+    Log,
+}
+
+impl Asked {
+    /// Every kind, in a fixed order.
+    pub const ALL: [Self; 8] = [
+        Self::Press,
+        Self::Look,
+        Self::Hotbar,
+        Self::Vehicle,
+        Self::Send,
+        Self::Expect,
+        Self::Timer,
+        Self::Log,
+    ];
+
+    /// The kind as a short name: for a metric's label and the script's
+    /// log.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Press => "press",
+            Self::Look => "look",
+            Self::Hotbar => "hotbar",
+            Self::Vehicle => "vehicle",
+            Self::Send => "send",
+            Self::Expect => "expect",
+            Self::Timer => "timer",
+            Self::Log => "log",
+        }
+    }
+}
+
+/// What a call on an instance refused of one kind for one reason, and how
+/// often: for whoever runs the script to count, and to write into its log
+/// (ADR-0036, D7; ADR-0037, C7).
+///
+/// The script itself got each refusal as a result. This is the same thing
+/// told to the runtime, at most once for each kind and reason however
+/// often a hook asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Refused {
+    /// What was asked for.
+    pub asked: Asked,
+    /// Why it wasn't taken.
+    pub reason: Refusal,
+    /// How often, in this call.
+    pub times: u32,
+}
+
+/// Counts one more refusal of `asked` for `reason` in `refused`.
+pub(crate) fn note(refused: &mut Vec<Refused>, asked: Asked, reason: Refusal, times: u32) {
+    let found = refused
+        .iter_mut()
+        .find(|known| known.asked == asked && known.reason == reason);
+    match found {
+        Some(known) => known.times = known.times.saturating_add(times),
+        None => refused.push(Refused {
+            asked,
+            reason,
+            times,
+        }),
+    }
 }
 
 /// Something a hook asked for, already past the limits below the script

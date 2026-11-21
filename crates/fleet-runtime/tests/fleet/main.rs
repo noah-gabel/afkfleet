@@ -10,6 +10,8 @@
 //! - `recorder` is a `metrics` recorder a test installs on its own thread.
 //! - `supervisor` holds the supervisor's scenarios, and `metrics` those of
 //!   the runtime's metrics (P4.9).
+//! - `scripted` holds a scripted mode's: the script runner in the bot's own
+//!   actor (P15.16 to P15.18, P15.33).
 // Integration tests are test code, but clippy only applies the test allowances
 // of clippy.toml (unwrap, panic, …) inside `#[cfg(test)]`; without this, the
 // helper functions would count as library code.
@@ -23,4 +25,5 @@ mod harness;
 mod metrics;
 mod panicky;
 mod recorder;
+mod scripted;
 mod supervisor;

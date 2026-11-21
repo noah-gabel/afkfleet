@@ -18,7 +18,11 @@ use crate::harness::{
     n, policy, running, secs, settle, step_seconds, stopped,
 };
 use crate::panicky::PanicOn;
-use crate::recorder::{ACTOR_RESTARTS, BOTS, RECONNECTS, Recorder, WATCHDOG_TRIPS, bots, series};
+use crate::recorder::{
+    ACTOR_RESTARTS, BOTS, RECONNECTS, Recorder, SCRIPT_CHAT_DROPPED, SCRIPT_HOOK_MICROS,
+    SCRIPT_HOOKS, SCRIPT_LOG_DROPPED, SCRIPT_REFUSED, SCRIPTS_STOPPED, WATCHDOG_TRIPS, bots,
+    series,
+};
 
 const TRANSIENT: &str = "multiplayer.disconnect.server_shutdown";
 
@@ -54,9 +58,48 @@ async fn a_new_fleet_describes_its_metrics_and_starts_every_series_at_zero() {
     expected.insert(series(WATCHDOG_TRIPS, [("kind", "tick")].into_iter()));
     expected.insert(series(WATCHDOG_TRIPS, [("kind", "packet")].into_iter()));
     expected.insert(series(ACTOR_RESTARTS, core::iter::empty()));
+    // The scripts' series (Plan.md P15.18): every hook, every reason a
+    // script reads, every way a script stops.
+    let hooks = [
+        "on_join",
+        "on_world_change",
+        "on_death",
+        "on_respawn",
+        "on_timer",
+        "on_chat",
+        "on_stop",
+    ];
+    for hook in hooks {
+        expected.insert(series(SCRIPT_HOOKS, [("hook", hook)].into_iter()));
+        expected.insert(series(SCRIPT_HOOK_MICROS, [("hook", hook)].into_iter()));
+    }
+    for reason in fleet_script::reasons() {
+        expected.insert(series(SCRIPT_REFUSED, [("reason", reason)].into_iter()));
+    }
+    for reason in ["limit", "error", "misuse", "state", "refused", "crashed"] {
+        expected.insert(series(SCRIPTS_STOPPED, [("reason", reason)].into_iter()));
+    }
+    for reason in ["queue", "gap"] {
+        expected.insert(series(
+            SCRIPT_CHAT_DROPPED,
+            [("reason", reason)].into_iter(),
+        ));
+    }
+    expected.insert(series(SCRIPT_LOG_DROPPED, core::iter::empty()));
     assert_eq!(recorder.series(), expected);
     assert_eq!(recorder.bots(), bots([]));
-    for name in [BOTS, RECONNECTS, WATCHDOG_TRIPS, ACTOR_RESTARTS] {
+    for name in [
+        BOTS,
+        RECONNECTS,
+        WATCHDOG_TRIPS,
+        ACTOR_RESTARTS,
+        SCRIPT_HOOKS,
+        SCRIPT_HOOK_MICROS,
+        SCRIPT_REFUSED,
+        SCRIPTS_STOPPED,
+        SCRIPT_CHAT_DROPPED,
+        SCRIPT_LOG_DROPPED,
+    ] {
         assert!(recorder.is_described(name), "{name}");
     }
 }

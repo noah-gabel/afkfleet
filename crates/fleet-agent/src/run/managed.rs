@@ -200,6 +200,7 @@ fn build<C: MinecraftConnector>(
         config: runtime,
         anchor,
         seed,
+        stopwatch: Arc::new(crate::stopwatch::OsStopwatch::start()),
     })
     .map_err(StartupError::Setup)?;
     diagnostics::register();

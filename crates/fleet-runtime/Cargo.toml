@@ -1,6 +1,6 @@
 [package]
 name = "fleet-runtime"
-description = "The bot runtime of afkfleet: one supervised actor per bot, with its mode runner, chat queue and watchdog. Generic over the fleet-core ports; it never sees azalea."
+description = "The bot runtime of afkfleet: one supervised actor per bot, with its mode runner, its script runner, chat queue and watchdog. Generic over the fleet-core ports; it never sees azalea."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,6 +14,8 @@ workspace = true
 # `DateTime` only: the runtime never reads the wall clock (ADR-0013).
 chrono.workspace = true
 fleet-core.workspace = true
+# The script engine: a scripted mode's instance, its actions and its errors (P15.16).
+fleet-script.workspace = true
 governor = { workspace = true, features = ["std"] }
 metrics.workspace = true
 # `StdRng` only, seeded by the caller: never the OS's randomness (ADR-0013).

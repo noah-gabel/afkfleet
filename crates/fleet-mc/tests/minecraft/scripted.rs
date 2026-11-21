@@ -1,7 +1,7 @@
 //! A scripted mode's inputs on a real server (Plan.md P15.15; ADR-0036,
 //! D9 to D12, D18): walking to the leash's end and back, each way to let
 //! go, sneaking at an edge, a dimension change as the world change, the
-//! mouse with both guards at a cobblestone generator, the right button's
+//! mouse with its three guards at a cobblestone generator, the right button's
 //! cadence counted in ticks, and mounting past an occupied minecart.
 //!
 //! The server is asked through RCON where the bot is and what it did; the
@@ -162,9 +162,16 @@ impl Scene {
     }
 
     pub(crate) async fn guards(&self, leash: u8, tool_guard: ToolGuard) {
+        self.guards_listing(leash, tool_guard, &[]).await;
+    }
+
+    /// [`guards`](Self::guards), for a mode that lists `blocks` for mining.
+    pub(crate) async fn guards_listing(&self, leash: u8, tool_guard: ToolGuard, blocks: &[&str]) {
+        let blocks: Vec<String> = blocks.iter().map(|block| (*block).to_owned()).collect();
         let guards = Guards {
             leash: LeashRadius::try_from(leash).unwrap(),
             tool_guard,
+            block_guard: fleet_core::script::BlockGuard::try_from(blocks).unwrap(),
         };
         assert_eq!(
             within("the guards", self.session.set_guards(guards)).await,
@@ -631,6 +638,9 @@ const MINER: Vec3 = Vec3::new(20.5, FEET, 2.5);
 /// The block where the generator's cobblestone forms, level with the
 /// bot's feet.
 const COBBLE: (i32, i32, i32) = (22, FLOOR, 2);
+/// The trench's wall right behind that block: stone, which the pickaxe
+/// breaks as easily, and which the mode doesn't list.
+const WALL: (i32, i32, i32) = (23, FLOOR, 2);
 /// The block the miner stands on.
 const UNDER_THE_MINER: (i32, i32, i32) = (20, BELOW, 2);
 
@@ -757,7 +767,7 @@ fn actions_on(sent: &[ServerboundGamePacket], kind: PlayerAction, block: (i32, i
 }
 
 /// The left button mines a cobblestone generator block after block behind
-/// both guards; the right button uses again every 4 ticks, or once for an
+/// its three guards; the right button uses again every 4 ticks, or once for an
 /// item used over time; mounting passes over a minecart someone sits in;
 /// and a break the server refuses is tried again and again.
 #[tokio::test(flavor = "multi_thread")]
@@ -766,7 +776,7 @@ async fn slow_mouse_scenario() {
     // server has an operator, which the last step makes one.
     let mut scene = Scene::start(16).await;
 
-    a_generator_is_mined_behind_both_guards(&mut scene).await;
+    a_generator_is_mined_behind_its_guards(&mut scene).await;
     the_right_button_keeps_the_vanilla_clients_cadence(&mut scene).await;
     mounting_passes_over_an_occupied_minecart(&mut scene).await;
     a_break_the_server_refuses_is_tried_again(&mut scene).await;
@@ -792,13 +802,14 @@ async fn a_generator_and_a_worn_pickaxe(scene: &mut Scene) {
             format!("setblock {} minecraft:air", at(COBBLE)),
             format!("setblock 21 {FLOOR} 2 minecraft:air"),
             format!("setblock 22 {FLOOR} 3 minecraft:air"),
-            // Behind that place, bedrock: a held button goes on to whatever
-            // the crosshair lands on once a block is gone, as in vanilla,
-            // and a wall of stone there was mined too (found on the first
-            // run: three cobblestone and one stone for the tool's 4 uses).
-            format!("setblock 23 {FLOOR} 2 minecraft:bedrock"),
+            // Behind that place stands the trench's stone wall. A held
+            // button goes on to whatever the crosshair lands on once a
+            // block is gone, as in vanilla, and without the block guard
+            // this wall was mined too (PR #126's first run: three
+            // cobblestone and one stone for the tool's 4 uses).
             format!("setblock 22 {FLOOR} 0 minecraft:water"),
             "scoreboard objectives add mined minecraft.mined:minecraft.cobblestone".to_owned(),
+            "scoreboard objectives add mined_stone minecraft.mined:minecraft.stone".to_owned(),
         ])
         .await;
     scene.put_at(AWAY, -90.0).await;
@@ -839,11 +850,14 @@ async fn a_generator_and_a_worn_pickaxe(scene: &mut Scene) {
             |output| output.contains("wooden_pickaxe"),
         )
         .await;
-    scene.guards(8, ToolGuard::DEFAULT).await;
+    // The mode lists what it mines: cobblestone, and nothing else.
+    scene
+        .guards_listing(8, ToolGuard::DEFAULT, &["cobblestone"])
+        .await;
     let _ = scene.reported().await;
 }
 
-async fn a_generator_is_mined_behind_both_guards(scene: &mut Scene) {
+async fn a_generator_is_mined_behind_its_guards(scene: &mut Scene) {
     a_generator_and_a_worn_pickaxe(scene).await;
 
     // The mining guard: held on the block it stands on, the button mines
@@ -911,6 +925,16 @@ async fn a_generator_is_mined_behind_both_guards(scene: &mut Scene) {
         })
         .count();
     assert_eq!(finished, 4, "{sent:?}");
+    // The block guard: while each next cobblestone formed, the crosshair
+    // was on the stone wall behind it, and the bot never as much as
+    // started on it.
+    assert_eq!(
+        actions_on(&sent, PlayerAction::StartDestroyBlock, WALL),
+        0,
+        "{sent:?}"
+    );
+    assert!(scene.block_is(WALL, "minecraft:stone").await);
+    assert_eq!(scene.score("mined_stone").await, 0);
     // The button is up: the generator's next block stays.
     scene
         .server

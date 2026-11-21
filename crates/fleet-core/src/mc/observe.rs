@@ -3,7 +3,9 @@
 //! script, and [`LetGo`], why a session let go of inputs by itself
 //! (Plan.md P15.10 to P15.13; ADR-0036, D9 to D12).
 
-use crate::script::{Input, Key, LeashRadius, MouseButton, Position, Snapshot, ToolGuard};
+use crate::script::{
+    BlockGuard, Input, Key, LeashRadius, MouseButton, Position, Snapshot, ToolGuard,
+};
 
 /// What a session sees of the game at one moment, taken on its host thread
 /// right before a hook runs (ADR-0036, D12).
@@ -19,17 +21,19 @@ pub struct Observation {
     pub anchor: Option<Position>,
 }
 
-/// The two settings of a scripted mode that a session applies below the
-/// script, every game tick (ADR-0036, D10, D11).
+/// The three settings of a scripted mode that a session applies below the
+/// script, every game tick (ADR-0036, D10, D11; ADR-0042's amendment, G13).
 ///
-/// A new session starts with the defaults of both, so whoever runs a
+/// A new session starts with the defaults of all three, so whoever runs a
 /// script sets them again at every join, before it presses anything.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct Guards {
     /// How far the bot walks from where it was put.
     pub leash: LeashRadius,
     /// How many uses a tool keeps when the bot stops mining with it.
     pub tool_guard: ToolGuard,
+    /// The blocks a held left button mines; none listed for any block.
+    pub block_guard: BlockGuard,
 }
 
 /// Why a session let go of inputs by itself, below the script
@@ -98,6 +102,7 @@ mod tests {
             Guards {
                 leash: LeashRadius::DEFAULT,
                 tool_guard: ToolGuard::DEFAULT,
+                block_guard: BlockGuard::ANY,
             }
         );
     }

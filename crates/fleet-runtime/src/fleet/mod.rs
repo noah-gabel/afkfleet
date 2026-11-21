@@ -32,6 +32,7 @@ use fleet_core::chat::ChatMessage;
 use fleet_core::id::BotId;
 use fleet_core::mc::{MinecraftConnector, SessionCredentialProvider};
 use fleet_core::resilience::{CircuitPolicy, RetryPolicy};
+use fleet_core::script::Stopwatch;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{Semaphore, broadcast, mpsc, oneshot};
 
@@ -63,6 +64,11 @@ pub struct FleetParts<C, P> {
     /// The seed of all the runtime's randomness. The runtime never reads the
     /// OS's randomness itself.
     pub seed: u64,
+    /// What a script's hook is timed by (ADR-0040's amendment): the OS's
+    /// monotonic clock in an agent, a manual one in tests. The runtime
+    /// never reads a clock of the OS's itself, and there's no default: a
+    /// fleet without one would bound no hook's time.
+    pub stopwatch: Arc<dyn Stopwatch>,
 }
 
 /// The runtime's API: a cheap handle on the fleet's [`Supervisor`]
@@ -355,6 +361,7 @@ mod tests {
             config,
             anchor: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
             seed: 1,
+            stopwatch: std::sync::Arc::new(fleet_testkit::stopwatch::ManualStopwatch::standing()),
         }
     }
 

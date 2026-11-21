@@ -28,9 +28,20 @@ Under CLAUDE.md's "Only `fleet-mc` may depend on `azalea`":
 - **A hook runs on a thread with at least 2 MiB of stack** (a runtime worker or a test's thread): the instance ends a hook at 1 MiB.
 - **An instance is handed a `Stopwatch`** (fleet-core's port) and ends a hook at 5 ms and a second's hooks at 20 ms: a hook's operations don't bound its time (ADR-0040's amendment). fleet-script itself reads no clock; tests time a hook with fleet-testkit's `ManualStopwatch`, never with the OS's clock, except the three tests of the reviewer's cases, which assert why a hook stopped and never how long it took.
 
+## fleet-runtime and a script's runner (ADR-0043)
+- **A hook runs on the mode runner's task, after it took a turn** (`ScriptTurns`): at most one fewer hooks than the runtime has workers run at once, and a script keeps its turn until it has yielded once. Never run a hook, or anything else of that size, outside a turn; never hold a turn across a session call.
+- **One hook a turn.** `Instance::wake` runs one due timer; the runner comes back for the next.
+- **What outlives a session is in the bot's `ScriptSlot`,** which the supervisor keeps: the instance, the limiter, the chat watch. The runner reaches the instance only through `ScriptSlot::turn`, which hands it a copy of the limiter and takes the copy back, so a hook that panics costs the bot no limit; a poisoned slot is a crashed script, never an `unwrap`.
+- **The actor is the one reader of a session's events.** What a script must hear goes through the session's `ScriptFeed`, which stays bounded whatever a server sends; a new kind of event joins `Life`, never a channel of its own.
+- **Whoever ends a runner's task releases what it held.** The runner clears the session's `held` mark only after its own last `ReleaseAll` went through; the actor reads the mark wherever a runner's task ends.
+- **A script's text is logged at `debug` only:** a log line, an error's message, a declared message as sent. An `info` line about a script names the hook, the line and a label.
+- **A reply's window opens from the chat delivery's outcome,** never where the hook asks and never where the message is queued (ADR-0037, C4).
+- **fleet-runtime still reads no clock of the OS's:** a hook's time comes through `FleetParts::stopwatch`. The agent's `OsStopwatch` is the one that reads it.
+
 ## fleet-mc and a scripted mode's inputs (ADR-0042)
 - **`Held` on the bot is the one place that says which keys and buttons are down.** A game action only changes it; `script/tick.rs` writes azalea's key state from it each game tick. Don't call azalea's `walk`, `sprint`, `set_jumping`, `set_crouching` or `left_click_mine` for a script's input: they act a frame late, and the leash and the guards must act inside the tick.
 - **The leash, the key state and the mining guards run before azalea's own systems in the same game tick,** and `connector::app`'s probe test pins it. A new system that touches what's held joins their chain in `script/mod.rs`; every system declares its place among azalea's, as for riding (ADR-0026).
+- **Mining is behind three guards, each a decision of fleet-core's, applied together in `script/mouse.rs`'s `guard_mining`:** the floor (`may_mine`), the tool (`ToolGuard::allows`) and the blocks a mode lists (`BlockGuard::allows`; ADR-0042, G13). A block a guard holds back only pauses the hold; a new reason to hold a block back joins `allowed` there, so it's judged for what azalea queued, what it mines and what the crosshair is on alike.
 - **Everything a snapshot holds is a registry identifier or a number** (`script/facts.rs`): never a name, lore or other text a server chose. A server's own name of a world that is no identifier becomes `minecraft:unknown`.
 - **What a server can grow, has a bound:** the passengers index (512, swept), a pending world change and each let-go (one).
 

@@ -219,6 +219,8 @@ pub enum Refusal {
     MiningGuard,
     /// The held tool is nearly used up.
     ToolGuard,
+    /// The block isn't one the mode lists for mining.
+    BlockGuard,
     /// A number outside its range, an angle that isn't a number, an
     /// unknown kind.
     BadValue,
@@ -231,13 +233,14 @@ pub enum Refusal {
 
 impl Refusal {
     /// Every reason, in a fixed order.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::TooSoon,
         Self::Dead,
         Self::NotInWorld,
         Self::Leashed,
         Self::MiningGuard,
         Self::ToolGuard,
+        Self::BlockGuard,
         Self::BadValue,
         Self::TooMany,
         Self::NoCommand,
@@ -253,6 +256,7 @@ impl Refusal {
             Self::Leashed => "leashed",
             Self::MiningGuard => "mining_guard",
             Self::ToolGuard => "tool_guard",
+            Self::BlockGuard => "block_guard",
             Self::BadValue => "bad_value",
             Self::TooMany => "too_many",
             Self::NoCommand => "no_command",
@@ -367,6 +371,7 @@ mod tests {
     #[case::leashed(Refusal::Leashed, "leashed")]
     #[case::mining_guard(Refusal::MiningGuard, "mining_guard")]
     #[case::tool_guard(Refusal::ToolGuard, "tool_guard")]
+    #[case::block_guard(Refusal::BlockGuard, "block_guard")]
     #[case::bad_value(Refusal::BadValue, "bad_value")]
     #[case::too_many(Refusal::TooMany, "too_many")]
     #[case::no_command(Refusal::NoCommand, "no_command")]
@@ -376,12 +381,12 @@ mod tests {
     }
 
     #[test]
-    fn the_reasons_are_a_closed_list_of_nine() {
+    fn the_reasons_are_a_closed_list_of_ten() {
         let mut texts: Vec<&str> = Refusal::ALL.iter().map(|reason| reason.as_str()).collect();
         texts.sort_unstable();
         texts.dedup();
 
-        assert_eq!(texts.len(), 9);
+        assert_eq!(texts.len(), 10);
         assert!(
             texts
                 .iter()

@@ -15,6 +15,7 @@ use fleet_core::chat::ChatMessage;
 use fleet_core::id::BotId;
 use fleet_core::mc::{MinecraftConnector, SessionCredentialProvider};
 use fleet_core::resilience::{CircuitBreaker, CircuitPolicy, FailureWindow, RetryPolicy};
+use fleet_core::script::Stopwatch;
 use rand::rngs::StdRng;
 use rand::{Rng as _, SeedableRng as _};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -30,6 +31,7 @@ use crate::clock::RuntimeClock;
 use crate::config::RuntimeConfig;
 use crate::event::{FleetEvent, FleetEventKind};
 use crate::metrics;
+use crate::script::{ScriptPrograms, ScriptSlot, ScriptTurns};
 use crate::snapshot::SnapshotOwner;
 
 /// What the supervisor keeps of one bot, across its actors.
@@ -43,6 +45,10 @@ struct Entry {
     breaker: watch::Sender<CircuitBreaker>,
     /// The bot's chat rate limit, kept so a restart doesn't refill it.
     bucket: ChatBucket,
+    /// What of the bot's script outlives a session: its instance, the
+    /// bot's limiter, its chat watch. Kept so an actor's restart neither
+    /// resets a limit nor starts a stopped script again (Plan.md P15.16).
+    script: ScriptSlot,
     /// The actor's recent crashes.
     crashes: FailureWindow,
     /// The running actor; none after a second crash loop.
@@ -79,6 +85,12 @@ pub struct Supervisor<C, P> {
     rng: StdRng,
     events: broadcast::Sender<FleetEvent>,
     tickets: ChatTickets,
+    /// The compiled scripts the fleet's bots share.
+    programs: ScriptPrograms,
+    /// The turnstile the fleet's hooks pass.
+    turns: ScriptTurns,
+    /// What every script's hook is timed by.
+    stopwatch: Arc<dyn Stopwatch>,
     commands: mpsc::Receiver<Command>,
     /// The parent of every actor's token; a child of `run`'s token.
     run_token: CancellationToken,
@@ -112,8 +124,14 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> Supervisor<C, P> {
             config,
             anchor,
             seed,
+            stopwatch,
         } = parts;
         Self {
+            programs: ScriptPrograms::new(),
+            turns: config
+                .script_hooks_at_once
+                .map_or_else(ScriptTurns::new, ScriptTurns::of),
+            stopwatch,
             connector,
             credentials,
             retry,
@@ -231,6 +249,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> Supervisor<C, P> {
             }),
             breaker: watch::Sender::new(CircuitBreaker::new(self.circuit)),
             bucket: ChatBucket::new(spec.chat_rate),
+            script: ScriptSlot::new(),
             crashes: FailureWindow::new(self.config.restart_limit, self.config.restart_window),
             actor: None,
             crash_looped: false,
@@ -482,6 +501,10 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> Supervisor<C, P> {
             events: self.events.clone(),
             bucket: entry.bucket.clone(),
             tickets: self.tickets.clone(),
+            script: entry.script.clone(),
+            programs: self.programs.clone(),
+            turns: self.turns.clone(),
+            stopwatch: Arc::clone(&self.stopwatch),
             snapshot: entry.snapshot.publisher(),
             breaker: entry.breaker.clone(),
             start,
@@ -750,6 +773,7 @@ mod tests {
             config: RuntimeConfig::default(),
             anchor: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
             seed: 1,
+            stopwatch: std::sync::Arc::new(fleet_testkit::stopwatch::ManualStopwatch::standing()),
         })
         .unwrap();
         (supervisor, connector, fleet.subscribe())

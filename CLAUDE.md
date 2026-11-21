@@ -86,6 +86,7 @@ The full table, with every recipe and how to write one, is in `.claude/rules/com
 **Bot lifecycle:**
 - Every lifecycle change goes through `fleet_core::bot::transition()`. Actors execute the effects it returns and never decide state themselves.
 - Disconnect handling follows the core classifier. Never reconnect against a duplicate login: that means a human is playing.
+- A scripted mode runs in its session's mode runner task, and its hooks take turns (ADR-0043). What outlives the session is in the bot's `ScriptSlot`, and every way out releases what the script held; the rules are in `.claude/rules/rust.md`.
 
 **Ports:**
 - In the runtime, ports are generic traits with `fn …(&self) -> impl Future<Output = T> + Send`.

@@ -8,6 +8,9 @@ expression: json
     "source": "fn on_join(first) {\n    timer.every(1200, \"swing\");\n}\n",
     "leash": 16,
     "tool_guard": 0,
+    "block_guard": [
+      "minecraft:cobblestone"
+    ],
     "messages": [
       {
         "key": "home",

@@ -557,6 +557,10 @@ The key metrics (all counters end in `_total`; times are Unix seconds, 0 until t
 | **Agent** | | |
 | `afkfleet_bots` | `state`: each bot state | The fleet's bots in each state |
 | `afkfleet_bot_reconnects_total`, `afkfleet_watchdog_trips_total` (`kind`: `tick`, `packet`), `afkfleet_actor_restarts_total` | | The bots' own reconnects, the watchdog's trips, the supervisor's restarts |
+| `afkfleet_script_hooks_total`, `afkfleet_script_hook_microseconds_total` (both `hook`: `on_join`, `on_world_change`, `on_death`, `on_respawn`, `on_timer`, `on_chat`, `on_stop`) | | The hooks the bots' scripts ran and the time they took together; their quotient is a hook's mean time. A script may take 5 ms a hook and 20 ms a second |
+| `afkfleet_script_refused_actions_total` | `reason`: what a script reads as a result's reason (`too_soon`, `leashed`, `block_guard`, …) | What scripts asked for and weren't given |
+| `afkfleet_scripts_stopped_total` | `reason`: `limit`, `error`, `misuse`, `state`, `refused`, `crashed` | Scripts that stopped running: by their own doing, refused by this agent's engine, or `crashed` for a fault of the agent's own, which is worth a report |
+| `afkfleet_script_chat_dropped_total` (`reason`: `queue`, `gap`), `afkfleet_script_log_dropped_total` | | Chat lines a script never got (more than its queue holds, or an any-time pattern's second match within a second), and log lines about refusals beyond 20 a minute |
 | `afkfleet_mc_abandoned_threads_total`, `afkfleet_mc_host_threads`, `afkfleet_mc_worlds`, `afkfleet_mc_dropped_chat_total`, `afkfleet_mc_ignored_action_bar_total` | | The Minecraft adapter's numbers, sampled every 5 s |
 | `afkfleet_outbox_chat_dropped_total`, `afkfleet_outbox_refused_total`, `afkfleet_outbox_session_requests_dropped_total` | | A managed agent's outbox: chat dropped for newer chat, items refused full (each ends the stream), session requests replaced or dropped unsent; sampled every 5 s |
 | `afkfleet_identity_not_after_timestamp_seconds`, `afkfleet_identity_renewals_total` (`outcome`: `renewed`, `failed`) | | When the agent's certificate ends, and its attempts to renew it |

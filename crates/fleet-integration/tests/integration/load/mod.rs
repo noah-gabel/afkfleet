@@ -15,6 +15,8 @@
 //! and the agent's together. The process's CPU time and memory are read
 //! after each.
 
+mod scripted;
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -53,7 +55,7 @@ const VIEWERS_A_BOT: usize = MEMBERS * GRANTS_EACH / BOTS;
 /// The test's own process, read from the OS: the server, the agent, every
 /// client and the harness itself run in it, so its CPU time and memory are
 /// an upper bound for the server's and the agent's together.
-struct Meter {
+pub(super) struct Meter {
     system: System,
     pid: Pid,
     /// The last reading: when, and the CPU time used until then.
@@ -63,7 +65,7 @@ struct Meter {
 }
 
 impl Meter {
-    fn start() -> Self {
+    pub(super) fn start() -> Self {
         let mut meter = Self {
             system: System::new().unwrap(),
             pid: sysinfo::get_current_pid().unwrap(),
@@ -75,7 +77,7 @@ impl Meter {
     }
 
     /// The CPU time the process used so far, and the memory it holds now.
-    fn read(&mut self) -> (Duration, u64) {
+    pub(super) fn read(&mut self) -> (Duration, u64) {
         let what = ProcessRefreshKind::nothing().with_cpu().with_memory();
         self.system
             .refresh_processes_specifics(ProcessesToUpdate::Some(&[self.pid]), true, what);
@@ -253,7 +255,7 @@ async fn read(mut socket: LiveEvents<MemoryStore>, board: Arc<Board>, member: us
 }
 
 /// `sorted`'s value at `percent` of the way up.
-fn percentile(sorted: &[Duration], percent: usize) -> Duration {
+pub(super) fn percentile(sorted: &[Duration], percent: usize) -> Duration {
     let last = sorted.len().saturating_sub(1);
     sorted
         .get((last * percent).div_ceil(100))

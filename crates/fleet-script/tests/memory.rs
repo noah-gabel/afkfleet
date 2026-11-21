@@ -54,6 +54,7 @@ fn program(source: &str) -> Arc<Program> {
         source: source.to_owned(),
         leash: 8,
         tool_guard: 2,
+        block_guard: Vec::new(),
         messages: Vec::new(),
         patterns: Vec::new(),
     };

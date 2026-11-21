@@ -35,6 +35,7 @@ pub(crate) fn fleet(queue: usize) -> (Fleet, TestSupervisor, FakeConnector) {
         config,
         anchor: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
         seed: 1,
+        stopwatch: Arc::new(fleet_testkit::stopwatch::ManualStopwatch::standing()),
     })
     .unwrap();
     (fleet, supervisor, fake)

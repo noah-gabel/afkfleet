@@ -9,7 +9,9 @@
 //!
 //! The runtime never reads the wall clock or the OS's randomness. Its caller
 //! passes in a wall-clock anchor and a seed, and all time goes through tokio's
-//! clock, so paused-time tests control everything (ADR-0013).
+//! clock, so paused-time tests control everything (ADR-0013). How long a
+//! script's hook ran is read from a stopwatch its caller passes in too
+//! (ADR-0040's amendment).
 //!
 //! - [`OfflineCredentials`] is the standalone agent's session-credential
 //!   provider: offline accounts log in with their name.
@@ -17,7 +19,12 @@
 //!   settings.
 //! - [`ChatQueue`] is a bot's outbound chat: a bounded queue with a rate
 //!   limit, shared by user chat and mode chat.
-//! - [`ModeRunner`] runs a bot's mode in one session.
+//! - [`ModeRunner`] runs a bot's mode in one session: a step mode's plan
+//!   itself, and a scripted mode through its script runner (the `script`
+//!   module's docs; ADR-0043). A script's instance, the bot's
+//!   limiter and its chat watch live in the bot's [`ScriptSlot`], which
+//!   the supervisor keeps; a [`ScriptEvent`] tells the app a script's
+//!   status, its error and its log.
 //! - [`BotActor`] is one bot's actor. It takes a [`BotCommand`] per `Fleet`
 //!   call through its [`BotInbox`] and ends with an [`ActorExit`].
 //! - [`Fleet`] is the runtime's API, and [`Supervisor`] the task behind it:
@@ -39,6 +46,7 @@ mod failure_log;
 mod fleet;
 mod metrics;
 mod mode;
+mod script;
 mod snapshot;
 
 pub use actor::{
@@ -56,4 +64,8 @@ pub use fleet::{
     Supervisor,
 };
 pub use mode::ModeRunner;
+pub use script::{
+    Life, LoggedValue, NotSent, ScriptEvent, ScriptFeed, ScriptInbox, ScriptLog, ScriptParts,
+    ScriptPrograms, ScriptSlot, ScriptStatus, ScriptTurns, script_feed,
+};
 pub use snapshot::{SnapshotOwner, SnapshotPublisher};

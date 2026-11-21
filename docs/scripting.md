@@ -44,7 +44,7 @@ A script defines the hooks it needs and leaves the others out. A function whose 
 | `fn on_respawn()` | The bot lives again after a death |
 | `fn on_timer(name)` | A timer the script set is due |
 | `fn on_chat(key, values)` | The server printed a line that fits one of the mode's declared patterns (see [`chat`](#chat)) |
-| `fn on_stop()` | The script stops in an orderly way: the bot is stopped, its mode is changed, or the mode was edited. It can change `state` and send one declared message; every key and button is released by the runtime right after it. It doesn't run after an error or a disconnect |
+| `fn on_stop()` | The script stops in an orderly way: the bot is stopped or removed, its agent shuts down, its mode is changed, or the mode was edited. It can change `state` and send one declared message, which goes out at once, ahead of anything still waiting in the bot's chat queue; every key and button is released by the runtime right after it. It doesn't run after an error or a disconnect, and a bot whose session doesn't answer is stopped without it after two seconds |
 
 **Nothing is held at the start of `on_join`, `on_world_change`, `on_death` and `on_respawn`.** Each of them puts the bot somewhere new, so the runtime lets go of every key and button first, and the hook decides again.
 
@@ -87,6 +87,7 @@ if !mouse.left.tap().ok {
 | `leashed` | The bot is at the end of its leash, and this would take it further |
 | `mining_guard` | The block reaches below the bot's feet |
 | `tool_guard` | The held tool is nearly used up |
+| `block_guard` | The block isn't one the mode lists for mining |
 | `bad_value` | A number outside its range, an angle that isn't a number, an unknown kind |
 | `too_many` | No room for another timer |
 | `no_command` | `chat.expect` without a declared command sent before it in the same hook |
@@ -134,7 +135,7 @@ keys.forward.hold_for(3000);
 - `hold()` mines the block the bot looks at, and then the next one that appears there, as a held button does in vanilla. An entity in front of the bot is attacked once when the button goes down, never again while it's held.
 - **The bot never mines a block that reaches below its feet:** the one it stands on, whatever its shape, everything under it, and the blocks beside it at that height. The hold returns `mining_guard`, and a hold that's already down pauses while the bot looks at such a block. So aim at feet level or higher from solid ground: a bot standing on a slab, on soul sand or on a carpet mines at eye level only, and so does one in mid-jump.
 - **The tool guard.** When the held tool has only a few uses left (2 unless the mode's setting says otherwise), mining stops, `held` turns `false`, and a new hold returns `tool_guard` until another item is in hand. `bot.held.durability` says how many uses are left.
-- **A held button mines whatever the crosshair lands on next.** Once a block is gone, that's the block behind it, exactly as in vanilla: a bot at a cobblestone generator mines the wall behind the generator's block while the next one forms. Put something its tool can't break there, or let go and look (`bot.looking_at`) before holding again.
+- **The block guard.** A held button mines whatever the crosshair lands on next. Once a block is gone, that's the block behind it, exactly as in vanilla: at a cobblestone generator it's the wall behind the generator's block while the next one forms, and on a real farm that wall may hold the lava. So a mode can list the blocks its script mines: a setting of the mode, up to 16 block IDs such as `cobblestone`. On any other block a hold pauses, and goes on by itself once the bot looks at a listed block again; a new hold on a block that isn't listed returns `block_guard`. A mode that lists nothing mines any block. The three guards answer in this order: `mining_guard`, `tool_guard`, `block_guard`.
 - **A block the server won't let the bot break** (a spawn protection, a claim) is mined to its end, put back by the server, and mined again, for as long as the button is held. Nothing is gained and the tool isn't worn, and a script can't tell it from a block that grows back.
 
 **Right button**
@@ -191,7 +192,8 @@ A script sends only messages its mode declares, each with a key. A message can h
 - **A reply counts only when the script asked.** `chat.expect(key, ms)` right after `chat.send` of a declared command opens a window of `ms` milliseconds (250 to 30,000) for that pattern, from the moment the command is sent. The first line that fits closes it. Without an open window, a reply pattern fits nothing.
 - **A pattern can be declared to count at any time** instead. It then needs no `chat.expect`, the app marks the mode as riskier, and it's delivered at most once a second. Prefer a reply wherever a command causes the line.
 - **A value from chat is a number or one of your own words.** It can go into a declared message's value, inside that value's range, and nowhere else: a recipient or a command is always written in the declaration.
-- Every message sent, every window and every match is a line in the script's log.
+- Every message sent, every window and every match is a line in the script's log, written by the runtime: a message that wasn't sent with the reason, a window that opened, one that ran out, one that never opened because its command wasn't sent, a match with its values, and a `chat.send` or `chat.expect` that was refused. They don't count against the script's own 20 lines a minute; the lines about what was refused have 20 a minute of their own.
+- **A window opens only when the server really got the command.** The bot's chat queue may refuse it (full, or the bot's chat rate used up), or the session may be unable to send it: no window opens then, and the log says why.
 
 ### `timer`
 | | |
@@ -200,7 +202,7 @@ A script sends only messages its mode declares, each with a key. A message can h
 | `timer.every(ms, name)` | Calls it every `ms` milliseconds (the same range), first after `ms` |
 | `timer.cancel(name)` | Removes that timer |
 
-A name holds one timer: setting it again replaces the old one. Timers wait while the bot is dead or between worlds, and they're cleared when it disconnects, so `on_join` is where a script starts them.
+A name holds one timer: setting it again replaces the old one. Timers wait while the bot is dead or between worlds, and they're cleared when it disconnects, so `on_join` is where a script starts them. Timers that are due at the same moment run one after the other, in the order they were due, and other bots' hooks may run in between: on an agent whose scripts keep it busy, a timer's hook can begin some milliseconds late.
 
 ### `random` and `log`
 - `random.between(low, high)` is a whole number from `low` to `high`, both included. `random.chance(percent)` is `true` that often.
@@ -375,6 +377,8 @@ fn next_pickaxe() {
     hotbar.select(state.slot);
 }
 ```
+
+The mode lists `cobblestone` as the one block it mines. While the next block forms, the crosshair is on the wall behind the generator: the hold pauses there, and a new hold returns `block_guard`, which the script answers by trying again a second later.
 
 #### Paying out a balance
 The mode declares two messages and one pattern:

@@ -15,8 +15,8 @@ use fleet_core::mc::{
 };
 use fleet_core::mode::{GameAction, HotbarSlot};
 use fleet_core::script::{
-    BlockPosition, Blocks, BotFacts, Identifier, Input, Key, LeashRadius, MouseButton, Position,
-    Snapshot, ToolGuard,
+    BlockGuard, BlockPosition, Blocks, BotFacts, Identifier, Input, Key, LeashRadius, MouseButton,
+    Position, Snapshot, ToolGuard,
 };
 use fleet_testkit::mc::{
     EmitOutcome, FakeConnector, FakeEvents, FakeSession, Performed, SessionController,
@@ -725,9 +725,10 @@ async fn setting_the_guards_is_logged_with_what_was_set() {
     let guards = Guards {
         leash: LeashRadius::try_from(16).unwrap(),
         tool_guard: ToolGuard::OFF,
+        block_guard: BlockGuard::try_from(vec!["cobblestone".to_owned()]).unwrap(),
     };
 
-    assert_eq!(session.set_guards(guards).await, Ok(()));
+    assert_eq!(session.set_guards(guards.clone()).await, Ok(()));
 
     assert_eq!(controller.log(), [Performed::Guards(guards)]);
 }
@@ -790,4 +791,139 @@ async fn a_world_change_and_a_let_go_are_delivered_in_order() {
         next(&mut events).await,
         Some(SessionEvent::LetGo(LetGo::ItemUsed))
     );
+}
+
+// --- What a scripted mode holds (Plan.md P15.17) ---
+
+const FORWARD: Input = Input::Key(Key::Forward);
+const SNEAK: Input = Input::Key(Key::Sneak);
+const LEFT: Input = Input::Mouse(MouseButton::Left);
+const RIGHT: Input = Input::Mouse(MouseButton::Right);
+
+/// A joined session in which a script holds two keys and both buttons.
+async fn holding() -> (FakeSession, FakeEvents, SessionController) {
+    let (session, events, controller) = start_joined().await;
+    for action in [
+        GameAction::Press(FORWARD),
+        GameAction::Press(SNEAK),
+        GameAction::Press(LEFT),
+        GameAction::HoldUntilUsed,
+    ] {
+        session.perform(action).await.unwrap();
+    }
+    assert_eq!(controller.held(), [FORWARD, SNEAK, LEFT, RIGHT]);
+    (session, events, controller)
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_new_session_holds_nothing_and_a_tap_holds_nothing() {
+    let (session, _events, controller) = start_joined().await;
+
+    session.perform(GameAction::Tap(FORWARD)).await.unwrap();
+    session.perform(GameAction::Jump).await.unwrap();
+    // A key that only taps is tapped, pressed or not.
+    session
+        .perform(GameAction::Press(Input::Key(Key::Drop)))
+        .await
+        .unwrap();
+
+    assert_eq!(controller.held(), []);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_press_holds_its_input_once_until_its_release() {
+    let (session, _events, controller) = holding().await;
+
+    session.perform(GameAction::Press(FORWARD)).await.unwrap();
+    let pressed_again = controller.held();
+    session.perform(GameAction::Release(SNEAK)).await.unwrap();
+    session.perform(GameAction::Release(SNEAK)).await.unwrap();
+
+    assert_eq!(pressed_again, [FORWARD, SNEAK, LEFT, RIGHT]);
+    assert_eq!(controller.held(), [FORWARD, LEFT, RIGHT]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn releasing_the_keys_leaves_the_buttons_and_releasing_all_leaves_nothing() {
+    let (session, _events, controller) = holding().await;
+
+    session.perform(GameAction::ReleaseKeys).await.unwrap();
+    let buttons = controller.held();
+    session.perform(GameAction::ReleaseAll).await.unwrap();
+
+    assert_eq!(buttons, [LEFT, RIGHT]);
+    assert_eq!(controller.held(), []);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_session_lets_go_by_itself_as_fleet_mc_does() {
+    let (_session, _events, controller) = holding().await;
+
+    let _ = controller.emit(SessionEvent::LetGo(LetGo::Leash));
+    let after_the_leash = controller.held();
+    let _ = controller.emit(SessionEvent::LetGo(LetGo::ToolGuard));
+    let _ = controller.emit(SessionEvent::LetGo(LetGo::ItemUsed));
+    let after_the_guards = controller.held();
+
+    // Sneaking is no walking.
+    assert_eq!(after_the_leash, [SNEAK, LEFT, RIGHT]);
+    assert_eq!(after_the_guards, [SNEAK]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_world_change_lets_go_of_everything() {
+    let (_session, _events, controller) = holding().await;
+
+    let _ = controller.emit(SessionEvent::WorldChanged);
+
+    assert_eq!(controller.held(), []);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_sessions_end_lets_go_of_everything() {
+    let (_session, _events, controller) = holding().await;
+
+    let _ = controller.emit(SessionEvent::Disconnected(DisconnectReason::kicked(
+        None, "Kicked",
+    )));
+
+    assert_eq!(controller.held(), []);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_teardown_lets_go_of_everything() {
+    let (session, _events, controller) = holding().await;
+
+    session.disconnect().await;
+
+    assert_eq!(controller.held(), []);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_press_the_session_didnt_take_holds_nothing() {
+    let (session, _events, controller) = start_joined().await;
+    controller.fail_performs(SessionError::QueueFull);
+
+    let failed = session.perform(GameAction::Press(FORWARD)).await;
+
+    assert_eq!(failed, Err(SessionError::QueueFull));
+    assert_eq!(controller.held(), []);
+}
+
+#[tokio::test(start_paused = true)]
+async fn failing_performs_fail_perform_alone_until_they_succeed_again() {
+    let (session, _events, controller) = start_joined().await;
+    controller.show(observation(7.5));
+    controller.fail_performs(SessionError::TimedOut);
+
+    let failed = session.perform(GameAction::Jump).await;
+    let guards = session.set_guards(Guards::default()).await;
+    let seen = session.observe().await;
+    controller.succeed_performs();
+    let again = session.perform(GameAction::Jump).await;
+
+    assert_eq!(failed, Err(SessionError::TimedOut));
+    assert_eq!(guards, Ok(()));
+    assert_eq!(seen, Ok(observation(7.5)));
+    assert_eq!(again, Ok(()));
 }

@@ -6,12 +6,14 @@ use fleet_core::chat::{ChatMessage, IncomingChat};
 use fleet_core::id::BotId;
 
 use crate::chat::{ChatFailure, ChatTicket};
+use crate::script::ScriptEvent;
 
 /// Something that happened to one bot, published on the fleet's bounded
 /// `broadcast` (ADR-0013). A subscriber that lags behind resyncs from the
 /// snapshots (Plan.md §6 row 12).
 ///
-/// Its `Debug` output can hold chat text, so it's logged only at `debug`.
+/// Its `Debug` output can hold chat text and a script's own text, so it's
+/// logged only at `debug`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FleetEvent {
     /// The bot.
@@ -49,6 +51,10 @@ pub enum FleetEventKind {
         /// The message.
         message: ChatMessage,
     },
+    /// The bot's script reports its status or a line of its log (Plan.md
+    /// P15.18). Its text is the script's own, so like chat it's logged
+    /// only at `debug`.
+    Script(ScriptEvent),
     /// The bot paused or failed and needs a human: `Resume` or `Reset`
     /// connects it again. It comes right after the `StateChanged` it belongs
     /// to (ADR-0013).

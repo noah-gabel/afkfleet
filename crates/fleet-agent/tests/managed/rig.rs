@@ -196,6 +196,7 @@ impl Rig {
             config,
             anchor: anchor(),
             seed: 1,
+            stopwatch: Arc::new(fleet_testkit::stopwatch::ManualStopwatch::standing()),
         })
         .unwrap();
         let (inbox, instructions) = conductor::inbox();

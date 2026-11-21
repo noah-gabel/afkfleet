@@ -43,7 +43,7 @@ use crate::riding::{Passengers, Riding};
 const UNKNOWN: &str = "minecraft:unknown";
 
 /// `name` as an identifier, or [`UNKNOWN`] if it isn't one.
-fn identifier(name: &str) -> Identifier {
+pub(super) fn identifier(name: &str) -> Identifier {
     Identifier::try_from(name)
         .or_else(|_| Identifier::try_from(UNKNOWN))
         // `UNKNOWN` is one; this keeps the function total without a panic.
@@ -82,7 +82,7 @@ fn uses_left(stack: &ItemStackData) -> Option<u32> {
 }
 
 /// The block `at` in fleet-core's coordinates.
-const fn block(at: BlockPos) -> BlockPosition {
+pub(super) const fn block(at: BlockPos) -> BlockPosition {
     BlockPosition {
         x: at.x,
         y: at.y,

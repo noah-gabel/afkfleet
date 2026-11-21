@@ -1,12 +1,13 @@
-//! The two guards of mining: never the floor, and never a tool to its end
-//! (ADR-0036, D11).
+//! The three guards of mining: never the floor, never a tool to its end,
+//! and only the blocks a mode lists (ADR-0036, D11; ADR-0042's amendment,
+//! G13).
 //!
-//! Both are decisions only. fleet-mc applies them on the bot's host thread
+//! All three are decisions only. fleet-mc applies them on the bot's host thread
 //! each game tick, before azalea's own mining runs, so they hold whatever a
 //! script or the runtime does.
 
-use super::facts::{BlockPosition, HeldItem};
-use super::settings::ToolGuard;
+use super::facts::{BlockPosition, HeldItem, Identifier};
+use super::settings::{BlockGuard, ToolGuard};
 
 /// How far below its feet a block's bottom may be and still count as level
 /// with them: enough for the rounding of a position a server sent, far less
@@ -44,10 +45,22 @@ impl ToolGuard {
     }
 }
 
+impl BlockGuard {
+    /// Whether a held left button may mine `block`, the kind of the block
+    /// in question; `None` for a block the bot knows nothing of.
+    ///
+    /// A guard that lists nothing allows every block, an unknown one
+    /// included, as in vanilla. One that lists blocks allows exactly
+    /// those: a block it can't name is not one of them.
+    #[must_use]
+    pub fn allows(&self, block: Option<&Identifier>) -> bool {
+        self.is_off() || block.is_some_and(|block| self.blocks().contains(block))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::script::Identifier;
     use proptest::prelude::*;
     use rstest::rstest;
 
@@ -161,7 +174,56 @@ mod tests {
         assert!(!ToolGuard::default().allows(Some(&tool(Some(2)))));
     }
 
+    fn listing(names: &[&str]) -> BlockGuard {
+        let names: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
+        BlockGuard::try_from(names).unwrap()
+    }
+
+    fn kind(name: &str) -> Identifier {
+        Identifier::try_from(name).unwrap()
+    }
+
+    #[rstest]
+    #[case::the_listed_block("cobblestone", true)]
+    #[case::the_listed_block_with_its_namespace("minecraft:cobblestone", true)]
+    #[case::the_second_listed_block("stone", true)]
+    #[case::the_wall_behind_it("obsidian", false)]
+    #[case::the_same_name_in_another_namespace("lobby:cobblestone", false)]
+    #[case::air("air", false)]
+    fn a_block_guard_allows_exactly_the_blocks_it_lists(#[case] block: &str, #[case] may: bool) {
+        let guard = listing(&["cobblestone", "stone"]);
+
+        assert_eq!(guard.allows(Some(&kind(block))), may);
+    }
+
+    #[test]
+    fn a_block_guard_never_allows_a_block_it_cant_name() {
+        assert!(!listing(&["cobblestone"]).allows(None));
+    }
+
+    #[test]
+    fn a_block_guard_that_lists_nothing_allows_every_block() {
+        for block in ["cobblestone", "obsidian", "air", "lobby:ore"] {
+            assert!(BlockGuard::ANY.allows(Some(&kind(block))), "{block}");
+        }
+        assert!(BlockGuard::ANY.allows(None));
+    }
+
     proptest! {
+        /// Whatever a mode lists: a block is allowed exactly when it's on
+        /// the list, and never one the bot can't name.
+        #[test]
+        fn a_listing_guard_allows_a_block_exactly_when_its_listed(
+            listed in proptest::collection::btree_set("[a-z]{1,6}", 1..=16),
+            asked in "[a-z]{1,6}",
+        ) {
+            let names: Vec<&str> = listed.iter().map(String::as_str).collect();
+            let guard = listing(&names);
+
+            prop_assert_eq!(guard.allows(Some(&kind(&asked))), listed.contains(&asked));
+            prop_assert!(!guard.allows(None));
+        }
+
         /// Wherever a bot's feet are: it never mines a block that reaches
         /// below them, and always may mine one that's wholly above.
         #[test]

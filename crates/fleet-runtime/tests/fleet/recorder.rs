@@ -19,6 +19,18 @@ pub(crate) const RECONNECTS: &str = "afkfleet_bot_reconnects_total";
 pub(crate) const WATCHDOG_TRIPS: &str = "afkfleet_watchdog_trips_total";
 /// The actor restart counter's name.
 pub(crate) const ACTOR_RESTARTS: &str = "afkfleet_actor_restarts_total";
+/// Hooks the bots' scripts ran.
+pub(crate) const SCRIPT_HOOKS: &str = "afkfleet_script_hooks_total";
+/// The time those hooks took, in microseconds.
+pub(crate) const SCRIPT_HOOK_MICROS: &str = "afkfleet_script_hook_microseconds_total";
+/// What scripts asked for and weren't given.
+pub(crate) const SCRIPT_REFUSED: &str = "afkfleet_script_refused_actions_total";
+/// Scripts that stopped running.
+pub(crate) const SCRIPTS_STOPPED: &str = "afkfleet_scripts_stopped_total";
+/// Chat lines a script never got.
+pub(crate) const SCRIPT_CHAT_DROPPED: &str = "afkfleet_script_chat_dropped_total";
+/// Lines about refusals that a script's log had no room for.
+pub(crate) const SCRIPT_LOG_DROPPED: &str = "afkfleet_script_log_dropped_total";
 
 /// Records counters and gauges by name and labels, and which metrics were
 /// described. A counter or a gauge is an `AtomicU64`; a gauge holds its
