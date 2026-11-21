@@ -83,6 +83,12 @@ pub enum CompileErrorKind {
     /// An expression nested deeper than the limit.
     #[error("an expression is nested more than {max} deep", max = fleet_core::script::limits::MAX_FUNCTION_EXPRESSION_DEPTH)]
     ExpressionTooDeep,
+    /// A raw string, `#"…"#`: Rhai 1.27.0 loses a line inside one, so the
+    /// places after it would be wrong (ADR-0040's amendment, A6).
+    #[error(
+        "a raw string (`#\"…\"#`) isn't part of the language here; write the text in quotes or backticks"
+    )]
+    RawString,
 }
 
 /// A script that can't be saved: what's wrong, and where (ADR-0036, D14).

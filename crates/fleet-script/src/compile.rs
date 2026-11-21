@@ -90,10 +90,16 @@ pub fn compile(script: &Script) -> Result<Program, CompileError> {
     for name in api::OBJECTS.into_iter().chain([STATE]) {
         scope.push_constant_dynamic(name, Dynamic::from(Placeholder));
     }
+    let scanned = scan(source);
     let ast = COMPILER
         .compile_with_scope(&scope, source)
-        .map_err(|error| parse_error(&error))?;
-    let scanned = scan(source);
+        .map_err(|error| before_raw_string(parse_error(&error), scanned.raw_string))?;
+    if let Some(at) = scanned.raw_string {
+        return Err(CompileError {
+            kind: CompileErrorKind::RawString,
+            at: Some(at),
+        });
+    }
 
     // Rhai's public API shows a program's statements only as a slice of a
     // type it doesn't name; its length is all that's needed.
@@ -182,6 +188,22 @@ fn functions(ast: &AST, scanned: &Scanned) -> Result<[bool; Hook::ALL.len()], Co
         }
     }
     Ok(hooks)
+}
+
+/// Rhai's own `error`, unless a raw string comes no later in the text:
+/// then the raw string, which a script may not hold. A place Rhai gives
+/// after one can be a line off, since Rhai 1.27.0's tokenizer loses a line
+/// when a raw string holds a quote right before a line break (ADR-0040's
+/// amendment, A6); a place before it is true.
+fn before_raw_string(error: CompileError, raw_string: Option<SourcePosition>) -> CompileError {
+    match (raw_string, error.at) {
+        (Some(raw), Some(at)) if (at.line, at.column) < (raw.line, raw.column) => error,
+        (Some(raw), _) => CompileError {
+            kind: CompileErrorKind::RawString,
+            at: Some(raw),
+        },
+        (None, _) => error,
+    }
 }
 
 /// A place Rhai names, as ours.

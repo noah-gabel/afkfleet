@@ -2517,6 +2517,7 @@ What would be left to do:
   > - **Added limits:** 64 variables in a function. **A text's 1,024 are bytes,** as Rhai counts; fleet-core's constant is `MAX_STRING_BYTES` now.
   > - **Its own tests cover 98 % of its lines.**
 - [x] **P15.6** 🔴 **Validation:** `compile(source, settings)` answers an error with line and column for a syntax error, an undefined variable (strict variables against placeholder objects), `import`, `eval`, a variable or parameter named like a game object, an unknown `on_…` function and a hook with the wrong parameters. Top-level statements are refused if Rhai's public API can show them, and never run either way.
+  > Note (P15.6, from group E) ([ADR-0040](docs/adr/0040-fleet-script-as-built.md)'s amendment, A6): **a raw string (`#"…"#`) is refused** at its own place. The fuzzer found on PR #128's CI that Rhai 1.27.0 loses a line inside one, so a later error's place was a line off; a mistake before the raw string still comes first.
   > Note (P15.6, group B) ([ADR-0040](docs/adr/0040-fleet-script-as-built.md)):
   > - **`compile(&Script)`,** not `compile(source, settings)`: the type `Script` holds both, already checked.
   > - **Anything outside a function is refused:** Rhai's public API does show a program's statements, as a slice of a type it doesn't name, and its length is all that's needed.

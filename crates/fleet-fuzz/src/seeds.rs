@@ -104,6 +104,7 @@ fn scripted(name: &str) -> Vec<Vec<u8>> {
                 b"fn on_join(first) { let f = |x| x; eval(\"1\"); import \"a\" as b; }",
                 b"fn f(state) { for bot in [1] { } try { } catch (world) { } }",
                 LONG_HOOK_NAME.as_bytes(),
+                RAW_STRING.as_bytes(),
                 b"fn f() { `a ${ `b ${ \"c\" }` }` + 'x' /* /* nested */ */ }",
             ])
             .map(<[u8]>::to_vec)
@@ -178,6 +179,13 @@ fn scripts() -> Vec<&'static str> {
 /// long: the input the fuzzer found on CI on 2026-11-17, byte for byte,
 /// where the error carried the whole name and its line grew past its bound.
 const LONG_HOOK_NAME: &str = "fn on_inconnecton_recojoimmmmmmmmmmmmmtmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmemmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmemmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmnconnecton_reconnect() { }";
+
+/// A raw string with a quote right before a line break, then a mistake:
+/// Rhai 1.27.0 loses a line there, so the mistake's place was a line off,
+/// past the end of an empty line. The fuzzer found such an input on CI on
+/// 2026-11-21 (column 41 of an empty line); a raw string is now refused at
+/// its own place (ADR-0040's amendment, A6).
+const RAW_STRING: &str = "fn f() {\n    let s = #\"a\"\nb\"#;\n\n    let t = ) ;\n}";
 
 /// A script that does something of everything in every hook, picked by
 /// its own random numbers.
@@ -422,7 +430,7 @@ mod tests {
             .iter()
             .map(|seed| compiled(seed).unwrap_err())
             .collect();
-        assert_eq!(reasons.len(), 8);
+        assert_eq!(reasons.len(), 9);
         // Each for a reason of its own.
         let mut distinct = reasons.clone();
         distinct.sort();
