@@ -33,15 +33,16 @@ use std::path::{Path, PathBuf};
 
 use fleet_core::bot::BotAccount;
 use fleet_core::disconnect::ConflictTexts;
-use fleet_core::mode::ModePreset;
+use fleet_core::mode::{ModeDefinition, ModePreset};
 use fleet_core::net::{PrivateTargets, TargetPolicy};
 use fleet_core::resilience::{CircuitPolicy, RetryPolicy};
+use fleet_core::script::Script;
 use fleet_core::value::{AgentName, McUsername, ServerAddress};
 use fleet_mc::McConfig;
 use fleet_runtime::RuntimeConfig;
 use raw::RawConfig;
 
-pub use error::{ConfigError, Problem, ProblemKind, Problems};
+pub use error::{ConfigError, Problem, ProblemKind, Problems, ScriptFileError};
 pub use fleet_startup::config::{
     KeyPath, KeySegment, LogConfig, LogFilter, LogFilterError, LogFormat, ParseError, ParseProblem,
     ParseSource, UnknownLogFormatError,
@@ -118,8 +119,8 @@ pub struct StandaloneBot {
     pub username: McUsername,
     /// The server to join.
     pub server: ServerAddress,
-    /// The preset mode it runs.
-    pub mode: ModePreset,
+    /// What it runs: a preset mode, or a script.
+    pub mode: StandaloneMode,
     /// Kick texts that count as a duplicate login (empty by default).
     pub conflict_texts: ConflictTexts,
 }
@@ -129,6 +130,49 @@ impl StandaloneBot {
     #[must_use]
     pub fn account(&self) -> BotAccount {
         BotAccount::Offline(self.username.clone())
+    }
+}
+
+/// What a standalone bot runs: `mode = "<preset>"`, or `script = { file =
+/// "…", … }`, a scripted mode read from a file at load, for development
+/// and the live tests (Plan.md P15.22).
+#[derive(Debug, Clone, PartialEq)]
+pub enum StandaloneMode {
+    /// A preset mode.
+    Preset(ModePreset),
+    /// A scripted mode at the newest script API level.
+    Script {
+        /// The file its text was read from.
+        file: PathBuf,
+        /// The script, its settings and its declarations, which fleet-core
+        /// checked; the runtime compiles it at the bot's start.
+        script: Script,
+    },
+}
+
+impl StandaloneMode {
+    /// The mode the bot runs.
+    #[must_use]
+    pub fn definition(&self) -> ModeDefinition {
+        match self {
+            Self::Preset(preset) => preset.definition(),
+            Self::Script { script, .. } => ModeDefinition::scripted(script.clone()),
+        }
+    }
+
+    /// Its name for the log: the preset's, or `script`.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Preset(preset) => preset.name(),
+            Self::Script { .. } => "script",
+        }
+    }
+}
+
+impl From<ModePreset> for StandaloneMode {
+    fn from(preset: ModePreset) -> Self {
+        Self::Preset(preset)
     }
 }
 

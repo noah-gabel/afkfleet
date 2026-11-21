@@ -43,6 +43,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use fleet_core::bot::{BotEvent, BotRules, BotSpec, BotState, DesiredRunState, Transition};
+use fleet_core::chat::ChatFormats;
 use fleet_core::disconnect::DisconnectReason;
 use fleet_core::mc::{
     CredentialError, MinecraftConnector, SessionCredentialProvider, SessionCredentials,
@@ -197,6 +198,9 @@ pub struct BotActor<C: MinecraftConnector, P> {
     breaker_copy: watch::Sender<CircuitBreaker>,
     breaker: CircuitBreaker,
     mode: watch::Sender<ModeDefinition>,
+    /// The server's chat formats from the spec, which each session's script
+    /// reads at every line (P15.34).
+    formats: watch::Sender<ChatFormats>,
     /// How many respawns the server confirmed; each session's runner
     /// subscribes when it starts, so it sees only its own (ADR-0020, S23).
     respawns: watch::Sender<u64>,
@@ -294,6 +298,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             breaker_copy: breaker,
             breaker: breaker_start,
             mode: watch::Sender::new(spec.mode.clone()),
+            formats: watch::Sender::new(spec.chat_formats.clone()),
             respawns: watch::Sender::new(0),
             queue: ChatQueue::new(spec.id, config.chat_queue, bucket, tickets),
             script,
@@ -464,7 +469,8 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
         self.feed(BotEvent::Start).await;
     }
 
-    /// Takes on a new spec: the mode and the conflict texts at once, a new
+    /// Takes on a new spec: the mode, the chat formats and the conflict
+    /// texts at once, a new
     /// server through a restart, and the desired state as Start or Stop.
     async fn update_spec(&mut self, spec: BotSpec) {
         if spec.id != self.spec.id || spec.account != self.spec.account {
@@ -481,6 +487,14 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
                 false
             } else {
                 mode.clone_from(&spec.mode);
+                true
+            }
+        });
+        self.formats.send_if_modified(|formats| {
+            if *formats == spec.chat_formats {
+                false
+            } else {
+                formats.clone_from(&spec.chat_formats);
                 true
             }
         });
@@ -772,6 +786,7 @@ mod tests {
             desired: DesiredRunState::Running,
             conflict_texts: ConflictTexts::default(),
             chat_rate: fleet_core::chat::ChatRate::default(),
+            chat_formats: fleet_core::chat::ChatFormats::default(),
         };
         let config = RuntimeConfig::default();
         let clock = RuntimeClock::new(DateTime::from_timestamp(1_700_000_000, 0).unwrap());

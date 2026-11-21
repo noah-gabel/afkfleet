@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use fleet_core::bot::{
     BotEvent, BotNotification, BotSnapshot, BotState, Effect, Transition, transition,
 };
-use fleet_core::chat::ChatFormats;
+
 use fleet_core::disconnect::{ConnectFailure, DisconnectReason};
 use fleet_core::mc::{
     ConnectError, ConnectParams, MinecraftConnector, SessionCredentialProvider, SessionError,
@@ -344,10 +344,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             inbox,
             events: self.events.clone(),
             stopwatch: Arc::clone(&self.stopwatch),
-            // The server's chat formats reach an agent with the bot's spec
-            // from Plan.md P15.34 on; until then no format tells a
-            // player's line apart, as on a standalone agent.
-            formats: ChatFormats::default(),
+            formats: self.formats.subscribe(),
             stop: stop.clone(),
             held: Arc::clone(&session.held),
         };

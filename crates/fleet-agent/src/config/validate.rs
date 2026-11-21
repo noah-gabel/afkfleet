@@ -6,9 +6,10 @@
 //! check that depends on a key with a problem of its own is skipped, so each
 //! mistake is reported once.
 
+use std::io::Read as _;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use fleet_core::bot::BotAccount;
@@ -16,17 +17,22 @@ use fleet_core::disconnect::ConflictTexts;
 use fleet_core::mode::ModePreset;
 use fleet_core::net::{IpNet, PrivateTargets, PrivateTargetsError};
 use fleet_core::resilience::{CircuitPolicy, CircuitPolicyError, RetryPolicy, RetryPolicyError};
+use fleet_core::script::{
+    LeashRadius, Script, ScriptApiLevel, ScriptDraft, ScriptSource, ToolGuard,
+};
 use fleet_core::value::{AgentName, McUsername, ServerAddress};
 use fleet_mc::McConfig;
 use fleet_runtime::RuntimeConfig;
 use tonic::transport::Uri;
 
 use super::raw::{
-    RawBot, RawConfig, RawControlPlane, RawLog, RawMetrics, RawRetry, RawRuntime, RawStandalone,
+    RawBot, RawConfig, RawControlPlane, RawLog, RawMetrics, RawRetry, RawRuntime, RawScript,
+    RawStandalone,
 };
 use super::{
     AgentConfig, AgentMode, ConfigError, ControlPlaneConfig, DEFAULT_HEARTBEAT_FILE_NAME, KeyPath,
-    LogConfig, LogFilter, LogFormat, ProblemKind, Problems, StandaloneBot,
+    LogConfig, LogFilter, LogFormat, ProblemKind, Problems, ScriptFileError, StandaloneBot,
+    StandaloneMode,
 };
 
 /// Validates `raw`: garde's ranges first, then fleet-core's constructors and
@@ -288,13 +294,21 @@ fn standalone_bot(
         ServerAddress::try_from,
         ProblemKind::Server,
     );
-    let mode = parsed(
-        raw.mode.as_deref(),
-        &key.key("mode"),
-        problems,
-        str::parse::<ModePreset>,
-        ProblemKind::Mode,
-    );
+    let mode = match (&raw.mode, &raw.script) {
+        (Some(_), Some(_)) => {
+            problems.push(key.key("script"), ProblemKind::ModeAndScript);
+            None
+        }
+        (None, Some(script)) => standalone_script(script, &key.key("script"), problems),
+        _ => parsed(
+            raw.mode.as_deref(),
+            &key.key("mode"),
+            problems,
+            str::parse::<ModePreset>,
+            ProblemKind::Mode,
+        )
+        .map(StandaloneMode::Preset),
+    };
     let conflict_texts = ConflictTexts::try_new(&raw.conflict_texts)
         .map_err(|error| {
             problems.push(key.key("conflict_texts"), ProblemKind::ConflictTexts(error));
@@ -306,6 +320,60 @@ fn standalone_bot(
         mode: mode?,
         conflict_texts: conflict_texts?,
     })
+}
+
+/// A bot's `script` at `key`: its file read, its settings and declarations
+/// checked by fleet-core at the newest script API level. The runtime
+/// compiles it when the bot starts, and refuses it there if it isn't a
+/// program.
+fn standalone_script(
+    raw: &RawScript,
+    key: &KeyPath,
+    problems: &mut Problems,
+) -> Option<StandaloneMode> {
+    let file_key = key.key("file");
+    let file = PathBuf::from(non_empty(raw.file.as_deref(), &file_key, problems)?);
+    if !file.is_absolute() {
+        problems.push(file_key, ProblemKind::NotAbsolute);
+        return None;
+    }
+    let source = read_script(&file)
+        .map_err(|error| problems.push(file_key, ProblemKind::ScriptFile(error)))
+        .ok()?;
+    let draft = ScriptDraft {
+        api: ScriptApiLevel::NEWEST.get(),
+        // A file saved on Windows ends its lines with CR LF; a script's
+        // text holds no CR.
+        source: source.replace("\r\n", "\n"),
+        leash: raw.leash.unwrap_or(LeashRadius::DEFAULT.blocks()),
+        tool_guard: raw.tool_guard.unwrap_or(ToolGuard::DEFAULT.uses_left()),
+        block_guard: raw.block_guard.clone(),
+        messages: raw.messages.clone(),
+        patterns: raw.patterns.clone(),
+    };
+    let script = Script::try_from(draft)
+        .map_err(|error| problems.push(key.clone(), ProblemKind::Script(error)))
+        .ok()?;
+    Some(StandaloneMode::Script { file, script })
+}
+
+/// The text of the script file at `path`: at most
+/// [`ScriptSource::MAX_BYTES`] bytes of UTF-8, read once at load, before
+/// the runtime starts, and never more than one byte past the limit.
+fn read_script(path: &Path) -> Result<String, ScriptFileError> {
+    let file = std::fs::File::open(path).map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => ScriptFileError::NotFound,
+        kind => ScriptFileError::Unreadable(kind),
+    })?;
+    let max = u64::try_from(ScriptSource::MAX_BYTES).unwrap_or(u64::MAX);
+    let mut bytes = Vec::new();
+    file.take(max.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| ScriptFileError::Unreadable(error.kind()))?;
+    if bytes.len() > ScriptSource::MAX_BYTES {
+        return Err(ScriptFileError::TooLarge);
+    }
+    String::from_utf8(bytes).map_err(|_| ScriptFileError::NotUtf8)
 }
 
 fn control_plane_config(

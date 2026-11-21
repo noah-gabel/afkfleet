@@ -10,6 +10,7 @@ use chrono::{DateTime, Utc};
 use fleet_core::bot::{BotNotification, BotSnapshot};
 use fleet_core::chat::{ChatMessage, IncomingChat};
 use fleet_core::id::{BotId, ChatRequestId};
+use fleet_core::script::{ScriptLogLine, ScriptState};
 use fleet_proto::control::{
     AgentMessage, BotEvent, BotEventKind, ChatFailedReason, Hello, SessionRequest,
 };
@@ -63,13 +64,16 @@ pub(crate) enum Notice {
     ChatFailed(ChatRequestId, ChatFailedReason),
 }
 
-/// Chat a bot received or its mode sent: the oldest is dropped first.
+/// Chat a bot received or its mode sent, and its script's log: the oldest
+/// is dropped first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Chat {
     /// Received from the server.
     Received(IncomingChat),
     /// Sent by the bot's mode.
     ModeSent(ChatMessage),
+    /// A line of the bot's script's log (Plan.md P15.23).
+    ScriptLog(ScriptLogLine),
 }
 
 /// What happened to an item pushed.
@@ -153,6 +157,9 @@ pub(crate) struct State {
     died: BTreeMap<BotId, DateTime<Utc>>,
     /// Each bot's removal.
     removed: BTreeMap<BotId, DateTime<Utc>>,
+    /// Each bot's script's latest status (Plan.md P15.20): never dropped
+    /// for chat, as a death isn't.
+    scripts: BTreeMap<BotId, (DateTime<Utc>, ScriptState)>,
     /// Alerts and answers, in order.
     notices: VecDeque<(BotId, DateTime<Utc>, Notice)>,
     /// Chat, in order.
@@ -174,6 +181,7 @@ impl State {
             statuses: BTreeMap::new(),
             died: BTreeMap::new(),
             removed: BTreeMap::new(),
+            scripts: BTreeMap::new(),
             notices: VecDeque::new(),
             chat: VecDeque::new(),
             chat_of: HashMap::new(),
@@ -218,6 +226,7 @@ impl State {
             .keys()
             .chain(self.died.keys())
             .chain(self.removed.keys())
+            .chain(self.scripts.keys())
             .collect();
         bots.len()
     }
@@ -226,7 +235,8 @@ impl State {
     fn per_bot_full(&self, bot: BotId) -> bool {
         let known = self.statuses.contains_key(&bot)
             || self.died.contains_key(&bot)
-            || self.removed.contains_key(&bot);
+            || self.removed.contains_key(&bot)
+            || self.scripts.contains_key(&bot);
         !known && self.per_bot_bots() >= self.caps.per_bot
     }
 
@@ -283,6 +293,7 @@ impl State {
         };
         self.statuses.retain(|bot, _| given.contains(bot));
         self.died.retain(|bot, _| given.contains(bot));
+        self.scripts.retain(|bot, _| given.contains(bot));
         self.notices.retain(|(bot, _, _)| given.contains(bot));
         self.chat.retain(|(bot, _, _)| given.contains(bot));
         self.chat_of.retain(|bot, _| given.contains(bot));
@@ -369,6 +380,15 @@ impl State {
             return self.refuse();
         }
         self.died.insert(bot, at);
+        Pushed::Queued
+    }
+
+    /// Queues a bot's script's status: its latest replaces one waiting.
+    pub(crate) fn script(&mut self, bot: BotId, at: DateTime<Utc>, state: ScriptState) -> Pushed {
+        if self.per_bot_full(bot) {
+            return self.refuse();
+        }
+        self.scripts.insert(bot, (at, state));
         Pushed::Queued
     }
 
@@ -488,19 +508,25 @@ impl State {
         if let Some(request) = self.lane.pop_front() {
             return Some(AgentMessage::SessionRequest(request));
         }
-        // A bot's status, then its death, by bot.
-        let first_status = self.statuses.keys().next().copied();
-        let first_death = self.died.keys().next().copied();
-        let bot = match (first_status, first_death) {
-            (Some(status), Some(death)) => Some(status.min(death)),
-            (status, death) => status.or(death),
-        };
+        // A bot's status, then its death, then its script's status, by bot.
+        let bot = [
+            self.statuses.keys().next(),
+            self.died.keys().next(),
+            self.scripts.keys().next(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+        .copied();
         if let Some(bot) = bot {
             if let Some(status) = self.statuses.remove(&bot) {
                 return Some(AgentMessage::Status(status));
             }
             if let Some(at) = self.died.remove(&bot) {
                 return Some(event(bot, at, BotEventKind::Died));
+            }
+            if let Some((at, state)) = self.scripts.remove(&bot) {
+                return Some(event(bot, at, BotEventKind::ScriptStatus(state)));
             }
         }
         if let Some((bot, at, notice)) = self.notices.pop_front() {
@@ -519,6 +545,7 @@ impl State {
         let kind = match chat {
             Chat::Received(chat) => BotEventKind::ChatReceived(chat),
             Chat::ModeSent(message) => BotEventKind::ModeChatSent(message),
+            Chat::ScriptLog(line) => BotEventKind::ScriptLog(line),
         };
         Some(event(bot, at, kind))
     }
@@ -534,6 +561,7 @@ mod tests {
     use fleet_core::bot::{BotState, PauseReason};
     use fleet_core::chat::PlayerChatKind;
     use fleet_core::disconnect::ConflictKind;
+    use fleet_core::script::{Hook, LogKind, ProblemKind, ReportText, ScriptPlace, ScriptProblem};
     use fleet_core::value::{AgentCapacity, AgentName, AgentVersion};
     use fleet_proto::control::SessionRequestId;
 
@@ -575,6 +603,23 @@ mod tests {
             protocol_version: fleet_proto::PROTOCOL_VERSION,
             capacity: AgentCapacity::try_from(10).unwrap(),
             running,
+            script_api: 1,
+        }
+    }
+
+    fn stopped(message: &str) -> ScriptState {
+        ScriptState::Stopped(ScriptProblem {
+            kind: ProblemKind::Error,
+            hook: Some(Hook::Timer),
+            place: ScriptPlace::new(2, 5),
+            message: ReportText::clean(message),
+        })
+    }
+
+    fn log(text: &str) -> ScriptLogLine {
+        ScriptLogLine {
+            kind: LogKind::Line,
+            text: ReportText::clean(text),
         }
     }
 
@@ -983,5 +1028,86 @@ mod tests {
             assert!(sent.len() >= waiting, "{order}: {sent:?}");
             assert_eq!(state.waiting(), [0; 4], "{order}");
         }
+    }
+
+    // --- A script's status and log (Plan.md P15.20, P15.23) ---
+
+    #[test]
+    fn a_scripts_status_waits_as_its_bots_latest_and_goes_after_its_death() {
+        let (mut state, generation) = reconciled(&[1]);
+        state.script(bot(1), at(1), ScriptState::Running);
+        state.died(bot(1), at(2));
+        state.script(bot(1), at(3), stopped("boom"));
+
+        let sent = drain(&mut state, generation);
+
+        assert_eq!(
+            sent,
+            [
+                event(bot(1), at(2), BotEventKind::Died),
+                event(bot(1), at(3), BotEventKind::ScriptStatus(stopped("boom"))),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_scripts_log_lines_are_chat_the_oldest_dropped_first() {
+        let (mut state, generation) = reconciled(&[1]);
+        for (second, text) in [(1, "one"), (2, "two"), (3, "three")] {
+            state.chat(bot(1), at(second), Chat::ScriptLog(log(text)));
+        }
+
+        let sent = drain(&mut state, generation);
+
+        assert_eq!(
+            sent,
+            [
+                event(bot(1), at(2), BotEventKind::ScriptLog(log("two"))),
+                event(bot(1), at(3), BotEventKind::ScriptLog(log("three"))),
+            ]
+        );
+        assert_eq!(state.counts().chat_dropped, 1);
+    }
+
+    #[test]
+    fn a_reconcile_drops_the_script_status_of_a_bot_it_doesnt_give() {
+        let mut state = State::new(caps());
+        let generation = state.open(hello(Vec::new()));
+        let _ = state.next(generation);
+        state.welcomed(generation, INTERVAL);
+        state.script(bot(1), at(1), ScriptState::Running);
+        state.script(bot(2), at(2), ScriptState::Crashed);
+
+        state.reconciled(generation, &[bot(2)].into());
+        let sent = drain(&mut state, generation);
+
+        assert_eq!(
+            sent,
+            [event(
+                bot(2),
+                at(2),
+                BotEventKind::ScriptStatus(ScriptState::Crashed)
+            )]
+        );
+    }
+
+    #[test]
+    fn a_scripts_status_takes_its_bots_place_in_the_per_bot_class() {
+        // Three bots fill the class: a fourth's script status is refused,
+        // and a known bot's is taken.
+        let (mut state, _) = reconciled(&[1, 2, 3, 4]);
+        for n in 1..=3 {
+            state.script(bot(n), at(1), ScriptState::Running);
+        }
+
+        assert_eq!(
+            state.script(bot(1), at(2), ScriptState::Crashed),
+            Pushed::Queued
+        );
+        assert_eq!(
+            state.script(bot(4), at(2), ScriptState::Running),
+            Pushed::Refused
+        );
+        assert_eq!(state.waiting()[1], 3);
     }
 }

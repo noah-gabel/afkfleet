@@ -29,6 +29,7 @@ fn hello() -> Hello {
         protocol_version: fleet_proto::PROTOCOL_VERSION,
         capacity: AgentCapacity::try_from(4).unwrap(),
         running: Vec::new(),
+        script_api: 1,
     }
 }
 

@@ -101,6 +101,7 @@ fn spec(desired: DesiredRunState) -> BotSpec {
         desired,
         conflict_texts: ConflictTexts::default(),
         chat_rate: fleet_core::chat::ChatRate::default(),
+        chat_formats: fleet_core::chat::ChatFormats::default(),
     }
 }
 
