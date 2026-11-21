@@ -1984,6 +1984,7 @@ dependencies = [
  "fleet-api-types",
  "fleet-core",
  "fleet-proto",
+ "fleet-script",
  "fleet-startup",
  "garde",
  "getrandom 0.4.3",
