@@ -26,6 +26,28 @@ afterEach(() => {
   assertNoInjectedStyles(document);
 });
 
+// jsdom gives a shadow root no `adoptedStyleSheets`, which Edge and WebView2 have. CodeMirror's
+// style-mod would then write a <style> into the script editor's shadow root, which the release
+// CSP refuses; with Edge's accessor, tests run the path the app runs: one constructed sheet,
+// which the style guard allows only there (ADR-0036, D16; ADR-0045).
+const adopted = new WeakMap<ShadowRoot, CSSStyleSheet[]>();
+Object.defineProperty(ShadowRoot.prototype, "adoptedStyleSheets", {
+  configurable: true,
+  get(this: ShadowRoot) {
+    return adopted.get(this) ?? [];
+  },
+  set(this: ShadowRoot, sheets: CSSStyleSheet[]) {
+    adopted.set(this, [...sheets]);
+  },
+});
+
+// jsdom has no document.execCommand, which CodeMirror calls as its editor takes the focus.
+document.execCommand = () => false;
+
+// jsdom has no layout, so a Range measures nothing, which CodeMirror asks while it draws.
+Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
+Range.prototype.getBoundingClientRect = () => new DOMRect();
+
 // jsdom has no layout, so no Element.scrollTo, which the router calls on the content column (S123),
 // and no Element.scrollIntoView, which a textarea calls as it takes the focus (ADR-0020, L4).
 Element.prototype.scrollTo = () => {};
