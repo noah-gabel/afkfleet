@@ -121,12 +121,16 @@ function labelsAt(text: string, explicit = false): string[] | null {
 }
 
 describe("completion", () => {
-  it("offers a game object's members after its dot, with their signatures and summaries", () => {
+  it("offers a game object's members after its dot, a method's signature beside it, each one's summary", () => {
     const result = completionsAt("fn on_join(first) { look.| }");
-    const keys = objectNamed("look");
+    const look = objectNamed("look");
 
     expect(result?.options.map((option) => [option.label, option.detail, option.info])).toEqual(
-      keys?.members.map((member) => [member.name, member.signature, member.summary]),
+      look?.members.map((member) => [
+        member.name,
+        member.kind === "method" ? member.signature : undefined,
+        member.summary,
+      ]),
     );
   });
 

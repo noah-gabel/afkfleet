@@ -169,7 +169,7 @@ One section per boundary, by STRIDE (spoofing, tampering, repudiation, informati
 ### Desktop app (B2, B7)
 *Expanded in P8 (ADR-0007, ADR-0017) and P11 (ADR-0020).*
 
-**What crosses B2, the webview and the app's Rust side.** The UI calls the 71 commands its one capability grants, and nothing else: no core command and no plugin API, and `withGlobalTauri` is off. tauri-plugin-opener isn't registered: the Rust side calls its free `open_url`, from one command without arguments, on the link it checked (P9.8).
+**What crosses B2, the webview and the app's Rust side.** The UI calls the 72 commands its one capability grants, and nothing else: no core command and no plugin API, and `withGlobalTauri` is off. tauri-plugin-opener isn't registered: the Rust side calls its free `open_url`, from one command without arguments, on the link it checked (P9.8).
 - **Into Rust:**
   - the server's address and a custom CA's certificates
   - usernames, passwords (login, registration, step-up, a new password), 2FA and recovery codes, invite codes
@@ -177,7 +177,8 @@ One section per boundary, by STRIDE (spoofing, tampering, repudiation, informati
   - a username to share an account with, an offline account's name
   - a chat line or a command for a bot to send, which may hold a password (a direct call, U34)
   - a Minecraft server's address and its conflict texts (Admins and the Owner; ADR-0020, U56), its chat formats and a line for the preview to try them on (S79, U58)
-  - a mode's name and steps, whose chat step may hold a password too (a direct call, R157)
+  - a mode's name and steps, whose chat step may hold a password too (a direct call, R157), or its script with its settings and declarations
+  - a script's text to check (`check_script`, ADR-0045, F4): perhaps another Admin's shared script, so untrusted. The Rust side only compiles it with fleet-script, the engine the server runs, never a hook; in `spawn_blocking`, one check at a time, the text bounded at 64 KiB; a compiler that panics or a check that waits past 5 s answers `script_check`, never a crash (`script_check::tests::a_check_that_panics_is_one_that_couldnt_check_never_a_crash`, `script_check::tests::a_check_waits_for_the_one_before_it_and_no_longer_than_its_bound`, `script_check::tests::a_hook_that_never_ends_is_compiled_and_never_run`, `script_check::tests::a_text_past_the_requests_bound_is_invalid_input_and_never_compiled`)
   - the audit log's target filter (U78), and the window's theme (U85)
 - **Back to the UI:**
   - profiles, users, invites and sessions

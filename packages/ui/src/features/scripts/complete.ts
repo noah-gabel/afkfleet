@@ -39,11 +39,15 @@ function callTemplate(signature: string): string {
   });
 }
 
-/** `member` as an option after a dot. */
+/** `member` as an option after a dot: a method with its signature beside it, a value without. */
 function memberOption(member: ScriptApiMember): Completion {
-  const common = { label: member.name, detail: member.signature, info: member.summary };
+  const common = { label: member.name, info: member.summary };
   return member.kind === "method"
-    ? snippetCompletion(callTemplate(member.signature), { ...common, type: "method" })
+    ? snippetCompletion(callTemplate(member.signature), {
+        ...common,
+        detail: member.signature,
+        type: "method",
+      })
     : { ...common, type: "property" };
 }
 
