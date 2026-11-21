@@ -22,6 +22,10 @@
 //   sent (R158); `validated()` refuses only what the wire can't carry (S82). The form's "resolver"
 //   checks nothing: it makes every submit start clean, so an error the server put on a field never
 //   blocks the next save.
+// - **Steps or a script** (P15.25, ADR-0036, D15): a new mode's kind is chosen here by an Admin or
+//   the Owner, who alone write scripts; anyone else's new mode is steps. A scripted mode sends its
+//   body and no steps; the server's error at `script.source` shows at its line in the editor, and
+//   one in a one-line text (a message's, a pattern's) names its character.
 
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -42,28 +46,33 @@ import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import type { CommandError } from "../../../generated/CommandError";
 import type { CreateModeRequest } from "../../../generated/CreateModeRequest";
+import type { FieldError } from "../../../generated/FieldError";
 import type { ModeResponse } from "../../../generated/ModeResponse";
 import { useRetryWait } from "../../../hooks/useRetryWait";
 import { useAlive } from "../../../hooks/useStepGuard";
 import { fieldErrorsOf, showFieldErrors } from "../../../lib/formErrors";
 import { inView } from "../../../lib/inView";
 import { useWriteAction } from "../../admin/hooks/useWriteAction";
+import type { Place } from "../../scripts/components/ScriptEditor";
 import { rememberMode, rereadModes } from "../cache";
 import {
+  bodyOf,
   copyOfValues,
   isEditable,
   type ModeValues,
   SECTIONS,
-  stepsOf,
   stepTotal,
   valuesOf,
 } from "../modeForm";
 import {
+  atCharacter,
   CANCEL,
   CAP_REACHED,
   copyName,
   created,
   IN_USE_BY_OTHERS,
+  KIND_FIELD,
+  KIND_TEXT,
   LEFT_THE_LIST,
   LOAD_AGAIN,
   MAKE_A_COPY,
@@ -83,6 +92,7 @@ import {
 } from "../texts";
 import { DeleteMode } from "./DeleteMode";
 import { ModeSummary } from "./ModeParts";
+import { ScriptSections } from "./ScriptSections";
 import { StepSection } from "./StepSection";
 
 /** See the module comment. */
@@ -92,6 +102,27 @@ const startClean: Resolver<ModeValues> = async (values) => ({ values, errors: {}
 interface Conflict {
   readonly kind: "changed" | "others";
   readonly text: string;
+}
+
+/**
+ * `error`'s fields as the form shows them: the script's own, which the editor shows at its line,
+ * apart; a one-line text's with the character it's at.
+ */
+function splitFields(error: CommandError): { script: FieldError | null; error: CommandError } {
+  const fields = fieldErrorsOf(error);
+  const script = fields.find((field) => field.path === "script.source") ?? null;
+  const rest = fields
+    .filter((field) => field.path !== "script.source")
+    .map((field) =>
+      field.path.endsWith(".text") && field.column !== undefined
+        ? { ...field, message: atCharacter(field.message, field.column) }
+        : field,
+    );
+  const shown: CommandError =
+    error.api === undefined
+      ? { ...error, fields: rest }
+      : { ...error, api: { ...error.api, fields: rest } };
+  return { script, error: shown };
 }
 
 /** The modes the list's cache holds. */
@@ -110,12 +141,18 @@ export function ModeEditor({
   left = false,
   copying = false,
   onCopy,
+  writesScripts = false,
+  focusAt = null,
 }: {
   row?: ModeResponse;
   initial: ModeValues;
   left?: boolean;
   copying?: boolean;
   onCopy?: (values: ModeValues) => void;
+  /** Whether the viewer may write a scripted mode: an Admin or the Owner (ADR-0036, D15). */
+  writesScripts?: boolean;
+  /** A place in the script to show: a bot's script error links here (P15.26). */
+  focusAt?: Place | null;
 }) {
   const api = useApiClient();
   const queryClient = useQueryClient();
@@ -132,15 +169,32 @@ export function ModeEditor({
   const [reloadFailed, setReloadFailed] = useState<string | null>(null);
   const [reloading, setReloading] = useState(false);
   const [goneToSave, setGoneToSave] = useState(false);
+  const [scriptProblem, setScriptProblem] = useState<FieldError | null>(null);
   const writes = useWriteAction();
   const form = useForm<ModeValues>({ resolver: startClean, defaultValues: initial });
   const paths = useRef<Readonly<Record<string, Path<ModeValues>>>>({});
   const shownSteps = useWatch({ control: form.control, name: [...SECTIONS] });
+  const kind = useWatch({ control: form.control, name: "kind" });
   const total = stepTotal({
     atStart: shownSteps[0],
     repeating: shownSteps[1],
     onRespawn: shownSteps[2],
   });
+
+  /** The request's common part from `values`, at `visibility`, and where its errors show. */
+  function requestBody(
+    values: ModeValues,
+    visibility: ModeValues["visibility"],
+  ): CreateModeRequest {
+    const built = bodyOf(values);
+    paths.current = built.paths;
+    return {
+      name: values.name,
+      visibility,
+      steps: built.steps,
+      ...(built.script === undefined ? {} : { script: built.script }),
+    };
+  }
 
   /** What a refusal shows: a wait, a field's text, or a line. */
   function show(error: CommandError, creating: boolean): void {
@@ -160,11 +214,15 @@ export function ModeEditor({
     } else if (details?.status === 403) {
       setFormError(details.message);
       rereadModes(queryClient);
-    } else if (!showFieldErrors(form.setError, error, paths.current)) {
-      const fields = fieldErrorsOf(error);
-      setFormError(
-        fields.length > 0 ? fields.map((field) => field.message).join("\n") : describeError(error),
-      );
+    } else {
+      const split = splitFields(error);
+      setScriptProblem(split.script);
+      const fields = fieldErrorsOf(split.error);
+      if (fields.length > 0 && !showFieldErrors(form.setError, split.error, paths.current)) {
+        setFormError(fields.map((field) => field.message).join("\n"));
+      } else if (fields.length === 0 && split.script === null) {
+        setFormError(describeError(error));
+      }
     }
   }
 
@@ -231,14 +289,9 @@ export function ModeEditor({
     setFormError(undefined);
     setConflict(null);
     setReloadFailed(null);
+    setScriptProblem(null);
     wait.reset();
-    const built = stepsOf(values);
-    paths.current = built.paths;
-    const body: CreateModeRequest = {
-      name: values.name,
-      visibility: values.visibility,
-      steps: built.steps,
-    };
+    const body = requestBody(values, values.visibility);
     if (row === undefined) {
       void save(
         () => api.createMode(body),
@@ -263,15 +316,9 @@ export function ModeEditor({
     form.clearErrors();
     setFormError(undefined);
     setReloadFailed(null);
+    setScriptProblem(null);
     wait.reset();
-    const values = form.getValues();
-    const built = stepsOf(values);
-    paths.current = built.paths;
-    const body: CreateModeRequest = {
-      name: values.name,
-      visibility: "private",
-      steps: built.steps,
-    };
+    const body = requestBody(form.getValues(), "private");
     void save(
       () => api.createMode(body),
       () => api.createModeWithCommands(body),
@@ -348,6 +395,16 @@ export function ModeEditor({
               <Input {...control} autoComplete="off" readOnly={locked} {...form.register("name")} />
             )}
           </FormField>
+          {row === undefined && writesScripts && !copying ? (
+            <FormField id={`${formId}-kind`} label={KIND_FIELD} error={undefined}>
+              {(control) => (
+                <NativeSelect {...control} disabled={locked} {...form.register("kind")}>
+                  <option value="steps">{KIND_TEXT.steps}</option>
+                  <option value="script">{KIND_TEXT.script}</option>
+                </NativeSelect>
+              )}
+            </FormField>
+          ) : null}
           {row === undefined ? (
             <p className="text-sm text-muted-foreground">{STARTS_PRIVATE}</p>
           ) : (
@@ -372,17 +429,27 @@ export function ModeEditor({
       }
       sections={
         <>
-          {SECTIONS.map((section) => (
-            <StepSection
-              key={section}
+          {kind === "script" ? (
+            <ScriptSections
               form={form}
-              section={section}
               view={view}
-              full={total >= MODE_MAX_STEPS}
-              unknown={0}
-              announce={setAnnouncement}
+              templates={row === undefined}
+              serverProblem={scriptProblem}
+              focusAt={focusAt}
             />
-          ))}
+          ) : (
+            SECTIONS.map((section) => (
+              <StepSection
+                key={section}
+                form={form}
+                section={section}
+                view={view}
+                full={total >= MODE_MAX_STEPS}
+                unknown={0}
+                announce={setAnnouncement}
+              />
+            ))
+          )}
           <p role="status" className="sr-only">
             {announcement}
           </p>
