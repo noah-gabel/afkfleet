@@ -1666,3 +1666,56 @@ fn the_dimension_is_an_identifier_whatever_the_server_calls_its_world(
 
     assert_eq!(seen.facts.bot().dimension, id(dimension));
 }
+
+// --- What a snapshot costs the host thread (Plan.md P15.19, ADR-0043) ---
+
+/// Measures one snapshot on the session's own World: the cube of 729
+/// blocks around the bot in a chunk full of stone, and 64 entities in
+/// range among 200 the bot knows. `just load` runs it and prints the
+/// line; it asserts only that the snapshot is the full one.
+#[test]
+fn load_a_snapshots_cost_on_the_host_thread() {
+    let mut scene = Scene::placed();
+    let _loaded = scene.chunk();
+    // The bot stands in its chunk's corner: the quarter of the cube that
+    // lies in this chunk is known, as at the edge of what a server sent.
+    for x in 0..=4 {
+        for z in 0..=4 {
+            for y in 60..64 {
+                let kind = if (x + z) % 2 == 0 {
+                    BlockKind::Stone
+                } else {
+                    BlockKind::Cobblestone
+                };
+                scene.set_block(block(x, y, z), kind);
+            }
+        }
+    }
+    for n in 0..200_i32 {
+        // Every third one within 16 blocks, the others far away.
+        let far = if n % 3 == 0 { 0.0 } else { 40.0 };
+        let at = Vec3::new(2.0 + far + f64::from(n) * 0.04, 64.0, 3.0);
+        scene.entity(EntityKind::Zombie, at, 1_000 + n);
+    }
+    let seen = scene.observe().expect("a placed bot is observed");
+    assert_eq!(seen.facts.entities().len(), 64);
+    assert_eq!(
+        seen.facts
+            .blocks()
+            .get(fleet_core::script::BlockPosition { x: 2, y: 63, z: 2 })
+            .map(Identifier::as_str),
+        Some("minecraft:stone")
+    );
+
+    let rounds = 2_000_u32;
+    let begun = Instant::now();
+    for _ in 0..rounds {
+        let again = scene.observe().expect("a placed bot is observed");
+        assert_eq!(again.facts.entities().len(), 64);
+    }
+    let each = begun.elapsed() / rounds;
+
+    println!(
+        "LOAD snapshot: {each:.1?} a snapshot on the host thread (729 block places, 64 of 200 entities)"
+    );
+}

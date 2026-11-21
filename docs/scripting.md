@@ -44,7 +44,7 @@ A script defines the hooks it needs and leaves the others out. A function whose 
 | `fn on_respawn()` | The bot lives again after a death |
 | `fn on_timer(name)` | A timer the script set is due |
 | `fn on_chat(key, values)` | The server printed a line that fits one of the mode's declared patterns (see [`chat`](#chat)) |
-| `fn on_stop()` | The script stops in an orderly way: the bot is stopped, its mode is changed, or the mode was edited. It can change `state` and send one declared message; every key and button is released by the runtime right after it. It doesn't run after an error or a disconnect |
+| `fn on_stop()` | The script stops in an orderly way: the bot is stopped or removed, its agent shuts down, its mode is changed, or the mode was edited. It can change `state` and send one declared message, which goes out at once, ahead of anything still waiting in the bot's chat queue; every key and button is released by the runtime right after it. It doesn't run after an error or a disconnect, and a bot whose session doesn't answer is stopped without it after two seconds |
 
 **Nothing is held at the start of `on_join`, `on_world_change`, `on_death` and `on_respawn`.** Each of them puts the bot somewhere new, so the runtime lets go of every key and button first, and the hook decides again.
 
@@ -192,7 +192,8 @@ A script sends only messages its mode declares, each with a key. A message can h
 - **A reply counts only when the script asked.** `chat.expect(key, ms)` right after `chat.send` of a declared command opens a window of `ms` milliseconds (250 to 30,000) for that pattern, from the moment the command is sent. The first line that fits closes it. Without an open window, a reply pattern fits nothing.
 - **A pattern can be declared to count at any time** instead. It then needs no `chat.expect`, the app marks the mode as riskier, and it's delivered at most once a second. Prefer a reply wherever a command causes the line.
 - **A value from chat is a number or one of your own words.** It can go into a declared message's value, inside that value's range, and nowhere else: a recipient or a command is always written in the declaration.
-- Every message sent, every window and every match is a line in the script's log.
+- Every message sent, every window and every match is a line in the script's log, written by the runtime: a message that wasn't sent with the reason, a window that opened, one that ran out, one that never opened because its command wasn't sent, a match with its values, and a `chat.send` or `chat.expect` that was refused. They don't count against the script's own 20 lines a minute; the lines about what was refused have 20 a minute of their own.
+- **A window opens only when the server really got the command.** The bot's chat queue may refuse it (full, or the bot's chat rate used up), or the session may be unable to send it: no window opens then, and the log says why.
 
 ### `timer`
 | | |
@@ -201,7 +202,7 @@ A script sends only messages its mode declares, each with a key. A message can h
 | `timer.every(ms, name)` | Calls it every `ms` milliseconds (the same range), first after `ms` |
 | `timer.cancel(name)` | Removes that timer |
 
-A name holds one timer: setting it again replaces the old one. Timers wait while the bot is dead or between worlds, and they're cleared when it disconnects, so `on_join` is where a script starts them.
+A name holds one timer: setting it again replaces the old one. Timers wait while the bot is dead or between worlds, and they're cleared when it disconnects, so `on_join` is where a script starts them. Timers that are due at the same moment run one after the other, in the order they were due, and other bots' hooks may run in between: on an agent whose scripts keep it busy, a timer's hook can begin some milliseconds late.
 
 ### `random` and `log`
 - `random.between(low, high)` is a whole number from `low` to `high`, both included. `random.chance(percent)` is `true` that often.

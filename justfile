@@ -628,12 +628,14 @@ fuzz target="all" seconds="60":
     cargo run -p fleet-fuzz --example seeds -- fuzz/corpus
     node scripts/fuzz.mjs {{ target }} {{ seconds }}
 
-# fleet-integration's `load_` tests: 200 bots on one managed agent and 20 Members' live
-# events sockets, in-process on the fake connector, measured and printed as `LOAD` lines.
-# No other profile runs them, and nothing runs beside them.
-# The load test (P13.4): prints its report.
+# The `load_` tests: fleet-integration's 200 bots on one managed agent with 20 Members'
+# live events sockets (P13.4), its 200 scripted bots on runtimes of one, two and four
+# workers (P15.19, ADR-0043), and fleet-mc's cost of a snapshot on the host thread; all
+# in-process on the fake connector, measured and printed as `LOAD` lines. No other profile
+# runs them, and nothing runs beside them.
+# The load tests (P13.4, P15.19): print their reports.
 load:
-    cargo nextest run -p fleet-integration --profile load --no-capture
+    cargo nextest run -p fleet-integration -p fleet-mc --profile load --no-capture
 
 # fleet-integration's `chaos_` tests (P13.5, ADR-0033): the production compose project from
 # both images, with a Minecraft server and real bots in it, and Docker's own faults: kills
