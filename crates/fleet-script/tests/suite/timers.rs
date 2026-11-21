@@ -151,19 +151,56 @@ fn a_script_holds_16_timers_and_no_more_from_a_hook_and_from_a_helper() {
     }
 }
 
+/// One hook a wake: whoever runs the script gets its thread back after
+/// each, and no call on an instance takes longer than one hook may
+/// (ADR-0043).
 #[test]
-fn timers_due_at_once_run_in_the_order_they_are_due_each_as_its_own_hook() {
+fn timers_due_at_once_run_in_the_order_they_are_due_one_a_wake() {
     let (_, mut world, mut instance) = join(
         "fn on_join(first) {\n  timer.after(3000, \"c\");\n  timer.after(1000, \"a\");\n  timer.after(2000, \"b\");\n}\nfn on_timer(name) { log.info(name); }",
     );
 
     // Nothing woke the script for five seconds: all three are due.
     world.now += Duration::from_secs(5);
-    let ran = world.wake(&mut instance);
+    let first = world.wake(&mut instance);
+    let second = world.wake(&mut instance);
+    let third = world.wake(&mut instance);
+    let fourth = world.wake(&mut instance);
 
-    assert_eq!(logged(&ran.actions), ["a", "b", "c"]);
-    assert!(matches!(ran.outcome, Outcome::Ran { .. }));
-    assert_eq!(ran.next_wake, None);
+    assert_eq!(logged(&first.actions), ["a"]);
+    assert_eq!(logged(&second.actions), ["b"]);
+    assert_eq!(logged(&third.actions), ["c"]);
+    for ran in [&first, &second, &third] {
+        assert!(matches!(ran.outcome, Outcome::Ran { operations } if operations > 0));
+    }
+    // While another one is due, the instance asks to be woken at once.
+    assert_eq!(first.next_wake, Some(world.now));
+    assert_eq!(second.next_wake, Some(world.now));
+    assert_eq!(third.next_wake, None);
+    assert_eq!(fourth.actions, []);
+    assert_eq!(fourth.outcome, Outcome::Ran { operations: 0 });
+}
+
+/// What a `hold_for` held is let go by the wake that finds its time up,
+/// with that wake's one timer.
+#[test]
+fn a_wake_lets_go_of_every_hold_that_is_over_before_its_one_timer() {
+    let (_, mut world, mut instance) = join(
+        "fn on_join(first) {\n  keys.forward.hold_for(1000);\n  keys.sneak.hold_for(1000);\n  timer.after(1000, \"a\");\n  timer.after(1000, \"b\");\n}\nfn on_timer(name) { log.info(name); }",
+    );
+
+    world.now += Duration::from_secs(1);
+    let first = world.wake(&mut instance);
+    let second = world.wake(&mut instance);
+
+    let releases = |ran: &fleet_script::Ran| {
+        ran.actions
+            .iter()
+            .filter(|action| matches!(action, Action::Release(_)))
+            .count()
+    };
+    assert_eq!((releases(&first), logged(&first.actions)), (2, vec!["a"]));
+    assert_eq!((releases(&second), logged(&second.actions)), (0, vec!["b"]));
 }
 
 #[test]

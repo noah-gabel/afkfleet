@@ -31,7 +31,7 @@ use crate::clock::RuntimeClock;
 use crate::config::RuntimeConfig;
 use crate::event::{FleetEvent, FleetEventKind};
 use crate::metrics;
-use crate::script::{ScriptPrograms, ScriptSlot};
+use crate::script::{ScriptPrograms, ScriptSlot, ScriptTurns};
 use crate::snapshot::SnapshotOwner;
 
 /// What the supervisor keeps of one bot, across its actors.
@@ -87,6 +87,8 @@ pub struct Supervisor<C, P> {
     tickets: ChatTickets,
     /// The compiled scripts the fleet's bots share.
     programs: ScriptPrograms,
+    /// The turnstile the fleet's hooks pass.
+    turns: ScriptTurns,
     /// What every script's hook is timed by.
     stopwatch: Arc<dyn Stopwatch>,
     commands: mpsc::Receiver<Command>,
@@ -126,6 +128,9 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> Supervisor<C, P> {
         } = parts;
         Self {
             programs: ScriptPrograms::new(),
+            turns: config
+                .script_hooks_at_once
+                .map_or_else(ScriptTurns::new, ScriptTurns::of),
             stopwatch,
             connector,
             credentials,
@@ -498,6 +503,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> Supervisor<C, P> {
             tickets: self.tickets.clone(),
             script: entry.script.clone(),
             programs: self.programs.clone(),
+            turns: self.turns.clone(),
             stopwatch: Arc::clone(&self.stopwatch),
             snapshot: entry.snapshot.publisher(),
             breaker: entry.breaker.clone(),

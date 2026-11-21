@@ -340,6 +340,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             bot_id: self.spec.id,
             slot: self.script.clone(),
             programs: self.programs.clone(),
+            turns: self.turns.clone(),
             inbox,
             events: self.events.clone(),
             stopwatch: Arc::clone(&self.stopwatch),

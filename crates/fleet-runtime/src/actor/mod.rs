@@ -69,7 +69,7 @@ use crate::clock::RuntimeClock;
 use crate::config::RuntimeConfig;
 use crate::event::FleetEvent;
 use crate::metrics;
-use crate::script::{ScriptPrograms, ScriptSlot};
+use crate::script::{ScriptPrograms, ScriptSlot, ScriptTurns};
 use crate::snapshot::SnapshotPublisher;
 
 /// Everything a [`BotActor`] is built from (ADR-0013).
@@ -106,6 +106,8 @@ pub struct BotActorParts<C, P> {
     pub script: ScriptSlot,
     /// The compiled scripts the fleet's bots share.
     pub programs: ScriptPrograms,
+    /// The turnstile the fleet's hooks pass: how many run at once.
+    pub turns: ScriptTurns,
     /// What a script's hook is timed by: the OS's monotonic clock in an
     /// agent, a manual one in tests (ADR-0040's amendment).
     pub stopwatch: Arc<dyn Stopwatch>,
@@ -201,6 +203,7 @@ pub struct BotActor<C: MinecraftConnector, P> {
     queue: ChatQueue,
     script: ScriptSlot,
     programs: ScriptPrograms,
+    turns: ScriptTurns,
     stopwatch: Arc<dyn Stopwatch>,
     /// Whether the event being applied is a Stop: the mode it ends is
     /// ended in an orderly way (Plan.md P15.17).
@@ -264,6 +267,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             tickets,
             script,
             programs,
+            turns,
             stopwatch,
             snapshot,
             breaker,
@@ -294,6 +298,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             queue: ChatQueue::new(spec.id, config.chat_queue, bucket, tickets),
             script,
             programs,
+            turns,
             stopwatch,
             orderly: false,
             inbox,
@@ -800,6 +805,7 @@ mod tests {
             tickets: ChatTickets::new(),
             script: ScriptSlot::new(),
             programs: ScriptPrograms::new(),
+            turns: ScriptTurns::new(),
             stopwatch: Arc::new(ManualStopwatch::standing()),
             snapshot: snapshots.publisher(),
             breaker: watch::Sender::new(CircuitBreaker::new(policy)),

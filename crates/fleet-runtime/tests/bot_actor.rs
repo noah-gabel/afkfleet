@@ -267,6 +267,7 @@ impl Setup {
             tickets: ChatTickets::new(),
             script: self.script.clone(),
             programs: fleet_runtime::ScriptPrograms::new(),
+            turns: fleet_runtime::ScriptTurns::new(),
             stopwatch: std::sync::Arc::new(self.stopwatch.clone()),
             snapshot: snapshot.publisher(),
             breaker: breaker_tx,

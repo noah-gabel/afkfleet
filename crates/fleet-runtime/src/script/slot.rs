@@ -18,13 +18,15 @@
 //! The supervisor keeps a bot's slot, as it keeps its chat bucket, and
 //! hands a clone to each of its actors.
 
+use core::num::NonZeroUsize;
 use core::time::Duration;
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 
 use chrono::{DateTime, Utc};
 use fleet_core::script::{ActionLimiter, ChatWatch, Script, Stopwatch, limits};
 use fleet_core::time;
 use fleet_script::{CompileError, Instance, Program};
+use tokio::sync::{Semaphore, SemaphorePermit};
 
 use super::event::ScriptStatus;
 
@@ -341,6 +343,83 @@ impl ScriptPrograms {
     }
 }
 
+/// How many hooks of a fleet's scripts run at the same time: one fewer
+/// than the runtime has async workers, and at least one (ADR-0043). Clones
+/// share one turnstile.
+///
+/// A hook holds its worker for up to 5 ms. With every worker inside a
+/// hook, whatever else is due on the runtime waits: the agent's stream
+/// and its heartbeat, every step-mode bot, the supervisor. So a hook
+/// takes a turn first. A script whose turn hasn't come isn't runnable,
+/// which keeps the workers' queues short however many scripts are due:
+/// what else is due waits for one hook at most, not for one of every
+/// script.
+///
+/// The turns are handed out in the order they were asked for.
+#[derive(Debug, Clone, Default)]
+pub struct ScriptTurns {
+    /// Made at the first turn, inside the runtime whose workers it counts.
+    turns: Arc<OnceLock<Semaphore>>,
+    /// A fixed number of turns instead of the runtime's, if one was set.
+    at_once: Option<NonZeroUsize>,
+}
+
+impl ScriptTurns {
+    /// A turnstile for the runtime its first turn is taken on.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A turnstile that lets `at_once` hooks run at the same time,
+    /// whatever the runtime.
+    #[must_use]
+    pub fn of(at_once: NonZeroUsize) -> Self {
+        Self {
+            turns: Arc::default(),
+            at_once: Some(at_once),
+        }
+    }
+
+    /// How many hooks may run at once on a runtime of `workers` async
+    /// workers: one fewer, so one worker is always free for what isn't a
+    /// hook; one on a runtime with a single worker, where the hooks then
+    /// run one after the other with everything else in between.
+    const fn spare(workers: usize) -> usize {
+        let spare = workers.saturating_sub(1);
+        if spare == 0 { 1 } else { spare }
+    }
+
+    /// [`spare`](Self::spare) for the runtime this is called on.
+    fn here() -> usize {
+        Self::spare(
+            tokio::runtime::Handle::try_current()
+                .map_or(1, |runtime| runtime.metrics().num_workers()),
+        )
+    }
+
+    /// Waits for a turn. The hook runs while the turn is held, and
+    /// nothing is awaited meanwhile.
+    pub(crate) async fn take(&self) -> Turn<'_> {
+        let turns = self.turns.get_or_init(|| {
+            let at_once = self.at_once.map_or_else(Self::here, NonZeroUsize::get);
+            // More than tokio counts is as good as no bound.
+            Semaphore::new(at_once.min(Semaphore::MAX_PERMITS))
+        });
+        // The turnstile is never closed, so a turn always comes; without
+        // one the hook runs all the same.
+        Turn {
+            _permit: turns.acquire().await.ok(),
+        }
+    }
+}
+
+/// A hook's turn, given back when it's dropped.
+#[derive(Debug)]
+pub(crate) struct Turn<'a> {
+    _permit: Option<SemaphorePermit<'a>>,
+}
+
 #[cfg(test)]
 mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -655,5 +734,76 @@ mod tests {
         // The next one that's shared sweeps the dead entry out.
         let _again = programs.share(compile(&jumps).unwrap());
         assert_eq!(programs.len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn no_more_hooks_take_a_turn_at_once_than_the_turnstile_lets() {
+        let turns = ScriptTurns::of(NonZeroUsize::new(2).unwrap());
+
+        let first = turns.take().await;
+        let _second = turns.take().await;
+        let third = tokio::time::timeout(Duration::from_secs(1), turns.take()).await;
+        drop(first);
+        let then = tokio::time::timeout(Duration::from_secs(1), turns.take()).await;
+
+        assert!(third.is_err(), "two turns are out");
+        assert!(then.is_ok(), "a turn that was given back is taken");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_turns_come_in_the_order_they_were_asked_for() {
+        let turns = ScriptTurns::of(NonZeroUsize::MIN);
+        let held = turns.take().await;
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let mut waiting = tokio::task::JoinSet::new();
+        for n in 0..3 {
+            let (turns, order) = (turns.clone(), Arc::clone(&order));
+            waiting.spawn(async move {
+                let _turn = turns.take().await;
+                order.lock().unwrap().push(n);
+            });
+            // Each asks before the next one does.
+            tokio::task::yield_now().await;
+        }
+
+        drop(held);
+        while waiting.join_next().await.is_some() {}
+
+        assert_eq!(*order.lock().unwrap(), [0, 1, 2]);
+    }
+
+    /// A test's runtime has one worker: one hook at a time.
+    #[tokio::test(start_paused = true)]
+    async fn a_runtime_with_one_worker_runs_one_hook_at_a_time() {
+        let turns = ScriptTurns::new();
+
+        let _first = turns.take().await;
+        let second = tokio::time::timeout(Duration::from_secs(1), turns.take()).await;
+
+        assert!(second.is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_turnstile_set_to_the_largest_number_holds_no_hook_back() {
+        let turns = ScriptTurns::of(NonZeroUsize::MAX);
+
+        let mut held = Vec::new();
+        for _ in 0..1_000 {
+            held.push(turns.take().await);
+        }
+
+        assert_eq!(held.len(), 1_000);
+    }
+
+    /// One worker stays free for what isn't a hook; a single worker runs
+    /// one hook at a time.
+    #[test]
+    fn one_fewer_hooks_run_at_once_than_the_runtime_has_workers() {
+        let at_once: Vec<usize> = [0, 1, 2, 3, 4, 8, 64]
+            .into_iter()
+            .map(ScriptTurns::spare)
+            .collect();
+
+        assert_eq!(at_once, [1, 1, 1, 2, 3, 7, 63]);
     }
 }

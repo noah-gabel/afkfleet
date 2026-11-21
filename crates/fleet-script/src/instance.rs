@@ -56,7 +56,8 @@ pub struct Moment<'a> {
 /// How a call on an instance ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    /// The hook ran to its end; a wake ran every timer that was due.
+    /// The hook ran to its end; a wake ran one timer that was due, or
+    /// found none.
     Ran {
         /// How many operations it ran, of a hook's and a second's budget.
         operations: u64,
@@ -465,8 +466,15 @@ impl Instance {
     }
 
     /// Wakes the script at the time it asked for: inputs whose `hold_for`
-    /// is over are let go, and `on_timer` runs for each timer that's due,
-    /// in the order they were due, each as a hook of its own.
+    /// is over are let go, and `on_timer` runs for **one** timer that's
+    /// due, the one that was due first.
+    ///
+    /// **One hook a wake.** While another timer is due, the answer asks to
+    /// be woken again at once ([`Ran::next_wake`] is this moment), so the
+    /// timers still run in the order they were due, each as a hook of its
+    /// own. Whoever runs the script gets its thread back between two
+    /// hooks, and no call on an instance takes longer than one hook may
+    /// (ADR-0043).
     ///
     /// Timers wait while the bot is dead or between worlds; a repeating
     /// one that was due several times runs once.
@@ -482,15 +490,16 @@ impl Instance {
             .map(Action::Release)
             .collect();
         let mut total = 0_u64;
-        // Timers wait while the bot is dead or between worlds.
-        while let Some(name) = self.due_timer(moment) {
+        // Timers wait while the bot is dead or between worlds. One a
+        // wake: the next one that's due makes `next_wake` this moment.
+        if let Some(name) = self.due_timer(moment) {
             match self.run(&HookEvent::Timer(name), moment, limiter, false) {
                 Run::NotDefined => {}
                 Run::Done {
                     operations,
                     actions: asked,
                 } => {
-                    total = total.saturating_add(operations);
+                    total = operations;
                     actions.extend(asked);
                 }
                 Run::Failed(error) => return self.fail(error),

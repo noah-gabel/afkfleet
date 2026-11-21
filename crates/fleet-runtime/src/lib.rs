@@ -66,6 +66,6 @@ pub use fleet::{
 pub use mode::ModeRunner;
 pub use script::{
     Life, LoggedValue, NotSent, ScriptEvent, ScriptFeed, ScriptInbox, ScriptLog, ScriptParts,
-    ScriptPrograms, ScriptSlot, ScriptStatus, script_feed,
+    ScriptPrograms, ScriptSlot, ScriptStatus, ScriptTurns, script_feed,
 };
 pub use snapshot::{SnapshotOwner, SnapshotPublisher};

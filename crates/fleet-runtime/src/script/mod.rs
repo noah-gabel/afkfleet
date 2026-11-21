@@ -11,7 +11,8 @@
 //! - [`ScriptSlot`] is what of a bot's script outlives a session: the
 //!   instance with its state, the bot's limiter and its chat watch. The
 //!   supervisor keeps it, as it keeps the bot's chat bucket.
-//!   [`ScriptPrograms`] are the compiled scripts the fleet's bots share.
+//!   [`ScriptPrograms`] are the compiled scripts the fleet's bots share,
+//!   and [`ScriptTurns`] is the turnstile their hooks pass.
 //! - [`ScriptFeed`] and [`ScriptInbox`] carry the session's events from
 //!   the bot's actor, their one reader, to the runner: bounded, whatever a
 //!   server sends.
@@ -20,9 +21,12 @@
 //!
 //! **A hook runs on the runner's own task,** an async worker: a bounded
 //! computation of a few microseconds as a rule and 5 ms at most, 20 ms a
-//! second for one script. ADR-0043 has what that does to the other tasks
-//! of a runtime with 200 scripted bots. Compiling a script runs off the
-//! workers, in `spawn_blocking`.
+//! second for one script. One hook a turn: the runner gives its worker
+//! back after each, and at most one fewer hooks than the runtime has
+//! workers run at once ([`ScriptTurns`]), so what else is due on the
+//! runtime waits for one hook at most. ADR-0043 has what was measured
+//! with 200 scripted bots. Compiling a script runs off the workers, in
+//! `spawn_blocking`.
 //!
 //! **The runtime still reads no clock of the OS's.** A script's timers,
 //! its `hold_for`s and its replies' windows run on tokio's clock, and a
@@ -40,4 +44,4 @@ pub use event::{LoggedValue, NotSent, ScriptEvent, ScriptLog, ScriptStatus};
 pub use feed::{Life, ScriptFeed, ScriptInbox, script_feed};
 pub use runner::ScriptParts;
 pub(crate) use runner::{Borrowed, Next, ScriptRunner};
-pub use slot::{ScriptPrograms, ScriptSlot};
+pub use slot::{ScriptPrograms, ScriptSlot, ScriptTurns};

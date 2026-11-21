@@ -26,7 +26,7 @@ use tracing::{debug, info, warn};
 
 use super::event::{NotSent, ScriptEvent, ScriptLog, ScriptStatus};
 use super::feed::{Fed, Life, ScriptInbox};
-use super::slot::{ScriptPrograms, ScriptSlot};
+use super::slot::{ScriptPrograms, ScriptSlot, ScriptTurns};
 use crate::chat::{ChatError, ChatFailure, ModeChat, SendOutcome};
 use crate::clock::RuntimeClock;
 use crate::event::{FleetEvent, FleetEventKind};
@@ -58,6 +58,8 @@ pub struct ScriptParts {
     pub slot: ScriptSlot,
     /// The compiled scripts the fleet's bots share.
     pub programs: ScriptPrograms,
+    /// The turnstile the fleet's hooks pass: how many run at once.
+    pub turns: ScriptTurns,
     /// The session's events for the script.
     pub inbox: ScriptInbox,
     /// The fleet's events.
@@ -129,7 +131,8 @@ enum Unseen {
 /// Which call on the instance a turn makes.
 enum Call<'a> {
     Event(&'a HookEvent),
-    Wake,
+    /// A wake the script asked for at this time.
+    Wake(DateTime<Utc>),
 }
 
 /// Runs a bot's script in one session, from the mode runner's task.
@@ -454,7 +457,7 @@ impl<'a, S: SessionHandle> ScriptRunner<'a, S> {
             Err(ended) => return ControlFlow::Break(ended),
         };
         let presence = self.presence(true);
-        let ran = self.turn(&Call::Event(&event), &seen, presence);
+        let ran = self.turn(&Call::Event(&event), &seen, presence).await;
         self.after(ran, false).await
     }
 
@@ -471,7 +474,9 @@ impl<'a, S: SessionHandle> ScriptRunner<'a, S> {
                     Err(Unseen::Closed) => return ControlFlow::Break(Ended::Session),
                     Err(Unseen::NotInWorld | Unseen::Busy) => self.unplaced(),
                 };
-                let ran = self.turn(&Call::Event(&HookEvent::Death), &seen, Presence::Dead);
+                let ran = self
+                    .turn(&Call::Event(&HookEvent::Death), &seen, Presence::Dead)
+                    .await;
                 self.after(ran, false).await
             }
             Life::Respawned => {
@@ -533,7 +538,9 @@ impl<'a, S: SessionHandle> ScriptRunner<'a, S> {
             }
         };
         let presence = self.presence(seen.placed);
-        let ran = self.turn(&Call::Event(&HookEvent::Chat(found)), &seen, presence);
+        let ran = self
+            .turn(&Call::Event(&HookEvent::Chat(found)), &seen, presence)
+            .await;
         self.after(ran, false).await
     }
 
@@ -547,10 +554,10 @@ impl<'a, S: SessionHandle> ScriptRunner<'a, S> {
             .slot
             .turn(|instance, _| instance.next_wake())
             .flatten()
-            .is_some_and(|wake| wake <= now);
-        if !due {
+            .filter(|wake| *wake <= now);
+        let Some(due) = due else {
             return ControlFlow::Continue(());
-        }
+        };
         let seen = match self.see().await {
             Ok(seen) => seen,
             Err(Unseen::Closed) => return ControlFlow::Break(Ended::Session),
@@ -565,7 +572,7 @@ impl<'a, S: SessionHandle> ScriptRunner<'a, S> {
         };
         self.not_before = None;
         let presence = self.presence(seen.placed);
-        let ran = self.turn(&Call::Wake, &seen, presence);
+        let ran = self.turn(&Call::Wake(due), &seen, presence).await;
         self.after(ran, false).await
     }
 
@@ -607,8 +614,24 @@ impl<'a, S: SessionHandle> ScriptRunner<'a, S> {
     }
 
     /// Runs one call on the instance at this moment and counts it; `None`
-    /// if no instance stands in the slot.
-    fn turn(&mut self, call: &Call<'_>, seen: &Seen, presence: Presence) -> Option<Ran> {
+    /// if no instance stands in the slot, or the session ended while the
+    /// hook waited for its turn.
+    ///
+    /// **A hook takes a turn first** ([`ScriptTurns`]): no more hooks run
+    /// at once than the runtime can spare workers for. The snapshot was
+    /// taken before the wait, so under a load that makes hooks wait it's
+    /// as old as the wait; the session's own guards judge the game as it
+    /// is, every tick.
+    async fn turn(&mut self, call: &Call<'_>, seen: &Seen, presence: Presence) -> Option<Ran> {
+        let asked = self.parts.stopwatch.elapsed();
+        let turns = self.parts.turns.clone();
+        let turn = tokio::select! {
+            biased;
+            // Cancel-safe: a turn that was being waited for is given up.
+            () = self.cancel.cancelled() => return None,
+            turn = turns.take() => turn,
+        };
+        let waited = self.parts.stopwatch.elapsed().saturating_sub(asked);
         let moment = Moment {
             facts: &seen.facts,
             now: self.clock.now(),
@@ -617,23 +640,38 @@ impl<'a, S: SessionHandle> ScriptRunner<'a, S> {
                 .anchor
                 .map(|anchor| Leash::new(self.script.leash(), anchor)),
         };
-        let hook = match call {
-            Call::Event(event) => event.hook(),
-            Call::Wake => Hook::Timer,
+        // How long after the time it asked for a wake's hook begins.
+        let (hook, late) = match call {
+            Call::Event(event) => (event.hook(), Duration::ZERO),
+            Call::Wake(due) => (Hook::Timer, time::elapsed(*due, moment.now)),
         };
         let before = self.parts.stopwatch.elapsed();
         let ran = self.parts.slot.turn(|instance, limiter| match call {
             Call::Event(event) => instance.handle(event, &moment, limiter),
-            Call::Wake => instance.wake(&moment, limiter),
+            Call::Wake(_) => instance.wake(&moment, limiter),
         })?;
         let took = self.parts.stopwatch.elapsed().saturating_sub(before);
         metrics::script_hook(hook, took);
+        let micros = |time: Duration| u64::try_from(time.as_micros()).unwrap_or(u64::MAX);
         debug!(
             hook = hook.name(),
-            took_us = u64::try_from(took.as_micros()).unwrap_or(u64::MAX),
+            took_us = micros(took),
+            late_us = micros(late),
+            waited_us = micros(waited),
+            operations = match ran.outcome {
+                Outcome::Ran { operations } => operations,
+                _ => 0,
+            },
             actions = ran.actions.len(),
             "a hook of the bot's script ran"
         );
+        // The hook held this worker for up to its 5 ms. Whoever else waits
+        // for one gets it now, before this script's next hook and before
+        // the next script's: the turn is given back only after that, so
+        // the scripts that wait for it stay out of the workers' queues
+        // meanwhile (ADR-0043).
+        tokio::task::yield_now().await;
+        drop(turn);
         Some(ran)
     }
 
@@ -824,7 +862,9 @@ impl<'a, S: SessionHandle> ScriptRunner<'a, S> {
             Err(Unseen::Closed | Unseen::NotInWorld | Unseen::Busy) => self.unplaced(),
         };
         let presence = self.presence(seen.placed);
-        let ran = self.turn(&Call::Event(&HookEvent::Stop), &seen, presence);
+        let ran = self
+            .turn(&Call::Event(&HookEvent::Stop), &seen, presence)
+            .await;
         // The instance's last action is a `ReleaseAll`. If the session
         // didn't take it, the mark stays, and whoever owns this task
         // releases once more when it has ended.

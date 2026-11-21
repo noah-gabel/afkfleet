@@ -109,7 +109,7 @@ fn a_timer_and_a_log_line_too_many_are_reported() {
 }
 
 #[test]
-fn a_wake_reports_what_all_its_timers_hooks_were_refused() {
+fn each_wake_reports_what_its_own_hook_was_refused() {
     // Two timers due at once, each looking twice: the second look of each
     // hook is too soon, and so is the first of the second hook.
     let source = "fn on_join(first) {\n  timer.after(1000, \"a\");\n  timer.after(1000, \"b\");\n}\nfn on_timer(name) {\n  look.at(0.0, 0.0);\n  look.at(0.0, 0.0);\n}";
@@ -119,10 +119,14 @@ fn a_wake_reports_what_all_its_timers_hooks_were_refused() {
 
     let wakes = world.pass(&mut instance, Duration::from_millis(1_000));
 
-    assert_eq!(wakes.len(), 1);
+    assert_eq!(wakes.len(), 2);
     assert_eq!(
         wakes[0].refused,
-        [refused(Asked::Look, Refusal::TooSoon, 3)]
+        [refused(Asked::Look, Refusal::TooSoon, 1)]
+    );
+    assert_eq!(
+        wakes[1].refused,
+        [refused(Asked::Look, Refusal::TooSoon, 2)]
     );
 }
 

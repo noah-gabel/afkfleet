@@ -195,6 +195,61 @@ async fn rejoin(
     join(harness, index).await
 }
 
+/// Notes in which order a hook of a script and another task's turn were
+/// logged: 0 for a timer's hook, 1 for the other task.
+#[derive(Debug, Clone, Default)]
+struct Order {
+    seen: std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+}
+
+impl Order {
+    /// What another task logs when it gets its turn.
+    const OTHER: &'static str = "another task's turn";
+
+    fn seen(&self) -> Vec<usize> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+/// An event's fields as text.
+struct Written(String);
+
+impl tracing::field::Visit for Written {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn core::fmt::Debug) {
+        use core::fmt::Write as _;
+        let _ = write!(self.0, "{}={value:?} ", field.name());
+    }
+}
+
+impl tracing::Subscriber for Order {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        let mut written = Written(String::new());
+        event.record(&mut written);
+        let which = ["hook=\"on_timer\"", Self::OTHER]
+            .iter()
+            .position(|needle| written.0.contains(needle));
+        if let Some(which) = which {
+            self.seen.lock().unwrap().push(which);
+        }
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
 /// What the session was asked to do, without its snapshots.
 fn done(controller: &SessionController) -> Vec<Performed> {
     controller
@@ -396,6 +451,79 @@ async fn timers_and_hold_for_run_on_tokios_time() {
         Some([GameAction::Release(FORWARD), tap].as_slice())
     );
     assert_eq!(controller.held(), []);
+}
+
+/// Three timers are due at the same moment, and three other tasks of the
+/// runtime are woken at that moment too. The runner runs one hook, then
+/// gives its worker to whoever waits for one, before the script's next
+/// hook: no script holds a worker for longer than one hook (ADR-0043).
+#[tokio::test(start_paused = true)]
+async fn the_tasks_that_wait_for_a_worker_get_it_between_two_hooks_that_are_due_at_once() {
+    let order = Order::default();
+    let _logs = tracing::subscriber::set_default(order.clone());
+    let source = "fn on_join(first) {\n  timer.after(1000, \"a\");\n  timer.after(1000, \"b\");\n  timer.after(1000, \"c\");\n}\nfn on_timer(name) {\n  keys.jump.tap();\n}";
+    let (_harness, _controller) = online(draft(source)).await;
+    let mut others = tokio::task::JoinSet::new();
+    for _ in 0..3 {
+        others.spawn(async {
+            tokio::time::sleep(ms(999)).await;
+            tracing::debug!("{}", Order::OTHER);
+        });
+    }
+
+    pass(secs(1)).await;
+    while let Some(done) = others.join_next().await {
+        done.unwrap();
+    }
+
+    // The runner's timer was set first, so its first hook runs first: with
+    // the three others waiting behind it, as the test means to have it.
+    // They all run before the script's second hook.
+    assert_eq!(order.seen(), [0, 1, 1, 1, 0, 0]);
+}
+
+/// Four bots' timers are due at the same moment, and so is another task
+/// of the runtime, which was woken last. A test's runtime has one worker,
+/// so one hook runs at a time: the scripts whose turn hasn't come aren't
+/// in the worker's queue, and the other task runs after one hook, not
+/// after one of every script (ADR-0043).
+#[tokio::test(start_paused = true)]
+async fn what_else_is_due_waits_for_one_hook_not_for_one_of_every_script() {
+    let order = Order::default();
+    let _logs = tracing::subscriber::set_default(order.clone());
+    let source = "fn on_join(first) {\n  timer.after(1000, \"a\");\n}\nfn on_timer(name) {\n  keys.jump.tap();\n}";
+    let harness = Setup::new().start().await;
+    let bots = [
+        (BOT, "AfkBot1"),
+        (OTHER, "AfkBot2"),
+        ("018bcfe5-6800-7bab-abab-ababababab01", "AfkBot3"),
+        ("018bcfe5-6800-7bab-abab-ababababab02", "AfkBot4"),
+    ];
+    for (bot, name) in bots {
+        harness
+            .apply(BotSpec {
+                mode: scripted_mode(draft(source)),
+                ..running(bot, name)
+            })
+            .await;
+    }
+    for index in 0..bots.len() {
+        let session = harness.session(index).await;
+        session.show(seen());
+        emit(&session, SessionEvent::Joined);
+    }
+    // Every script joins in the same millisecond, so their timers are due
+    // together.
+    pass(ms(1)).await;
+    let other = tokio::spawn(async {
+        tokio::time::sleep(ms(999)).await;
+        tracing::debug!("{}", Order::OTHER);
+    });
+
+    pass(secs(1)).await;
+    other.await.unwrap();
+
+    assert_eq!(order.seen(), [0, 1, 0, 0, 0]);
 }
 
 #[tokio::test(start_paused = true)]
