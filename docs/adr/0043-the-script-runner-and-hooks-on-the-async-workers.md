@@ -266,7 +266,7 @@ One change turned nothing red and was removed instead: a second `ReleaseAll` at 
 - **The scripted load test runs once on GitHub's linux/arm64 runner,** production's architecture: every number above is from the development PC. The manual workflow `Load (arm64)` (`.github/workflows/load-arm64.yml`) runs fleet-integration's scripted `load_` tests in a release build there; its numbers are under "What was measured on linux/arm64" below.
 
 ## What was measured on linux/arm64
-`load_200_scripted_bots` again, as above, in a release build on GitHub's `ubuntu-24.04-arm` runner (aarch64, 16 GB of memory), through the manual workflow `Load (arm64)`, 2026-11-21. The hot script calibrated there at **96 rounds for 2.8 ms** alone (1,191 operations a hook).
+`load_200_scripted_bots` again, as above, in a release build on GitHub's `ubuntu-24.04-arm` runner (aarch64, four cores, 16 GB of memory), through the manual workflow `Load (arm64)`, 2026-11-21. The hot script calibrated there at **96 rounds for 2.8 ms** alone (1,191 operations a hook).
 
 **This machine's timers are exact:** with nothing running, a heartbeat came 0.6 to 1.5 ms late and a step 1.1 to 1.4 ms, where the development PC's were 4 to 16 ms. So every "late" below is the load's own.
 
@@ -289,7 +289,7 @@ One change turned nothing red and was removed instead: a second `ReleaseAll` at 
 - **Hooks are slower beside each other here.** The hot hook takes 2.8 ms alone and 2.8 ms with one at a time (one worker, or two in turns), but 3.5 to 4.1 ms when several run at once: on cores that share their caches, the costliest operation the engine has slows down when it runs on every core. So on four workers most hot scripts crossed a budget, a hook's 5 ms as they came due and the second's 20 ms in turns, and stopped, as a script past its budget does; on one and two workers in turns none did. The examples, four hundred times under the budgets, never stopped anywhere.
 - **Nothing here changes a decision.** The turns keep the agent's own work on time, which is what they're for; a script planned to the edge of its budget stops on a busy agent, as the budgets say (A1). The reference's scripting guide should say so: a script that needs more than a few milliseconds a hook doesn't belong in a hook.
 
-**The real stream beside real scripts** (group E's `load_scripted_bots_on_the_real_stream`, [ADR-0044](0044-scripted-modes-on-the-wire-the-server-and-the-agent.md), E12): its arm64 numbers are in group E's pull request and in ADR-0044.
+**The real stream beside real scripts** (group E's `load_scripted_bots_on_the_real_stream`, [ADR-0044](0044-scripted-modes-on-the-wire-the-server-and-the-agent.md), E12), on the same runner: 200 bots on one managed agent, its stream to the real server, its heartbeat measured as the stream's longest silence past a 1 s interval. **1.7 ms with every bot on `afk`, 2.3 ms at most with every bot hot:** the agent's own heartbeat isn't later beside scripts.
 
 ## Known limits
 - **The agent's stream itself** was measured beside scripts by group E ([ADR-0044](0044-scripted-modes-on-the-wire-the-server-and-the-agent.md), E12).

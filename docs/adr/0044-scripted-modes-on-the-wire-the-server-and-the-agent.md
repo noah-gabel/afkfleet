@@ -82,7 +82,16 @@ A `[[standalone.bots]]` entry takes `script = { file = "/abs/path.rhai", … }` 
 | A quarter hot | 6,525 | 71 % | 1.012 s | 2 |
 | All hot | 15,906 | 238 % | 1.016 s | 0 |
 
-**The heartbeat isn't later beside scripts than without them:** at most 17 ms past the interval in every phase, which is this PC's own timer step (15.6 ms on Windows), already there with no script at all. No bot went offline and the stream never ended. The arm64 run's numbers are in [ADR-0043](0043-the-script-runner-and-hooks-on-the-async-workers.md#what-was-measured-on-linuxarm64).
+**On GitHub's linux/arm64 runner** (`ubuntu-24.04-arm`, four cores, a release build, the manual workflow `Load (arm64)`, 2026-11-21):
+
+| Phase | Hooks in 20 s | CPU | The longest silence | Scripts stopped |
+|---|---|---|---|---|
+| Every bot on `afk` | 0 | 2 % of one core | 1.0017 s | 0 |
+| The four examples | 3,515 | 10 % | 1.0017 s | 0 |
+| A quarter hot | 4,121 | 31 % | 1.0018 s | 32 |
+| All hot | 2,307 | 51 % | 1.0023 s | 138 |
+
+**The heartbeat isn't later beside scripts than without them.** On the development PC it was at most 17 ms past the interval in every phase, which is its own timer step (15.6 ms on Windows), already there with no script at all. On arm64, whose timers are exact, it was 1.7 ms past it with every bot on `afk` and **2.3 ms at most with every bot hot**, 1.0 to 1.3 ms at the median of each phase. No bot went offline and the stream never ended. On arm64 most hot scripts stopped for their budgets, as [ADR-0043](0043-the-script-runner-and-hooks-on-the-async-workers.md#what-was-measured-on-linuxarm64) found there: a hot hook is slower when several run at once on that machine. The examples never stopped.
 
 ## Deviations
 - **The bot's page saying its agent must be updated (D13)** is left to the bot's page itself (P15.26, group F): a scripted bot that no agent can run waits as `awaiting_agent`, and the API's own reason for it comes with the text that shows it. Setting the mode on a bot whose agent is live and too old already answers 409 `agent_too_old`, with the message "This bot's agent runs a version that can't run this scripted mode. Update the agent first."
