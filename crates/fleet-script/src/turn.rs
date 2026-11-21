@@ -21,7 +21,7 @@ use fleet_core::{text, time};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 
-use crate::action::{Action, PressKind};
+use crate::action::{Action, Asked, PressKind, Refused, note};
 use crate::compile::Program;
 use crate::error::Misuse;
 use crate::instance::{Moment, Presence};
@@ -123,6 +123,8 @@ pub(crate) struct Turn {
     stopping: bool,
     /// Whether `on_stop` has sent its one message.
     sent_at_stop: bool,
+    /// What the hook was refused, for whoever runs the script.
+    refused: Vec<Refused>,
 }
 
 impl Turn {
@@ -144,6 +146,7 @@ impl Turn {
             command: None,
             stopping: false,
             sent_at_stop: false,
+            refused: Vec::new(),
         }
     }
 
@@ -158,17 +161,29 @@ impl Turn {
         self.command = None;
         self.stopping = stopping;
         self.sent_at_stop = false;
+        self.refused.clear();
     }
 
-    /// Ends the hook: what it asked for, and the limiter back.
-    pub(crate) fn end(&mut self) -> (Vec<Action>, ActionLimiter) {
+    /// Ends the hook: what it asked for, the limiter back, and what it
+    /// was refused.
+    pub(crate) fn end(&mut self) -> (Vec<Action>, ActionLimiter, Vec<Refused>) {
         self.facts = None;
         self.command = None;
         self.stopping = false;
         (
             core::mem::take(&mut self.actions),
             core::mem::take(&mut self.limiter),
+            core::mem::take(&mut self.refused),
         )
+    }
+
+    /// Notes a refusal of `asked` for whoever runs the script, and hands
+    /// the answer on to the script.
+    fn noted(&mut self, asked: Asked, answer: Answer) -> Answer {
+        if let Err(reason) = answer {
+            note(&mut self.refused, asked, reason, 1);
+        }
+        answer
     }
 
     /// The facts of the running hook.
@@ -241,6 +256,12 @@ impl Turn {
 
     /// Presses `input` and lets go at once.
     pub(crate) fn tap(&mut self, input: Input) -> Answer {
+        let answer = self.try_tap(input);
+        self.noted(Asked::Press, answer)
+    }
+
+    /// [`tap`](Self::tap), before its refusal is noted.
+    fn try_tap(&mut self, input: Input) -> Answer {
         self.can_act()?;
         if self.leashed(input) {
             return Err(Refusal::Leashed);
@@ -267,7 +288,8 @@ impl Turn {
         if length == HoldLength::UntilUsed && input != Input::Mouse(MouseButton::Right) {
             return Err(Misuse::RightButtonOnly);
         }
-        Ok(self.held(input, length))
+        let answer = self.held(input, length);
+        Ok(self.noted(Asked::Press, answer))
     }
 
     /// [`hold`](Self::hold), for an input that can be held that way.
@@ -324,6 +346,12 @@ impl Turn {
 
     /// Looks in a direction; `None` for an angle that is no number.
     pub(crate) fn look_at(&mut self, yaw: Option<f64>, pitch: Option<f64>) -> Answer {
+        let answer = self.try_look_at(yaw, pitch);
+        self.noted(Asked::Look, answer)
+    }
+
+    /// [`look_at`](Self::look_at), before its refusal is noted.
+    fn try_look_at(&mut self, yaw: Option<f64>, pitch: Option<f64>) -> Answer {
         let (Some(yaw), Some(pitch)) = (yaw, pitch) else {
             return Err(Refusal::BadValue);
         };
@@ -338,6 +366,12 @@ impl Turn {
 
     /// Turns by an amount; `None` for an angle that is no number.
     pub(crate) fn look_turn(&mut self, yaw: Option<f64>, pitch: Option<f64>) -> Answer {
+        let answer = self.try_look_turn(yaw, pitch);
+        self.noted(Asked::Look, answer)
+    }
+
+    /// [`look_turn`](Self::look_turn), before its refusal is noted.
+    fn try_look_turn(&mut self, yaw: Option<f64>, pitch: Option<f64>) -> Answer {
         let (Some(yaw), Some(pitch)) = (yaw, pitch) else {
             return Err(Refusal::BadValue);
         };
@@ -349,6 +383,12 @@ impl Turn {
 
     /// Looks at a point; `None` for coordinates that are no numbers.
     pub(crate) fn look_at_position(&mut self, point: Option<Position>) -> Answer {
+        let answer = self.try_look_at_position(point);
+        self.noted(Asked::Look, answer)
+    }
+
+    /// [`look_at_position`](Self::look_at_position), before its refusal is noted.
+    fn try_look_at_position(&mut self, point: Option<Position>) -> Answer {
         let point = point.ok_or(Refusal::BadValue)?;
         self.can_act()?;
         self.limit(Limited::LookAt)?;
@@ -358,6 +398,12 @@ impl Turn {
 
     /// Selects a hotbar slot; `None` for a number that is not 1 to 9.
     pub(crate) fn select(&mut self, slot: Option<HotbarSlot>) -> Answer {
+        let answer = self.try_select(slot);
+        self.noted(Asked::Hotbar, answer)
+    }
+
+    /// [`select`](Self::select), before its refusal is noted.
+    fn try_select(&mut self, slot: Option<HotbarSlot>) -> Answer {
         let slot = slot.ok_or(Refusal::BadValue)?;
         self.can_act()?;
         self.limit(Limited::Hotbar)?;
@@ -368,6 +414,12 @@ impl Turn {
     /// Gets into the nearest free vehicle of `kind`; `None` for text that
     /// names no kind.
     pub(crate) fn mount(&mut self, kind: Option<Identifier>) -> Answer {
+        let answer = self.try_mount(kind);
+        self.noted(Asked::Vehicle, answer)
+    }
+
+    /// [`mount`](Self::mount), before its refusal is noted.
+    fn try_mount(&mut self, kind: Option<Identifier>) -> Answer {
         let kind = kind
             .filter(|kind| kind.as_str() == MOUNTABLE)
             .ok_or(Refusal::BadValue)?;
@@ -379,6 +431,12 @@ impl Turn {
 
     /// Gets out of the vehicle.
     pub(crate) fn dismount(&mut self) -> Answer {
+        let answer = self.try_dismount();
+        self.noted(Asked::Vehicle, answer)
+    }
+
+    /// [`dismount`](Self::dismount), before its refusal is noted.
+    fn try_dismount(&mut self) -> Answer {
         self.can_act()?;
         self.limit(Limited::Dismount)?;
         self.actions.push(Action::Dismount);
@@ -391,6 +449,16 @@ impl Turn {
     /// # Errors
     /// [`Misuse::UnknownMessage`] for a key the mode does not declare.
     pub(crate) fn send(
+        &mut self,
+        key: Option<&str>,
+        values: Option<&[(String, Value)]>,
+    ) -> Result<Answer, Misuse> {
+        let answer = self.try_send(key, values)?;
+        Ok(self.noted(Asked::Send, answer))
+    }
+
+    /// [`send`](Self::send), before its refusal is noted.
+    fn try_send(
         &mut self,
         key: Option<&str>,
         values: Option<&[(String, Value)]>,
@@ -461,6 +529,16 @@ impl Turn {
         key: Option<&str>,
         window: Option<Duration>,
     ) -> Result<Answer, Misuse> {
+        let answer = self.try_expect(key, window)?;
+        Ok(self.noted(Asked::Expect, answer))
+    }
+
+    /// [`expect`](Self::expect), before its refusal is noted.
+    fn try_expect(
+        &mut self,
+        key: Option<&str>,
+        window: Option<Duration>,
+    ) -> Result<Answer, Misuse> {
         let program = Arc::clone(&self.program);
         let pattern = key
             .and_then(|key| program.script().patterns().get(key))
@@ -497,6 +575,17 @@ impl Turn {
         name: Option<TimerName>,
         repeats: bool,
     ) -> Answer {
+        let answer = self.try_timer(length, name, repeats);
+        self.noted(Asked::Timer, answer)
+    }
+
+    /// [`timer`](Self::timer), before its refusal is noted.
+    fn try_timer(
+        &mut self,
+        length: Option<Duration>,
+        name: Option<TimerName>,
+        repeats: bool,
+    ) -> Answer {
         let (Some(length), Some(name)) = (length, name) else {
             return Err(Refusal::BadValue);
         };
@@ -526,6 +615,12 @@ impl Turn {
     /// Writes a line into the log, one line of at most
     /// [`limits::LOG_LINE_CHARS`] characters; a longer one is cut.
     pub(crate) fn log(&mut self, line: &str) -> Answer {
+        let answer = self.try_log(line);
+        self.noted(Asked::Log, answer)
+    }
+
+    /// [`log`](Self::log), before its refusal is noted.
+    fn try_log(&mut self, line: &str) -> Answer {
         if !self.log.take(self.now) {
             return Err(Refusal::TooSoon);
         }

@@ -16,7 +16,7 @@
 //!   what it holds down, its budgets. Its caller hands it events
 //!   ([`Instance::handle`]) and wakes it when it asked
 //!   ([`Instance::wake`]); each call runs hooks to their end and returns
-//!   the [`Action`]s they asked for.
+//!   the [`Action`]s they asked for, and what they were [`Refused`].
 //! - [`API`] describes every object a script uses, for the reference and
 //!   the editor, and [`EXAMPLES`] are the complete scripts the reference
 //!   shows.
@@ -51,7 +51,7 @@ mod state;
 mod timers;
 mod turn;
 
-pub use action::{Action, PressKind};
+pub use action::{Action, Asked, PressKind, Refused};
 pub use api::describe::{API, Member, MemberKind, Object, reasons};
 pub use compile::{Program, compile};
 pub use error::{

@@ -415,6 +415,39 @@ impl Snapshot {
         }
     }
 
+    /// What a hook is shown of a bot that is in no world: a bot at the
+    /// origin of a world without a name (`minecraft:unknown`), without
+    /// health, with an empty hand and nothing around it.
+    ///
+    /// Whoever runs a script hands it this when the session can't say what
+    /// the bot sees and never could, together with a presence that
+    /// refuses every action. Nothing in it is a fact about the game.
+    #[must_use]
+    pub fn nowhere() -> Self {
+        let bot = BotFacts {
+            health: 0.0,
+            food: 0,
+            position: Position {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            yaw: 0.0,
+            pitch: 0.0,
+            dimension: Identifier(format!("{}:unknown", Identifier::DEFAULT_NAMESPACE)),
+            riding: None,
+            held: None,
+            selected: HotbarSlot::FIRST,
+            looking_at: None,
+        };
+        let blocks = Blocks::read(BlockPosition { x: 0, y: 0, z: 0 }, |_| None);
+        Self {
+            bot,
+            entities: Vec::new(),
+            blocks,
+        }
+    }
+
     /// The bot.
     #[must_use]
     pub const fn bot(&self) -> &BotFacts {
@@ -786,6 +819,23 @@ mod tests {
         assert_eq!(seen.bot(), &bot);
         assert_eq!(seen.blocks(), &floor());
         assert_eq!(seen.entities(), []);
+    }
+
+    #[test]
+    fn a_bot_nowhere_is_at_the_origin_of_a_world_without_a_name_and_sees_nothing() {
+        let seen = Snapshot::nowhere();
+
+        assert_eq!(seen.bot().position, at(0.0, 0.0, 0.0));
+        // The name is an identifier like any other.
+        assert_eq!(seen.bot().dimension, id("minecraft:unknown"));
+        assert_eq!(seen.bot().dimension.as_str(), "minecraft:unknown");
+        assert_eq!(seen.bot().held, None);
+        assert_eq!(seen.bot().riding, None);
+        assert_eq!(seen.bot().looking_at, None);
+        assert_eq!(seen.bot().selected, HotbarSlot::FIRST);
+        assert_eq!(seen.entities(), []);
+        assert_eq!(seen.blocks().get(BlockPosition { x: 0, y: 0, z: 0 }), None);
+        assert_eq!(seen, Snapshot::nowhere());
     }
 
     #[test]

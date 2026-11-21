@@ -12,7 +12,7 @@ use fleet_core::script::{
 };
 use rhai::{CallFnOptions, Dynamic, Engine, EvalAltResult, FLOAT, Map, Position, Scope};
 
-use crate::action::Action;
+use crate::action::{Action, Refused, note};
 use crate::api;
 use crate::budget::SecondBudget;
 use crate::compile::{Program, message, position};
@@ -89,6 +89,10 @@ pub struct Ran {
     pub next_wake: Option<DateTime<Utc>>,
     /// How it ended.
     pub outcome: Outcome,
+    /// What the script asked for in this call and wasn't given: each kind
+    /// and reason once, with how often. The script got every one as a
+    /// result; this is for its log and the runtime's counters.
+    pub refused: Vec<Refused>,
 }
 
 /// Where an instance is in its life.
@@ -307,6 +311,8 @@ pub struct Instance {
     status: Status,
     /// Whether the bot could act when the instance last heard.
     presence: Presence,
+    /// What the hooks of the call that's running were refused.
+    refused: Vec<Refused>,
 }
 
 impl fmt::Debug for Instance {
@@ -399,6 +405,7 @@ impl Instance {
             budget: SecondBudget::default(),
             status: Status::Running,
             presence: Presence::NotInWorld,
+            refused: Vec::new(),
         }
     }
 
@@ -453,6 +460,7 @@ impl Instance {
             actions,
             next_wake: self.wake_after(moment.now),
             outcome,
+            refused: core::mem::take(&mut self.refused),
         }
     }
 
@@ -492,6 +500,7 @@ impl Instance {
             actions,
             next_wake: self.wake_after(moment.now),
             outcome: Outcome::Ran { operations: total },
+            refused: core::mem::take(&mut self.refused),
         }
     }
 
@@ -572,6 +581,7 @@ impl Instance {
             actions: Vec::new(),
             next_wake: None,
             outcome: Outcome::Over,
+            refused: Vec::new(),
         }
     }
 
@@ -597,6 +607,7 @@ impl Instance {
             actions: vec![Action::ReleaseAll],
             next_wake: None,
             outcome: Outcome::Stopped(error),
+            refused: core::mem::take(&mut self.refused),
         }
     }
 
@@ -617,6 +628,7 @@ impl Instance {
             actions,
             next_wake: None,
             outcome: Outcome::Ended { error },
+            refused: core::mem::take(&mut self.refused),
         }
     }
 
@@ -683,8 +695,17 @@ impl Instance {
             }
         };
 
-        let (actions, back) = lock(&self.turn).end();
+        let (actions, back, refused) = lock(&self.turn).end();
         *limiter = back;
+        // Told to the runtime whether the hook goes on to fail or not.
+        for Refused {
+            asked,
+            reason,
+            times,
+        } in refused
+        {
+            note(&mut self.refused, asked, reason, times);
+        }
         // A hook that ran out of its budget counted one operation more
         // than it was allowed.
         let operations = self

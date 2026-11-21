@@ -12,6 +12,7 @@ use fleet_core::mc::{
     Guards, Liveness, Observation, SessionError, SessionEvent, SessionEvents, SessionHandle,
 };
 use fleet_core::mode::GameAction;
+use fleet_core::script::{Input, MouseButton};
 use tokio::sync::Notify;
 
 /// Something the code under test did in a session, in the order it happened.
@@ -73,6 +74,7 @@ struct State {
     withholding: bool,
     hung: bool,
     failing_actions: Option<SessionError>,
+    failing_performs: Option<SessionError>,
     failing_chat: Option<SessionError>,
     failing_respawn: Option<SessionError>,
     /// How long [`SessionHandle::disconnect`] takes after it has closed the
@@ -85,6 +87,9 @@ struct State {
     /// What [`SessionHandle::observe`] answers with, once the test has
     /// shown the session something.
     shown: Option<Observation>,
+    /// The keys and buttons a scripted mode holds down, in the order they
+    /// went down.
+    held: Vec<Input>,
 }
 
 /// Where a session is in its life.
@@ -147,6 +152,27 @@ impl State {
         true
     }
 
+    /// Keeps what a scripted mode's `action` holds down, as fleet-mc's
+    /// own record of it does: a press of an input that can be held puts it
+    /// down, a release lets it go, and a tap holds nothing.
+    fn hold(&mut self, action: GameAction) {
+        let right = Input::Mouse(MouseButton::Right);
+        match action {
+            GameAction::Press(input) if input.can_be_held() => self.put_down(input),
+            GameAction::HoldUntilUsed => self.put_down(right),
+            GameAction::Release(input) => self.held.retain(|held| *held != input),
+            GameAction::ReleaseKeys => self.held.retain(|held| matches!(held, Input::Mouse(_))),
+            GameAction::ReleaseAll => self.held.clear(),
+            _ => {}
+        }
+    }
+
+    fn put_down(&mut self, input: Input) {
+        if !self.held.contains(&input) {
+            self.held.push(input);
+        }
+    }
+
     /// Whether a handle call runs now, and the error it fails with if not.
     fn ready(&self) -> Result<(), SessionError> {
         // A torn-down session answers at once, even when it hung: fleet-mc
@@ -189,6 +215,9 @@ impl Shared {
             {
                 return Err(error);
             }
+            if let (Performed::Action(_), Some(error)) = (&call, state.failing_performs) {
+                return Err(error);
+            }
             if let (Performed::Chat(_), Some(error)) = (&call, state.failing_chat) {
                 return Err(error);
             }
@@ -196,6 +225,9 @@ impl Shared {
                 return Err(error);
             }
             let respawn = matches!(call, Performed::Respawn);
+            if let Performed::Action(action) = &call {
+                state.hold(*action);
+            }
             state.log.push(call);
             respawn && state.respawn_asked()
         };
@@ -225,6 +257,7 @@ impl Shared {
             let mut state = self.lock();
             if state.phase != Phase::TornDown {
                 state.phase = Phase::TornDown;
+                state.held.clear();
                 state.queue.clear();
                 state.log.push(Performed::Disconnect);
             }
@@ -402,11 +435,17 @@ impl SessionController {
                             SessionEvent::Died => state.death = Death::Queued,
                             SessionEvent::Disconnected(_) | SessionEvent::ConnectionFailed(_) => {
                                 state.phase = Phase::Ended;
+                                state.held.clear();
                             }
-                            SessionEvent::Chat(_)
-                            | SessionEvent::Respawned
-                            | SessionEvent::WorldChanged
-                            | SessionEvent::LetGo(_) => {}
+                            // As fleet-mc does: a world change lets go of
+                            // everything, and a let-go of its own inputs
+                            // (ADR-0042, G1, G6).
+                            SessionEvent::WorldChanged => state.held.clear(),
+                            SessionEvent::LetGo(reason) => {
+                                let gone = reason.inputs();
+                                state.held.retain(|held| !gone.contains(held));
+                            }
+                            SessionEvent::Chat(_) | SessionEvent::Respawned => {}
                         }
                         state.queue.push_back(event);
                         EmitOutcome::Queued
@@ -462,9 +501,10 @@ impl SessionController {
         state.frozen_packet = Some(state.frozen_packet.unwrap_or_else(now));
     }
 
-    /// Makes [`SessionHandle::perform`] fail with `error` until
-    /// [`succeed_actions`](Self::succeed_actions). Chat and respawns still
-    /// work.
+    /// Makes [`SessionHandle::perform`], [`SessionHandle::set_guards`] and
+    /// [`SessionHandle::observe`] fail with `error` until
+    /// [`succeed_actions`](Self::succeed_actions), as a session whose job
+    /// queue is full or that doesn't answer. Chat and respawns still work.
     pub fn fail_actions(&self, error: SessionError) {
         self.shared.lock().failing_actions = Some(error);
     }
@@ -472,6 +512,20 @@ impl SessionController {
     /// Lets [`SessionHandle::perform`] succeed again.
     pub fn succeed_actions(&self) {
         self.shared.lock().failing_actions = None;
+    }
+
+    /// Makes [`SessionHandle::perform`] alone fail with `error` until
+    /// [`succeed_performs`](Self::succeed_performs): the session still
+    /// takes its guards and still says what the bot sees, which
+    /// [`fail_actions`](Self::fail_actions) stops too.
+    pub fn fail_performs(&self, error: SessionError) {
+        self.shared.lock().failing_performs = Some(error);
+    }
+
+    /// Lets [`SessionHandle::perform`] succeed again, unless
+    /// [`fail_actions`](Self::fail_actions) still holds it.
+    pub fn succeed_performs(&self) {
+        self.shared.lock().failing_performs = None;
     }
 
     /// Makes [`SessionHandle::send_chat`] fail with `error` until
@@ -532,6 +586,15 @@ impl SessionController {
     #[must_use]
     pub fn log(&self) -> Vec<Performed> {
         self.shared.lock().log.clone()
+    }
+
+    /// Returns the keys and buttons a scripted mode holds down in this
+    /// session right now, in the order they went down: what its presses
+    /// put down and no release, world change, let-go or end of the session
+    /// has let go of since.
+    #[must_use]
+    pub fn held(&self) -> Vec<Input> {
+        self.shared.lock().held.clone()
     }
 
     /// Returns how many chat events were dropped because the queue was full.
