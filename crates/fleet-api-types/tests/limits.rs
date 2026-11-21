@@ -13,7 +13,7 @@ use std::fs;
 use std::path::Path;
 
 use fleet_api_types::accounts::MC_NAME_MAX_CHARS;
-use fleet_api_types::app::{CA_PEM_MAX_BYTES, SERVER_URL_MAX_BYTES};
+use fleet_api_types::app::{CA_PEM_MAX_BYTES, SCRIPT_CHECK_MAX_BYTES, SERVER_URL_MAX_BYTES};
 use fleet_api_types::auth::{NEW_PASSWORD_MAX_CHARS, PASSWORD_MAX_CHARS, USERNAME_MAX_CHARS};
 use fleet_api_types::bots::SERVER_ADDRESS_MAX_CHARS;
 use fleet_api_types::chat::CHAT_MESSAGE_MAX_UNITS;
@@ -44,6 +44,7 @@ fn expected() -> BTreeMap<&'static str, u64> {
         ("PAGE_MAX", u64::from(PAGE_MAX)),
         ("SERVER_URL_MAX_BYTES", usize(SERVER_URL_MAX_BYTES)),
         ("CA_PEM_MAX_BYTES", usize(CA_PEM_MAX_BYTES)),
+        ("SCRIPT_CHECK_MAX_BYTES", usize(SCRIPT_CHECK_MAX_BYTES)),
         ("STEP_UP_WINDOW_SECS", STEP_UP_WINDOW.as_secs()),
         ("MC_NAME_MIN_CHARS", usize(McUsername::MIN_LEN)),
         ("MC_NAME_MAX_CHARS", usize(MC_NAME_MAX_CHARS)),

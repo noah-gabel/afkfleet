@@ -20,7 +20,7 @@ use afkfleet_desktop::keychain::KeychainFactory;
 use afkfleet_desktop::profile::PROFILE_FILE;
 use afkfleet_desktop::state::{AppState, LinkOpener, OpenError};
 use fleet_api_types::app::{
-    AppVersion, CommandError, LogoutResponse, ServerProfileState, UpdateCheck,
+    AppVersion, CommandError, LogoutResponse, ScriptCheck, ServerProfileState, UpdateCheck,
 };
 use fleet_client::VerifiedLink;
 use rstest::rstest;
@@ -216,7 +216,7 @@ fn every_contract_command_passes_the_acl_and_answers_as_the_contract_says() {
             (_, _, answer) => panic!("{command}: unexpected answer {answer:?}"),
         }
     }
-    assert_eq!(entries.len(), 71);
+    assert_eq!(entries.len(), 72);
 }
 
 /// The version the contract's answers name. The TypeScript tests' fakes answer it; the
@@ -259,6 +259,11 @@ fn assert_ok(command: &str, expected: &Value, value: &Value) {
         "app_version" => assert_eq!(
             serde_json::from_value::<AppVersion>(value.clone()).unwrap(),
             serde_json::from_value::<AppVersion>(expected.clone()).unwrap(),
+            "{command}"
+        ),
+        "check_script" => assert_eq!(
+            serde_json::from_value::<ScriptCheck>(value.clone()).unwrap(),
+            serde_json::from_value::<ScriptCheck>(expected.clone()).unwrap(),
             "{command}"
         ),
         other => panic!("{other}: the contract expects no Ok answer from it"),

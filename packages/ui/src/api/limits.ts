@@ -29,3 +29,4 @@ export const CHAT_FORMATS_MAX = 8;
 export const CHAT_FORMAT_MAX_CHARS = 64;
 export const CHAT_PREVIEW_LINE_MAX_CHARS = 1024;
 export const SERVER_SETTINGS_PAGE_MAX = 10;
+export const SCRIPT_CHECK_MAX_BYTES = 65536;

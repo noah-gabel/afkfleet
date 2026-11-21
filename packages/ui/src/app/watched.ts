@@ -164,6 +164,8 @@ export function watched(client: ApiClient, stores: AppStores, events: WatchEvent
     installUpdate: () => client.installUpdate(),
     // Not watched: the app answers it from its own version, with no network call (U37).
     appVersion: () => client.appVersion(),
+    // Not watched: the app's Rust side answers it with no network call (ADR-0045).
+    checkScript: (request) => client.checkScript(request),
   };
 }
 

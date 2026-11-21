@@ -45,6 +45,7 @@ export function describeError(error: CommandError): string {
     case "update_install":
     case "no_update":
     case "update_busy":
+    case "script_check":
       return error.message;
     default: {
       // Every code is handled: a new one is a compile error here.

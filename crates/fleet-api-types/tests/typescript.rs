@@ -37,7 +37,7 @@ fn exported() -> (TempDir, BTreeMap<String, String>) {
 }
 
 /// Every file the export writes, sorted: one per type.
-const EXPORTED_FILES: [&str; 154] = [
+const EXPORTED_FILES: [&str; 162] = [
     "AccountKind.ts",
     "AccountLabel.ts",
     "AccountPage.ts",
@@ -163,6 +163,13 @@ const EXPORTED_FILES: [&str; 154] = [
     "RegisterRequest.ts",
     "RegisterResponse.ts",
     "SafeInt.ts",
+    "ScriptApi.ts",
+    "ScriptApiMember.ts",
+    "ScriptApiMemberKind.ts",
+    "ScriptApiObject.ts",
+    "ScriptCheck.ts",
+    "ScriptCheckRequest.ts",
+    "ScriptExample.ts",
     "ScriptHookName.ts",
     "ScriptLogKind.ts",
     "ScriptLogLine.ts",
@@ -192,6 +199,7 @@ const EXPORTED_FILES: [&str; 154] = [
     "UserResponse.ts",
     "UserRole.ts",
     "WindowTheme.ts",
+    "script-api.ts",
 ];
 
 #[test]
@@ -203,7 +211,7 @@ fn the_export_writes_one_file_per_type() {
 
 /// The desktop app's IPC types (ADR-0017): never on the HTTP wire, so the
 /// `OpenAPI` document leaves them out.
-const APP_TYPES: [&str; 21] = [
+const APP_TYPES: [&str; 28] = [
     "ApiErrorDetails.ts",
     "AppVersion.ts",
     "BotCommandEffect.ts",
@@ -218,6 +226,13 @@ const APP_TYPES: [&str; 21] = [
     "LoginStepResponse.ts",
     "LogoutResponse.ts",
     "ProfileUnreadable.ts",
+    "ScriptApi.ts",
+    "ScriptApiMember.ts",
+    "ScriptApiMemberKind.ts",
+    "ScriptApiObject.ts",
+    "ScriptCheck.ts",
+    "ScriptCheckRequest.ts",
+    "ScriptExample.ts",
     "ServerProfileRequest.ts",
     "ServerProfileResponse.ts",
     "ServerProfileState.ts",
@@ -239,18 +254,39 @@ fn the_app_export_adds_exactly_the_ipc_types_to_the_apis() {
 
     let only_app: Vec<&String> = app.keys().filter(|name| !api.contains_key(*name)).collect();
     let combined: BTreeMap<&String, &String> = api.iter().chain(app.iter()).collect();
+    let types: BTreeMap<&String, &String> = files
+        .iter()
+        .filter(|(name, _)| name.as_str() != typescript::SCRIPT_API_FILE)
+        .collect();
 
     assert_eq!(only_app, APP_TYPES);
-    assert_eq!(combined, files.iter().collect::<BTreeMap<_, _>>());
+    assert_eq!(combined, types);
 }
 
 #[test]
-fn every_generated_file_starts_with_ts_rss_header() {
+fn every_generated_file_starts_with_ts_rss_header_but_the_description_with_its_own() {
     let (_scratch, files) = exported();
 
     for (name, text) in &files {
-        assert!(text.starts_with(TS_RS_HEADER), "{name}:\n{text}");
+        let header = if name == typescript::SCRIPT_API_FILE {
+            typescript::DATA_HEADER
+        } else {
+            TS_RS_HEADER
+        };
+        assert!(text.starts_with(header), "{name}:\n{text}");
     }
+}
+
+/// Windows' file system ignores case, so two names that differ only in it
+/// would be one file there, the second written over the first.
+#[test]
+fn no_two_exported_names_differ_only_in_case() {
+    let lower: std::collections::BTreeSet<String> = EXPORTED_FILES
+        .iter()
+        .map(|name| name.to_lowercase())
+        .collect();
+
+    assert_eq!(lower.len(), EXPORTED_FILES.len());
 }
 
 #[test]

@@ -82,6 +82,7 @@ const COMMANDS: &[&str] = &[
     "check_update",
     "install_update",
     "app_version",
+    "check_script",
 ];
 
 fn main() -> Result<(), Box<dyn Error>> {

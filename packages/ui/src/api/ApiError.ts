@@ -42,6 +42,7 @@ const CODES: Record<CommandErrorCode, true> = {
   update_install: true,
   no_update: true,
   update_busy: true,
+  script_check: true,
 };
 
 /** `invalid_input`'s fixed sentence: `CommandErrorCode::InvalidInput.message()`'s. */

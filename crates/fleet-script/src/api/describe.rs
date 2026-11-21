@@ -29,6 +29,10 @@ pub struct Member {
     pub signature: &'static str,
     /// What it does or is, in a line.
     pub summary: &'static str,
+    /// The object of this API that a property is, when it's one: each of
+    /// `keys`' keys and `mouse`'s buttons is an `input`, so the editor knows
+    /// what follows `keys.forward.` (Plan.md P15.25).
+    pub object: Option<&'static str>,
 }
 
 /// An object of the API, or a group of names that belong together.
@@ -49,6 +53,7 @@ const fn method(name: &'static str, signature: &'static str, summary: &'static s
         kind: MemberKind::Method,
         signature,
         summary,
+        object: None,
     }
 }
 
@@ -58,6 +63,18 @@ const fn property(name: &'static str, summary: &'static str) -> Member {
         kind: MemberKind::Property,
         signature: name,
         summary,
+        object: None,
+    }
+}
+
+/// A key or a mouse button: a property that is an `input`.
+const fn input(name: &'static str, summary: &'static str) -> Member {
+    Member {
+        name,
+        kind: MemberKind::Property,
+        signature: name,
+        summary,
+        object: Some("input"),
     }
 }
 
@@ -67,6 +84,7 @@ const fn hook(hook: Hook, signature: &'static str, summary: &'static str) -> Mem
         kind: MemberKind::Hook,
         signature,
         summary,
+        object: None,
     }
 }
 
@@ -77,16 +95,16 @@ pub const API: &[Object] = &[
         name: "keys",
         summary: "The keys of a vanilla keyboard.",
         members: &[
-            property("forward", "W: walk forward."),
-            property("back", "S: walk back."),
-            property("left", "A: strafe left."),
-            property("right", "D: strafe right."),
-            property("jump", "Space."),
-            property("sneak", "Shift."),
-            property("sprint", "Ctrl."),
-            property("drop", "Q: drops one of the held item. Tap only."),
-            property("drop_stack", "Ctrl+Q: drops the held stack. Tap only."),
-            property(
+            input("forward", "W: walk forward."),
+            input("back", "S: walk back."),
+            input("left", "A: strafe left."),
+            input("right", "D: strafe right."),
+            input("jump", "Space."),
+            input("sneak", "Shift."),
+            input("sprint", "Ctrl."),
+            input("drop", "Q: drops one of the held item. Tap only."),
+            input("drop_stack", "Ctrl+Q: drops the held stack. Tap only."),
+            input(
                 "swap_offhand",
                 "F: swaps the held item with the offhand's. Tap only.",
             ),
@@ -97,8 +115,8 @@ pub const API: &[Object] = &[
         name: "mouse",
         summary: "The two mouse buttons.",
         members: &[
-            property("left", "Attack; held on a block, mine."),
-            property("right", "Use."),
+            input("left", "Attack; held on a block, mine."),
+            input("right", "Use."),
         ],
     },
     Object {
@@ -390,6 +408,49 @@ mod tests {
         for object in API {
             let members: BTreeSet<&str> = object.members.iter().map(|member| member.name).collect();
             assert_eq!(members.len(), object.members.len(), "{}", object.name);
+        }
+    }
+
+    #[test]
+    fn every_key_and_mouse_button_is_an_input() {
+        let inputs: Vec<(&str, &str)> = API
+            .iter()
+            .flat_map(|object| {
+                object
+                    .members
+                    .iter()
+                    .filter(|member| member.object == Some("input"))
+                    .map(|member| (object.name, member.name))
+            })
+            .collect();
+        let mut expected: Vec<(&str, &str)> =
+            Key::ALL.iter().map(|key| ("keys", key.name())).collect();
+        expected.extend([("mouse", "left"), ("mouse", "right")]);
+
+        assert_eq!(inputs, expected);
+    }
+
+    #[test]
+    fn a_member_that_is_an_object_is_a_property_and_names_one_the_api_has() {
+        for object in API {
+            for member in object.members {
+                if let Some(name) = member.object {
+                    assert_eq!(
+                        member.kind,
+                        MemberKind::Property,
+                        "{}.{}",
+                        object.name,
+                        member.name
+                    );
+                    assert!(
+                        API.iter()
+                            .any(|known| known.name == name && known.name != object.name),
+                        "{}.{} is {name}",
+                        object.name,
+                        member.name
+                    );
+                }
+            }
         }
     }
 

@@ -74,6 +74,7 @@ import type { ModeStepRequest } from "@afkfleet/ui/generated/ModeStepRequest";
 import type { ModeVisibility } from "@afkfleet/ui/generated/ModeVisibility";
 import type { PreviewChatFormatsResponse } from "@afkfleet/ui/generated/PreviewChatFormatsResponse";
 import type { RegisterResponse } from "@afkfleet/ui/generated/RegisterResponse";
+import type { ScriptCheck } from "@afkfleet/ui/generated/ScriptCheck";
 import type { ServerProfileState } from "@afkfleet/ui/generated/ServerProfileState";
 import type { ServerSettingsPage } from "@afkfleet/ui/generated/ServerSettingsPage";
 import type { ServerSettingsResponse } from "@afkfleet/ui/generated/ServerSettingsResponse";
@@ -176,10 +177,34 @@ export const COMMANDS = [
   "check_update",
   "install_update",
   "app_version",
+  "check_script",
 ] as const;
 
 /** One command. */
 export type Command = (typeof COMMANDS)[number];
+
+/**
+ * The fake's stand-in for the app's compiler (ADR-0045): the first `kees`, a misspelled `keys`, is
+ * an undefined name at its place, in the compiler's words; any other text is clean. The real
+ * check is the desktop crate's, against fleet-script; this only lets a flow show a mark.
+ */
+function checkedScript(source: string): ScriptCheck {
+  const lines = source.split("\n");
+  for (const [index, line] of lines.entries()) {
+    const at = line.indexOf("kees");
+    if (at !== -1) {
+      return {
+        problem: {
+          path: "script.source",
+          message: "`kees` isn't defined",
+          line: index + 1,
+          column: at + 1,
+        },
+      };
+    }
+  }
+  return {};
+}
 
 /** What a command does: its value, or a refusal. */
 export type Outcome =
@@ -844,14 +869,16 @@ export class FakeBackend {
       return lasting;
     }
     // Not the theme's, which reaches no server, nor the profile, which only the app holds,
-    // nor the updater's, which ask GitHub (ADR-0022, S27), nor the app's version (U37).
+    // nor the updater's, which ask GitHub (ADR-0022, S27), nor the app's version (U37), nor a
+    // script's check, which the app answers itself (ADR-0045).
     if (
       this.#refusing !== null &&
       command !== "set_window_theme" &&
       command !== "server_profile" &&
       command !== "check_update" &&
       command !== "install_update" &&
-      command !== "app_version"
+      command !== "app_version" &&
+      command !== "check_script"
     ) {
       // The real logout ends the session in the app whatever the server does, and answers
       // that the server wasn't told (ADR-0022, S1).
@@ -2345,6 +2372,8 @@ export class FakeBackend {
         return this.#install === null ? value() : refused(this.#install);
       case "app_version":
         return value({ version: "0.1.0" });
+      case "check_script":
+        return value(checkedScript(String(request.source ?? "")));
       case "open_verification_link":
         if (this.#flow === null) {
           return refused("no_verification_link");

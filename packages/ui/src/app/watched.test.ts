@@ -181,6 +181,28 @@ describe("watched", () => {
     expect(events.sessionEnded).not.toHaveBeenCalled();
   });
 
+  it("leaves the banner and the session alone for a script's check: the app answers it (ADR-0045)", async () => {
+    let answer: "ok" | "no_session" = "ok";
+    const { client, stores, events } = setup({
+      checkScript: async () => {
+        if (answer === "no_session") {
+          throw fakeApiError("no_session");
+        }
+        return {};
+      },
+    });
+    stores.session.getState().signIn();
+    stores.connection.getState().fail("down");
+
+    await client.checkScript({ source: "" });
+    answer = "no_session";
+    await expect(client.checkScript({ source: "" })).rejects.toBeInstanceOf(ApiError);
+
+    expect(stores.connection.getState().status).toBe("down");
+    expect(events.recovered).not.toHaveBeenCalled();
+    expect(events.sessionEnded).not.toHaveBeenCalled();
+  });
+
   it("raises no banner for an update that can't reach GitHub", async () => {
     const { client, stores } = setup({
       checkUpdate: async () => {

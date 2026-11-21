@@ -33,6 +33,7 @@ use fleet_core::script::{
     ScriptError, ScriptLogLine as CoreLogLine, ScriptSource, ScriptSourceError,
     ScriptState as CoreState, TemplateError, ValueDraft, ValueKind, When, clean_source,
 };
+use fleet_script::CompileError;
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use ts_rs::TS;
@@ -40,6 +41,7 @@ use utoipa::openapi::RefOr;
 use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, Schema, Type};
 use utoipa::{PartialSchema as _, ToSchema};
 
+use crate::error::FieldError;
 use crate::int::{SafeInt, integer_schema};
 use crate::open::{Open, OpenEnum};
 use crate::text::BoundedText;
@@ -428,6 +430,26 @@ impl ScriptFieldError {
             ..self
         }
     }
+}
+
+impl From<ScriptFieldError> for FieldError {
+    /// The rule at its field, with its place when it has one: a 422's
+    /// field error, and what the app's own check of a script's text says.
+    fn from(error: ScriptFieldError) -> Self {
+        Self::new(&error.path, &error.message).at_place(error.line, error.column)
+    }
+}
+
+/// A script whose text isn't a program, as the caller's own mistake: a field
+/// error at `script.source` with the engine's message, its line and its
+/// column (ADR-0036, D14). The server's 422 at save and the app's check
+/// while a script is typed both say it through this, so they say the same.
+#[must_use]
+pub fn not_a_program(error: &CompileError) -> FieldError {
+    let (line, column) = error
+        .at
+        .map_or((None, None), |at| (Some(at.line), Some(at.column)));
+    FieldError::new("script.source", &error.kind.to_string()).at_place(line, column)
 }
 
 /// The field message of a field a type needs and a request left out.
@@ -1603,5 +1625,56 @@ mod tests {
         check::<ScriptProblemKind>();
         check::<ScriptHookName>();
         check::<ScriptLogKind>();
+    }
+
+    #[test]
+    fn a_rule_becomes_its_field_error_with_its_place() {
+        let error =
+            with(|body| body["source"] = json!("fn on_join(first) {\n\u{200b}}")).unwrap_err();
+
+        let field = FieldError::from(error.clone());
+
+        assert_eq!(field.path.as_str(), "script.source");
+        assert_eq!(field.message.as_str(), error.message);
+        assert_eq!((field.line, field.column), (Some(2), Some(1)));
+        let leash = FieldError::from(rule("script.leash", "is too far"));
+        assert_eq!(
+            (leash.path.as_str(), leash.line, leash.column),
+            ("script.leash", None, None)
+        );
+    }
+
+    #[test]
+    fn a_script_that_isnt_a_program_is_a_field_error_at_its_source_with_its_place() {
+        let script = request(json!({
+            "source": "fn on_join(first) {\n\tkees.forward.hold();\n}\n",
+            "leash": 8, "tool_guard": 2, "block_guard": [], "messages": [], "patterns": []
+        }))
+        .script()
+        .unwrap();
+        let error = fleet_script::compile(&script).unwrap_err();
+
+        let field = not_a_program(&error);
+
+        assert_eq!(field.path.as_str(), "script.source");
+        assert_eq!(field.message.as_str(), error.kind.to_string());
+        assert!(
+            field.message.as_str().contains("kees"),
+            "{}",
+            field.message.as_str()
+        );
+        assert_eq!((field.line, field.column), (Some(2), Some(2)));
+    }
+
+    #[test]
+    fn a_compile_error_without_a_place_has_none() {
+        let error = CompileError {
+            kind: fleet_script::CompileErrorKind::TopLevelStatement,
+            at: None,
+        };
+
+        let field = not_a_program(&error);
+
+        assert_eq!((field.line, field.column), (None, None));
     }
 }
