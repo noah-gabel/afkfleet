@@ -1089,14 +1089,25 @@ test("scripts: the editor with its marks, a mode's declarations and a bot's scri
   await editor.click();
   await page.keyboard.press("Control+End");
   await page.keyboard.type("fn mine() {\nkees.left.hold();\nmouse.left.hodl();\n}");
+  if (shooting()) {
+    // The shots' clock stands at NOW, and CodeMirror's linter waits until Date.now passes its
+    // delay: a second later the marks come, then the clock goes back to NOW for the shots.
+    await page.clock.setFixedTime(new Date(new Date(NOW).getTime() + 1000));
+  }
   await expect(main.getByRole("button", { name: /mouse\.left has no hodl/ })).toBeVisible();
+  if (shooting()) {
+    await page.clock.setFixedTime(new Date(NOW));
+  }
   await expect(main.getByRole("button", { name: /`kees` isn't defined$/ })).toBeVisible();
-  await bothThemes(page, "a new scripted mode, an example and its marks", { end: "ends" });
+  // Two columns scroll each by itself, so the window is as tall as the script's sections.
+  await bothThemes(page, "a new scripted mode, an example and its marks", { height: 1500 });
 
   await nav(page, "Modes");
   await main.getByRole("link", { name: "Open Balance" }).click();
   await expect(main.getByText(/^Riskier:/)).toBeVisible();
-  await bothThemes(page, "a scripted mode, its messages and an any-time pattern", { end: "ends" });
+  await bothThemes(page, "a scripted mode, its messages and an any-time pattern", {
+    height: 3400,
+  });
 
   await nav(page, "Home");
   await page.getByRole("link", { name: "Open AfkBot1" }).click();

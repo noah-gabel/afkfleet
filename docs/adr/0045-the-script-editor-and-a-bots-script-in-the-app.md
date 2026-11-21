@@ -64,10 +64,13 @@ The probe's text walk enters every open shadow root, and a backdrop and an opaci
 ## Measured: the app's size
 A release build (`tauri build --no-bundle`), the development PC:
 
-| | Before (main, 140dccaa) | After |
-|---|---|---|
-| `afkfleet-desktop.exe` | 18,170,368 bytes | see the pull request |
-| The UI's JavaScript | 827,290 bytes | see the pull request |
+| | Before (main, 140dccaa) | After | Change |
+|---|---|---|---|
+| `afkfleet-desktop.exe` | 18,170,368 bytes | 22,011,904 bytes | +3,841,536 bytes, +21.1 % |
+| The UI's JavaScript | 827,290 bytes (254.77 kB gzipped) | 1,275,686 bytes (398.62 kB gzipped) | +448,396 bytes, +54.2 % |
+| The UI's CSS | 61,959 bytes | 62,222 bytes | +263 bytes |
+
+The exe holds the UI compressed, so the JavaScript's share of its growth is about the 144 kB more it takes gzipped; **Rhai and fleet-script are about 3.7 MB of it.** The JavaScript's growth is CodeMirror's packages, the generated description with its four examples, and the editor's and the screens' code.
 
 ## Alternatives considered
 - **The `codemirror` package's `basicSetup`.** The same extensions in a list we don't name; and its default highlight style, which we replace.
