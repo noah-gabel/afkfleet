@@ -1,6 +1,6 @@
 # 0043. The script runner in fleet-runtime, and a script's hooks on the async workers
 
-- **Status:** Accepted. Decided under ADR-0025. One point is put to the user at its end: hooks take turns on the async workers instead of moving to a thread pool of their own
+- **Status:** Accepted. Decided under ADR-0025. The one point put to the user at its end is answered: hooks keep taking turns on the async workers, with no thread pool ([the user's answer](#the-users-answer-2026-11-21), 2026-11-21)
 - **Date:** 2026-11-21
 - **Related:** Plan.md Phase 15 (P15.16 to P15.19, P15.33); [ADR-0036](0036-scripted-modes.md) (D1, D5, D6, D9, D18), [ADR-0037](0037-scripts-read-system-chat.md) (C4, C5, C7), [ADR-0040](0040-fleet-script-as-built.md) with its amendment (E5, E6, E10, A1, A2) and [ADR-0042](0042-scripted-inputs-in-fleet-mc.md), whose decisions this builds; ADR-0013 (the runtime's clock and tasks), ADR-0032 (the load test); `crates/fleet-runtime/src/script/`, `crates/fleet-runtime/tests/fleet/scripted.rs`, `crates/fleet-integration/tests/integration/load/scripted.rs`
 
@@ -258,6 +258,12 @@ One change turned nothing red and was removed instead: a second `ReleaseAll` at 
 
 ## Put to the user
 **Hooks take turns on the async workers; they don't move to a thread pool** (R10). The reviewer's remedy, should the workers not take it, was a pool. I measured that they don't take it as first built, and that with turns they do, without a pool's threads and handoffs. If the pool is wanted all the same, it replaces what a turn does and nothing around it.
+
+## The user's answer (2026-11-21)
+**Hooks keep taking turns on the async workers (R10). No thread pool.** Recorded in group E's first commit (Plan.md P15.19's note). With it, two checks the user asked for:
+
+- **The real stream beside real scripts is group E's check.** Once a scripted mode travels (P15.20), the agent's own stream and heartbeat run beside scripted bots; if the heartbeat is late there, group E's pull request says so.
+- **The scripted load test runs once on GitHub's linux/arm64 runner,** production's architecture: every number above is from the development PC. The manual workflow `Load (arm64)` (`.github/workflows/load-arm64.yml`) runs fleet-integration's scripted `load_` tests in a release build there; its numbers are under "What was measured on linux/arm64" below.
 
 ## Known limits
 - **The agent's stream itself isn't measured** beside scripts (above). Group E can run this test's fleet beside a real stream once a scripted mode travels.

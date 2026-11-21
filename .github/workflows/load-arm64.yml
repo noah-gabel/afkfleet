@@ -1,0 +1,51 @@
+# The scripted load test (P15.19, ADR-0043) on GitHub's linux/arm64 runner, production's
+# architecture: fleet-integration's scripted `load_` tests in a release build, their report in the
+# job's log as `LOAD` lines. Every other number of ADR-0043 is from the development PC (Windows,
+# x86_64); these stand beside them. It runs on demand, and once when a pull request that adds or
+# changes this file is opened (a manual workflow can only be dispatched once GitHub knows it).
+# Nothing is published, and it's never a required check: it measures and prints, and its few
+# assertions are the test's own. Third-party actions are pinned to full commit SHAs (version in the
+# comment), as in ci.yml.
+name: Load (arm64)
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened]
+    paths:
+      - ".github/workflows/load-arm64.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: load-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  load:
+    name: load (ubuntu-24.04-arm)
+    runs-on: ubuntu-24.04-arm
+    # A cold release build of fleet-integration's graph, then about ten minutes of measuring.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain
+        run: rustup install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+        with:
+          tool: cargo-nextest@0.9.146
+      - name: The machine
+        run: |
+          uname -m
+          nproc
+          free -m
+      - name: The scripted load tests, in a release build
+        run: cargo nextest run -p fleet-integration --profile load --cargo-profile release --no-capture -E 'test(/scripted/)'
