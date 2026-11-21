@@ -282,6 +282,9 @@ pub enum UnplacedReason {
     OfflineNotAllowed,
     /// It may run, and waits for an agent with room.
     AwaitingAgent,
+    /// It may run, and its mode is a script that every live agent is too
+    /// old to run: an agent must be updated (ADR-0036, D13).
+    AgentTooOld,
 }
 
 impl OpenEnum for UnplacedReason {
@@ -294,6 +297,7 @@ impl OpenEnum for UnplacedReason {
         Self::Refused,
         Self::OfflineNotAllowed,
         Self::AwaitingAgent,
+        Self::AgentTooOld,
     ];
 
     fn as_str(self) -> &'static str {
@@ -306,6 +310,7 @@ impl OpenEnum for UnplacedReason {
             Self::Refused => "refused",
             Self::OfflineNotAllowed => "offline_not_allowed",
             Self::AwaitingAgent => "awaiting_agent",
+            Self::AgentTooOld => "agent_too_old",
         }
     }
 }
@@ -323,6 +328,7 @@ impl From<UnplacedWhy> for UnplacedReason {
                 Unplaced::OfflineNotAllowed => Self::OfflineNotAllowed,
             },
             UnplacedWhy::AwaitingAgent => Self::AwaitingAgent,
+            UnplacedWhy::AwaitingNewerAgent => Self::AgentTooOld,
         }
     }
 }
@@ -895,6 +901,10 @@ mod tests {
         assert_eq!(
             UnplacedReason::from(UnplacedWhy::AwaitingAgent),
             UnplacedReason::AwaitingAgent
+        );
+        assert_eq!(
+            UnplacedReason::from(UnplacedWhy::AwaitingNewerAgent).as_str(),
+            "agent_too_old"
         );
     }
 

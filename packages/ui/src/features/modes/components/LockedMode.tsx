@@ -2,7 +2,9 @@
 // R160, R161): the editor's own sections, cards, labels and values, read-only rather than
 // disabled, so they keep the normal text color and screen readers read them; nothing to press
 // but what the server's flags offer. A step this version doesn't know is one line. Nothing can
-// be lost here, so it follows the row: `ModeScreen` keys it by what it shows.
+// be lost here, so it follows the row: `ModeScreen` keys it by what it shows. A scripted mode shows
+// its script in the editor, read-only, with its settings and declarations (P15.25); a copy of one
+// is offered only to those who write scripts.
 import { useId, useState } from "react";
 import { useForm } from "react-hook-form";
 
@@ -12,6 +14,7 @@ import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import type { ModeResponse } from "../../../generated/ModeResponse";
 import { useWriteAction } from "../../admin/hooks/useWriteAction";
+import type { Place } from "../../scripts/components/ScriptEditor";
 import {
   copyValues,
   isKnownMode,
@@ -31,6 +34,7 @@ import {
 } from "../texts";
 import { DeleteMode } from "./DeleteMode";
 import { ModeSummary, UnknownSteps } from "./ModeParts";
+import { ScriptSections } from "./ScriptSections";
 import type { StepView } from "./StepCard";
 import { StepSection } from "./StepSection";
 
@@ -41,17 +45,19 @@ const READ_ONLY: StepView = { readOnly: true, locked: false, copying: false };
 function silent(): void {}
 
 /**
- * `mode`, locked; `note` says why it's locked when that needs saying, and `onCopy` opens a copy
- * of it, if this version can hold it (U63).
+ * `mode`, locked; `note` says why it's locked when that needs saying, `onCopy` opens a copy
+ * of it, if this version can hold it (U63), and `focusAt` shows a place in its script.
  */
 export function LockedMode({
   mode,
   note,
   onCopy,
+  focusAt = null,
 }: {
   mode: ModeResponse;
   note?: string | undefined;
-  onCopy: (values: ModeValues) => void;
+  onCopy?: (values: ModeValues) => void;
+  focusAt?: Place | null;
 }) {
   const formId = useId();
   const form = useForm<ModeValues>({ defaultValues: valuesOf(mode) });
@@ -76,32 +82,36 @@ export function LockedMode({
         </>
       }
       sections={
-        <>
-          {SECTIONS.map((section) => (
-            <StepSection
-              key={section}
-              form={form}
-              section={section}
-              view={READ_ONLY}
-              full={false}
-              unknown={unknown.filter((one) => one === section).length}
-              announce={silent}
-            />
-          ))}
-          {elsewhere === 0 ? null : (
-            <div className="rounded-lg border bg-card p-3">
-              <fieldset className="flex min-w-0 flex-col gap-2">
-                <legend className="mb-2 text-base font-semibold">{OTHER_STEPS}</legend>
-                <UnknownSteps count={elsewhere} />
-              </fieldset>
-            </div>
-          )}
-        </>
+        mode.script === undefined ? (
+          <>
+            {SECTIONS.map((section) => (
+              <StepSection
+                key={section}
+                form={form}
+                section={section}
+                view={READ_ONLY}
+                full={false}
+                unknown={unknown.filter((one) => one === section).length}
+                announce={silent}
+              />
+            ))}
+            {elsewhere === 0 ? null : (
+              <div className="rounded-lg border bg-card p-3">
+                <fieldset className="flex min-w-0 flex-col gap-2">
+                  <legend className="mb-2 text-base font-semibold">{OTHER_STEPS}</legend>
+                  <UnknownSteps count={elsewhere} />
+                </fieldset>
+              </div>
+            )}
+          </>
+        ) : (
+          <ScriptSections form={form} view={READ_ONLY} focusAt={focusAt} />
+        )
       }
       notes={gone ? <p role="alert">{MODE_GONE}</p> : null}
       apart={
         <>
-          {isKnownMode(mode) ? (
+          {isKnownMode(mode) && onCopy !== undefined ? (
             <Button type="button" variant="outline" onClick={() => onCopy(copyValues(mode))}>
               {MAKE_A_COPY}
             </Button>

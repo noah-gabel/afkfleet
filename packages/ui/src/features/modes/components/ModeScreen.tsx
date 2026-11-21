@@ -17,28 +17,36 @@ import { useRef, useState } from "react";
 
 import { toApiError } from "../../../api/ApiError";
 import { describeError } from "../../../api/describeError";
-import { useModes } from "../../../api/queries";
+import { useMe, useModes } from "../../../api/queries";
 import { ScreenState } from "../../../components/ScreenState";
 import type { ModeResponse } from "../../../generated/ModeResponse";
 import { modesOf } from "../../bots/facts";
+import type { Place } from "../../scripts/components/ScriptEditor";
 import { isEditable, type ModeValues, newValues, valuesOf } from "../modeForm";
 import { LOADING_MODE, MODE_GONE, modesFailed, NO_LONGER_EDITABLE } from "../texts";
 import { LockedMode } from "./LockedMode";
 import { ModeEditor } from "./ModeEditor";
 
+/** Whether the signed-in user writes scripted modes: an Admin or the Owner (ADR-0036, D15). */
+function useWritesScripts(): boolean {
+  const role = useMe().data?.role;
+  return role === "admin" || role === "owner";
+}
+
 /** A new mode's form. */
 export function NewModeScreen() {
-  return <ModeEditor initial={newValues()} />;
+  return <ModeEditor initial={newValues()} writesScripts={useWritesScripts()} />;
 }
 
 /** What the locked view shows, so a change of any of it shows at once. */
 function lockedKey(mode: ModeResponse): string {
-  return JSON.stringify([mode.name, mode.visibility, mode.steps]);
+  return JSON.stringify([mode.name, mode.visibility, mode.steps, mode.script]);
 }
 
-/** Mode `id`: loading, failed, gone, or its form or locked view. */
-export function ModeScreen({ id }: { id: string }) {
+/** Mode `id`: loading, failed, gone, or its form or locked view; `focusAt` a place in its script. */
+export function ModeScreen({ id, focusAt = null }: { id: string; focusAt?: Place | null }) {
   const query = useModes();
+  const writesScripts = useWritesScripts();
   const known = modesOf(query);
   // The row an open form last showed: what it stays on while no row is read. Dropping the form
   // drops this, which holds arguments the server has since cut (S83).
@@ -49,7 +57,7 @@ export function ModeScreen({ id }: { id: string }) {
   const read = typeof known === "string" ? undefined : known.find((mode) => mode.id === id);
 
   if (copy !== null) {
-    return <ModeEditor key="copy" initial={copy} copying />;
+    return <ModeEditor key="copy" initial={copy} copying writesScripts={writesScripts} />;
   }
   if (read === undefined) {
     if (opened.current !== null) {
@@ -78,7 +86,16 @@ export function ModeScreen({ id }: { id: string }) {
   if (isEditable(read)) {
     opened.current = read;
     dropped.current = false;
-    return <ModeEditor row={read} initial={valuesOf(read)} left={false} onCopy={setCopy} />;
+    return (
+      <ModeEditor
+        row={read}
+        initial={valuesOf(read)}
+        left={false}
+        writesScripts={writesScripts}
+        focusAt={focusAt}
+        {...(read.script === undefined || writesScripts ? { onCopy: setCopy } : {})}
+      />
+    );
   }
   if (opened.current !== null) {
     opened.current = null;
@@ -89,7 +106,8 @@ export function ModeScreen({ id }: { id: string }) {
       key={lockedKey(read)}
       mode={read}
       note={dropped.current ? NO_LONGER_EDITABLE : undefined}
-      onCopy={setCopy}
+      focusAt={focusAt}
+      {...(read.script === undefined || writesScripts ? { onCopy: setCopy } : {})}
     />
   );
 }

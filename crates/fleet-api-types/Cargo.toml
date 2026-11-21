@@ -16,11 +16,17 @@ workspace = true
 chrono.workspace = true
 # `text::sanitize_untrusted`, which cleans every text a client reads (ADR-0015).
 fleet-core.workspace = true
+# The script API's one description and its examples, which `just gen` exports for the editor,
+# and the field error of a script that isn't a program, which the server and the app's check
+# share (Plan.md P15.25; ADR-0045).
+fleet-script.workspace = true
 # The request DTOs' rules, checked at the server's boundary (ADR-0016).
 garde = { workspace = true, features = ["derive"] }
 # `SecretText::into_secret`, which hands a secret field to the server (ADR-0016).
 secrecy.workspace = true
 serde = { workspace = true, features = ["derive"] }
+# The script API's description as a TypeScript constant (`just gen`).
+serde_json.workspace = true
 thiserror.workspace = true
 # The TypeScript export; `serde-compat` carries serde's renames into it (ADR-0015).
 ts-rs = { workspace = true, features = ["serde-compat"] }
@@ -33,6 +39,5 @@ zeroize.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true
-serde_json.workspace = true
 # A fresh folder for each export: the tests' and the exporter example's (ADR-0015).
 tempfile.workspace = true

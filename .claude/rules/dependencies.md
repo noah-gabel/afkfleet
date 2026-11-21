@@ -92,6 +92,7 @@ Moved from `CLAUDE.md` word for word; it points here. CLAUDE.md keeps the rule: 
 | Fonts | `@fontsource-variable/geist`, `@fontsource/ibm-plex-mono` (imported in `styles.css`, never inlined; ADR-0020, U93, S111) |
 | Icons | `lucide-react` |
 | Toasts | `sonner` |
+| Code editor | `@codemirror/state`, `@codemirror/view`, `@codemirror/language`, `@codemirror/commands`, `@codemirror/autocomplete`, `@codemirror/lint`, `@codemirror/search`, `@lezer/highlight` (the script editor in its shadow root, whose constructed stylesheet is frontend.md's one exception; never the `codemirror` package; ADR-0036, D16; ADR-0045) |
 | Drag and drop | `@dnd-kit/core`, `@dnd-kit/sortable`, `@dnd-kit/utilities` (the modes' steps, on pointer events: Tauri's `dragDropEnabled` stays on, so HTML5 drag events never fire on Windows; ADR-0020, U69) |
 | Tests | `vitest`, `jsdom`, `@testing-library/react` (+ its peer `@testing-library/dom`), `@testing-library/user-event`, `msw` with `@msw/playwright` (in the Playwright process only), `@playwright/test` (the installed Edge; for the screenshot baselines, the Chromium of Playwright's own Linux image at the same version, pinned by digest in `deploy/docker/shots.Dockerfile`, ADR-0020, U97, S130), `@types/node` (`apps/desktop`'s e2e config and specs) |
 | Lint & format | `@biomejs/biome` |

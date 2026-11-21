@@ -54,7 +54,7 @@ use fleet_api_types::modes::{
     CreateModeRequest, MODE_NAME_TAKEN, MODE_SCRIPT_HAS_NO_STEPS, ModePage, ModeResponse,
     ModeSteps, UpdateModeRequest,
 };
-use fleet_api_types::script::ModeScriptRequest;
+use fleet_api_types::script::{self, ModeScriptRequest};
 use fleet_api_types::{ErrorResponse, FieldError, PageQuery};
 use fleet_core::authz::{ModeKind, Permission, ResourceContext};
 use fleet_core::id::ModeId;
@@ -392,11 +392,7 @@ fn requested(
     script
         .script()
         .map(ModeDefinition::scripted)
-        .map_err(|error| {
-            ApiError::Validation(vec![
-                FieldError::new(&error.path, &error.message).at_place(error.line, error.column),
-            ])
-        })
+        .map_err(|error| ApiError::Validation(vec![FieldError::from(error)]))
 }
 
 /// A script that isn't a program, as the caller's own mistake: 422 at
@@ -405,12 +401,7 @@ fn requested(
 fn not_a_program(error: ScriptCheckError) -> ApiError {
     match error {
         ScriptCheckError::NotAProgram(error) => {
-            let (line, column) = error
-                .at
-                .map_or((None, None), |at| (Some(at.line), Some(at.column)));
-            ApiError::Validation(vec![
-                FieldError::new("script.source", &error.kind.to_string()).at_place(line, column),
-            ])
+            ApiError::Validation(vec![script::not_a_program(&error)])
         }
         other @ ScriptCheckError::CompilerFailed(_) => ApiError::internal(other),
     }

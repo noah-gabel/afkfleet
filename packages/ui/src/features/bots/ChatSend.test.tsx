@@ -352,3 +352,95 @@ describe("the send box and the secret rule (U34)", () => {
     expect(within(document.body).queryByText("/login hunter2")).toBeNull();
   });
 });
+
+describe("↑ and ↓ recall the lines sent to this bot (the user's addition to P15.26)", () => {
+  let row = 0;
+  /** The next row a sent line is kept as. */
+  function nextRow(): number {
+    row += 1;
+    return row;
+  }
+
+  /** Sends `text` from the box, which the server takes. */
+  async function sendLine(app: Awaited<ReturnType<typeof sendBox>>["app"], text: string) {
+    await app.user.clear(field());
+    await app.user.type(field(), text);
+    await app.user.click(screen.getByRole("button", { name: "Send" }));
+    await vi.waitFor(() => expect(field().value).toBe(""));
+  }
+
+  it("fills in the last line, then the one before it, goes forward, and past the newest shows what was typed", async () => {
+    const { app } = await sendBox({ sendChat: async () => answer(nextRow()) });
+    await sendLine(app, "/spawn");
+    await sendLine(app, "hello");
+    await app.user.type(field(), "half typed");
+
+    await app.user.keyboard("{ArrowUp}");
+    expect(field().value).toBe("hello");
+    await app.user.keyboard("{ArrowUp}");
+    expect(field().value).toBe("/spawn");
+    await app.user.keyboard("{ArrowUp}");
+    expect(field().value).toBe("/spawn");
+    await app.user.keyboard("{ArrowDown}");
+    expect(field().value).toBe("hello");
+    await app.user.keyboard("{ArrowDown}");
+    expect(field().value).toBe("half typed");
+  });
+
+  it("keeps only lines the server took, the same line twice in a row once", async () => {
+    let refuse = false;
+    const { app } = await sendBox({
+      sendChat: async () => {
+        if (refuse) {
+          throw refusal(409, "chat_unavailable", { message: "The bot isn't online." });
+        }
+        return answer(nextRow());
+      },
+    });
+    await sendLine(app, "once");
+    await sendLine(app, "once");
+    refuse = true;
+    await app.user.type(field(), "refused");
+    await app.user.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText("The bot isn't online.");
+    await app.user.clear(field());
+
+    await app.user.keyboard("{ArrowUp}");
+    expect(field().value).toBe("once");
+    await app.user.keyboard("{ArrowUp}");
+    expect(field().value).toBe("once");
+    await app.user.keyboard("{ArrowDown}{ArrowDown}");
+    expect(field().value).toBe("");
+  });
+
+  it("recalls nothing while a send runs, nor while an input method composes", async () => {
+    const held = deferred<ChatSendResponse>();
+    let hold = false;
+    const { app } = await sendBox({
+      sendChat: async () => (hold ? held.promise : answer(nextRow())),
+    });
+    await sendLine(app, "earlier");
+    hold = true;
+    await app.user.type(field(), "now");
+    await app.user.click(screen.getByRole("button", { name: "Send" }));
+    await app.user.click(field());
+
+    await app.user.keyboard("{ArrowUp}");
+    expect(field().value).toBe("now");
+    await act(async () => {
+      held.resolve(answer(nextRow()));
+      await held.promise;
+    });
+    await vi.waitFor(() => expect(field().value).toBe(""));
+    field().focus();
+    const composing = new KeyboardEvent("keydown", {
+      key: "ArrowUp",
+      bubbles: true,
+      isComposing: true,
+    });
+    act(() => {
+      field().dispatchEvent(composing);
+    });
+    expect(field().value).toBe("");
+  });
+});

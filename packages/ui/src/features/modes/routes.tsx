@@ -20,12 +20,28 @@ export const newModeRoute = createRoute({
   component: NewModeScreen,
 });
 
-/** `/modes/$id`: one mode. */
+/** A whole number from 1, or nothing: a search parameter's line or column. */
+function placeNumber(value: unknown): number | undefined {
+  const number = typeof value === "string" ? Number(value) : value;
+  return typeof number === "number" && Number.isSafeInteger(number) && number > 0
+    ? number
+    : undefined;
+}
+
+/** `/modes/$id`: one mode; `?line=&column=` shows a place in its script (P15.26). */
 export const modeRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "modes/$id",
+  validateSearch: (search: Record<string, unknown>): { line?: number; column?: number } => {
+    const line = placeNumber(search.line);
+    const column = placeNumber(search.column);
+    return line === undefined ? {} : { line, ...(column === undefined ? {} : { column }) };
+  },
   component: function ModeRoute() {
     const { id } = modeRoute.useParams();
-    return <ModeScreen key={id} id={id} />;
+    const { line, column } = modeRoute.useSearch();
+    const focusAt =
+      line === undefined ? null : { line, ...(column === undefined ? {} : { column }) };
+    return <ModeScreen key={id} id={id} focusAt={focusAt} />;
   },
 });

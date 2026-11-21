@@ -59,9 +59,12 @@ export const ADD_TEXT = "Add text";
 /** Next to "Add text" once the most texts are there. */
 export const AT_MOST_TEXTS = `At most ${CONFLICT_TEXTS_MAX} texts.`;
 export const FORMATS_HEADING = "Chat formats";
-/** What a format does and how to write one (ADR-0020's table, H7). */
+/**
+ * What a format does and how to write one (ADR-0020's table, H7): since P15.34 it also keeps a
+ * script from reading a player's line as the server's own (ADR-0037, C2).
+ */
 export const FORMATS_HINT =
-  'Some servers send chat as server text, like "[Clan] Name : hello". A format finds the name in such a line, for display only. Write the line\'s start as sent: {sender} for the name, {any} for a part that changes, like a clan tag. The first that fits names the line.';
+  "Some servers send chat as server text, like \"[Clan] Name : hello\". A format finds the name in such a line: the chat shows it as that player's, and no script reads it as the server's own. Write the line's start as sent: {sender} for the name, {any} for a part that changes, like a clan tag. The first that fits names the line.";
 
 /** The label of format `n`, counted from 1. */
 export function chatFormatLabel(n: number): string {

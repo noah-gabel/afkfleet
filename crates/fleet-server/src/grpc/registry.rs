@@ -1273,6 +1273,17 @@ impl LiveAgents for AgentRegistry {
         }
     }
 
+    fn newest_script_api(&self) -> Option<u32> {
+        self.state()
+            .slots
+            .values()
+            .filter_map(|slot| match &slot.phase {
+                Phase::Live(live) => Some(live.script_api),
+                Phase::Claimed { .. } => None,
+            })
+            .max()
+    }
+
     fn held(&self, agent: AgentId, bot: BotId) -> Option<HeldBot> {
         let state = self.state();
         let slot = state.slots.get(&agent)?;
@@ -2863,6 +2874,38 @@ mod tests {
             .unwrap();
         let _welcome = queued.try_recv().unwrap();
         (lease, queued)
+    }
+
+    #[test]
+    fn the_newest_live_level_is_the_highest_a_live_stream_runs_and_none_without_one() {
+        let (registry, _) = registry();
+        assert_eq!(LiveAgents::newest_script_api(&registry), None);
+        let (old, _old_queue) = live_at(&registry, 0);
+        assert_eq!(LiveAgents::newest_script_api(&registry), Some(0));
+
+        let claimed = registry
+            .claim(&Admitted {
+                agent: agent(2),
+                ..admitted(2)
+            })
+            .unwrap();
+        assert_eq!(LiveAgents::newest_script_api(&registry), Some(0));
+        let (queue, _newer_queue) = mpsc::channel(8);
+        registry
+            .activate(
+                &claimed,
+                Activation {
+                    script_api: 1,
+                    ..activation(queue, Vec::new())
+                },
+            )
+            .unwrap();
+        assert_eq!(LiveAgents::newest_script_api(&registry), Some(1));
+
+        drop(claimed);
+        assert_eq!(LiveAgents::newest_script_api(&registry), Some(0));
+        drop(old);
+        assert_eq!(LiveAgents::newest_script_api(&registry), None);
     }
 
     /// No scripted mode reaches an agent below its level on any path, from

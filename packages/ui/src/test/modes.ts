@@ -4,9 +4,12 @@ import { act, screen, within } from "@testing-library/react";
 
 import type { ApiClient } from "../api/ApiClient";
 import type { CreateModeRequest } from "../generated/CreateModeRequest";
+import type { MeResponse } from "../generated/MeResponse";
 import type { ModeAction } from "../generated/ModeAction";
 import type { ModeResponse } from "../generated/ModeResponse";
 import type { ModeSchedule } from "../generated/ModeSchedule";
+import type { ModeScript } from "../generated/ModeScript";
+import type { ModeScriptRequest } from "../generated/ModeScriptRequest";
 import type { ModeStep } from "../generated/ModeStep";
 import type { UpdateModeRequest } from "../generated/UpdateModeRequest";
 import { mode } from "./live";
@@ -31,6 +34,25 @@ export function every(seconds: number, jitter = 0): ModeSchedule {
 /** The on-respawn schedule. */
 export const ON_RESPAWN: ModeSchedule = { type: "on_respawn" };
 
+/** A scripted body as an editor of its mode reads it: the request's, at level 1. */
+export function shownScript(request: ModeScriptRequest): ModeScript {
+  return {
+    api: 1,
+    source: request.source,
+    leash: request.leash,
+    tool_guard: request.tool_guard,
+    block_guard: request.block_guard,
+    messages: request.messages.map((message) => ({
+      key: message.key,
+      text: message.text,
+      values: message.values,
+      arguments_hidden: false,
+    })),
+    patterns: request.patterns,
+    any_time_chat: request.patterns.some((pattern) => pattern.when === "any_time"),
+  };
+}
+
 /** The server's pointer to the twin; its code keeps its old name (ADR-0028). */
 const POINTED_TO_TWIN =
   "This mode holds a command that isn't on the server's list: save it with its commands.";
@@ -50,6 +72,8 @@ export async function atMode(
   options: {
     readonly rows?: ModeResponse[];
     readonly handlers?: Partial<ApiClient>;
+    /** `me`'s answer; a Member by default. */
+    readonly user?: MeResponse;
   } = {},
 ) {
   const state = {
@@ -69,6 +93,7 @@ export async function atMode(
         action: { ...step.action, arguments_hidden: false },
       })),
       unlisted_command: holdsCommand(request),
+      ...(request.script === undefined ? {} : { script: shownScript(request.script) }),
     });
   const created = (request: CreateModeRequest) => {
     const made = saved(request);
@@ -85,30 +110,34 @@ export async function atMode(
     state.rows = state.rows.map((one) => (one.id === target ? edited : one));
     return edited;
   };
-  const app = await signedIn({
-    modes: async () => {
-      await state.hold;
-      if (state.readFails) {
-        throw refusal(500, "internal");
-      }
-      return { items: state.rows };
+  const app = await signedIn(
+    {
+      modes: async () => {
+        await state.hold;
+        if (state.readFails) {
+          throw refusal(500, "internal");
+        }
+        return { items: state.rows };
+      },
+      createMode: async (request) => {
+        if (holdsCommand(request)) {
+          throw refusal(403, "mode_needs_step_up", { message: POINTED_TO_TWIN });
+        }
+        return created(request);
+      },
+      createModeWithCommands: async (request) => created(request),
+      updateMode: async (target, request) => {
+        if (holdsCommand(request)) {
+          throw refusal(403, "mode_needs_step_up", { message: POINTED_TO_TWIN });
+        }
+        return updated(target, request);
+      },
+      updateModeWithCommands: async (target, request) => updated(target, request),
+      checkScript: async () => ({}),
+      ...options.handlers,
     },
-    createMode: async (request) => {
-      if (holdsCommand(request)) {
-        throw refusal(403, "mode_needs_step_up", { message: POINTED_TO_TWIN });
-      }
-      return created(request);
-    },
-    createModeWithCommands: async (request) => created(request),
-    updateMode: async (target, request) => {
-      if (holdsCommand(request)) {
-        throw refusal(403, "mode_needs_step_up", { message: POINTED_TO_TWIN });
-      }
-      return updated(target, request);
-    },
-    updateModeWithCommands: async (target, request) => updated(target, request),
-    ...options.handlers,
-  });
+    options.user === undefined ? {} : { user: options.user },
+  );
   await act(() =>
     id === "new"
       ? app.runtime.router.navigate({ to: "/modes/new" })

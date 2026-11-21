@@ -12,7 +12,8 @@
 //   here, not in `watched()` (R88).
 // - **A refetch drops every hold and reads everything again** (S60): `ready`, `resync` and an
 //   unreadable frame each supersede the events before them.
-// - **An event patches the cache** (livePatches.ts), **held per query** (S60): a change for a
+// - **An event patches the cache** (livePatches.ts), **held per query** (S60), and makes no entry
+//   but a bot's script record, which only the live events make and nothing fetches (P15.26): a change for a
 //   query that's fetching waits until its fetch succeeds, then all of its held changes are
 //   applied in order, at most `HOLD_MAX`; past that, the query is read once more instead. A
 //   fetch that fails applies them to the data it keeps, without a read, keeping its error
@@ -29,6 +30,8 @@
 // - **The live record** (S71): every update of the current watch, and its end, go to the
 //   record the timeline and the notices show; a bots query's read fills in what it doesn't
 //   know, a bot's 404 drops it, and each sign-in and sign-out clears it.
+// - **The lines a bot's chat remembers** (`stores.chatRecall`, P15.26): each sign-in, sign-out and
+//   session end drops them all, and a `bot_removed` its bot's.
 // - **The chat's loss count** (S70, R115, `stores.live`): moved at each start, the current
 //   watch's end and every refetch, so a pending chat mark ends with what may have been
 //   missed; and whether the current watch is live, from its refetch until it goes down.
@@ -168,6 +171,9 @@ export function createLiveLayer(
         for (const patch of patchesFor(update.event, cachedBot)) {
           change(patch);
         }
+        if (update.event.type === "bot_removed" && update.event.bot_id !== undefined) {
+          stores.chatRecall.getState().forget(update.event.bot_id);
+        }
         return;
       case "disconnected":
         stores.live.getState().setConnected(false);
@@ -219,6 +225,10 @@ export function createLiveLayer(
       case "reset":
         drop(patch.queryKey);
         void queryClient.resetQueries({ queryKey: patch.queryKey, exact: true });
+        return;
+      case "keep":
+        // Never fetched, so never held: written at once, made when it isn't there.
+        queryClient.setQueryData(patch.queryKey, (data: unknown) => patch.update(data));
         return;
       case "set": {
         const query = cache.find({ queryKey: patch.queryKey, exact: true });
@@ -391,6 +401,7 @@ export function createLiveLayer(
       toApiError(event.action.error).error.api?.status === 404
     ) {
       record.drop(id);
+      stores.chatRecall.getState().forget(id);
     }
   }
 
@@ -403,11 +414,13 @@ export function createLiveLayer(
       stores.live.getState().setConnected(false);
       hint({ kind: "none" });
       stores.record.getState().clear();
+      stores.chatRecall.getState().clear();
       return;
     }
     if (session.phase === "signed_in" && session.generation !== started) {
       started = session.generation;
       stores.record.getState().clear();
+      stores.chatRecall.getState().clear();
       start();
       return;
     }

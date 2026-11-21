@@ -29,6 +29,16 @@ Every account uses two-factor authentication. Besides your password, you enter a
 ## Logging in
 Log in with your username, your password and a code from the app. Success: Home opens and shows the bots shared with you.
 
+## Chatting with a bot
+On a bot's screen, type a chat line or a `/command` and choose **Send**. **↑** fills in the last line you sent that bot, **↑** again the one before it, and **↓** goes forward again; past the newest, the box shows what you were typing. The app keeps at most 50 lines per bot, and only while you're logged in: it forgets them when you log out, when the session ends and when the bot is removed, and never writes them to disk.
+
+## Scripted modes
+A mode can be a script instead of steps. Admins and the Owner write them: in **Modes › New mode**, choose **A script** under **What it runs**, and start from an example if you like. The editor marks a mistake at its line while you type (a misspelled name, a method that doesn't exist), suggests what follows a dot (**Ctrl+Space**), shows what a name does when you point at it, and finds and replaces (**Ctrl+F**). **Tab** indents; to leave the editor, press **Esc**, then **Tab**. The server checks the script again when you save. [The script reference](scripting.md) explains the language and every example.
+
+Anyone can run a shared script on a bot they control. A mode that reads the server's chat at any time, rather than only as a reply to its own command, is marked, as the riskier kind.
+
+On a bot's screen, **Script** shows whether its script runs, what stopped it, and its log. **Show in the script** opens the mode at the line of the error. The app shows what the bot reported while it was open: after a restart of the app, a running script's status comes back at the bot's next join. **Waiting for an updated agent** means the bot's mode is a script and every agent online runs a version too old for it: ask the server's admin to update the agent.
+
 ## Updates
 Updates come through the app. At each start it checks GitHub, and when a newer version exists, a row at the top says "afkfleet X.Y.Z is available." Click **Install and restart**: a small installer window shows its progress, and afkfleet starts again by itself. **Check for updates** in **Profile › Updates** checks whenever you want. The app installs only updates signed with afkfleet's key. They're downloaded by the app, not a browser, so Windows normally doesn't warn again.
 

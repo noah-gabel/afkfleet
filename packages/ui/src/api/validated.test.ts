@@ -16,6 +16,7 @@ import {
   NEW_PASSWORD_MAX_CHARS,
   PAGE_MAX,
   PASSWORD_MAX_CHARS,
+  SCRIPT_CHECK_MAX_BYTES,
   SERVER_ADDRESS_MAX_CHARS,
   SERVER_SETTINGS_PAGE_MAX,
   SERVER_URL_MAX_BYTES,
@@ -35,6 +36,7 @@ function client() {
     checkUpdate: ok,
     installUpdate: ok,
     appVersion: ok,
+    checkScript: ok,
     serverProfile: ok,
     setServerProfile: ok,
     checkServer: ok,
@@ -188,6 +190,31 @@ describe("validated, the updater's calls (ADR-0022, S27, U37)", () => {
       { method: "installUpdate", args: [] },
       { method: "appVersion", args: [] },
     ]);
+  });
+});
+
+describe("validated, a script's check (ADR-0045)", () => {
+  it("passes a text up to four times a script's limit, counted in UTF-8 bytes", async () => {
+    const { fake, api } = client();
+    const most = "é".repeat(SCRIPT_CHECK_MAX_BYTES / 2);
+
+    await api.checkScript({ source: most });
+
+    expect(fake.calls).toEqual([{ method: "checkScript", args: [{ source: most }] }]);
+  });
+
+  it("refuses a longer text, and any other field, before the app checks it", async () => {
+    const { fake, api } = client();
+
+    expect(
+      await refusedFields(
+        api.checkScript({ source: `${"é".repeat(SCRIPT_CHECK_MAX_BYTES / 2)}x` }),
+      ),
+    ).toEqual(["source"]);
+    expect(
+      await refusedFields(api.checkScript({ source: "", api: 1 } as unknown as { source: string })),
+    ).toEqual([""]);
+    expect(fake.calls).toEqual([]);
   });
 });
 
@@ -474,6 +501,59 @@ describe("validated", () => {
         ["updateModeWithCommands", [ID, update]],
         ["deleteMode", [ID]],
       ]);
+    });
+
+    describe("a scripted mode's body (ADR-0044, E5)", () => {
+      const script = {
+        source: "fn on_join(first) {\n    keys.jump.tap();\n}\n",
+        leash: 8,
+        tool_guard: 2,
+        block_guard: ["cobblestone"],
+        messages: [
+          {
+            key: "pay",
+            text: "/pay AfkMain {amount}",
+            values: [{ name: "amount", type: "decimal", min: 1, max: 1_000_000, places: 2 }],
+          },
+        ],
+        patterns: [
+          {
+            key: "balance",
+            when: "reply",
+            text: "Balance: {amount} coins",
+            captures: [{ name: "amount", type: "amount", min: 0, max: 1e9, decimal_mark: "." }],
+          },
+        ],
+      } as const;
+      const scripted = { name: "Balance", visibility: "private", steps: [], script } as const;
+
+      it("passes a body through unchanged, leaving every rule to the server", async () => {
+        const { fake, api } = client();
+        const ruleBroken = { ...scripted, script: { ...script, leash: 0, block_guard: ["!!"] } };
+
+        await api.createMode(scripted as never);
+        await api.updateMode(ID, { version: 2, ...ruleBroken } as never);
+
+        expect(fake.calls.map((call) => call.args)).toEqual([
+          [scripted],
+          [ID, { version: 2, ...ruleBroken }],
+        ]);
+      });
+
+      it("refuses what the wire can't carry: a number past a byte, an unknown type or field", async () => {
+        expect(await refusals({ ...scripted, script: { ...script, leash: 256 } })).toEqual([
+          ["script.leash", expect.any(String)],
+        ]);
+        expect(
+          await refusals({
+            ...scripted,
+            script: { ...script, patterns: [{ ...script.patterns[0], when: "sometimes" }] },
+          }),
+        ).toEqual([["script.patterns[0].when", expect.any(String)]]);
+        expect(await refusals({ ...scripted, script: { ...script, api: 1 } })).toEqual([
+          ["script", expect.any(String)],
+        ]);
+      });
     });
 
     it("takes every action the generated type holds", async () => {

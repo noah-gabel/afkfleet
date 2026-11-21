@@ -13,7 +13,7 @@ use std::fs;
 use std::path::Path;
 
 use fleet_api_types::accounts::MC_NAME_MAX_CHARS;
-use fleet_api_types::app::{CA_PEM_MAX_BYTES, SERVER_URL_MAX_BYTES};
+use fleet_api_types::app::{CA_PEM_MAX_BYTES, SCRIPT_CHECK_MAX_BYTES, SERVER_URL_MAX_BYTES};
 use fleet_api_types::auth::{NEW_PASSWORD_MAX_CHARS, PASSWORD_MAX_CHARS, USERNAME_MAX_CHARS};
 use fleet_api_types::bots::SERVER_ADDRESS_MAX_CHARS;
 use fleet_api_types::chat::CHAT_MESSAGE_MAX_UNITS;
@@ -27,6 +27,7 @@ use fleet_api_types::server_settings::{
 };
 use fleet_core::auth::{NewPassword, STEP_UP_WINDOW};
 use fleet_core::mode::MAX_MODES_PER_OWNER;
+use fleet_core::script::{BlockGuard, ChatPattern, ChatPatterns, MessageTemplate, Script};
 use fleet_core::value::{McUsername, Username};
 
 /// Every limit the UI mirrors, by its name in both languages.
@@ -44,6 +45,12 @@ fn expected() -> BTreeMap<&'static str, u64> {
         ("PAGE_MAX", u64::from(PAGE_MAX)),
         ("SERVER_URL_MAX_BYTES", usize(SERVER_URL_MAX_BYTES)),
         ("CA_PEM_MAX_BYTES", usize(CA_PEM_MAX_BYTES)),
+        ("SCRIPT_CHECK_MAX_BYTES", usize(SCRIPT_CHECK_MAX_BYTES)),
+        ("SCRIPT_MAX_BLOCKS", usize(BlockGuard::MAX_BLOCKS)),
+        ("SCRIPT_MAX_MESSAGES", usize(Script::MAX_MESSAGES)),
+        ("SCRIPT_MAX_VALUES", usize(MessageTemplate::MAX_VALUES)),
+        ("SCRIPT_MAX_PATTERNS", usize(ChatPatterns::MAX_PATTERNS)),
+        ("SCRIPT_MAX_CAPTURES", usize(ChatPattern::MAX_CAPTURES)),
         ("STEP_UP_WINDOW_SECS", STEP_UP_WINDOW.as_secs()),
         ("MC_NAME_MIN_CHARS", usize(McUsername::MIN_LEN)),
         ("MC_NAME_MAX_CHARS", usize(MC_NAME_MAX_CHARS)),

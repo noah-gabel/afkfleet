@@ -2943,7 +2943,8 @@ expression: document
           "reauth_required",
           "refused",
           "offline_not_allowed",
-          "awaiting_agent"
+          "awaiting_agent",
+          "agent_too_old"
         ],
         "type": "string"
       },

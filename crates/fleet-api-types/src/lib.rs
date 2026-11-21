@@ -55,6 +55,8 @@
 //! - [`openapi`]: the `OpenAPI` schemas, which the server's dev-only document
 //!   serves and which a test keeps equal to the TypeScript.
 //! - [`page`]: the query of every list, [`PageQuery`].
+//! - [`script`]: a scripted mode's body, and a bot's script's status and log.
+//! - [`script_api`]: the script API's description and examples, for the editor.
 //! - [`secret`]: secrets in requests and responses, [`SecretText`].
 //! - [`sessions`]: the user's live sessions.
 //! - [`text`]: cleaned and capped text, [`BoundedText`].
@@ -82,6 +84,7 @@ pub mod open;
 pub mod openapi;
 pub mod page;
 pub mod script;
+pub mod script_api;
 pub mod secret;
 pub mod server_settings;
 pub mod sessions;

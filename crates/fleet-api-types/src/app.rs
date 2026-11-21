@@ -26,6 +26,7 @@ use crate::bots::BotResponse;
 use crate::error::{ErrorCode, FieldError, MESSAGE_MAX_CHARS, REQUEST_ID_MAX_CHARS};
 use crate::events::EventMessage;
 use crate::open::Open;
+use crate::script::SCRIPT_SOURCE_MAX_BYTES;
 use crate::text::BoundedText;
 
 /// The most bytes of [`ServerProfileRequest::url`]: far more than any origin,
@@ -35,6 +36,10 @@ pub const SERVER_URL_MAX_BYTES: usize = 2048;
 /// `CustomCa::MAX_BYTES`, which this crate can't name; the desktop crate
 /// tests that both are equal.
 pub const CA_PEM_MAX_BYTES: usize = 65_536;
+/// The most bytes of [`ScriptCheckRequest::source`]: four times a script's
+/// own limit, so a text past that limit is still checked and told so by
+/// fleet-core's rule, and the work a check does stays bounded.
+pub const SCRIPT_CHECK_MAX_BYTES: usize = 4 * SCRIPT_SOURCE_MAX_BYTES;
 
 /// What went wrong with a command. The app's Rust side and its UI ship
 /// together, so the UI knows every code; the server's code, which can grow,
@@ -113,6 +118,9 @@ pub enum CommandErrorCode {
     NoUpdate,
     /// An update check or install is already running.
     UpdateBusy,
+    /// A script's text couldn't be checked: the check failed or waited too
+    /// long for the one before it. It says nothing about the script.
+    ScriptCheck,
 }
 
 impl CommandErrorCode {
@@ -146,6 +154,7 @@ impl CommandErrorCode {
         Self::UpdateInstall,
         Self::NoUpdate,
         Self::UpdateBusy,
+        Self::ScriptCheck,
     ];
 
     /// The code's fixed sentence: the same for every error with this code,
@@ -184,6 +193,7 @@ impl CommandErrorCode {
             Self::UpdateInstall => "The installer couldn't be started.",
             Self::NoUpdate => "There's no update to install. Check again.",
             Self::UpdateBusy => "An update check or install is already running.",
+            Self::ScriptCheck => "The script couldn't be checked.",
         }
     }
 }
@@ -309,6 +319,30 @@ pub struct AppVersion {
     /// This app's version.
     #[ts(type = "string")]
     pub version: BoundedText<VERSION_MAX_CHARS>,
+}
+
+/// The `check_script` command's input: a scripted mode's text as the
+/// editor holds it (Plan.md P15.25; ADR-0045). It may be another Admin's
+/// shared script, so it's untrusted: the app's Rust side only compiles it,
+/// never runs it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Validate, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ScriptCheckRequest {
+    /// The script's text.
+    #[garde(length(bytes, max = SCRIPT_CHECK_MAX_BYTES))]
+    pub source: String,
+}
+
+/// The `check_script` command's answer: the first problem the server's own
+/// check at save would find in the text, or none. The server stays the
+/// judge: it checks again at save.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct ScriptCheck {
+    /// The problem, at `script.source` with its line and column when it has
+    /// a place, worded as the server's 422 words it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub problem: Option<FieldError>,
 }
 
 /// What the `set_window_theme` command takes: the user's theme choice, for
@@ -561,6 +595,42 @@ mod tests {
     use crate::events::EventMessageKind;
 
     #[test]
+    fn a_script_check_request_takes_its_source_up_to_four_times_a_scripts_limit_and_nothing_else() {
+        let at_most: ScriptCheckRequest =
+            serde_json::from_value(json!({ "source": "x".repeat(SCRIPT_CHECK_MAX_BYTES) }))
+                .unwrap();
+        let past: ScriptCheckRequest =
+            serde_json::from_value(json!({ "source": "x".repeat(SCRIPT_CHECK_MAX_BYTES + 1) }))
+                .unwrap();
+
+        assert_eq!(SCRIPT_CHECK_MAX_BYTES, 65_536);
+        assert!(at_most.validate().is_ok());
+        assert!(past.validate().is_err());
+        assert!(
+            serde_json::from_value::<ScriptCheckRequest>(json!({ "source": "", "api": 1 }))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_script_checks_answer_holds_its_problem_or_leaves_it_out() {
+        let clean = ScriptCheck { problem: None };
+        let problem = ScriptCheck {
+            problem: Some(FieldError::new("script.source", "nope").at_place(Some(2), Some(3))),
+        };
+
+        assert_eq!(serde_json::to_value(&clean).unwrap(), json!({}));
+        assert_eq!(
+            serde_json::to_value(&problem).unwrap(),
+            json!({ "problem": { "path": "script.source", "message": "nope", "line": 2, "column": 3 } })
+        );
+        assert_eq!(
+            serde_json::from_value::<ScriptCheck>(serde_json::to_value(&problem).unwrap()).unwrap(),
+            problem
+        );
+    }
+
+    #[test]
     fn a_window_theme_is_one_of_three_words_and_nothing_else() {
         for (word, theme) in [
             ("light", WindowTheme::Light),
@@ -640,10 +710,11 @@ mod tests {
             CommandErrorCode::UpdateInstall => 25,
             CommandErrorCode::NoUpdate => 26,
             CommandErrorCode::UpdateBusy => 27,
+            CommandErrorCode::ScriptCheck => 28,
         }
     }
 
-    const CODES: usize = 28;
+    const CODES: usize = 29;
 
     fn details() -> ApiErrorDetails {
         ApiErrorDetails {

@@ -54,7 +54,12 @@ export function visibilityText(visibility: ModeVisibility): string {
 }
 
 /** A card's labelled facts (U119). */
-export const FACT = { owner: "Owner", visibility: "Visibility", steps: "Steps" } as const;
+export const FACT = {
+  owner: "Owner",
+  visibility: "Visibility",
+  steps: "Steps",
+  runs: "Runs",
+} as const;
 
 /** A mode that sends a command off the allowlist (S68). */
 export const MARK_UNLISTED = "Sends a command off the allowlist. Needs Manage to choose.";
@@ -241,3 +246,124 @@ export function pickedUp(n: number): string {
 export function putBack(n: number): string {
   return `Put back step ${n}.`;
 }
+
+// --- A scripted mode (Plan.md P15.25, P15.35; ADR-0036, D8, D10, D11, D15; ADR-0037, C3, C5;
+// ADR-0042, G13; ADR-0045) ---------------------------------------------------------------------
+
+/** What a mode runs: its kind, chosen when it's made. */
+export const KIND_FIELD = "What it runs";
+export const KIND_TEXT = { steps: "Steps", script: "A script" } as const;
+/** A mode's kind, as its facts show it. */
+export const FACT_SCRIPT = "Script";
+
+/** The script's section. */
+export const SCRIPT_HEADING = "Script";
+export const SCRIPT_HINT =
+  "Functions only: the hooks the bot calls, such as on_join(first), and your own. Nothing outside a function runs.";
+/** The starter templates: the reference's examples. */
+export const TEMPLATE_FIELD = "Start from an example";
+export const TEMPLATE_NONE = "Choose an example";
+export const TEMPLATE_USE = "Use example";
+export const TEMPLATE_HINT =
+  "Replaces the script, its safety settings, its messages and its chat patterns.";
+
+/** The safety settings. */
+export const SAFETY_HEADING = "Safety";
+export const SAFETY_HINT = "Below the script, whatever it does.";
+export const LEASH_FIELD = "Leash, in blocks";
+export const LEASH_HINT = "How far the bot may walk from where it was put: 1 to 64.";
+export const TOOL_GUARD_FIELD = "Tool guard, in uses left";
+export const TOOL_GUARD_HINT = "Mining stops when a tool has this many uses left. 0 turns it off.";
+export const BLOCKS_HEADING = "Blocks it mines";
+export const BLOCKS_HINT =
+  "A held left button mines only these, such as cobblestone. None listed: any block.";
+export const ADD_BLOCK = "Add block";
+export function blockLabel(n: number): string {
+  return `Block ${n}`;
+}
+export function removeBlock(n: number): string {
+  return `Remove block ${n}`;
+}
+
+/** The declared messages. */
+export const MESSAGES_HEADING = "Messages";
+export const MESSAGES_HINT =
+  'What the script may send, by its key: chat.send("key", #{ name: value }). A {name} in the text is a value the script fills, in its range.';
+export const ADD_MESSAGE = "Add message";
+export function messageLabel(n: number): string {
+  return `Message ${n}`;
+}
+export function removeMessage(n: number): string {
+  return `Remove message ${n}`;
+}
+export const KEY_FIELD = "Key";
+export const MESSAGE_TEXT_FIELD = "Text";
+export const VALUES_HEADING = "Values";
+export const ADD_VALUE = "Add value";
+export function valueLabel(n: number): string {
+  return `Value ${n}`;
+}
+export function removeValue(n: number): string {
+  return `Remove value ${n}`;
+}
+/** A value's name, as the text writes it in braces. */
+export const NAME_OF_VALUE = "Name in the text";
+/** A capture's name, as the line writes it in braces. */
+export const NAME_OF_CAPTURE = "Name in the line";
+export const TYPE_FIELD = "Type";
+export const VALUE_TYPE_TEXT = {
+  integer: "Whole number",
+  decimal: "Decimal",
+  word: "One of some words",
+} as const;
+export const MIN_FIELD = "From";
+export const MAX_FIELD = "To";
+export const PLACES_FIELD = "Decimals";
+export const WORDS_FIELD = "Words";
+export const WORDS_HINT = "Separated by spaces.";
+
+/** The declared chat patterns (ADR-0037). */
+export const PATTERNS_HEADING = "Chat patterns";
+export const PATTERNS_HINT =
+  "Lines of the server's own chat the script reads, whole, in on_chat(key, values). Never a player's line.";
+export const ADD_PATTERN = "Add pattern";
+export function patternLabel(n: number): string {
+  return `Pattern ${n}`;
+}
+export function removePattern(n: number): string {
+  return `Remove pattern ${n}`;
+}
+export const LINE_FIELD = "Line";
+export const WHEN_FIELD = "When it counts";
+export const WHEN_TEXT = {
+  reply: "As a reply, after chat.expect",
+  any_time: "At any time",
+} as const;
+/** The warning at a pattern that may come at any time (ADR-0037, C5). */
+export const ANY_TIME_WARNING =
+  "Riskier: any line the server prints that fits counts, not only a reply to the script's own command. Prefer a reply.";
+export const CAPTURES_HEADING = "Captures";
+export const ADD_CAPTURE = "Add capture";
+export function captureLabel(n: number): string {
+  return `Capture ${n}`;
+}
+export function removeCapture(n: number): string {
+  return `Remove capture ${n}`;
+}
+export const CAPTURE_TYPE_TEXT = {
+  integer: "Whole number",
+  amount: "Amount, such as 1,234.5 or 1.5k",
+  word: "One of some words",
+} as const;
+export const DECIMAL_MARK_FIELD = "Decimal mark";
+export const DECIMAL_MARK_TEXT = { ".": "Point: 1,234.56", ",": "Comma: 1.234,56" } as const;
+/** Next to an Add button once the most are there. */
+export function atMost(count: number, what: string): string {
+  return `At most ${count} ${what}.`;
+}
+/** A one-line text's error with the character it's at. */
+export function atCharacter(message: string, column: number): string {
+  return `${message} (at character ${column})`;
+}
+/** A mode whose script reads chat at any time, on its card and its screen (ADR-0037, C5). */
+export const MARK_ANY_TIME_CHAT = "Reads the server's chat at any time.";

@@ -5,4 +5,4 @@
  * This union lists the values this version knows; a newer server may send
  * others, so code that branches on it keeps a default branch.
  */
-export type UnplacedReason = "no_server" | "stopped" | "owner_disabled" | "pending" | "reauth_required" | "refused" | "offline_not_allowed" | "awaiting_agent";
+export type UnplacedReason = "no_server" | "stopped" | "owner_disabled" | "pending" | "reauth_required" | "refused" | "offline_not_allowed" | "awaiting_agent" | "agent_too_old";

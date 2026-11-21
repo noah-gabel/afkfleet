@@ -22,6 +22,7 @@ import {
   NEW_PASSWORD_MIN_CHARS,
   PAGE_MAX,
   PASSWORD_MAX_CHARS,
+  SCRIPT_CHECK_MAX_BYTES,
   SERVER_ADDRESS_MAX_CHARS,
   SERVER_SETTINGS_PAGE_MAX,
   SERVER_URL_MAX_BYTES,
@@ -383,10 +384,57 @@ const modeSteps = z
   .array(modeStepRequest)
   .refine((steps) => steps.length <= MODE_MAX_STEPS, `must hold at most ${MODE_MAX_STEPS} steps`);
 
+/** A range's end: any finite number, which the wire carries; whether it fits its type is the server's. */
+const rangeEnd = z.number({ error: NOT_A_NUMBER }).optional();
+
+/** A declared value: a closed type and no other field; its rules are the server's (ADR-0036, D8). */
+const modeValueRequest = z.strictObject({
+  name: z.string(),
+  type: z.enum(["integer", "decimal", "word"]),
+  min: rangeEnd,
+  max: rangeEnd,
+  places: wireInteger(WIRE_U8_MAX).optional(),
+  options: z.array(z.string()).optional(),
+});
+
+/** A pattern's capture: a closed type and no other field; its rules are the server's (ADR-0037, C3). */
+const modeCaptureRequest = z.strictObject({
+  name: z.string(),
+  type: z.enum(["integer", "amount", "word"]),
+  min: rangeEnd,
+  max: rangeEnd,
+  decimal_mark: z.enum([".", ","]).optional(),
+  options: z.array(z.string()).optional(),
+});
+
+/**
+ * A scripted mode's body: what the wire carries, closed types and no other field (S82). Every
+ * rule (the text's size and characters, the leash's range, a declaration's) is the server's,
+ * answered at its field (ADR-0044, E5).
+ */
+const modeScriptRequest = z.strictObject({
+  source: z.string(),
+  leash: wireInteger(WIRE_U8_MAX),
+  tool_guard: wireInteger(WIRE_U8_MAX),
+  block_guard: z.array(z.string()),
+  messages: z.array(
+    z.strictObject({ key: z.string(), text: z.string(), values: z.array(modeValueRequest) }),
+  ),
+  patterns: z.array(
+    z.strictObject({
+      key: z.string(),
+      when: z.enum(["reply", "any_time"]),
+      text: z.string(),
+      captures: z.array(modeCaptureRequest),
+    }),
+  ),
+});
+
 export const createModeRequest = z.strictObject({
   name: modeName,
   visibility: z.enum(["private", "shared"]),
   steps: modeSteps,
+  script: modeScriptRequest.optional(),
 });
 
 export const updateModeRequest = z.strictObject({
@@ -394,6 +442,17 @@ export const updateModeRequest = z.strictObject({
   name: modeName,
   visibility: z.enum(["private", "shared"]),
   steps: modeSteps,
+  script: modeScriptRequest.optional(),
+});
+
+/** The editor's check of a script's text, at most four times a script's own bytes (ADR-0045). */
+export const scriptCheckRequest = z.strictObject({
+  source: z
+    .string()
+    .refine(
+      (text) => bytes(text) <= SCRIPT_CHECK_MAX_BYTES,
+      `length must be at most ${SCRIPT_CHECK_MAX_BYTES} bytes`,
+    ),
 });
 
 /** A command for `/command`: a chat line that starts with `/` once trimmed (S8). */

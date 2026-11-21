@@ -172,6 +172,8 @@ export function unplacedText(why: UnplacedReason): string {
       return "Offline accounts not allowed";
     case "awaiting_agent":
       return "No agent with room yet";
+    case "agent_too_old":
+      return "Waiting for an updated agent";
     case "stopped":
       return "Stopped";
     default:
@@ -491,3 +493,53 @@ export function noticeLine(notice: Notice): string {
 function nameOf(notice: Notice): string {
   return notice.name ?? UNKNOWN_BOT;
 }
+
+// --- A bot's script (Plan.md P15.26; ADR-0036, D13; ADR-0044, E9, E10; ADR-0045) --------------
+
+/** Under a bot whose every live agent is too old for its scripted mode (ADR-0036, D13). */
+export const AGENT_TOO_OLD =
+  "Its mode is a script, and every agent online runs a version too old for it. Update an agent.";
+/** The script's card. */
+export const SCRIPT_HEADING = "Script";
+/** Before its script said anything: nothing of it is stored, only the live events carry it. */
+export const SCRIPT_NO_STATUS = "No word from its script since the app connected.";
+/** Where the script stands. */
+export const SCRIPT_STATE_TEXT = {
+  running: "Running",
+  stopped: "Stopped",
+  refused: "Refused by its agent",
+  crashed: "Crashed: the agent stopped it",
+} as const;
+/** What stopped or refused it. */
+export const SCRIPT_PROBLEM_TEXT = {
+  compile: "Not a program its agent takes",
+  error: "An error of the script's",
+  misuse: "A wrong use of the API",
+  limit: "Over a limit",
+  state: "Its state broke its rules",
+} as const;
+/** The hook that ran when it stopped. */
+export function inHook(hook: string): string {
+  return `In ${hook}`;
+}
+/** Where in the script. */
+export function scriptPlace(line: number, column: number | undefined): string {
+  return column === undefined ? `Line ${line}` : `Line ${line}, column ${column}`;
+}
+/** The link to the place in the mode's script. */
+export const SHOW_IN_SCRIPT = "Show in the script";
+/** Its log. */
+export const SCRIPT_LOG_HEADING = "Log";
+export const SCRIPT_LOG_EMPTY = "Nothing logged since the app connected.";
+/** What a log line is about. */
+export const SCRIPT_LOG_KIND_TEXT = {
+  line: "Log",
+  sent: "Sent",
+  not_sent: "Not sent",
+  window_opened: "Waiting for a reply",
+  window_expired: "No reply came",
+  window_dropped: "Stopped waiting",
+  matched: "Read",
+  refused: "Refused",
+  stop_failed: "on_stop failed",
+} as const;

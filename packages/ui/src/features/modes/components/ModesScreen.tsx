@@ -19,6 +19,7 @@ import { modesOf } from "../../bots/facts";
 import {
   FACT,
   LOADING_MODES,
+  MARK_ANY_TIME_CHAT,
   MARK_UNLISTED,
   MODES_HEADING,
   MODES_INTRO,
@@ -29,6 +30,7 @@ import {
   visibilityText,
   whoseText,
 } from "../texts";
+import { bodyFact } from "./ModeParts";
 
 /** The way to a new mode, with its icon. */
 function NewModeLink() {
@@ -114,6 +116,7 @@ function ModeCard({ mode }: { mode: ModeResponse }) {
       </h2>
       <Facts facts={modeFacts(mode)} place="card" />
       {mode.unlisted_command ? <p className="text-xs">{MARK_UNLISTED}</p> : null}
+      {mode.script?.any_time_chat ? <p className="text-xs">{MARK_ANY_TIME_CHAT}</p> : null}
     </Card>
   );
 }
@@ -123,6 +126,6 @@ export function modeFacts(mode: ModeResponse) {
   return [
     { term: FACT.owner, value: whoseText(mode.ownership, mode.owner) },
     { term: FACT.visibility, value: visibilityText(mode.visibility) },
-    { term: FACT.steps, value: String(mode.steps.length) },
+    bodyFact(mode),
   ];
 }

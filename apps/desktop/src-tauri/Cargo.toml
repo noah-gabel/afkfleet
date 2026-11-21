@@ -22,6 +22,11 @@ doc = false
 fleet-api-types.workspace = true
 # The only way to the server: it holds the access and step tokens itself (ADR-0017).
 fleet-client.workspace = true
+# A script's defaults, read by the editor's check (`script_check`; Plan.md P15.25, ADR-0045).
+fleet-core.workspace = true
+# The editor's check of a script's text: fleet-script's own compile, the one the server and
+# the agent run, never a hook (`script_check`; ADR-0045). Rhai comes in through it alone.
+fleet-script.workspace = true
 # Every request DTO and the server profile are validated at the command boundary.
 garde.workspace = true
 # An update's download, sent as tauri-plugin-updater sends it but read under the app's own
@@ -63,8 +68,6 @@ tokio = { workspace = true, features = ["macros", "sync", "time"] }
 [dev-dependencies]
 # ManualClock's times for the TOTP codes.
 chrono.workspace = true
-# The Owner's username and password, and the Clock trait, for the in-process server.
-fleet-core.workspace = true
 # The in-process server the bridge tests run against (ADR-0017).
 fleet-server.workspace = true
 # The signal source that stops the in-process server.

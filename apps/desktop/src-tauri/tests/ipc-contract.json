@@ -674,6 +674,13 @@
       "inputs": [],
       "args": {},
       "expect": { "ok": { "version": "0.1.0" } }
+    },
+    {
+      "command": "check_script",
+      "method": "checkScript",
+      "inputs": [{ "source": "fn on_join(first) {\n    keys.jump.tap();\n}\n" }],
+      "args": { "request": { "source": "fn on_join(first) {\n    keys.jump.tap();\n}\n" } },
+      "expect": { "ok": {} }
     }
   ]
 }

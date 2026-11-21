@@ -6,9 +6,11 @@ import type { ModeScheduleKind } from "../../generated/ModeScheduleKind";
 import type { ModeStep } from "../../generated/ModeStep";
 import type { ModeStepRequest } from "../../generated/ModeStepRequest";
 import type { ModeVisibility } from "../../generated/ModeVisibility";
+import { SCRIPT_API } from "../../generated/script-api";
 import { mode } from "../../test/live";
 import {
   ACTION_KINDS,
+  bodyOf,
   copyValues,
   isEditable,
   isKnownMode,
@@ -21,6 +23,7 @@ import {
   unknownSteps,
   valuesOf,
 } from "./modeForm";
+import { newScriptValues, scriptValuesOf } from "./scriptForm";
 
 const AT_START = { type: "at_start" } as const;
 const EVERY = { type: "every", interval_ms: 45_000, jitter_ms: 0 } as const;
@@ -97,8 +100,15 @@ describe("a mode's values and its request (R158, R159)", () => {
     const [request] = stepsOf(values).steps;
 
     expect(Object.keys(values).sort()).toEqual(
-      ["atStart", "name", "onRespawn", "repeating", "visibility"].sort(),
+      ["atStart", "kind", "name", "onRespawn", "repeating", "script", "visibility"].sort(),
     );
+    // A script's level, its any-time flag and a cut command's mark are the answer's alone.
+    const body = SCRIPT_API.examples[3]?.script;
+    const script = valuesOf(mode(1, { ...(body === undefined ? {} : { script: body }) })).script;
+    expect(Object.keys(script).sort()).toEqual(
+      ["blocks", "leash", "messages", "patterns", "source", "toolGuard"].sort(),
+    );
+    expect(Object.keys(script.messages[0] ?? {}).sort()).toEqual(["key", "text", "values"]);
     expect(Object.keys(request?.action ?? {}).sort()).toEqual(["message", "type"]);
     expect(Object.keys(request ?? {}).sort()).toEqual(["action", "probability", "schedule"]);
   });
@@ -149,9 +159,11 @@ describe("a mode's values and its request (R158, R159)", () => {
     expect(newValues()).toEqual({
       name: "",
       visibility: "private",
+      kind: "steps",
       atStart: [],
       repeating: [],
       onRespawn: [],
+      script: newScriptValues(),
     });
   });
 });
@@ -332,5 +344,89 @@ describe("a copy (U63, U67, R170)", () => {
     const whole = holding(asked({ type: "send_chat", message: "/warp farm" }));
 
     expect(copyValues(whole).atStart[0]?.cutCommand).toBeNull();
+  });
+});
+
+describe("a scripted mode (P15.25)", () => {
+  const body = SCRIPT_API.examples[2]?.script;
+  if (body === undefined) {
+    throw new Error("no example");
+  }
+  const scripted = mode(1, { script: body });
+
+  it("opens as a script with its body's fields, no steps", () => {
+    const values = valuesOf(scripted);
+
+    expect(values.kind).toBe("script");
+    expect(values.script).toEqual(scriptValuesOf(body));
+    expect(stepTotal(values)).toBe(0);
+    expect(isEditable(scripted)).toBe(true);
+  });
+
+  it("opens a step mode as steps, with a new script's fields left alone", () => {
+    expect(valuesOf(mode(1)).kind).toBe("steps");
+    expect(valuesOf(mode(1)).script).toEqual(newScriptValues());
+  });
+
+  it.each<[string, Partial<ModeResponse>]>([
+    ["the server says no", { editable: false }],
+    [
+      "a cut command",
+      {
+        script: {
+          ...body,
+          messages: [{ key: "pay", text: "/pay", values: [], arguments_hidden: true }],
+        },
+      },
+    ],
+    [
+      "a pattern this version can't hold",
+      {
+        script: {
+          ...body,
+          patterns: [{ key: "x", when: "sometimes" as never, text: "x {a}", captures: [] }],
+        },
+      },
+    ],
+  ])("never opens one with %s", (_name, changes) => {
+    expect(isEditable(mode(1, { script: body, ...changes }))).toBe(false);
+  });
+
+  it("knows an unknown body as unknown, and copies a known one as a script", () => {
+    expect(
+      isKnownMode(
+        mode(1, {
+          script: { ...body, patterns: [{ key: "x", when: "x" as never, text: "", captures: [] }] },
+        }),
+      ),
+    ).toBe(false);
+    expect(copyValues(scripted)).toMatchObject({ kind: "script", script: scriptValuesOf(body) });
+  });
+});
+
+describe("what a save sends of a mode's body (P15.25)", () => {
+  it("sends a step mode's steps and no script, whatever its script's fields hold", () => {
+    const values = { ...valuesOf(holding(asked({ type: "jump" }))), script: newScriptValues() };
+
+    const body = bodyOf(values);
+
+    expect(body.steps).toEqual(stepsOf(values).steps);
+    expect(body.script).toBeUndefined();
+    expect(body.paths["steps[0].action.type"]).toBe("atStart.0.kind");
+  });
+
+  it("sends a script with no steps, whatever the step fields hold, and maps both kinds of path", () => {
+    const body = SCRIPT_API.examples[0]?.script;
+    const values = {
+      ...valuesOf(mode(1, { ...(body === undefined ? {} : { script: body }) })),
+      atStart: [newStep()],
+    };
+
+    const sent = bodyOf(values);
+
+    expect(sent.steps).toEqual([]);
+    expect(sent.script?.source).toBe(body?.source);
+    expect(sent.paths).toMatchObject({ name: "name", "script.leash": "script.leash" });
+    expect(sent.paths["steps[0].action.type"]).toBeUndefined();
   });
 });

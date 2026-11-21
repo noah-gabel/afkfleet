@@ -12,6 +12,9 @@
 //   stronger, and neither once the focus has gone, which a plain ratio can't see: `--input` holds
 //   3:1 too. Cells without the marker fail, as they'd pass on the outline.
 //
+// - **Shadow roots:** the walk enters every open one (the script editor's, ADR-0045), and a
+//   backdrop or an opacity climbs from a shadow root's top to its host.
+//
 // **Left out, on purpose:** WCAG 1.4.11's graphics (a status square, an icon, an input's border, a
 // radio's mark), hover and pressed colours, generated content, and a select's open list, which
 // isn't in the DOM.
@@ -112,10 +115,32 @@ export function probe(
     return (high + 0.05) / (low + 0.05);
   };
   const rounded = (ratio: number) => Math.round(ratio * 100) / 100;
+  /** The element `element` sits in: its parent, or, at a shadow root's top, the root's host. */
+  const up = (element: Element): Element | null => {
+    if (element.parentElement !== null) {
+      return element.parentElement;
+    }
+    const root = element.getRootNode();
+    return root instanceof ShadowRoot ? root.host : null;
+  };
+  /** Every open shadow root on the page, nested ones included. */
+  const shadowRoots = (): ShadowRoot[] => {
+    const found: ShadowRoot[] = [];
+    const walk = (root: Document | ShadowRoot) => {
+      for (const element of root.querySelectorAll("*")) {
+        if (element.shadowRoot !== null) {
+          found.push(element.shadowRoot);
+          walk(element.shadowRoot);
+        }
+      }
+    };
+    walk(document);
+    return found;
+  };
   /** The backgrounds behind `element`, composited down to the first opaque one. */
   const backdrop = (element: Element): Rgba => {
     const layers: Rgba[] = [];
-    for (let at: Element | null = element; at !== null; at = at.parentElement) {
+    for (let at: Element | null = element; at !== null; at = up(at)) {
       const layer = rgba(getComputedStyle(at).backgroundColor);
       if (layer[3] > 0) {
         layers.push(layer);
@@ -129,7 +154,7 @@ export function probe(
   /** The opacity `element` and its ancestors multiply to. */
   const opacity = (element: Element): number => {
     let total = 1;
-    for (let at: Element | null = element; at !== null; at = at.parentElement) {
+    for (let at: Element | null = element; at !== null; at = up(at)) {
       total *= Number(getComputedStyle(at).opacity);
     }
     return total;
@@ -174,21 +199,23 @@ export function probe(
       }
     };
 
-    const texts = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    for (let node = texts.nextNode(); node !== null; node = texts.nextNode()) {
-      const parent = node.parentElement;
-      if (parent !== null && parent.closest("script, style, option, select, textarea") === null) {
-        measure(parent, (node.textContent ?? "").trim());
+    for (const root of [document.body, ...shadowRoots()]) {
+      const texts = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let node = texts.nextNode(); node !== null; node = texts.nextNode()) {
+        const parent = node.parentElement;
+        if (parent !== null && parent.closest("script, style, option, select, textarea") === null) {
+          measure(parent, (node.textContent ?? "").trim());
+        }
       }
-    }
-    for (const control of document.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
-      "input, select, textarea",
-    )) {
-      const type = control.getAttribute("type");
-      if (type !== "radio" && type !== "checkbox" && type !== "hidden") {
-        measure(control, control.value);
-        if (control.value === "") {
-          measure(control, control.getAttribute("placeholder") ?? "", "::placeholder");
+      for (const control of root.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
+        "input, select, textarea",
+      )) {
+        const type = control.getAttribute("type");
+        if (type !== "radio" && type !== "checkbox" && type !== "hidden") {
+          measure(control, control.value);
+          if (control.value === "") {
+            measure(control, control.getAttribute("placeholder") ?? "", "::placeholder");
+          }
         }
       }
     }

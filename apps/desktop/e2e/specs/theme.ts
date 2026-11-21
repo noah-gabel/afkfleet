@@ -40,6 +40,14 @@ export async function focusProblems(page: Page): Promise<readonly string[]> {
   const tabbables = await asked<number>(page, { kind: "tabStart" });
   let done = false;
   for (let stop = 0; !done && stop < tabbables + 20; stop += 1) {
+    // The script editor takes Tab to indent; Esc, then Tab, leaves it, as its hint says (ADR-0045).
+    if (
+      await page.evaluate(
+        () => document.activeElement?.matches('[data-slot="script-editor"]') === true,
+      )
+    ) {
+      await page.keyboard.press("Escape");
+    }
     await page.keyboard.press("Tab");
     const step = await asked<TabStep>(page, { kind: "tabStep" });
     done = step.done;

@@ -24,7 +24,15 @@ import {
   chatOutcomesKey,
   grantsKey,
   MODES_LIST_KEY,
+  scriptKey,
 } from "./queries";
+import {
+  EMPTY_SCRIPT_RECORD,
+  isScriptRecord,
+  type ScriptRecord,
+  withLine,
+  withStatus,
+} from "./scriptReports";
 
 /** What an update answers when only the server can decide: read the query again. */
 export const READ_AGAIN = Symbol("read again");
@@ -39,7 +47,12 @@ export type LivePatch =
   /** Reads every query under the key again. */
   | { readonly kind: "invalidate"; readonly queryKey: QueryKey }
   /** Resets the query: empty, read again when shown. */
-  | { readonly kind: "reset"; readonly queryKey: QueryKey };
+  | { readonly kind: "reset"; readonly queryKey: QueryKey }
+  /**
+   * Writes over the query's data, making it when the cache holds none: a record only the live
+   * events make, which nothing fetches (a bot's script, P15.26).
+   */
+  | { readonly kind: "keep"; readonly queryKey: QueryKey; readonly update: LiveUpdater };
 
 /** A list's pages as an infinite query keeps them: each page's items, newest first. */
 interface Paged<I> {
@@ -99,6 +112,18 @@ export function patchesFor(event: EventMessage, cached: CachedBot): LivePatch[] 
       const id = event.mode_id;
       return id === undefined ? [] : [pagesPatch(MODES_LIST_KEY, (data) => without(data, id))];
     }
+    case "bot_script": {
+      const { bot_id: botId, script } = event;
+      return botId === undefined || script === undefined
+        ? []
+        : [scriptPatch(botId, (record) => withStatus(record, script))];
+    }
+    case "bot_script_log": {
+      const { bot_id: botId, log } = event;
+      return botId === undefined || log === undefined
+        ? []
+        : [scriptPatch(botId, (record) => withLine(record, log))];
+    }
     case "ready":
     case "resync":
     case "bot_died":
@@ -141,6 +166,7 @@ function removedPatches(id: string, bot: BotResponse | undefined): LivePatch[] {
     { kind: "reset", queryKey: botKey(id) },
     { kind: "reset", queryKey: chatKey(id) },
     { kind: "reset", queryKey: chatOutcomesKey(id) },
+    { kind: "reset", queryKey: scriptKey(id) },
     ...(bot === undefined
       ? []
       : [{ kind: "reset", queryKey: accountKey(bot.account.id) } as const]),
@@ -176,6 +202,18 @@ function outcomesPatch(botId: string, update: (outcomes: ChatOutcomes) => ChatOu
     kind: "set",
     queryKey: chatOutcomesKey(botId),
     update: (data) => (isOutcomes(data) ? update(data) : data),
+  };
+}
+
+/**
+ * A patch of bot `botId`'s script record, made when the cache holds none: a status is said only at
+ * a change and at each join, so it's kept whether the bot's screen is open or not (P15.26).
+ */
+function scriptPatch(botId: string, update: (record: ScriptRecord) => ScriptRecord): LivePatch {
+  return {
+    kind: "keep",
+    queryKey: scriptKey(botId),
+    update: (data) => update(isScriptRecord(data) ? data : EMPTY_SCRIPT_RECORD),
   };
 }
 

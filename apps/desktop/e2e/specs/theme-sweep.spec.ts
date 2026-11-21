@@ -5,10 +5,11 @@
 // app's router lives in memory, so no click reaches it, and it holds one text and one link in the
 // app's default colours.
 
+import { SCRIPT_API } from "@afkfleet/ui/generated/script-api";
 import type { Page } from "@playwright/test";
-
 import { type FakeBackend, MEMBER, NEW_USER, OWNER } from "../fake/backend";
 import { expect, fakeBackend, shooting, test } from "../fixtures";
+
 import { NOW } from "../shots";
 import { enterCode, expectHome, idle, logIn, push } from "./steps";
 import {
@@ -1042,6 +1043,102 @@ test("modes: the list, the editor, a conflict, and a locked one", async ({ page,
   await main.getByRole("link", { name: "Open warp" }).click();
   await expect(main.getByRole("button", { name: "Make a copy" })).toBeVisible();
   await bothThemes(page, "a locked mode, its command cut");
+});
+
+test("scripts: the editor with its marks, a mode's declarations and a bot's script", async ({
+  page,
+  context,
+}) => {
+  const backend = await fakeBackend(context);
+  backend.addAccount(OWNER);
+  const balance = SCRIPT_API.examples.find((one) => one.id === "balance")?.script;
+  if (balance === undefined) {
+    throw new Error("no balance example");
+  }
+  const declared = backend.addScriptedMode(OWNER, "Balance", {
+    source: balance.source,
+    leash: balance.leash,
+    tool_guard: balance.tool_guard,
+    block_guard: balance.block_guard,
+    messages: balance.messages.map(({ key, text, values }) => ({ key, text, values })),
+    patterns: [
+      ...balance.patterns,
+      {
+        key: "restart",
+        when: "any_time",
+        text: "Restarting in {m} minutes",
+        captures: [{ name: "m", type: "integer", min: 0, max: 60 }],
+      },
+    ],
+  });
+  backend.setBot("AfkBot1", {
+    modeId: declared,
+    desiredState: "running",
+    status: { kind: "reported", state: "online" },
+  });
+  await signIn(page, backend, OWNER);
+  const main = page.getByRole("main");
+  const editor = page.locator('[data-slot="script-editor"] .cm-content');
+
+  await nav(page, "Modes");
+  await main.getByRole("link", { name: "New mode" }).click();
+  await main.getByLabel("Name").fill("Cobble");
+  await main.getByLabel("What it runs").selectOption("script");
+  await main.getByLabel("Start from an example").selectOption("cobblestone_generator");
+  await main.getByRole("button", { name: "Use example" }).click();
+  await editor.click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type("fn mine() {\nkees.left.hold();\nmouse.left.hodl();\n}");
+  if (shooting()) {
+    // The shots' clock stands at NOW, and CodeMirror's linter waits until Date.now passes its
+    // delay: a second later the marks come, then the clock goes back to NOW for the shots.
+    await page.clock.setFixedTime(new Date(new Date(NOW).getTime() + 1000));
+  }
+  await expect(main.getByRole("button", { name: /mouse\.left has no hodl/ })).toBeVisible();
+  if (shooting()) {
+    await page.clock.setFixedTime(new Date(NOW));
+  }
+  await expect(main.getByRole("button", { name: /`kees` isn't defined$/ })).toBeVisible();
+  // Two columns scroll each by itself, so the window is as tall as the script's sections.
+  await bothThemes(page, "a new scripted mode, an example and its marks", { height: 1500 });
+
+  await nav(page, "Modes");
+  await main.getByRole("link", { name: "Open Balance" }).click();
+  await expect(main.getByText(/^Riskier:/)).toBeVisible();
+  await bothThemes(page, "a scripted mode, its messages and an any-time pattern", {
+    height: 3400,
+  });
+
+  await nav(page, "Home");
+  await page.getByRole("link", { name: "Open AfkBot1" }).click();
+  const id = backend.bot("AfkBot1").id;
+  for (const log of [
+    { kind: "sent", text: "balance" },
+    { kind: "window_opened", text: "balance, for 5000 ms" },
+    { kind: "matched", text: "balance: amount 1520.5" },
+    { kind: "line", text: "paying 520.5" },
+  ] as const) {
+    await push(page, { update: "event", event: { type: "bot_script_log", bot_id: id, log } });
+  }
+  await push(page, {
+    update: "event",
+    event: {
+      type: "bot_script",
+      bot_id: id,
+      script: {
+        state: "stopped",
+        problem: {
+          kind: "misuse",
+          hook: "on_chat",
+          line: 12,
+          column: 9,
+          message: "pay2 isn't a message the mode declares",
+        },
+      },
+    },
+  });
+  await expect(main.getByRole("link", { name: "Show in the script" })).toBeVisible();
+  await bothThemes(page, "a bot, its script stopped");
 });
 
 test("modes: loading, failed, none, a long list, and sixteen steps in two columns and stacked", async ({

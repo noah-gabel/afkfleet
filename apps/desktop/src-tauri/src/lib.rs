@@ -36,6 +36,7 @@ pub mod keychain;
 mod live;
 mod navigation;
 pub mod profile;
+pub mod script_check;
 pub mod startup;
 pub mod state;
 pub mod update;
@@ -152,6 +153,7 @@ pub fn configure<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
             commands::update::check_update,
             commands::update::install_update,
             commands::update::app_version,
+            commands::script::check_script,
         ])
 }
 

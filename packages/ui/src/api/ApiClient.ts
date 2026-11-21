@@ -47,6 +47,8 @@ import type { PreviewChatFormatsRequest } from "../generated/PreviewChatFormatsR
 import type { PreviewChatFormatsResponse } from "../generated/PreviewChatFormatsResponse";
 import type { RegisterRequest } from "../generated/RegisterRequest";
 import type { RegisterResponse } from "../generated/RegisterResponse";
+import type { ScriptCheck } from "../generated/ScriptCheck";
+import type { ScriptCheckRequest } from "../generated/ScriptCheckRequest";
 import type { ServerProfileRequest } from "../generated/ServerProfileRequest";
 import type { ServerProfileResponse } from "../generated/ServerProfileResponse";
 import type { ServerProfileState } from "../generated/ServerProfileState";
@@ -246,6 +248,12 @@ export interface ApiClient {
    * Profile's Updates section, the login screen and the start screen.
    */
   appVersion(): Promise<AppVersion>;
+  /**
+   * The first problem the server's check at save would find in a scripted mode's text, or none
+   * (Plan.md P15.25; ADR-0045). The app's Rust side compiles it with the engine the server runs,
+   * off the UI's thread, and never runs it; a check that fails rejects with `script_check`.
+   */
+  checkScript(request: ScriptCheckRequest): Promise<ScriptCheck>;
 }
 
 /** A method of the API. */
@@ -324,4 +332,5 @@ export const API_METHODS = [
   "checkUpdate",
   "installUpdate",
   "appVersion",
+  "checkScript",
 ] as const satisfies readonly ApiMethod[];

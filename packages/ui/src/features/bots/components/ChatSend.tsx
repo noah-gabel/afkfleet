@@ -15,10 +15,15 @@
 //   message (`chat_unavailable` offers no "try again"), a 422's at the field, a 429's
 //   countdown on Send; after a 403 or a 404 the bot is read again. The server judges
 //   everything else (R117).
+// - **↑ and ↓ recall the lines sent to this bot** (the user's addition to P15.26, recall.ts): ↑
+//   fills in the newest line the server took, ↑ again the one before it, ↓ goes forward, and past
+//   the newest the box shows what was typed. The lines live in memory alone (`stores.chatRecall`),
+//   since one can hold a password. Nothing is recalled while a send runs or an input method
+//   composes, nor with a modifier held. The chat has had no password prompt since ADR-0028.
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQueryClient } from "@tanstack/react-query";
 import { LoaderCircleIcon } from "lucide-react";
-import { useId, useState } from "react";
+import { type KeyboardEvent, useId, useState } from "react";
 import { useForm } from "react-hook-form";
 
 import { toApiError } from "../../../api/ApiError";
@@ -37,6 +42,7 @@ import type { CommandError } from "../../../generated/CommandError";
 import { useRetryWait } from "../../../hooks/useRetryWait";
 import { useAlive } from "../../../hooks/useStepGuard";
 import { showFieldErrors } from "../../../lib/formErrors";
+import { type Browse, NOT_BROWSING, newer, older } from "../recall";
 import { CHAT } from "../texts";
 
 /** When a send began: the loss count for its pending mark, and the sign-in it's of. */
@@ -49,13 +55,14 @@ interface Begun {
 export function ChatSend({ bot }: { bot: BotResponse }) {
   const api = useApiClient();
   const queryClient = useQueryClient();
-  const { live, session } = useAppStores();
+  const { live, session, chatRecall } = useAppStores();
   const alive = useAlive();
   const wait = useRetryWait();
   const fieldId = useId();
   const errorId = useId();
   const [sending, setSending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  const [browse, setBrowse] = useState<Browse>(NOT_BROWSING);
   const form = useForm<ChatSendRequest>({
     resolver: zodResolver(chatSendRequest),
     defaultValues: { message: "" },
@@ -72,16 +79,18 @@ export function ChatSend({ bot }: { bot: BotResponse }) {
    * for an answer that comes in a later sign-in than its send began in, whose screen and
    * outcomes are another session's.
    */
-  function answered(answer: ChatSendResponse, begun: Begun): void {
+  function answered(answer: ChatSendResponse, begun: Begun, message: string): void {
     if (session.getState().generation !== begun.generation) {
       return;
     }
+    chatRecall.getState().remember(bot.id, message);
     recordAnswer(queryClient, bot.id, answer, begun.losses);
     if (!live.getState().connected) {
       void queryClient.invalidateQueries({ queryKey: chatKey(bot.id), exact: true });
     }
     if (alive.current) {
       form.reset({ message: "" });
+      setBrowse(NOT_BROWSING);
     }
   }
 
@@ -125,7 +134,7 @@ export function ChatSend({ bot }: { bot: BotResponse }) {
     const begun = begin();
     setSending(true);
     try {
-      answered(await send(message), begun);
+      answered(await send(message), begun, message);
     } catch (rejection) {
       refused(toApiError(rejection).error);
     } finally {
@@ -134,6 +143,31 @@ export function ChatSend({ bot }: { bot: BotResponse }) {
       }
     }
   });
+
+  /** ↑ and ↓: the line before or after, as recall.ts steps through this bot's lines. */
+  function recall(event: KeyboardEvent<HTMLInputElement>): void {
+    const up = event.key === "ArrowUp";
+    if (
+      (!up && event.key !== "ArrowDown") ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey ||
+      event.nativeEvent.isComposing ||
+      locked
+    ) {
+      return;
+    }
+    const lines = chatRecall.getState().linesOf(bot.id);
+    const step = up ? older(lines, browse, form.getValues("message")) : newer(lines, browse);
+    if (step === null) {
+      return;
+    }
+    event.preventDefault();
+    setBrowse(step.browse);
+    form.setValue("message", step.text);
+    event.currentTarget.setSelectionRange(step.text.length, step.text.length);
+  }
 
   const fieldError = form.formState.errors.message?.message;
   return (
@@ -153,7 +187,8 @@ export function ChatSend({ bot }: { bot: BotResponse }) {
           readOnly={locked}
           aria-invalid={fieldError === undefined ? undefined : true}
           aria-describedby={fieldError === undefined ? undefined : errorId}
-          {...form.register("message")}
+          onKeyDown={recall}
+          {...form.register("message", { onChange: () => setBrowse(NOT_BROWSING) })}
         />
         <Button type="submit" disabled={locked || wait.waiting !== null}>
           {sending ? (

@@ -10,6 +10,8 @@
 //   "is required for this type", but for the chance, whose absence is a bare 400 (S82). A number
 //   the wire can't carry is sent to `validated()` as it is, which refuses it at its field.
 // - **The paths** say where each request path's error shows, through the order sent.
+// - **A mode is steps or a script** (`kind`, P15.25): a scripted mode's body is `script`
+//   (scriptForm.ts), and a step mode keeps a new script's fields, which nothing sends.
 import type { Path } from "react-hook-form";
 
 import type { ModeActionKind } from "../../generated/ModeActionKind";
@@ -17,9 +19,17 @@ import type { ModeActionRequest } from "../../generated/ModeActionRequest";
 import type { ModeResponse } from "../../generated/ModeResponse";
 import type { ModeSchedule } from "../../generated/ModeSchedule";
 import type { ModeScheduleRequest } from "../../generated/ModeScheduleRequest";
+import type { ModeScriptRequest } from "../../generated/ModeScriptRequest";
 import type { ModeStep } from "../../generated/ModeStep";
 import type { ModeStepRequest } from "../../generated/ModeStepRequest";
 import type { ModeVisibility } from "../../generated/ModeVisibility";
+import {
+  isKnownScript,
+  newScriptValues,
+  type ScriptValues,
+  scriptRequestOf,
+  scriptValuesOf,
+} from "./scriptForm";
 import { ACTION_TEXT, copyName } from "./texts";
 
 /** The sections, in the order a save sends them. */
@@ -68,13 +78,18 @@ export interface StepValues {
   cutCommand: string | null;
 }
 
+/** What a mode's body is. */
+export type ModeKind = "steps" | "script";
+
 /** The form: what a request is built from. */
 export interface ModeValues {
   name: string;
   visibility: ModeVisibility;
+  kind: ModeKind;
   atStart: StepValues[];
   repeating: StepValues[];
   onRespawn: StepValues[];
+  script: ScriptValues;
 }
 
 /** A new step: a jump, always, without a wait yet. */
@@ -99,7 +114,15 @@ export function newStep(): StepValues {
 
 /** A new mode's values; every new mode starts private (U67). */
 export function newValues(): ModeValues {
-  return { name: "", visibility: "private", atStart: [], repeating: [], onRespawn: [] };
+  return {
+    name: "",
+    visibility: "private",
+    kind: "steps",
+    atStart: [],
+    repeating: [],
+    onRespawn: [],
+    script: newScriptValues(),
+  };
 }
 
 /** Whether this version knows action kind `kind`. */
@@ -130,7 +153,8 @@ export function isKnownStep(step: ModeStep): boolean {
 export function isKnownMode(mode: ModeResponse): boolean {
   return (
     (mode.visibility === "private" || mode.visibility === "shared") &&
-    mode.steps.every((step) => isKnownStep(step))
+    mode.steps.every((step) => isKnownStep(step)) &&
+    (mode.script === undefined || isKnownScript(mode.script))
   );
 }
 
@@ -142,7 +166,8 @@ export function isEditable(mode: ModeResponse): boolean {
   return (
     mode.editable &&
     isKnownMode(mode) &&
-    mode.steps.every((step) => step.action.arguments_hidden !== true)
+    mode.steps.every((step) => step.action.arguments_hidden !== true) &&
+    (mode.script?.messages ?? []).every((message) => !message.arguments_hidden)
   );
 }
 
@@ -189,9 +214,11 @@ export function valuesOf(mode: ModeResponse): ModeValues {
   const values: ModeValues = {
     name: mode.name,
     visibility: mode.visibility,
+    kind: mode.script === undefined ? "steps" : "script",
     atStart: [],
     repeating: [],
     onRespawn: [],
+    script: mode.script === undefined ? newScriptValues() : scriptValuesOf(mode.script),
   };
   for (const step of mode.steps) {
     const section = sectionOf(step.schedule);
@@ -327,6 +354,26 @@ export function stepsOf(values: ModeValues): BuiltSteps {
     });
   }
   return { steps, paths };
+}
+
+/** What a save sends of a mode's body, and where each path of its errors shows. */
+export interface Body {
+  readonly steps: ModeStepRequest[];
+  readonly script?: ModeScriptRequest;
+  readonly paths: Readonly<Record<string, Path<ModeValues>>>;
+}
+
+/** The request's body from `values`: its steps, or its script with no steps (P15.25). */
+export function bodyOf(values: ModeValues): Body {
+  if (values.kind === "script") {
+    const built = scriptRequestOf(values.script);
+    return {
+      steps: [],
+      script: built.script,
+      paths: { name: "name", visibility: "visibility", ...built.paths },
+    };
+  }
+  return stepsOf(values);
 }
 
 /** How many steps `values` holds, over its sections. */

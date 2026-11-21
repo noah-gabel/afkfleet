@@ -61,3 +61,4 @@ Each architecture decision record (ADR) holds one decision with its context, its
 - [0042. A scripted mode's inputs in fleet-mc, as built: one place for what's held, guards before azalea's own systems, and what the live scenarios found](adr/0042-scripted-inputs-in-fleet-mc.md)
 - [0043. The script runner in fleet-runtime, and a script's hooks on the async workers](adr/0043-the-script-runner-and-hooks-on-the-async-workers.md)
 - [0044. Scripted modes on the wire, the server and the agent: who writes one, what's checked at save, never below an agent's level, and what an agent reports](adr/0044-scripted-modes-on-the-wire-the-server-and-the-agent.md)
+- [0045. The script editor and a bot's script in the app: CodeMirror in a shadow root, one description, the app's own check, and the chat's ↑ and ↓](adr/0045-the-script-editor-and-a-bots-script-in-the-app.md)

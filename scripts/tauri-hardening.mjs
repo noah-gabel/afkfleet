@@ -117,6 +117,7 @@ export const COMMANDS = [
   "check_update",
   "install_update",
   "app_version",
+  "check_script",
 ];
 
 /** The whole of `app.security`. */

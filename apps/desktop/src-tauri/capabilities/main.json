@@ -74,6 +74,7 @@
     "allow-set-window-theme",
     "allow-check-update",
     "allow-install-update",
-    "allow-app-version"
+    "allow-app-version",
+    "allow-check-script"
   ]
 }
