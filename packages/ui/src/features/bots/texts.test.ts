@@ -86,6 +86,7 @@ describe("a bot's reason", () => {
     ["refused", "Account link refused"],
     ["offline_not_allowed", "Offline accounts not allowed"],
     ["awaiting_agent", "No agent with room yet"],
+    ["agent_too_old", "Waiting for an updated agent"],
     ["a_newer_why", "a_newer_why"],
   ] as [BotStatus["why"] & string, string][])("not running for %s reads %s", (why, text) => {
     expect(unplacedText(why)).toBe(text);

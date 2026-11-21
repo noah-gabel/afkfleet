@@ -2,7 +2,9 @@
 // name, state, controls and facts, its Settings and its timeline; the console on the right, filling
 // the height, the left column scrolling by itself. Under about 800 px of content it stacks, the boxes
 // first (U105). That's measured on the content column, not the window, since the sidebar takes a part
-// of it (U113). While it's open, its notices are acknowledged (R109).
+// of it (U113). While it's open, its notices are acknowledged (R109). A bot on a scripted mode has
+// a Script card under its own (P15.26), and one no agent online can run says an agent must be
+// updated (ADR-0036, D13).
 // A read that answers 404 says the bot doesn't exist or can't be seen, also when it goes
 // while its screen is open (a `bot_removed` resets its query, which reads it again, R98).
 import { Link } from "@tanstack/react-router";
@@ -19,10 +21,11 @@ import { Card } from "../../../components/ui/card";
 import { useNow } from "../../../hooks/useNow";
 import { botFacts, modesOf, uptimeNextChange } from "../facts";
 import { botActions } from "../permissions";
-import { AGENTS_LINK, agentLastSeen, BOT_NOT_FOUND, LOADING_BOT } from "../texts";
+import { AGENT_TOO_OLD, AGENTS_LINK, agentLastSeen, BOT_NOT_FOUND, LOADING_BOT } from "../texts";
 import { BotChat } from "./BotChat";
 import { BotControls } from "./BotControls";
 import { BotState } from "./BotParts";
+import { BotScript } from "./BotScript";
 import { BotSettings } from "./BotSettings";
 import { BotTimeline } from "./BotTimeline";
 import { ChatSend } from "./ChatSend";
@@ -68,6 +71,8 @@ export function BotScreen({ id }: { id: string }) {
     server: actions.configure,
   });
   const lastSeen = data.status.kind === "unknown" ? data.status.agent_last_seen_at : undefined;
+  const known = modesOf(modes);
+  const mode = typeof known === "string" ? undefined : known.find((one) => one.id === data.mode_id);
   return (
     <main className="flex flex-1 flex-col p-4 @min-[53rem]/content:min-h-0">
       <div className="grid gap-3 @min-[53rem]/content:min-h-0 @min-[53rem]/content:flex-[1_1_0] @min-[53rem]/content:grid-cols-[minmax(18rem,2fr)_3fr]">
@@ -82,6 +87,9 @@ export function BotScreen({ id }: { id: string }) {
               </div>
               <BotControls bot={data} />
               <Facts facts={facts} place="screen" />
+              {data.status.kind === "unplaced" && data.status.why === "agent_too_old" ? (
+                <p className="text-sm">{AGENT_TOO_OLD}</p>
+              ) : null}
               {lastSeen === undefined ? null : (
                 <p className="text-sm text-muted-foreground">{agentLastSeen(lastSeen, now)}</p>
               )}
@@ -92,6 +100,7 @@ export function BotScreen({ id }: { id: string }) {
               ) : null}
             </Card>
           </section>
+          <BotScript bot={data} mode={mode} />
           <BotSettings bot={data} />
           <BotTimeline id={data.id} />
         </div>

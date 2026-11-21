@@ -179,3 +179,29 @@ describe("the notices store", () => {
     expect(notices.getState().dismissed).toEqual({ generation: 4, warnings: ["recoveryCodes"] });
   });
 });
+
+describe("the chat recall store (the user's addition to P15.26)", () => {
+  it("keeps each bot's lines apart, the same line twice in a row once", () => {
+    const { chatRecall } = createAppStores();
+
+    chatRecall.getState().remember("bot-1", "/spawn");
+    chatRecall.getState().remember("bot-1", "/spawn");
+    chatRecall.getState().remember("bot-2", "hi");
+
+    expect(chatRecall.getState().linesOf("bot-1")).toEqual(["/spawn"]);
+    expect(chatRecall.getState().linesOf("bot-2")).toEqual(["hi"]);
+    expect(chatRecall.getState().linesOf("bot-3")).toEqual([]);
+  });
+
+  it("forgets one bot's lines, and every bot's", () => {
+    const { chatRecall } = createAppStores();
+    chatRecall.getState().remember("bot-1", "a");
+    chatRecall.getState().remember("bot-2", "b");
+
+    chatRecall.getState().forget("bot-1");
+    expect(chatRecall.getState().linesOf("bot-1")).toEqual([]);
+    expect(chatRecall.getState().linesOf("bot-2")).toEqual(["b"]);
+    chatRecall.getState().clear();
+    expect(chatRecall.getState().linesOf("bot-2")).toEqual([]);
+  });
+});

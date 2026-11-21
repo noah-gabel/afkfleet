@@ -40,6 +40,7 @@ import { answered, type ChatOutcomes } from "./chatOutcomes";
 import { useApiClient } from "./context";
 import { PAGE_MAX, SERVER_SETTINGS_PAGE_MAX } from "./limits";
 import { usernamePrefix } from "./schemas";
+import { EMPTY_SCRIPT_RECORD, type ScriptRecord } from "./scriptReports";
 
 /** Why a read of every page failed when the server's pages didn't move on (R99). */
 export const PAGES_DONT_MOVE_ON = "The server sent a list this app doesn't understand.";
@@ -383,6 +384,11 @@ export function chatOutcomesKey(id: string) {
   return tagged<ChatOutcomes>()(["bots", "chat-outcomes", id] as const);
 }
 
+/** A bot's script as the live events reported it (P15.26). */
+export function scriptKey(id: string) {
+  return tagged<ScriptRecord>()(["bots", "script", id] as const);
+}
+
 /** The modes the user may see: every page, read at once (S68). */
 export const MODES_LIST_KEY = tagged<InfiniteData<ModePage, string | undefined>>()([
   "modes",
@@ -506,6 +512,25 @@ export function chatOutcomesQuery(id: string) {
     gcTime: Number.POSITIVE_INFINITY,
     staleTime: Number.POSITIVE_INFINITY,
   });
+}
+
+/**
+ * One bot's script, as the live events reported it (P15.26): empty until reported, never fetched,
+ * kept while the session lasts; the session's end empties the cache, and a `bot_removed` resets it.
+ */
+export function scriptQuery(id: string) {
+  return queryOptions({
+    queryKey: scriptKey(id),
+    queryFn: skipToken,
+    initialData: EMPTY_SCRIPT_RECORD,
+    gcTime: Number.POSITIVE_INFINITY,
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+}
+
+/** One bot's script, as its screen shows it. */
+export function useBotScript(id: string): ScriptRecord {
+  return useQuery(scriptQuery(id)).data ?? EMPTY_SCRIPT_RECORD;
 }
 
 /** One bot's chat outcomes, as its screen holds them. */

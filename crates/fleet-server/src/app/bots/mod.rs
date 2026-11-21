@@ -327,6 +327,8 @@ impl BotService {
             qualifies,
             last: self.last_known(record.bot.id, record.bot.last),
             assigned,
+            needs: record.mode.script_api(),
+            newest_live: self.live.newest_script_api(),
         });
         Ok(BotView {
             record,

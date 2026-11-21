@@ -149,6 +149,15 @@ impl LiveAgents for Live {
         self.streams.lock().unwrap().get(&agent).copied()
     }
 
+    fn newest_script_api(&self) -> Option<u32> {
+        self.streams
+            .lock()
+            .unwrap()
+            .values()
+            .map(|stream| stream.script_api)
+            .max()
+    }
+
     fn held(&self, agent: AgentId, bot: BotId) -> Option<HeldBot> {
         self.held.lock().unwrap().get(&(agent, bot)).cloned()
     }
@@ -750,6 +759,51 @@ async fn a_qualifying_bot_without_an_agent_awaits_one_in_its_sticky_state(
             })),
         }
     );
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_scripted_bot_awaits_a_newer_agent_while_every_live_one_is_too_old(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let bot = setup.bot(1).await;
+    setup.run(bot).await;
+    let afk = ModePreset::Afk.id().to_string();
+    let scripted = r#"{"script":{"api":1,"source":"fn on_join(first) {}","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}}"#;
+    sqlx::query!(
+        "UPDATE modes SET definition_json = ? WHERE id = ?",
+        scripted,
+        afk
+    )
+    .execute(setup.db.write_pool())
+    .await
+    .unwrap();
+    let stream = |script_api| LiveStream {
+        connected_at: at(T0),
+        last_seen: at(T0),
+        script_api,
+    };
+    let waiting = |why| ShownState::Unplaced { why, sticky: None };
+
+    assert_eq!(setup.shown(bot).await, waiting(UnplacedWhy::AwaitingAgent));
+    setup
+        .live
+        .streams
+        .lock()
+        .unwrap()
+        .insert(agent(1), stream(0));
+    assert_eq!(
+        setup.shown(bot).await,
+        waiting(UnplacedWhy::AwaitingNewerAgent)
+    );
+    setup
+        .live
+        .streams
+        .lock()
+        .unwrap()
+        .insert(agent(2), stream(1));
+    assert_eq!(setup.shown(bot).await, waiting(UnplacedWhy::AwaitingAgent));
 }
 
 #[sqlx::test(migrations = false)]

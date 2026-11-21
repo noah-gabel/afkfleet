@@ -28,6 +28,7 @@ import {
   grantsKey,
   MODES_LIST_KEY,
   modesQuery,
+  scriptKey,
 } from "../api/queries";
 import type { AccountPage } from "../generated/AccountPage";
 import type { AccountResponse } from "../generated/AccountResponse";
@@ -143,6 +144,27 @@ describe("the cache", () => {
     watch.latest().push(botFrame(bot(1)));
 
     expect(queryClient.getQueryCache().getAll()).toEqual([]);
+  });
+
+  it("makes a bot's script record, the one entry only the live events make, and keeps it (P15.26)", () => {
+    const { watch, queryClient } = setup();
+
+    watch
+      .latest()
+      .push(event({ type: "bot_script", bot_id: botId(1), script: { state: "running" } }));
+    watch
+      .latest()
+      .push(event({ type: "bot_script_log", bot_id: botId(1), log: { kind: "line", text: "hi" } }));
+
+    expect(queryClient.getQueryData(scriptKey(botId(1)))).toEqual({
+      status: { state: "running" },
+      log: [{ id: 0, kind: "line", text: "hi" }],
+      next: 1,
+    });
+    // Unobserved, it stays for the session: the session's end clears the cache.
+    expect(queryClient.getQueryCache().find({ queryKey: scriptKey(botId(1)) })?.gcTime).toBe(
+      Number.POSITIVE_INFINITY,
+    );
   });
 
   it("follows a bot frame: the list and the account replaced, the grants read again, twice the same", () => {
@@ -1044,6 +1066,23 @@ describe("the live record (S71)", () => {
 
     expect(signedOut.bots).toEqual({});
     expect(stores.record.getState().record.bots).toEqual({});
+  });
+
+  it("drops the lines a bot's chat remembers at sign-out, at a sign-in, and a bot's at its removal", async () => {
+    const { watch, stores } = setup();
+    const recall = stores.chatRecall;
+    recall.getState().remember(botId(1), "/login secret");
+    recall.getState().remember(botId(2), "hi");
+
+    watch.latest().push(event({ type: "bot_removed", bot_id: botId(1) }));
+    expect(recall.getState().linesOf(botId(1))).toEqual([]);
+    expect(recall.getState().linesOf(botId(2))).toEqual(["hi"]);
+
+    stores.session.getState().signOut();
+    expect(recall.getState().linesOf(botId(2))).toEqual([]);
+    recall.getState().remember(botId(3), "late");
+    stores.session.getState().signIn();
+    expect(recall.getState().linesOf(botId(3))).toEqual([]);
   });
 
   it("marks a gap when a new watch of the same sign-in is ready after the last one ended", async () => {

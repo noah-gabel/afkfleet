@@ -25,6 +25,7 @@ import {
   chatOutcomesKey,
   grantsKey,
   MODES_LIST_KEY,
+  scriptKey,
 } from "./queries";
 
 const REQUEST = "01900000-0000-7000-8000-0000000004a1";
@@ -32,8 +33,9 @@ const REQUEST = "01900000-0000-7000-8000-0000000004a1";
 /** What `event`'s patch for `queryKey` makes of `data`. */
 function patched(event: EventMessage, queryKey: QueryKey, data: unknown): unknown {
   const patch = patchesFor(event, () => undefined).find(
-    (one): one is Extract<LivePatch, { kind: "set" }> =>
-      one.kind === "set" && JSON.stringify(one.queryKey) === JSON.stringify(queryKey),
+    (one): one is Extract<LivePatch, { kind: "set" | "keep" }> =>
+      (one.kind === "set" || one.kind === "keep") &&
+      JSON.stringify(one.queryKey) === JSON.stringify(queryKey),
   );
   if (patch === undefined) {
     throw new Error(`no patch for ${JSON.stringify(queryKey)}`);
@@ -165,6 +167,7 @@ describe("the other events", () => {
         { kind: "reset", queryKey: botKey(botId(3)) },
         { kind: "reset", queryKey: chatKey(botId(3)) },
         { kind: "reset", queryKey: chatOutcomesKey(botId(3)) },
+        { kind: "reset", queryKey: scriptKey(botId(3)) },
         { kind: "invalidate", queryKey: ACCOUNTS_KEY },
       ]),
     );
@@ -179,7 +182,7 @@ describe("the other events", () => {
       kind: "reset",
       queryKey: accountKey(accountId(3)),
     });
-    expect(resets(() => undefined)).toHaveLength(3);
+    expect(resets(() => undefined)).toHaveLength(4);
   });
 
   it("chat merges its line into the bot's chat by the row's ID", () => {
@@ -251,6 +254,37 @@ describe("the other events", () => {
     const notice = { type, bot_id: botId(1) } as EventMessage;
 
     expect(patchesFor(notice, () => undefined)).toEqual([]);
+  });
+
+  it("bot_script and bot_script_log keep a bot's status and log, from nothing too (P15.26)", () => {
+    const key = scriptKey(botId(3));
+    const status: EventMessage = {
+      type: "bot_script",
+      bot_id: botId(3),
+      script: {
+        state: "stopped",
+        problem: { kind: "error", hook: "on_join", line: 2, column: 4, message: "boom" },
+      },
+    };
+    const logged: EventMessage = {
+      type: "bot_script_log",
+      bot_id: botId(3),
+      log: { kind: "sent", text: "balance" },
+    };
+
+    const first = patched(status, key, undefined);
+    const then = patched(logged, key, first);
+
+    expect(first).toEqual({ status: status.script, log: [], next: 0 });
+    expect(then).toEqual({
+      status: status.script,
+      log: [{ id: 0, kind: "sent", text: "balance" }],
+      next: 1,
+    });
+    expect(patchesFor({ type: "bot_script", bot_id: botId(3) }, () => undefined)).toEqual([]);
+    expect(
+      patchesFor({ type: "bot_script_log", log: { kind: "line", text: "x" } }, () => undefined),
+    ).toEqual([]);
   });
 
   it("a frame missing what its kind carries patches nothing", () => {

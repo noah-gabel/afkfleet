@@ -195,6 +195,11 @@ pub trait LiveAgents: Send + Sync + fmt::Debug {
     /// `agent`'s live stream, if it has one.
     fn live(&self, agent: AgentId) -> Option<LiveStream>;
 
+    /// The highest script API level a live stream's hello named: `None`
+    /// while no stream is live. A bot's page says its agent must be updated
+    /// when every live agent is too old for its mode (ADR-0036, D13).
+    fn newest_script_api(&self) -> Option<u32>;
+
     /// `bot`, if `agent`'s live stream holds it assigned: since when, and its
     /// latest report on that stream (never an earlier stream's).
     fn held(&self, agent: AgentId, bot: BotId) -> Option<HeldBot>;

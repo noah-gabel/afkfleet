@@ -22,6 +22,10 @@
 // - `theme`: light or dark, from what this PC remembers and what Windows says (theme.ts, S92).
 // - `back`: whether a step on screen has taken the frame's Back away, as leaving it would lose
 //   what it shows for good (U112).
+// - `chatRecall`: the lines the user sent each bot that the server took, for ↑ and ↓ in its chat
+//   (the user's addition to P15.26, features/bots/recall.ts). A line can hold a password, so they
+//   live here alone, in memory: never in the cache or in storage. The live layer drops them at a
+//   sign-out, a sign-in and the session's end, and a bot's at its removal.
 // - `update`: the app's updates (ADR-0022, U27, S27): whether the start's one check ran, the
 //   last check's answer, an install under way or failed, and whether Later put the notice away.
 //   It lives as long as the App, never in the query cache, which a logout clears and a resync
@@ -37,6 +41,7 @@ import {
   type LiveRecord,
   observe,
 } from "../api/liveRecord";
+import { remembered } from "../features/bots/recall";
 import type { BotResponse } from "../generated/BotResponse";
 import type { CommandError } from "../generated/CommandError";
 import type { LiveUpdateMessage } from "../generated/LiveUpdateMessage";
@@ -216,6 +221,23 @@ export interface UpdateState {
   putAway(): void;
 }
 
+/** The chat recall store; see the module comment. */
+export interface ChatRecallState {
+  /** Each bot's lines, oldest first. */
+  readonly lines: ReadonlyMap<string, readonly string[]>;
+  /** Bot `botId`'s lines, oldest first; none for a bot without any. */
+  linesOf(botId: string): readonly string[];
+  /** The server took `line` for bot `botId`. */
+  remember(botId: string, line: string): void;
+  /** Bot `botId` is gone. */
+  forget(botId: string): void;
+  /** A sign-out, a sign-in or the session's end: nothing is kept. */
+  clear(): void;
+}
+
+/** No lines. */
+const NO_LINES: readonly string[] = [];
+
 /** The stores of one App. */
 export interface AppStores {
   readonly session: StoreApi<SessionState>;
@@ -226,6 +248,7 @@ export interface AppStores {
   readonly theme: StoreApi<ThemeState>;
   readonly back: StoreApi<BackState>;
   readonly update: StoreApi<UpdateState>;
+  readonly chatRecall: StoreApi<ChatRecallState>;
 }
 
 /** Fresh stores for one App. */
@@ -233,6 +256,27 @@ export function createAppStores(): AppStores {
   const choice = readThemeChoice();
   const windows = windowsTheme();
   return {
+    chatRecall: createStore<ChatRecallState>()((set, get) => ({
+      lines: new Map(),
+      linesOf(botId) {
+        return get().lines.get(botId) ?? NO_LINES;
+      },
+      remember(botId, line) {
+        const lines = new Map(get().lines);
+        lines.set(botId, remembered(get().linesOf(botId), line));
+        set({ lines });
+      },
+      forget(botId) {
+        if (get().lines.has(botId)) {
+          const lines = new Map(get().lines);
+          lines.delete(botId);
+          set({ lines });
+        }
+      },
+      clear() {
+        set({ lines: new Map() });
+      },
+    })),
     update: createStore<UpdateState>()((set, get) => ({
       started: false,
       check: null,
