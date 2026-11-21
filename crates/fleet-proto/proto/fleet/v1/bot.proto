@@ -23,6 +23,10 @@ message BotSpec {
   repeated string conflict_texts = 6;
   // How fast it may chat: the server's setting (ADR-0020, S3).
   ChatRate chat_rate = 7;
+  // How its server prints a player's chat as system text, as written, at
+  // most 8 (ADR-0020, S80): a script never reads a line one of them fits
+  // (ADR-0037, C2).
+  repeated string chat_formats = 8;
 }
 
 // A bot's chat rate: a bucket that holds `burst` messages and gains one every

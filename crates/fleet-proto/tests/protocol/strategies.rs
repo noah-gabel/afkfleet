@@ -9,7 +9,7 @@ use fleet_core::bot::{
     BotAccount, BotNotification, BotSnapshot, BotSpec, BotState, DesiredRunState, FailReason,
     Lifecycle, PauseReason, StickyState,
 };
-use fleet_core::chat::{ChatMessage, IncomingChat, PlayerChatKind};
+use fleet_core::chat::{ChatFormats, ChatMessage, IncomingChat, PlayerChatKind};
 use fleet_core::disconnect::{
     AccountRestriction, ConflictKind, ConflictTexts, ConnectFailure, DisconnectReason,
     PermanentKind, SessionServerFailure,
@@ -17,6 +17,11 @@ use fleet_core::disconnect::{
 use fleet_core::id::{AccountId, AgentId, BotId, ChatRequestId};
 use fleet_core::mc::SessionCredentials;
 use fleet_core::mode::{Action, HotbarSlot, ModeDefinition, ModeDraft, Schedule, Step};
+use fleet_core::script::{
+    CaptureDraft, CaptureKind, DecimalMark, Hook, LogKind, MessageDraft, PatternDraft, ProblemKind,
+    ReportText, Script, ScriptDraft, ScriptLogLine, ScriptPlace, ScriptProblem, ScriptState,
+    ValueDraft, ValueKind, When,
+};
 use fleet_core::value::{AgentCapacity, McUsername, ServerAddress};
 use fleet_proto::control::{
     AgentMessage, Assignment, BotEvent, BotEventKind, ChatFailedReason, Hello, LifecycleCommand,
@@ -134,11 +139,130 @@ fn schedule() -> impl Strategy<Value = Schedule> {
     ]
 }
 
-/// A valid mode: random steps that pass `ModeDraft::validate`, plus the presets.
+/// A message a scripted mode declares: fixed, or with an integer, a decimal
+/// or a word.
+fn declared_message(n: usize) -> impl Strategy<Value = MessageDraft> {
+    prop_oneof![
+        Just(MessageDraft {
+            key: format!("fixed_{n}"),
+            text: "/spawn".to_owned(),
+            values: Vec::new(),
+        }),
+        (-1000..=0_i64, 1..=1_000_000_i64).prop_map(move |(min, max)| MessageDraft {
+            key: format!("count_{n}"),
+            text: "/give AfkMain {count}".to_owned(),
+            values: vec![ValueDraft {
+                name: "count".to_owned(),
+                kind: ValueKind::Integer { min, max },
+            }],
+        }),
+        (0..=100_u32, 1..=4_u8).prop_map(move |(min, places)| MessageDraft {
+            key: format!("pay_{n}"),
+            text: "/pay AfkMain {amount}".to_owned(),
+            values: vec![ValueDraft {
+                name: "amount".to_owned(),
+                kind: ValueKind::Decimal {
+                    min: f64::from(min),
+                    max: 1_000_000.0,
+                    places,
+                },
+            }],
+        }),
+        Just(MessageDraft {
+            key: format!("home_{n}"),
+            text: "/home {name}".to_owned(),
+            values: vec![ValueDraft {
+                name: "name".to_owned(),
+                kind: ValueKind::Word {
+                    options: vec!["farm".to_owned(), "base".to_owned()],
+                },
+            }],
+        }),
+    ]
+}
+
+/// A chat pattern a scripted mode declares, of any capture's kind.
+fn declared_pattern(n: usize) -> impl Strategy<Value = PatternDraft> {
+    let when = prop_oneof![Just(When::Reply), Just(When::AnyTime)];
+    let capture = prop_oneof![
+        (0..=10_i64).prop_map(|min| CaptureKind::Integer { min, max: 64 }),
+        (
+            0..=10_u32,
+            prop_oneof![Just(DecimalMark::Point), Just(DecimalMark::Comma)]
+        )
+            .prop_map(|(min, decimal_mark)| CaptureKind::Amount {
+                min: f64::from(min),
+                max: 1_000_000_000.0,
+                decimal_mark,
+            }),
+        Just(CaptureKind::Word {
+            options: vec!["sold".to_owned(), "bought".to_owned()],
+        }),
+    ];
+    (when, capture).prop_map(move |(when, kind)| PatternDraft {
+        key: format!("pattern_{n}"),
+        when,
+        text: "Balance: ${value}".to_owned(),
+        captures: vec![CaptureDraft {
+            name: "value".to_owned(),
+            kind,
+        }],
+    })
+}
+
+/// A valid scripted mode's body: a script of printable text and line breaks,
+/// any leash, tool guard and list of blocks, and up to three messages and two
+/// patterns of every kind.
+pub(crate) fn script() -> impl Strategy<Value = Script> {
+    let blocks = proptest::sample::subsequence(
+        vec![
+            "minecraft:cobblestone",
+            "minecraft:stone",
+            "minecraft:oak_log",
+            "minecraft:melon",
+        ],
+        0..=4,
+    );
+    (
+        "[ -~\n\t]{0,200}",
+        1..=64_u8,
+        0..=100_u8,
+        blocks,
+        0..=3_usize,
+        0..=2_usize,
+    )
+        .prop_flat_map(|(source, leash, tool_guard, blocks, messages, patterns)| {
+            let messages: Vec<_> = (0..messages).map(declared_message).collect();
+            let patterns: Vec<_> = (0..patterns).map(declared_pattern).collect();
+            (
+                Just((source, leash, tool_guard, blocks)),
+                messages,
+                patterns,
+            )
+        })
+        .prop_map(
+            |((source, leash, tool_guard, blocks), messages, patterns)| {
+                Script::try_from(ScriptDraft {
+                    api: 1,
+                    source,
+                    leash,
+                    tool_guard,
+                    block_guard: blocks.into_iter().map(str::to_owned).collect(),
+                    messages,
+                    patterns,
+                })
+                .unwrap()
+            },
+        )
+}
+
+/// A valid mode: random steps that pass `ModeDraft::validate`, the presets,
+/// and scripted modes.
 pub(crate) fn mode() -> impl Strategy<Value = ModeDefinition> {
     prop_oneof![
         Just(ModeDefinition::afk()),
         Just(ModeDefinition::farm()),
+        script().prop_map(ModeDefinition::scripted),
         vec(
             (action(), schedule(), 1..=100_u8).prop_map(|(action, schedule, probability)| Step {
                 action,
@@ -170,18 +294,66 @@ pub(crate) fn bot_spec() -> impl Strategy<Value = BotSpec> {
         ],
         conflict_texts(),
         chat_rate(),
+        chat_formats(),
     )
         .prop_map(
-            |(id, account, server, mode, desired, conflict_texts, chat_rate)| BotSpec {
-                id,
-                account,
-                server,
-                mode,
-                desired,
-                conflict_texts,
-                chat_rate,
+            |(id, account, server, mode, desired, conflict_texts, chat_rate, chat_formats)| {
+                BotSpec {
+                    id,
+                    account,
+                    server,
+                    mode,
+                    desired,
+                    conflict_texts,
+                    chat_rate,
+                    chat_formats,
+                }
             },
         )
+}
+
+/// A server's chat formats: up to three valid ones, as written.
+pub(crate) fn chat_formats() -> impl Strategy<Value = ChatFormats> {
+    proptest::sample::subsequence(
+        vec![
+            "<{sender}> ",
+            "[{any}] {sender}: ",
+            "{sender} whispers to you: ",
+        ],
+        0..=3,
+    )
+    .prop_map(|formats| ChatFormats::try_new(&formats).unwrap())
+}
+
+/// A script's status as an agent reports it: its texts as the reader would
+/// leave them, cleaned.
+pub(crate) fn script_state() -> impl Strategy<Value = ScriptState> {
+    let problem = (
+        select(ProblemKind::ALL.to_vec()),
+        prop::option::of(select(Hook::ALL.to_vec())),
+        prop::option::of((1..=u32::MAX, 1..=u32::MAX)),
+        "[ -~]{0,200}",
+    )
+        .prop_map(|(kind, hook, place, message)| ScriptProblem {
+            kind,
+            hook,
+            place: place.and_then(|(line, column)| ScriptPlace::new(line, column)),
+            message: ReportText::clean(&message),
+        });
+    prop_oneof![
+        Just(ScriptState::Running),
+        problem.clone().prop_map(ScriptState::Stopped),
+        problem.prop_map(ScriptState::Refused),
+        Just(ScriptState::Crashed),
+    ]
+}
+
+/// A line of a script's log as an agent reports it.
+pub(crate) fn script_log_line() -> impl Strategy<Value = ScriptLogLine> {
+    (select(LogKind::ALL.to_vec()), "[ -~]{0,200}").prop_map(|(kind, text)| ScriptLogLine {
+        kind,
+        text: ReportText::clean(&text),
+    })
 }
 
 fn attempt() -> impl Strategy<Value = NonZeroU32> {
@@ -385,6 +557,8 @@ fn bot_event_kind() -> impl Strategy<Value = BotEventKind> {
         chat_message().prop_map(BotEventKind::ModeChatSent),
         bot_notification().prop_map(BotEventKind::Alert),
         Just(BotEventKind::Removed),
+        script_state().prop_map(BotEventKind::ScriptStatus),
+        script_log_line().prop_map(BotEventKind::ScriptLog),
     ]
 }
 
@@ -404,14 +578,16 @@ pub(crate) fn hello() -> impl Strategy<Value = Hello> {
         any::<u32>(),
         1..=1000_u32,
         running(),
+        any::<u32>(),
     )
         .prop_map(
-            |(name, version, protocol_version, capacity, running)| Hello {
+            |(name, version, protocol_version, capacity, running, script_api)| Hello {
                 name: name.parse().unwrap(),
                 agent_version: version.parse().unwrap(),
                 protocol_version,
                 capacity: AgentCapacity::try_from(capacity).unwrap(),
                 running,
+                script_api,
             },
         )
 }

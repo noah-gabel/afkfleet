@@ -1,7 +1,9 @@
 //! The shared size limits (Plan.md P10.4; ADR-0019, S25): the largest
 //! message each side legitimately sends fits the limit the other side reads
 //! with, with every value at its cap. The hello is larger than tonic's
-//! default 4 MiB, which is why the limits are set at all.
+//! default 4 MiB, which is why the limits are set at all. Since Phase 15 the
+//! largest full reconcile gives every bot the largest scripted mode, which a
+//! mode's bound on its declarations' text keeps within the limit (P15.20).
 
 use core::num::{NonZeroU32, NonZeroU64};
 
@@ -9,11 +11,17 @@ use chrono::{DateTime, Utc};
 use fleet_core::bot::{
     BotAccount, BotSnapshot, BotSpec, BotState, DesiredRunState, FailReason, StickyState,
 };
-use fleet_core::chat::{ChatMessage, ChatSender, IncomingChat, PlayerChatKind};
+use fleet_core::chat::{
+    ChatFormats, ChatMessage, ChatSender, IncomingChat, MAX_CHAT_FORMATS, PlayerChatKind,
+};
 use fleet_core::disconnect::{ConflictTexts, DisconnectReason, PermanentKind};
 use fleet_core::id::{AccountId, BotId};
 use fleet_core::mc::SessionCredentials;
 use fleet_core::mode::{Action, ModeDefinition, ModeDraft, Schedule, Step};
+use fleet_core::script::{
+    BlockGuard, CaptureDraft, CaptureKind, Identifier, MessageDraft, PatternDraft, Script,
+    ScriptDraft, ScriptSource, ValueDraft, ValueKind, When,
+};
 use fleet_core::value::{AgentCapacity, AgentName, AgentVersion, ServerAddress};
 use fleet_proto::PROTOCOL_VERSION;
 use fleet_proto::control::{
@@ -73,6 +81,7 @@ fn largest_hello() -> AgentMessage {
         protocol_version: PROTOCOL_VERSION,
         capacity: AgentCapacity::try_from(1000_u32).unwrap(),
         running: (0..MAX_BOTS).map(largest_snapshot).collect(),
+        script_api: u32::MAX,
     })
 }
 
@@ -116,6 +125,80 @@ fn largest_mode() -> ModeDefinition {
     ModeDraft { steps }.validate().unwrap()
 }
 
+/// 32 distinct words of `len` characters, from 2.
+fn words(len: usize) -> Vec<String> {
+    (0..32)
+        .map(|n| format!("{n:02}{}", "x".repeat(len - 2)))
+        .collect()
+}
+
+/// A scripted mode whose every list is full, its words `len` characters
+/// long: the most strings, so the most bytes the wire spends besides the text.
+fn full_script(len: usize) -> ScriptDraft {
+    let names = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    let messages = (0..Script::MAX_MESSAGES)
+        .map(|n| MessageDraft {
+            key: format!("m{n:02}"),
+            text: format!("/c {{{}}}", names.join("} {")),
+            values: names
+                .iter()
+                .map(|name| ValueDraft {
+                    name: (*name).to_owned(),
+                    kind: ValueKind::Word {
+                        options: words(len),
+                    },
+                })
+                .collect(),
+        })
+        .collect();
+    let patterns = (0..8)
+        .map(|n| PatternDraft {
+            key: format!("p{n:02}"),
+            when: When::Reply,
+            text: "Got {a} x {b} y {c} z {d} done".to_owned(),
+            captures: names[..4]
+                .iter()
+                .map(|name| CaptureDraft {
+                    name: (*name).to_owned(),
+                    kind: CaptureKind::Word {
+                        options: words(len),
+                    },
+                })
+                .collect(),
+        })
+        .collect();
+    ScriptDraft {
+        api: 1,
+        // The longest source: 16 KiB of 4-byte characters.
+        source: wide(ScriptSource::MAX_BYTES / 4),
+        leash: 64,
+        tool_guard: 100,
+        block_guard: (0..BlockGuard::MAX_BLOCKS)
+            .map(|n| format!("minecraft:{n:02}{}", "b".repeat(Identifier::MAX_LEN - 12)))
+            .collect(),
+        messages,
+        patterns,
+    }
+}
+
+/// The largest scripted mode on the wire: every list full, and its words as
+/// long as the declarations' bound lets them be.
+fn largest_scripted_mode() -> ModeDefinition {
+    let script = (2..=32)
+        .rev()
+        .find_map(|len| Script::try_from(full_script(len)).ok())
+        .unwrap();
+    ModeDefinition::scripted(script)
+}
+
+/// A server's chat formats at their caps: 8 of 64 characters as written.
+fn largest_chat_formats() -> ChatFormats {
+    let formats: Vec<String> = (0..MAX_CHAT_FORMATS)
+        .map(|n| format!("{n:02}{} {{sender}}: ", wide(ChatFormats::MAX_LEN - 13)))
+        .collect();
+    ChatFormats::try_new(&formats).unwrap()
+}
+
 /// The longest server address: a 253-character host and a five-digit port.
 fn longest_address() -> ServerAddress {
     let host = format!(
@@ -136,7 +219,9 @@ fn largest_conflict_texts() -> ConflictTexts {
 }
 
 fn largest_reconcile() -> ServerMessage {
-    let mode = largest_mode();
+    // A scripted mode is the larger.
+    let mode = largest_scripted_mode();
+    let chat_formats = largest_chat_formats();
     let server = longest_address();
     let conflict_texts = largest_conflict_texts();
     let account = AccountId::new_v7(
@@ -155,6 +240,7 @@ fn largest_reconcile() -> ServerMessage {
                     desired: DesiredRunState::Running,
                     conflict_texts: conflict_texts.clone(),
                     chat_rate: fleet_core::chat::ChatRate::default(),
+                    chat_formats: chat_formats.clone(),
                 },
                 restore: Some(StickyState::Failed(FailReason::Permanent {
                     kind: PermanentKind::Banned,
@@ -180,6 +266,17 @@ fn the_largest_hello_fits_the_agent_message_limit_and_tonics_default_doesnt() {
 
     assert!(size > 4 * 1024 * 1024, "{size} bytes");
     assert!(size <= MAX_AGENT_MESSAGE_BYTES, "{size} bytes");
+}
+
+#[test]
+fn the_largest_scripted_mode_is_larger_than_the_largest_step_mode_and_bounded() {
+    let step = wire::ModeDefinition::from(largest_mode()).encoded_len();
+    let scripted = wire::ModeDefinition::from(largest_scripted_mode()).encoded_len();
+
+    assert!(scripted > step, "{scripted} bytes against {step}");
+    // The source's 16 KiB, the declarations' 16 KiB, and what the wire
+    // spends on their structure.
+    assert!(scripted <= 48 * 1024, "{scripted} bytes");
 }
 
 #[test]

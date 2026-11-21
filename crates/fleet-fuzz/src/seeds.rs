@@ -271,8 +271,10 @@ fn agent_messages() -> Vec<Vec<u8>> {
                 protocol_version: PROTOCOL_VERSION,
                 capacity,
                 running: Vec::new(),
+                script_api: 1,
             })
         });
+    let scripts = script_reports();
     let enroll = wire::EnrollRequest {
         token: "a-token".to_owned(),
         name: "agent-1".to_owned(),
@@ -281,13 +283,71 @@ fn agent_messages() -> Vec<Vec<u8>> {
     hello
         .into_iter()
         .chain([AgentMessage::Heartbeat])
+        .chain(scripts)
         .filter_map(|message| wire::AgentMessage::try_from(message).ok())
         .map(|message| message.encode_to_vec())
         .chain([enroll.encode_to_vec()])
         .collect()
 }
 
-/// A welcome and an unassignment, as the server sends them.
+/// A bot's script's status with its problem's place, and a line of its
+/// log, as an agent reports them (Phase 15).
+fn script_reports() -> Vec<AgentMessage> {
+    use fleet_core::script::{
+        Hook, LogKind, ProblemKind, ReportText, ScriptLogLine, ScriptPlace, ScriptProblem,
+        ScriptState,
+    };
+    use fleet_proto::control::{BotEvent, BotEventKind};
+
+    let Ok(bot_id) = BotId::try_from(ID) else {
+        return Vec::new();
+    };
+    let at = chrono::DateTime::UNIX_EPOCH;
+    let event = |kind| AgentMessage::Event(BotEvent { bot_id, at, kind });
+    vec![
+        event(BotEventKind::ScriptStatus(ScriptState::Stopped(
+            ScriptProblem {
+                kind: ProblemKind::Error,
+                hook: Some(Hook::Chat),
+                place: ScriptPlace::new(3, 7),
+                message: ReportText::clean("Function not found: pay"),
+            },
+        ))),
+        event(BotEventKind::ScriptLog(ScriptLogLine {
+            kind: LogKind::Sent,
+            text: ReportText::clean("sent `balance`"),
+        })),
+    ]
+}
+
+/// The scripted mode with every kind of declaration, as a mode stores it.
+const SCRIPTED: &str = r#"{"script":{"api":1,"source":"fn on_join(first) {\n    chat.send(\"balance\");\n}\n","leash":8,"tool_guard":2,"block_guard":["minecraft:cobblestone"],"messages":[{"key":"balance","text":"/balance","values":[]},{"key":"pay","text":"/pay {to} {amount} x{n}","values":[{"name":"to","type":"word","options":["AfkMain","AfkBot2"]},{"name":"amount","type":"decimal","min":0.01,"max":1000000.0,"places":2},{"name":"n","type":"integer","min":1,"max":64}]}],"patterns":[{"key":"balance","when":"reply","text":"Balance: ${amount}","captures":[{"name":"amount","type":"amount","min":0,"max":1000000000,"decimal_mark":"."}]}]}}"#;
+
+/// A bot's assignment to the scripted mode, with a server's chat formats,
+/// as the server sends one (Phase 15).
+fn scripted_assignment() -> Option<ServerMessage> {
+    use fleet_core::bot::{BotAccount, BotSpec, DesiredRunState};
+    use fleet_core::chat::{ChatFormats, ChatRate};
+    use fleet_core::disconnect::ConflictTexts;
+    use fleet_proto::control::Assignment;
+
+    Some(ServerMessage::Assign(Assignment {
+        spec: BotSpec {
+            id: BotId::try_from(ID).ok()?,
+            account: BotAccount::Offline("AfkBot1".parse().ok()?),
+            server: "mc.example.com".try_into().ok()?,
+            mode: serde_json::from_str(SCRIPTED).ok()?,
+            desired: DesiredRunState::Running,
+            conflict_texts: ConflictTexts::default(),
+            chat_rate: ChatRate::default(),
+            chat_formats: ChatFormats::try_new(&["[{any}] {sender} : ", "<{sender}> "]).ok()?,
+        },
+        restore: None,
+    }))
+}
+
+/// A welcome, an unassignment and a scripted bot's assignment, as the
+/// server sends them.
 fn server_messages() -> Vec<Vec<u8>> {
     let welcome = AgentId::try_from(ID).ok().map(|agent_id| {
         ServerMessage::Welcome(Welcome {
@@ -299,6 +359,7 @@ fn server_messages() -> Vec<Vec<u8>> {
     welcome
         .into_iter()
         .chain(unassign)
+        .chain(scripted_assignment())
         .filter_map(|message| wire::ServerMessage::try_from(message).ok())
         .map(|message| message.encode_to_vec())
         .collect()
@@ -411,7 +472,17 @@ mod tests {
 
     #[test]
     fn the_message_seeds_are_whole_messages() {
-        assert_eq!(agent_messages().len(), 3);
-        assert_eq!(server_messages().len(), 2);
+        // A hello, a heartbeat, a script's status and a line of its log, and
+        // an enrollment request.
+        assert_eq!(agent_messages().len(), 5);
+        // A welcome, an unassignment and a scripted bot's assignment.
+        let server = server_messages();
+        assert_eq!(server.len(), 3);
+        let assigned = wire::ServerMessage::decode(server[2].as_slice()).unwrap();
+        let Ok(ServerMessage::Assign(assignment)) = ServerMessage::try_from(assigned) else {
+            panic!("an assignment");
+        };
+        assert!(assignment.spec.mode.script().is_some());
+        assert_eq!(assignment.spec.chat_formats.iter().count(), 2);
     }
 }

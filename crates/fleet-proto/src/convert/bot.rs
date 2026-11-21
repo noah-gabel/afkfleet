@@ -6,7 +6,7 @@ use fleet_core::bot::{
     BotAccount, BotNotification, BotSnapshot, BotSpec, BotState, DesiredRunState, FailReason,
     PauseReason, StickyState,
 };
-use fleet_core::chat::{ChatRate, ChatRateError};
+use fleet_core::chat::{ChatFormats, ChatRate, ChatRateError};
 use fleet_core::disconnect::{ConflictKind, ConflictTexts, PermanentKind};
 use fleet_core::value::{McUsername, ServerAddress};
 
@@ -40,6 +40,7 @@ impl From<BotSpec> for wire::BotSpec {
                 interval_secs: spec.chat_rate.interval_secs(),
                 burst: spec.chat_rate.burst().get(),
             }),
+            chat_formats: spec.chat_formats.iter().map(str::to_owned).collect(),
         }
     }
 }
@@ -82,6 +83,10 @@ impl TryFrom<wire::BotSpec> for BotSpec {
             desired,
             conflict_texts,
             chat_rate: chat_rate_from_wire(required("BotSpec.chat_rate", spec.chat_rate)?)?,
+            // A list as the server keeps it: each format as written, in
+            // order, checked by fleet-core again.
+            chat_formats: ChatFormats::try_new(&spec.chat_formats)
+                .map_err(|e| ConvertError::new("BotSpec.chat_formats", e.into()))?,
         })
     }
 }

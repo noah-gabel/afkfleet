@@ -152,11 +152,23 @@ fn a_refused_token_never_shows_in_the_error() {
 }
 
 /// Fields named like a secret that aren't one, each with its reason.
-const NOT_SECRETS: [(&str, &str, &str); 1] = [(
-    "fleet.v1.Kick",
-    "key",
-    "a kick's translation key, such as multiplayer.disconnect.banned",
-)];
+const NOT_SECRETS: [(&str, &str, &str); 3] = [
+    (
+        "fleet.v1.Kick",
+        "key",
+        "a kick's translation key, such as multiplayer.disconnect.banned",
+    ),
+    (
+        "fleet.v1.DeclaredMessage",
+        "key",
+        "the name a script sends a declared message by, such as balance",
+    ),
+    (
+        "fleet.v1.ChatPattern",
+        "key",
+        "the name a script knows a chat pattern by, such as balance",
+    ),
+];
 
 /// Words that make a field name look like a secret's.
 const SECRET_WORDS: [&str; 4] = ["token", "secret", "password", "key"];

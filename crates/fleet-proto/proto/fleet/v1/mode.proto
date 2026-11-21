@@ -1,15 +1,149 @@
-// A bot's mode as it crosses the wire: the steps of a validated mode, which the
-// receiver checks again with the mode rules of fleet-core (ADR-0019).
+// A bot's mode as it crosses the wire: the steps or the script of a validated
+// mode, which the receiver checks again with the mode rules of fleet-core
+// (ADR-0019; ADR-0036, D13).
 syntax = "proto3";
 
 package fleet.v1;
 
 import "fleet/v1/common.proto";
 
-// What a bot does while it's online.
+// What a bot does while it's online: steps, or a script. A scripted mode has
+// `script` and no steps. An agent from before scripts would skip `script` and
+// read a mode that does nothing, so the server sends a scripted mode only to
+// an agent whose hello says it runs its API level (Hello.script_api).
 message ModeDefinition {
   // The steps, in the order they run when several are due at once.
   repeated Step steps = 1;
+  // The script, with what the mode sets and declares beside it.
+  Script script = 2;
+}
+
+// A scripted mode's body (ADR-0036, D13; ADR-0037).
+message Script {
+  // The script API level the mode was validated at, from 1.
+  uint32 api = 1;
+  // The script's text, at most 16 KiB.
+  string source = 2;
+  // The leash's radius, 1 to 64 blocks.
+  uint32 leash = 3;
+  // How many uses the tool guard keeps, 0 (off) to 100.
+  uint32 tool_guard = 4;
+  // The blocks a held left button mines, as registry identifiers; none for
+  // any block (ADR-0042, G13).
+  repeated string block_guard = 5;
+  // The messages the script may send, at most 16.
+  repeated DeclaredMessage messages = 6;
+  // The chat lines the script reads, at most 8.
+  repeated ChatPattern patterns = 7;
+}
+
+// A message a scripted mode declares: the only text its script can send.
+message DeclaredMessage {
+  // The key a script names it by.
+  string key = 1;
+  // The text, with a `{name}` where each value goes.
+  string text = 2;
+  // The values the text holds.
+  repeated DeclaredValue values = 3;
+}
+
+// A declared message's value: its name, and what it may be.
+message DeclaredValue {
+  // The value's name, as the text writes it in braces.
+  string name = 1;
+  // What it may be.
+  oneof kind {
+    // A whole number in a range.
+    IntegerRange integer = 2;
+    // A decimal number in a range, with fixed places.
+    DecimalRange decimal = 3;
+    // One of a closed list of words.
+    Words word = 4;
+  }
+}
+
+// A whole number from `min` to `max`.
+message IntegerRange {
+  // The smallest value.
+  int64 min = 1;
+  // The largest value.
+  int64 max = 2;
+}
+
+// A decimal number from `min` to `max`, written with exactly `places` digits
+// after the point.
+message DecimalRange {
+  // The smallest value.
+  double min = 1;
+  // The largest value.
+  double max = 2;
+  // How many digits follow the point, 1 to 4.
+  uint32 places = 3;
+}
+
+// A closed list of words, each 1 to 32 characters without whitespace.
+message Words {
+  // The words.
+  repeated string options = 1;
+}
+
+// A line of the server's own chat a scripted mode declares it reads
+// (ADR-0037, C3).
+message ChatPattern {
+  // The key a script knows it by.
+  string key = 1;
+  // When it counts.
+  PatternWhen when = 2;
+  // The line, with a `{name}` where each capture is.
+  string text = 3;
+  // The captures the text holds, at most 4.
+  repeated PatternCapture captures = 4;
+}
+
+// When a chat pattern counts.
+enum PatternWhen {
+  // Not set; never valid.
+  PATTERN_WHEN_UNSPECIFIED = 0;
+  // Only inside a window the script opened after a command of its own.
+  PATTERN_WHEN_REPLY = 1;
+  // Whenever the bot is online.
+  PATTERN_WHEN_ANY_TIME = 2;
+}
+
+// A chat pattern's capture: its name, and what it reads.
+message PatternCapture {
+  // The capture's name, as the text writes it in braces.
+  string name = 1;
+  // What it reads.
+  oneof kind {
+    // A whole number in a range.
+    IntegerRange integer = 2;
+    // An amount in a range.
+    AmountRange amount = 3;
+    // One of a closed list of words.
+    Words word = 4;
+  }
+}
+
+// An amount, as servers write one, from `min` to `max`.
+message AmountRange {
+  // The smallest value that counts.
+  double min = 1;
+  // The largest value that counts.
+  double max = 2;
+  // Which character comes before its decimals.
+  DecimalMark decimal_mark = 3;
+}
+
+// Which character an amount writes before its decimals; the other is its
+// thousands separator.
+enum DecimalMark {
+  // Not set; never valid.
+  DECIMAL_MARK_UNSPECIFIED = 0;
+  // `1,234.56`.
+  DECIMAL_MARK_POINT = 1;
+  // `1.234,56`.
+  DECIMAL_MARK_COMMA = 2;
 }
 
 // One entry of a mode: what the bot does, when, and how likely.

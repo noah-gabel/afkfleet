@@ -247,6 +247,7 @@ mod every_value {
                 desired,
                 conflict_texts: fleet_core::disconnect::ConflictTexts::default(),
                 chat_rate: fleet_core::chat::ChatRate::default(),
+                chat_formats: fleet_core::chat::ChatFormats::default(),
             };
             assert_eq!(infallible::<_, wire::BotSpec>(spec.clone()), Ok(spec));
         }

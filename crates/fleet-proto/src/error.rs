@@ -1,8 +1,9 @@
 //! [`ConvertError`]: why a value can't cross the wire.
 
-use fleet_core::chat::{ChatMessageError, IncomingChatError};
+use fleet_core::chat::{ChatFormatsError, ChatMessageError, IncomingChatError};
 use fleet_core::disconnect::ConflictTextsError;
 use fleet_core::mode::{HotbarSlotError, ModeError};
+use fleet_core::script::ScriptError;
 use fleet_core::value::{
     AgentCapacityError, AgentNameError, AgentVersionError, McUsernameError, ServerAddressError,
 };
@@ -114,6 +115,17 @@ pub enum Problem {
     /// An invalid hotbar slot.
     #[error(transparent)]
     HotbarSlot(#[from] HotbarSlotError),
+    /// A mode with both steps and a script.
+    #[error("both steps and a script")]
+    TwoBodies,
+    /// An invalid scripted mode's body: its settings or its declarations.
+    /// Whether its source is a program is the engine's to say, per bot
+    /// (ADR-0036, D13).
+    #[error(transparent)]
+    Script(#[from] ScriptError),
+    /// An invalid list of chat formats.
+    #[error(transparent)]
+    ChatFormats(#[from] ChatFormatsError),
     /// An invalid Minecraft username.
     #[error(transparent)]
     McUsername(#[from] McUsernameError),

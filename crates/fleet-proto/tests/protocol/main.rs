@@ -29,6 +29,7 @@ mod rejects;
 mod renewal;
 mod round_trip;
 mod schema;
+mod script;
 mod strategies;
 
 use fleet_core::mc::SessionCredentials;

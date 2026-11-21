@@ -6,12 +6,13 @@ use chrono::{DateTime, Utc};
 use fleet_core::bot::{BotNotification, BotSnapshot};
 use fleet_core::chat::{ChatMessage, IncomingChat};
 use fleet_core::id::{BotId, ChatRequestId};
+use fleet_core::script::{ScriptLogLine, ScriptState};
 use fleet_core::value::{AgentCapacity, AgentName, AgentVersion};
 
 use super::{bots_from_wire, bots_to_wire, request_number};
 use crate::convert::{
-    chat_message_from_wire, enum_from_wire, id_from_wire, id_to_wire, required, time_from_wire,
-    time_to_wire,
+    chat_message_from_wire, enum_from_wire, id_from_wire, id_to_wire, log_from_wire, log_to_wire,
+    required, status_from_wire, status_to_wire, time_from_wire, time_to_wire,
 };
 use crate::generated as wire;
 use crate::{ConvertError, Problem};
@@ -45,6 +46,10 @@ pub struct Hello {
     /// The status of every bot the agent runs. Reading a hello refuses more
     /// than [`MAX_BOTS`](super::MAX_BOTS) of them, or a bot that appears twice.
     pub running: Vec<BotSnapshot>,
+    /// The script API level the agent runs: 0 for an agent from before
+    /// scripts, whose hello has none. A level this version doesn't know is
+    /// kept as it is: the agent runs every lower one too (ADR-0036, D13).
+    pub script_api: u32,
 }
 
 /// Something that happened to one bot.
@@ -86,6 +91,11 @@ pub enum BotEventKind {
     /// bot sends no status before it, so the server keeps that state
     /// (ADR-0013).
     Removed,
+    /// Where the bot's script is in its life; a refusal by the agent's own
+    /// engine is one (ADR-0036, D13). Its texts are cleaned when read.
+    ScriptStatus(ScriptState),
+    /// A line of the bot's script's log, cleaned when read.
+    ScriptLog(ScriptLogLine),
 }
 
 /// Why a user's chat message wasn't sent: the runtime's delivery failures and
@@ -160,6 +170,7 @@ impl TryFrom<AgentMessage> for wire::AgentMessage {
                 protocol_version: hello.protocol_version,
                 capacity: hello.capacity.into(),
                 running: bots_to_wire(hello.running)?,
+                script_api: hello.script_api,
             }),
             AgentMessage::Heartbeat => Msg::Heartbeat(wire::Heartbeat {}),
             AgentMessage::Status(snapshot) => Msg::Status(snapshot.try_into()?),
@@ -206,6 +217,7 @@ pub(super) fn hello_from_wire(hello: wire::Hello) -> Result<Hello, ConvertError>
         running: bots_from_wire("Hello.running", hello.running, |snapshot: &BotSnapshot| {
             snapshot.bot_id
         })?,
+        script_api: hello.script_api,
     })
 }
 
@@ -226,6 +238,8 @@ fn event_to_wire(event: BotEvent) -> Result<wire::BotEvent, ConvertError> {
         }),
         BotEventKind::Alert(notification) => Kind::Alert(notification.into()),
         BotEventKind::Removed => Kind::Removed(wire::Unit {}),
+        BotEventKind::ScriptStatus(state) => Kind::ScriptStatus(status_to_wire(state)),
+        BotEventKind::ScriptLog(line) => Kind::ScriptLog(log_to_wire(&line)),
     };
     Ok(wire::BotEvent {
         bot_id: id_to_wire(event.bot_id),
@@ -254,6 +268,8 @@ fn event_from_wire(event: wire::BotEvent) -> Result<BotEvent, ConvertError> {
         )?),
         Kind::Alert(notification) => BotEventKind::Alert(notification.try_into()?),
         Kind::Removed(wire::Unit {}) => BotEventKind::Removed,
+        Kind::ScriptStatus(status) => BotEventKind::ScriptStatus(status_from_wire(status)?),
+        Kind::ScriptLog(line) => BotEventKind::ScriptLog(log_from_wire(&line)?),
     };
     Ok(BotEvent { bot_id, at, kind })
 }
