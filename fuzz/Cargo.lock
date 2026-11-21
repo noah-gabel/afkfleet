@@ -1948,6 +1948,7 @@ version = "0.1.3"
 dependencies = [
  "chrono",
  "fleet-core",
+ "fleet-script",
  "governor",
  "metrics",
  "rand 0.10.3",
