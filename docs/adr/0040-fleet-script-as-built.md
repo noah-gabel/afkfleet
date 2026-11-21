@@ -1,6 +1,6 @@
 # 0040. `fleet-script` as built: an engine an instance, a sandbox tighter than planned, and what was measured
 
-- **Status:** Accepted. Decided under ADR-0025. The two points put to the user are answered, and a hook is bounded in time, in the [amendment](#amendment-2026-11-18-a-hooks-time-and-the-users-answers) of 2026-11-18, which puts one new point to them
+- **Status:** Accepted. Decided under ADR-0025. The two points put to the user are answered, and a hook is bounded in time, in the [amendment](#amendment-2026-11-18-a-hooks-time-and-the-users-answers) of 2026-11-18; the point that amendment put to them is answered at its end (2026-11-21: scripts keep `try` and `catch`)
 - **Date:** 2026-11-17
 - **Related:** Plan.md Phase 15 (P15.5 to P15.9, P15.31); [ADR-0036](0036-scripted-modes.md) (D3 to D6, D14, D18) and [ADR-0037](0037-scripts-read-system-chat.md) (C4, C6), whose decisions this builds; [the script reference](../scripting.md); ADR-0010 (time and randomness are parameters), ADR-0030 (fuzz targets); `deny.toml`; `crates/fleet-script`, `crates/fleet-fuzz/src/script.rs`
 
@@ -240,4 +240,14 @@ A debug build would now run past a runtime thread's 2 MiB. **The test the user a
 E3 stands.
 
 ### Put to the user
+**Answered on 2026-11-21** (A5).
+
 - **A script's `try` and `catch` (A2).** Keeping them means a script can catch a refusal of Rhai's own inside a function pointer's call (a data size, the call depth) and go on until its operations or its time end the hook; nothing is lost by it but that hook's 5 ms at most. Taking them away would make every error stop the script, and take from an author the way to survive a mistake of their own (an index past an array's end, a missing property) on a farm that runs for days. I'd keep them.
+
+### A5. Scripts keep `try` and `catch` *(the user's answer, 2026-11-21)*
+The user's answer to PR #126: **scripts keep them; the time bound ends a caught loop within its 5 ms.** A2 stands as built, and none of its three ways to close the gap is taken.
+
+- **What a script can catch:** its own mistakes (an index past an array's end, a property never set), and one refusal of Rhai's that gains it nothing: a text, an array or a map past its limit inside a function that an array's method calls.
+- **What it can't catch its way past:** a hook's operations and time, a second's, the state's limits, the stack guard and the depth of its calls. Each of the instance's own stops sticks (E4), so the next thing a script does after a `catch` ends the hook again.
+- **Tests that hold it:** the suite's `time` module (a caught end, and the reviewer's three cases against the OS's clock), `a_script_cant_catch_its_way_past_the_stack_guard`, and the sandbox tests of a caught data-size error.
+- **The reference** says the same in "Errors", unchanged.

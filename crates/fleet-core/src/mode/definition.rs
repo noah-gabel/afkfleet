@@ -1453,6 +1453,7 @@ mod tests {
             source: FARM_SCRIPT.to_owned(),
             leash: 16,
             tool_guard: 0,
+            block_guard: vec!["cobblestone".to_owned()],
             messages: vec![
                 message("home", "/home farm"),
                 MessageDraft {
@@ -1579,8 +1580,7 @@ mod tests {
         format!(r#"{{"script":{script}}}"#)
     }
 
-    const EMPTY_SCRIPT: &str =
-        r#"{"api":1,"source":"","leash":8,"tool_guard":2,"messages":[],"patterns":[]}"#;
+    const EMPTY_SCRIPT: &str = r#"{"api":1,"source":"","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}"#;
 
     #[test]
     fn reads_a_scripted_modes_documented_json() {
@@ -1602,19 +1602,19 @@ mod tests {
     #[case::a_script_as_text(r#"{"script":"fn on_join(first) {}"}"#.to_owned())]
     #[case::a_script_without_its_settings(r#"{"script":{"api":1,"source":""}}"#.to_owned())]
     #[case::a_newer_api_level(script_json(
-        r#"{"api":2,"source":"","leash":8,"tool_guard":2,"messages":[],"patterns":[]}"#
+        r#"{"api":2,"source":"","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}"#
     ))]
     #[case::a_leash_that_is_off(script_json(
-        r#"{"api":1,"source":"","leash":0,"tool_guard":2,"messages":[],"patterns":[]}"#
+        r#"{"api":1,"source":"","leash":0,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}"#
     ))]
     #[case::a_source_with_a_hidden_character(script_json(
-        r#"{"api":1,"source":"\u202e","leash":8,"tool_guard":2,"messages":[],"patterns":[]}"#
+        r#"{"api":1,"source":"\u202e","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}"#
     ))]
     #[case::a_message_that_isnt_one(script_json(
-        r#"{"api":1,"source":"","leash":8,"tool_guard":2,"messages":[{"key":"k","text":"{a}","values":[]}],"patterns":[]}"#
+        r#"{"api":1,"source":"","leash":8,"tool_guard":2,"block_guard":[],"messages":[{"key":"k","text":"{a}","values":[]}],"patterns":[]}"#
     ))]
     #[case::a_pattern_that_reads_free_text(script_json(
-        r#"{"api":1,"source":"","leash":8,"tool_guard":2,"messages":[],"patterns":[{"key":"k","when":"reply","text":"Balance: {a}","captures":[{"name":"a","type":"text"}]}]}"#
+        r#"{"api":1,"source":"","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[{"key":"k","when":"reply","text":"Balance: {a}","captures":[{"name":"a","type":"text"}]}]}"#
     ))]
     fn refuses_a_stored_mode_that_isnt_one(#[case] json: String) {
         assert!(

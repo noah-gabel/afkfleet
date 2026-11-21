@@ -289,7 +289,7 @@ async fn a_stored_scripted_mode_isnt_read_before_the_server_knows_scripts(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
-    let scripted = r#"{"script":{"api":1,"source":"fn on_join(first) {}","leash":8,"tool_guard":2,"messages":[],"patterns":[]}}"#;
+    let scripted = r#"{"script":{"api":1,"source":"fn on_join(first) {}","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}}"#;
     // It is a mode fleet-core reads, so only this guard stands in its way.
     assert!(
         serde_json::from_str::<ModeDefinition>(scripted)

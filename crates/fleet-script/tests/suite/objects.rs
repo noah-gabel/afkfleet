@@ -869,6 +869,73 @@ fn a_hold_of_the_left_button_with_a_nearly_used_tool_is_refused() {
 }
 
 #[test]
+fn a_hold_of_the_left_button_on_a_block_the_mode_doesnt_list_is_refused() {
+    let source = "fn on_join(first) {\n  let h = mouse.left.hold();\n  let t = mouse.left.tap();\n  log.info(`${h.ok} [${h.reason}] ${t.ok} ${mouse.left.held}`);\n}";
+    let looking_at = |block: Option<&str>, listed: &[&str]| {
+        let mut world = World::new();
+        world.bot.looking_at = block.map(|block| LookingAt::Block {
+            id: id(block),
+            at: BlockPosition { x: 0, y: 64, z: 1 },
+        });
+        let mut draft = crate::support::draft(source);
+        draft.block_guard = listed.iter().map(|block| (*block).to_owned()).collect();
+        let mut instance = fleet_script::Instance::new(
+            crate::support::program_of(draft),
+            7,
+            crate::support::still(),
+        );
+        world.run(&mut instance, &HookEvent::Join { first: true });
+        world.log
+    };
+
+    assert_eq!(
+        looking_at(Some("stone"), &["cobblestone"]),
+        ["false [block_guard] true false"]
+    );
+    assert_eq!(
+        looking_at(Some("cobblestone"), &["cobblestone"]),
+        ["true [] false true"]
+    );
+    assert_eq!(
+        looking_at(Some("stone"), &["cobblestone", "minecraft:stone"]),
+        ["true [] false true"]
+    );
+    // A mode that lists nothing mines any block, as in vanilla.
+    assert_eq!(looking_at(Some("stone"), &[]), ["true [] false true"]);
+    // Looking at no block, the hold is taken: the session pauses it at
+    // every block that isn't listed.
+    assert_eq!(looking_at(None, &["cobblestone"]), ["true [] false true"]);
+}
+
+/// The floor first, then the tool, then the list: a script that changes
+/// its pickaxe at `tool_guard` does so wherever the crosshair is.
+#[test]
+fn the_three_guards_of_mining_answer_in_a_fixed_order() {
+    let source = "fn on_join(first) {\n  let h = mouse.left.hold();\n  log.info(h.reason);\n}";
+    let hold = |y: i32, durability: u32| {
+        let mut world = World::new();
+        world.bot.held = Some(pickaxe(durability));
+        world.bot.looking_at = Some(LookingAt::Block {
+            id: id("stone"),
+            at: BlockPosition { x: 0, y, z: 1 },
+        });
+        let mut draft = crate::support::draft(source);
+        draft.block_guard = vec!["cobblestone".to_owned()];
+        let mut instance = fleet_script::Instance::new(
+            crate::support::program_of(draft),
+            7,
+            crate::support::still(),
+        );
+        world.run(&mut instance, &HookEvent::Join { first: true });
+        world.log
+    };
+
+    assert_eq!(hold(63, 2), ["mining_guard"]);
+    assert_eq!(hold(64, 2), ["tool_guard"]);
+    assert_eq!(hold(64, 50), ["block_guard"]);
+}
+
+#[test]
 fn a_method_that_doesnt_exist_stops_the_script_where_it_runs_with_its_line() {
     let (ran, ..) = join("fn on_join(first) {\n  keys.forward.hodl();\n}");
 

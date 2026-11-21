@@ -211,23 +211,32 @@ impl Turn {
     }
 
     /// Why a hold of the left button may not start: a block that reaches
-    /// below the bot's feet, or a tool that's nearly used up (ADR-0036,
-    /// D11).
+    /// below the bot's feet, a tool that's nearly used up, or a block the
+    /// mode doesn't list, judged in that order (ADR-0036, D11; ADR-0042's
+    /// amendment, G13).
+    ///
+    /// A bot that looks at no block may start: the session below pauses
+    /// the hold at every block a guard holds back.
     fn guarded(&self) -> Answer {
         let Some(facts) = &self.facts else {
             return Ok(());
         };
         let bot = facts.bot();
-        if let Some(LookingAt::Block { at, .. }) = &bot.looking_at
-            && !may_mine(bot.position.y(), *at)
-        {
+        let script = self.program.script();
+        let block = match &bot.looking_at {
+            Some(LookingAt::Block { id, at }) => Some((id, *at)),
+            Some(LookingAt::Entity { .. }) | None => None,
+        };
+        if block.is_some_and(|(_, at)| !may_mine(bot.position.y(), at)) {
             return Err(Refusal::MiningGuard);
         }
-        if self.program.script().tool_guard().allows(bot.held.as_ref()) {
-            Ok(())
-        } else {
-            Err(Refusal::ToolGuard)
+        if !script.tool_guard().allows(bot.held.as_ref()) {
+            return Err(Refusal::ToolGuard);
         }
+        if block.is_some_and(|(id, _)| !script.block_guard().allows(Some(id))) {
+            return Err(Refusal::BlockGuard);
+        }
+        Ok(())
     }
 
     /// Presses `input` and lets go at once.

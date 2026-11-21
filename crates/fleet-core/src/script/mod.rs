@@ -21,8 +21,8 @@
 //!   and the blocks near it, everything a server controls as a registry
 //!   [`Identifier`] or a number (ADR-0036, D12).
 //! - [`Leash`] decides how far a bot walks from where it was put, and
-//!   [`may_mine`] and [`ToolGuard::allows`] what it may mine (ADR-0036,
-//!   D10, D11).
+//!   [`may_mine`], [`ToolGuard::allows`] and [`BlockGuard::allows`] what
+//!   it may mine (ADR-0036, D10, D11; ADR-0042's amendment).
 //! - [`Hook`] and [`HookEvent`] are what a script is called for, and
 //!   [`Refusal`] why an action wasn't taken (ADR-0036, D4, D6).
 //! - [`MessageTemplate`] is a message the mode declares, fixed or with
@@ -68,8 +68,8 @@ pub use pattern::{
 #[cfg(test)]
 pub(crate) use settings::draft_of;
 pub use settings::{
-    LeashRadius, LeashRadiusError, Script, ScriptApiLevel, ScriptApiLevelError, ScriptDraft,
-    ScriptError, ToolGuard, ToolGuardError,
+    BlockGuard, BlockGuardError, LeashRadius, LeashRadiusError, Script, ScriptApiLevel,
+    ScriptApiLevelError, ScriptDraft, ScriptError, ToolGuard, ToolGuardError,
 };
 pub use source::{ScriptSource, ScriptSourceError};
 pub use stopwatch::Stopwatch;

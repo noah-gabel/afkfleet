@@ -23,6 +23,7 @@ pub(crate) fn draft(source: &str) -> ScriptDraft {
         source: source.to_owned(),
         leash: 8,
         tool_guard: 2,
+        block_guard: Vec::new(),
         messages: Vec::new(),
         patterns: Vec::new(),
     }

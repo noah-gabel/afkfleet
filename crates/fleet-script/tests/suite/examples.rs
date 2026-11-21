@@ -55,6 +55,18 @@ fn every_example_is_a_scripted_mode_that_compiles() {
         assert!(compile(&script).is_ok(), "{}", example.id);
         assert_eq!(script.leash().blocks(), 8);
         assert_eq!(script.tool_guard().uses_left(), 2);
+        // Only the generator mines, and it lists what it mines.
+        let listed: Vec<&str> = script
+            .block_guard()
+            .blocks()
+            .iter()
+            .map(fleet_core::script::Identifier::as_str)
+            .collect();
+        if example.id == "cobblestone_generator" {
+            assert_eq!(listed, ["minecraft:cobblestone"]);
+        } else {
+            assert_eq!(listed, [""; 0]);
+        }
     }
 }
 
@@ -293,6 +305,42 @@ fn the_cobblestone_generator_mines_and_changes_pickaxes_until_none_is_left() {
         .count();
     assert_eq!(holds, 9);
     assert!(!instance.is_held(left));
+}
+
+/// While the next cobblestone forms, the crosshair is on the wall behind
+/// it: the mode lists cobblestone, so a new hold there is refused, nothing
+/// is pressed, and the script keeps its pickaxe and tries again.
+#[test]
+fn the_cobblestone_generator_never_starts_on_the_wall_behind_its_block() {
+    let left = Input::Mouse(MouseButton::Left);
+    let block = |kind: &str| {
+        Some(LookingAt::Block {
+            id: id(kind),
+            at: BlockPosition { x: 0, y: 64, z: 1 },
+        })
+    };
+    let mut world = World::new();
+    world.hotbar = core::array::from_fn(|_| Some(pickaxe(50)));
+    world.bot.held = Some(pickaxe(50));
+    world.bot.looking_at = block("stone");
+    let mut instance = instance_of("cobblestone_generator");
+    world.run(&mut instance, &HookEvent::Join { first: true });
+
+    let wakes = world.pass(&mut instance, Duration::from_millis(3_100));
+
+    assert!(all_ran(&wakes));
+    assert_eq!(wakes.len(), 3);
+    assert_eq!(world.presses(), []);
+    assert!(!instance.is_held(left));
+    assert_eq!(world.bot.selected, HotbarSlot::FIRST);
+    assert_eq!(world.log.len(), 0);
+
+    // The cobblestone is there: the next timer's hold is taken.
+    world.bot.looking_at = block("cobblestone");
+    world.pass(&mut instance, Duration::from_millis(1_000));
+
+    assert_eq!(world.presses(), [(left, PressKind::Hold)]);
+    assert!(instance.is_held(left));
 }
 
 #[test]

@@ -1,6 +1,6 @@
 # 0042. A scripted mode's inputs in fleet-mc, as built: one place for what's held, guards before azalea's own systems, and what the live scenarios found
 
-- **Status:** Accepted. Decided under ADR-0025
+- **Status:** Accepted. Decided under ADR-0025. Amended on 2026-11-21 with a third guard of mining ([G13](#amendment-2026-11-21-a-third-guard-of-mining-the-blocks-a-mode-lists)), the user's answer to PR #126
 - **Date:** 2026-11-18
 - **Related:** Plan.md Phase 15 (P15.10 to P15.15, P15.32); [ADR-0036](0036-scripted-modes.md) (D6, D9 to D12, D18) and [ADR-0037](0037-scripts-read-system-chat.md) (C2, C3, C9), whose decisions this builds; [ADR-0040](0040-fleet-script-as-built.md) (E10); [ADR-0026](0026-a-bot-in-a-minecart.md) and [ADR-0034](0034-a-stopgap-action-into-the-nearest-minecart.md) (riding and the stopgap action); ADR-0020 (S22, S27: the bridge's death and respawn); `crates/fleet-mc/src/script/`, `crates/fleet-mc/src/riding/passengers.rs`, `crates/fleet-mc/tests/minecraft/{scripted,chat_lines}.rs`; `docs/releasing.md`
 
@@ -136,7 +136,7 @@ D18 left it to this group. The second login is tested where it's decided: the pa
 
 ## Known limits
 - **A press reaches azalea at the next game tick,** up to 50 ms after the action.
-- **A held left button mines whatever the crosshair lands on** (G11), and tries a refused break again and again.
+- **A held left button mines whatever the crosshair lands on** (G11), unless the mode lists its blocks (G13), and tries a refused break again and again.
 - **The index of passengers can call a vehicle occupied** whose passenger left without a new list from the server. A script then passes it over until one comes.
 - **The right button's "used over time"** is a list for the six items that say so in no component; a new such item in a Minecraft version would be clicked every 4 ticks until it's added.
 - **A step mode's `Sneak` and a script's keys don't mix:** the key state is written from `Held` whenever a script's key changes. A mode is steps or a script, never both.
@@ -154,3 +154,45 @@ D18 left it to this group. The second login is tested where it's decided: the pa
 - **Group D** maps fleet-script's `Action` onto `GameAction`, sets the guards at every join, observes before each hook, and hands `LetGo` to `Instance::let_go`.
 - **Three more live scenarios,** about two and a half minutes of `just test-slow`.
 - **The reference** says what a held left button does once its block is gone, and what a refused break looks like.
+
+## Amendment (2026-11-21): a third guard of mining, the blocks a mode lists
+The user's answer to PR #126, built as the first commit of group D's pull request.
+
+### G13. The block guard
+**The finding it answers** is G11's: a held left button mines whatever the crosshair lands on while the next cobblestone forms, which at the first run was the trench's stone wall. Bedrock behind the block hid it in the test; on a real farm the wall behind a generator can be what holds the lava.
+
+**A mode may list the blocks a held left button mines.**
+
+| | |
+|---|---|
+| **The setting** | `block_guard`, beside `tool_guard` in a scripted mode's body: up to **16** registry identifiers. **An empty list means any block,** as in vanilla. Text without a namespace is in `minecraft`, so `cobblestone` and `minecraft:cobblestone` are one block, and listing a block twice is refused |
+| **fleet-core decides** | `BlockGuard::allows(block)`: with nothing listed, every block; otherwise exactly the listed ones. **A block the bot can't name is no listed block** (a chunk it doesn't know): a mode that lists blocks never mines blind |
+| **fleet-mc applies it each tick,** with the other two | In `guard_mining`, before azalea's `MiningSystems`: a block is allowed when the mining guard *and* the block guard allow it. So an unlisted block is treated exactly like one below the feet: `LeftClickMine` is off while the crosshair is on it, a `MiningQueued` for it is removed, a `Mining` of it is aborted with its progress reset. **The hold only pauses:** the button stays down, no let-go is reported, and mining goes on once the crosshair is on a listed block again |
+| **fleet-script takes it with the settings** | A *new* hold while the bot looks at an unlisted block is refused with the reason **`block_guard`**, the closed list's tenth. Looking at no block, a hold is taken, and the session pauses it wherever it must |
+| **The order of the three reasons** | `mining_guard`, then `tool_guard`, then `block_guard`. A script that changes its pickaxe at `tool_guard` does so wherever its crosshair happens to be |
+| **`Guards`** | gains `block_guard` and is no longer `Copy`; a new session's default lists nothing |
+
+**Each block is judged by what the bot knows it to be at that tick,** not by what it was when mining began: the server may have replaced it. The bot's picture of its world is read only while a mode that lists blocks holds the button, at most three lookups a tick (what's queued, what's mined, what the crosshair is on).
+
+**Why the same tick is enough** (read in azalea 0.16.0's `plugins/mining.rs` on docs.rs, and on the list in `docs/releasing.md`):
+- azalea's `handle_auto_mine` runs in the game tick's `MiningSystems` and reads the bot's `HitResultComponent`, which azalea updates in `Update`, between game ticks. The guard runs before `MiningSystems` in the same tick, so it judges the very target azalea is about to act on.
+- `handle_auto_mine` only asks: its `StartMiningBlockEvent` becomes a `MiningQueued` in a later frame, and `handle_mining_queued` starts on it at the *next* game tick, after the guard has judged that block by itself. So even a tool that breaks a block at once never breaks one the guard didn't see queued.
+
+**The cobblestone example lists `cobblestone`** (`Example::draft`), and the reference says what the guard does. Its script is unchanged: a hold refused with `block_guard` is tried again by the next timer.
+
+**The live scenario** (`slow_mouse_scenario`) has the stone wall behind the generator's block again; what its runs showed is under "The live runs" below.
+
+**The live runs** (2026-11-21, the development PC, a server of its own each):
+
+| The mode lists | Runs | What the bot did with the tool's four uses |
+|---|---|---|
+| Nothing (**red first**) | 1 | Three cobblestone and one block of the wall, as in PR #126's first run: the scenario fails waiting for the fourth cobblestone |
+| `cobblestone` | 5 in a row | Four cobblestone. **No `StartDestroyBlock` for the wall in any run,** the wall still stone, and the server's own count of stone the bot mined at 0 |
+
+**Not built here:** the mode editor's field for the list (group F), and the wire's (group E, with the rest of a scripted mode's body). The stored format has it from now on: a scripted mode's JSON always says `"block_guard": [...]`. No scripted mode is stored anywhere yet (P15.1's guard).
+
+**Alternatives considered:**
+- **A list of blocks never to mine.** An author would have to name every block of every wall; the list of what a farm produces is one or two names.
+- **Ending the hold on an unlisted block,** like the tool guard. The generator's next block forms within a second; a script would have to press again each time, and the limiter's half second between holds would cost most of a generator's output.
+- **Judging only what the crosshair is on.** A block azalea already queued or mines would be mined to its end after the crosshair moved (G4's own reason).
+- **Block tags** (`#minecraft:base_stone_overworld`). A client's tag lists are the server's to send and to change; a closed list of names is what the mode's author sees.

@@ -20,6 +20,8 @@ pub struct Example {
     /// The script.
     pub source: &'static str,
     declarations: Declarations,
+    /// The blocks the example's mode lists for mining.
+    block_guard: &'static [&'static str],
 }
 
 /// What an example's mode declares beside its script.
@@ -33,7 +35,8 @@ enum Declarations {
 
 impl Example {
     /// The example as a scripted mode's body, as written: the script with
-    /// the default leash and tool guard and what the example declares.
+    /// the default leash and tool guard, the blocks it mines, and what the
+    /// example declares.
     #[must_use]
     pub fn draft(&self) -> ScriptDraft {
         let (messages, patterns) = match self.declarations {
@@ -45,6 +48,11 @@ impl Example {
             source: self.source.to_owned(),
             leash: LeashRadius::DEFAULT.blocks(),
             tool_guard: ToolGuard::DEFAULT.uses_left(),
+            block_guard: self
+                .block_guard
+                .iter()
+                .map(|block| (*block).to_owned())
+                .collect(),
             messages,
             patterns,
         }
@@ -97,23 +105,28 @@ pub const EXAMPLES: [Example; 4] = [
         title: "An AFK farm",
         source: include_str!("../scripts/afk_farm.rhai"),
         declarations: Declarations::None,
+        block_guard: &[],
     },
     Example {
         id: "minecart_farm",
         title: "The minecart farm",
         source: include_str!("../scripts/minecart_farm.rhai"),
         declarations: Declarations::None,
+        block_guard: &[],
     },
     Example {
         id: "cobblestone_generator",
         title: "A cobblestone generator",
         source: include_str!("../scripts/cobblestone_generator.rhai"),
         declarations: Declarations::None,
+        // The wall behind the generator's block is never mined.
+        block_guard: &["cobblestone"],
     },
     Example {
         id: "balance",
         title: "Paying out a balance",
         source: include_str!("../scripts/balance.rhai"),
         declarations: Declarations::Balance,
+        block_guard: &[],
     },
 ];

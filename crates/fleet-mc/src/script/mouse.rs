@@ -1,7 +1,7 @@
 //! The mouse buttons of a scripted mode (Plan.md P15.11; ADR-0036, D11).
 //!
 //! **The left button, held, is azalea's hold-to-mine** (its `LeftClickMine`,
-//! what `Client::left_click_mine` sets), behind two guards that fleet-core
+//! what `Client::left_click_mine` sets), behind three guards that fleet-core
 //! decides and [`guard_mining`] applies each game tick, **before azalea's
 //! mining systems**:
 //!
@@ -10,6 +10,12 @@
 //!   what azalea already queued or mines is judged by its own block and the
 //!   bot's feet *now*, so a block that was level with the feet when mining
 //!   began is let alone once the bot has risen. The hold only pauses.
+//! - **The block guard:** a mode may list the blocks it mines (ADR-0042's
+//!   amendment, G13). Any other block is held back exactly as the mining
+//!   guard holds one back: nothing starts on it, what azalea queued or
+//!   mines there is stopped, and the hold goes on once the crosshair is on
+//!   a listed block again. Each block is judged by what the bot knows it
+//!   to be *now*; one it can't name is no listed block.
 //! - **The tool guard:** when the held item wears and is down to the uses
 //!   the mode keeps, the button goes up, and the runtime hears of it.
 //!
@@ -28,7 +34,7 @@ use azalea::BlockPos;
 use azalea::core::direction::Direction as Face;
 use azalea::ecs::entity::Entity;
 use azalea::ecs::query::{Has, With};
-use azalea::ecs::system::{Commands, Query};
+use azalea::ecs::system::{Commands, Query, Res};
 use azalea::ecs::world::World;
 use azalea::entity::inventory::Inventory;
 use azalea::entity::{LocalEntity, LookDirection, Position};
@@ -42,11 +48,12 @@ use azalea::protocol::packets::game::s_player_action::{
     Action as PlayerAction, ServerboundPlayerAction,
 };
 use azalea::registry::builtin::ItemKind;
+use azalea::world::{WorldName, Worlds};
 use fleet_core::mc::{LetGo, SessionError};
-use fleet_core::script::{BlockPosition, may_mine};
+use fleet_core::script::may_mine;
 use tracing::debug;
 
-use super::facts::held_item;
+use super::facts::{block, held_item, identifier};
 use super::held::{Held, RightHold};
 use super::{Guarded, Reports};
 use crate::actions;
@@ -63,6 +70,7 @@ type Mined = (
     &'static Guarded,
     &'static Position,
     &'static Inventory,
+    Option<&'static WorldName>,
     Option<&'static HitResultComponent>,
     Option<&'static Mining>,
     Option<&'static MiningQueued>,
@@ -70,9 +78,15 @@ type Mined = (
     Option<&'static mut MineProgress>,
 );
 
-/// Applies the two guards of mining, and the button's own state, to what
+/// Applies the three guards of mining, and the button's own state, to what
 /// azalea mines; see the [module docs](self).
-pub(super) fn guard_mining(mut commands: Commands, mut bots: Query<Mined, With<LocalEntity>>) {
+pub(super) fn guard_mining(
+    mut commands: Commands,
+    worlds: Option<Res<Worlds>>,
+    mut bots: Query<Mined, With<LocalEntity>>,
+) {
+    // Every world the client knows; none before azalea has made the first.
+    let worlds: Option<&Worlds> = worlds.map(Res::into_inner);
     for (
         bot,
         reports,
@@ -80,6 +94,7 @@ pub(super) fn guard_mining(mut commands: Commands, mut bots: Query<Mined, With<L
         guarded,
         position,
         inventory,
+        world,
         hit,
         mining,
         queued,
@@ -94,16 +109,24 @@ pub(super) fn guard_mining(mut commands: Commands, mut bots: Query<Mined, With<L
         }
         let down = held.left;
         let feet = position.y;
-        let allowed = |at: BlockPos| {
-            may_mine(
-                feet,
-                BlockPosition {
-                    x: at.x,
-                    y: at.y,
-                    z: at.z,
-                },
-            )
+        let block_guard = &guarded.0.block_guard;
+        // The bot's own picture of its world, read only while a mode that
+        // lists blocks holds the button: at most three lookups a tick.
+        let chunks = (down && !block_guard.is_off())
+            .then(|| world.zip(worlds))
+            .flatten()
+            .and_then(|(name, worlds)| worlds.get(name));
+        let chunks = chunks.as_ref().map(|world| world.read());
+        let listed = |at: BlockPos| {
+            block_guard.is_off() || {
+                let kind = chunks
+                    .as_ref()
+                    .and_then(|chunks| chunks.get_block_state(at))
+                    .map(|state| identifier(&state.as_block_kind().to_string()));
+                block_guard.allows(kind.as_ref())
+            }
         };
+        let allowed = |at: BlockPos| may_mine(feet, block(at)) && listed(at);
         // What azalea is about to mine, and what it mines.
         if queued.is_some_and(|queued| !down || !allowed(queued.position)) {
             commands.entity(bot).remove::<MiningQueued>();

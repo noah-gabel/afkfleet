@@ -404,6 +404,7 @@ mod tests {
                 "leashed",
                 "mining_guard",
                 "tool_guard",
+                "block_guard",
                 "bad_value",
                 "too_many",
                 "no_command"

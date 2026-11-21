@@ -15,8 +15,8 @@ use fleet_core::mc::{
 };
 use fleet_core::mode::{GameAction, HotbarSlot};
 use fleet_core::script::{
-    BlockPosition, Blocks, BotFacts, Identifier, Input, Key, LeashRadius, MouseButton, Position,
-    Snapshot, ToolGuard,
+    BlockGuard, BlockPosition, Blocks, BotFacts, Identifier, Input, Key, LeashRadius, MouseButton,
+    Position, Snapshot, ToolGuard,
 };
 use fleet_testkit::mc::{
     EmitOutcome, FakeConnector, FakeEvents, FakeSession, Performed, SessionController,
@@ -725,9 +725,10 @@ async fn setting_the_guards_is_logged_with_what_was_set() {
     let guards = Guards {
         leash: LeashRadius::try_from(16).unwrap(),
         tool_guard: ToolGuard::OFF,
+        block_guard: BlockGuard::try_from(vec!["cobblestone".to_owned()]).unwrap(),
     };
 
-    assert_eq!(session.set_guards(guards).await, Ok(()));
+    assert_eq!(session.set_guards(guards.clone()).await, Ok(()));
 
     assert_eq!(controller.log(), [Performed::Guards(guards)]);
 }

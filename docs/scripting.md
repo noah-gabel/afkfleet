@@ -87,6 +87,7 @@ if !mouse.left.tap().ok {
 | `leashed` | The bot is at the end of its leash, and this would take it further |
 | `mining_guard` | The block reaches below the bot's feet |
 | `tool_guard` | The held tool is nearly used up |
+| `block_guard` | The block isn't one the mode lists for mining |
 | `bad_value` | A number outside its range, an angle that isn't a number, an unknown kind |
 | `too_many` | No room for another timer |
 | `no_command` | `chat.expect` without a declared command sent before it in the same hook |
@@ -134,7 +135,7 @@ keys.forward.hold_for(3000);
 - `hold()` mines the block the bot looks at, and then the next one that appears there, as a held button does in vanilla. An entity in front of the bot is attacked once when the button goes down, never again while it's held.
 - **The bot never mines a block that reaches below its feet:** the one it stands on, whatever its shape, everything under it, and the blocks beside it at that height. The hold returns `mining_guard`, and a hold that's already down pauses while the bot looks at such a block. So aim at feet level or higher from solid ground: a bot standing on a slab, on soul sand or on a carpet mines at eye level only, and so does one in mid-jump.
 - **The tool guard.** When the held tool has only a few uses left (2 unless the mode's setting says otherwise), mining stops, `held` turns `false`, and a new hold returns `tool_guard` until another item is in hand. `bot.held.durability` says how many uses are left.
-- **A held button mines whatever the crosshair lands on next.** Once a block is gone, that's the block behind it, exactly as in vanilla: a bot at a cobblestone generator mines the wall behind the generator's block while the next one forms. Put something its tool can't break there, or let go and look (`bot.looking_at`) before holding again.
+- **The block guard.** A held button mines whatever the crosshair lands on next. Once a block is gone, that's the block behind it, exactly as in vanilla: at a cobblestone generator it's the wall behind the generator's block while the next one forms, and on a real farm that wall may hold the lava. So a mode can list the blocks its script mines: a setting of the mode, up to 16 block IDs such as `cobblestone`. On any other block a hold pauses, and goes on by itself once the bot looks at a listed block again; a new hold on a block that isn't listed returns `block_guard`. A mode that lists nothing mines any block. The three guards answer in this order: `mining_guard`, `tool_guard`, `block_guard`.
 - **A block the server won't let the bot break** (a spawn protection, a claim) is mined to its end, put back by the server, and mined again, for as long as the button is held. Nothing is gained and the tool isn't worn, and a script can't tell it from a block that grows back.
 
 **Right button**
@@ -375,6 +376,8 @@ fn next_pickaxe() {
     hotbar.select(state.slot);
 }
 ```
+
+The mode lists `cobblestone` as the one block it mines. While the next block forms, the crosshair is on the wall behind the generator: the hold pauses there, and a new hold returns `block_guard`, which the script answers by trying again a second later.
 
 #### Paying out a balance
 The mode declares two messages and one pattern:

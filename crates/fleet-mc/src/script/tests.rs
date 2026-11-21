@@ -33,7 +33,7 @@ use azalea::world::{WorldName, Worlds};
 use azalea::{BlockPos, Event, PhysicsState, Vec3, WalkDirection};
 use fleet_core::mc::{Guards, LetGo, SessionError, SessionEvent};
 use fleet_core::mode::GameAction;
-use fleet_core::script::{Input, Key, LeashRadius, MouseButton, ToolGuard};
+use fleet_core::script::{BlockGuard, Input, Key, LeashRadius, MouseButton, ToolGuard};
 use rstest::rstest;
 
 use super::held::{Held, RightHold};
@@ -718,7 +718,7 @@ fn the_leash_is_as_long_as_the_mode_set_it_and_keeps_its_anchor() {
     let mut scene = Scene::placed();
     scene.guards(Guards {
         leash: LeashRadius::try_from(2).unwrap(),
-        tool_guard: ToolGuard::DEFAULT,
+        ..Guards::default()
     });
     scene.press(key(Key::Forward));
     scene.move_to(Vec3::new(2.4, 64.0, 0.5));
@@ -943,6 +943,7 @@ fn the_tool_guard_ends_a_hold_when_the_tool_is_nearly_used_up(
     scene.guards(Guards {
         leash: LeashRadius::DEFAULT,
         tool_guard,
+        block_guard: BlockGuard::ANY,
     });
     scene.holds(pickaxe(200));
     scene.looks_at(Some(block(0, 65, 2)));
@@ -974,6 +975,171 @@ fn the_tool_guard_ends_a_hold_when_the_tool_is_nearly_used_up(
             )]
         );
     }
+}
+
+// --- The block guard (ADR-0042's amendment, G13) ---
+
+/// The guards of a mode that lists `blocks` for mining.
+fn listing(blocks: &[&str]) -> Guards {
+    let blocks: Vec<String> = blocks.iter().map(|block| (*block).to_owned()).collect();
+    Guards {
+        block_guard: BlockGuard::try_from(blocks).unwrap(),
+        ..Guards::default()
+    }
+}
+
+#[rstest]
+#[case::the_listed_block(BlockKind::Cobblestone, &["cobblestone"], true)]
+#[case::the_wall_behind_it(BlockKind::Stone, &["cobblestone"], false)]
+#[case::one_of_two_listed(BlockKind::Stone, &["cobblestone", "minecraft:stone"], true)]
+#[case::air_where_the_block_was(BlockKind::Air, &["cobblestone"], false)]
+#[case::any_block_with_nothing_listed(BlockKind::Stone, &[], true)]
+fn the_block_guard_holds_the_hold_back_while_the_bot_looks_at_a_block_the_mode_doesnt_list(
+    #[case] kind: BlockKind,
+    #[case] listed: &[&str],
+    #[case] mined: bool,
+) {
+    let mut scene = Scene::placed();
+    let _loaded = scene.chunk();
+    scene.set_block(block(0, 65, 2), kind);
+    scene.guards(listing(listed));
+    scene.looks_at(Some(block(0, 65, 2)));
+    scene.press(LEFT);
+
+    scene.ticks(2);
+
+    assert_eq!(scene.has::<LeftClickMine>(), mined);
+    // The button stays down either way: the hold only pauses.
+    assert!(scene.held().left);
+    assert_eq!(scene.events(), []);
+}
+
+/// No chunk is loaded here, so the bot can't name the block: a mode that
+/// lists blocks mines none it can't name, and one that lists nothing mines
+/// as before.
+#[rstest]
+#[case::a_mode_that_lists_blocks(&["cobblestone"], false)]
+#[case::a_mode_that_lists_nothing(&[], true)]
+fn a_block_the_bot_cant_name_is_mined_only_by_a_mode_that_lists_nothing(
+    #[case] listed: &[&str],
+    #[case] mined: bool,
+) {
+    let mut scene = Scene::placed();
+    scene.guards(listing(listed));
+    scene.looks_at(Some(block(0, 65, 2)));
+    scene.press(LEFT);
+
+    scene.ticks(2);
+
+    assert_eq!(scene.has::<LeftClickMine>(), mined);
+    assert!(scene.held().left);
+}
+
+/// What PR #126's generator showed: once the block is gone, the crosshair
+/// lands on the wall behind it.
+#[test]
+fn at_a_generator_the_hold_pauses_on_the_wall_and_goes_on_when_the_next_block_forms() {
+    let mut scene = Scene::placed();
+    let _loaded = scene.chunk();
+    let (cobble, wall) = (block(2, 64, 0), block(3, 64, 0));
+    scene.set_block(cobble, BlockKind::Cobblestone);
+    scene.set_block(wall, BlockKind::Stone);
+    scene.guards(listing(&["cobblestone"]));
+    scene.looks_at(Some(cobble));
+    scene.press(LEFT);
+    scene.tick();
+    let on_the_block = scene.has::<LeftClickMine>();
+
+    scene.set_block(cobble, BlockKind::Air);
+    scene.looks_at(Some(wall));
+    scene.tick();
+    let on_the_wall = scene.has::<LeftClickMine>();
+
+    scene.set_block(cobble, BlockKind::Cobblestone);
+    scene.looks_at(Some(cobble));
+    scene.tick();
+
+    assert!(on_the_block && !on_the_wall);
+    assert!(scene.has::<LeftClickMine>());
+    assert!(scene.held().left);
+    assert_eq!(scene.events(), []);
+    assert_eq!(scene.actions_sent(), []);
+}
+
+#[test]
+fn what_azalea_is_about_to_mine_that_the_mode_doesnt_list_never_starts() {
+    let mut scene = Scene::placed();
+    let _loaded = scene.chunk();
+    let (cobble, wall) = (block(2, 64, 0), block(3, 64, 0));
+    scene.set_block(cobble, BlockKind::Cobblestone);
+    scene.set_block(wall, BlockKind::Stone);
+    scene.guards(listing(&["cobblestone"]));
+    scene.looks_at(Some(cobble));
+    scene.press(LEFT);
+    scene.tick();
+    let bot = scene.bot;
+    // Queued for the wall, whatever the crosshair is on by now.
+    scene.app.world_mut().entity_mut(bot).insert(MiningQueued {
+        position: wall,
+        direction: Face::North,
+        force: true,
+    });
+
+    scene.tick();
+
+    assert!(!scene.has::<MiningQueued>());
+    assert_eq!(scene.actions_sent(), []);
+    assert!(scene.held().left);
+}
+
+#[test]
+fn a_block_being_mined_is_let_alone_once_it_is_no_listed_block_any_more() {
+    let mut scene = Scene::placed();
+    let _loaded = scene.chunk();
+    let cobble = block(2, 64, 0);
+    scene.set_block(cobble, BlockKind::Cobblestone);
+    scene.guards(listing(&["cobblestone"]));
+    scene.looks_at(Some(cobble));
+    scene.press(LEFT);
+    scene.tick();
+    let bot = scene.bot;
+    scene.app.world_mut().entity_mut(bot).insert(Mining {
+        pos: cobble,
+        dir: Face::North,
+        force: true,
+    });
+    **scene.app.world_mut().get_mut::<MineProgress>(bot).unwrap() = 0.6;
+    scene.tick();
+    let while_listed = (scene.has::<Mining>(), scene.actions_sent());
+
+    // The server put another block there.
+    scene.set_block(cobble, BlockKind::Stone);
+    scene.tick();
+
+    assert_eq!(while_listed, (true, Vec::new()));
+    assert!(!scene.has::<Mining>() && !scene.has::<LeftClickMine>());
+    assert_eq!(
+        scene.actions_sent(),
+        [Sent::Action(PlayerAction::AbortDestroyBlock, cobble)]
+    );
+    assert!(scene.get::<MineProgress>().unwrap().abs() < f32::EPSILON);
+    // Paused, not ended.
+    assert!(scene.held().left);
+    assert_eq!(scene.events(), []);
+}
+
+#[test]
+fn the_floor_is_never_mined_even_when_the_mode_lists_it() {
+    let mut scene = Scene::placed();
+    let _loaded = scene.chunk();
+    scene.set_block(block(0, 63, 0), BlockKind::Cobblestone);
+    scene.guards(listing(&["cobblestone"]));
+    scene.looks_at(Some(block(0, 63, 0)));
+    scene.press(LEFT);
+
+    scene.ticks(2);
+
+    assert!(!scene.has::<LeftClickMine>());
 }
 
 // --- The right button (Plan.md P15.11) ---
