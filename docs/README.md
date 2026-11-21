@@ -60,3 +60,4 @@ Each architecture decision record (ADR) holds one decision with its context, its
 - [0041. `picomatch`'s advisory in the build tools: ignored by its one ID, and how `pnpm audit` ignores](adr/0041-picomatch-advisory-in-the-build-tools.md)
 - [0042. A scripted mode's inputs in fleet-mc, as built: one place for what's held, guards before azalea's own systems, and what the live scenarios found](adr/0042-scripted-inputs-in-fleet-mc.md)
 - [0043. The script runner in fleet-runtime, and a script's hooks on the async workers](adr/0043-the-script-runner-and-hooks-on-the-async-workers.md)
+- [0044. Scripted modes on the wire, the server and the agent: who writes one, what's checked at save, never below an agent's level, and what an agent reports](adr/0044-scripted-modes-on-the-wire-the-server-and-the-agent.md)

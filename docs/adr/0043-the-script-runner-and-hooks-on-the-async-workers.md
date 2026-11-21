@@ -265,8 +265,34 @@ One change turned nothing red and was removed instead: a second `ReleaseAll` at 
 - **The real stream beside real scripts is group E's check.** Once a scripted mode travels (P15.20), the agent's own stream and heartbeat run beside scripted bots; if the heartbeat is late there, group E's pull request says so.
 - **The scripted load test runs once on GitHub's linux/arm64 runner,** production's architecture: every number above is from the development PC. The manual workflow `Load (arm64)` (`.github/workflows/load-arm64.yml`) runs fleet-integration's scripted `load_` tests in a release build there; its numbers are under "What was measured on linux/arm64" below.
 
+## What was measured on linux/arm64
+`load_200_scripted_bots` again, as above, in a release build on GitHub's `ubuntu-24.04-arm` runner (aarch64, 16 GB of memory), through the manual workflow `Load (arm64)`, 2026-11-21. The hot script calibrated there at **96 rounds for 2.8 ms** alone (1,191 operations a hook).
+
+**This machine's timers are exact:** with nothing running, a heartbeat came 0.6 to 1.5 ms late and a step 1.1 to 1.4 ms, where the development PC's were 4 to 16 ms. So every "late" below is the load's own.
+
+**The examples alone** are free here too: 171 to 175 hooks a second, 1 to 3 ms of work a second, 43 operations at most, nothing stopped, 30 to 44 MiB for the whole process.
+
+**With the hot script,** the longest of each phase (heartbeat / a step), as they come due and in turns:
+
+| Workers | Hot | As they come due | In turns | Hot scripts stopped so far in the run, as they come due / in turns |
+|---|---|---|---|---|
+| 1 | 25 % | 1.2 / 2.1 ms | 1.4 / 2.9 ms | 0 / 0 |
+| 1 | 50 % | **37.5 / 35.3 ms** | 6.5 / 8.4 ms | 0 / 0 |
+| 1 | 100 % | **608 ms, and 12 of 24 beats came / 755 ms, and 70 of 230 steps** | 6.0 / 8.2 ms, all of them | 0 / 0 |
+| 2 | 50 % | 1.6 / 4.5 ms | 1.3 / 1.7 ms | 46 / 0 |
+| 2 | 100 % | **90.6 / 101.9 ms, and 187 steps** | 1.0 / 1.8 ms | 47 / 0 |
+| 4 | 50 % | 2.1 / 1.9 ms | 1.6 / 1.9 ms | 97 / 85 |
+| 4 | 100 % | 1.6 / 3.3 ms | 1.1 / 1.8 ms | **198 / 176** |
+
+**What it says:**
+- **The answer holds on production's architecture.** In turns, what isn't a hook is on time at every share on every runtime: a heartbeat 6.5 ms late at most and a step 8.4 ms, both on one worker that hooks fill; 1 to 2 ms on two and four. As they come due, one worker's heartbeat was 0.6 s late and lost half its beats, and two workers' 91 ms, as on the development PC.
+- **Hooks are slower beside each other here.** The hot hook takes 2.8 ms alone and 2.8 ms with one at a time (one worker, or two in turns), but 3.5 to 4.1 ms when several run at once: on cores that share their caches, the costliest operation the engine has slows down when it runs on every core. So on four workers most hot scripts crossed a budget, a hook's 5 ms as they came due and the second's 20 ms in turns, and stopped, as a script past its budget does; on one and two workers in turns none did. The examples, four hundred times under the budgets, never stopped anywhere.
+- **Nothing here changes a decision.** The turns keep the agent's own work on time, which is what they're for; a script planned to the edge of its budget stops on a busy agent, as the budgets say (A1). The reference's scripting guide should say so: a script that needs more than a few milliseconds a hook doesn't belong in a hook.
+
+**The real stream beside real scripts** (group E's `load_scripted_bots_on_the_real_stream`, [ADR-0044](0044-scripted-modes-on-the-wire-the-server-and-the-agent.md), E12): its arm64 numbers are in group E's pull request and in ADR-0044.
+
 ## Known limits
-- **The agent's stream itself isn't measured** beside scripts (above). Group E can run this test's fleet beside a real stream once a scripted mode travels.
+- **The agent's stream itself** was measured beside scripts by group E ([ADR-0044](0044-scripted-modes-on-the-wire-the-server-and-the-agent.md), E12).
 - **A hook's snapshot is as old as its wait for a turn** (R10).
 - **What a hook that fails wrote into its log is lost** with everything else it asked for (ADR-0040): the app shows the error and its line.
 - **`on_stop` is cut after 2 s** on a session that doesn't answer; the release then comes from the session's end.
