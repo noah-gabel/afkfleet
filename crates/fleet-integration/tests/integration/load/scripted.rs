@@ -44,7 +44,7 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use fleet_agent::stopwatch::OsStopwatch;
 use fleet_core::bot::{BotAccount, BotSpec, BotState, DesiredRunState};
-use fleet_core::chat::{ChatMessage, ChatRate, IncomingChat};
+use fleet_core::chat::{ChatFormats, ChatMessage, ChatRate, IncomingChat};
 use fleet_core::disconnect::ConflictTexts;
 use fleet_core::id::BotId;
 use fleet_core::mc::{
@@ -99,7 +99,7 @@ const HOT_HOOK: Duration = Duration::from_micros(2_800);
 /// The hot script: four hooks a second, each `rounds` times an array's
 /// method that calls a function of the script's for thirty items, the
 /// costliest kind of operation the engine has (ADR-0040's amendment, A1).
-fn hot(rounds: u64) -> ScriptDraft {
+pub(super) fn hot(rounds: u64) -> ScriptDraft {
     let source = format!(
         "fn on_join(first) {{\n    timer.every(250, \"burn\");\n}}\n\nfn on_timer(name) {{\n    let items = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30];\n    let n = 0;\n    while n < {rounds} {{\n        items.map(Fn(\"same\"));\n        n += 1;\n    }}\n}}\n\nfn same(item) {{\n    item\n}}\n"
     );
@@ -147,7 +147,7 @@ fn hot_hook(rounds: u64) -> Option<Duration> {
 /// this machine, in this build: a few rounds are timed, and a rule of
 /// three brings them to the time, four times over. Rounds whose hook is
 /// stopped are halved.
-fn calibrate() -> u64 {
+pub(super) fn calibrate() -> u64 {
     let mut rounds = 4_u64;
     let mut took = Duration::ZERO;
     for _ in 0..6 {
@@ -231,12 +231,13 @@ fn spec(n: usize, mode: ModeDefinition) -> BotSpec {
         desired: DesiredRunState::Running,
         conflict_texts: ConflictTexts::default(),
         chat_rate: ChatRate::default(),
+        chat_formats: ChatFormats::default(),
     }
 }
 
 /// What a bot's session shows it: a farm as each example expects one, with
 /// a pickaxe in hand, twenty entities around and cobblestone in front.
-fn seen() -> Observation {
+pub(super) fn seen() -> Observation {
     let place = Position::try_new(0.5, 64.0, 0.5).expect("a position");
     let id = |name: &str| Identifier::try_from(name).expect("an identifier");
     let bot = BotFacts {

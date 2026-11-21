@@ -68,18 +68,31 @@ impl Logs {
     /// guard lives.
     pub(crate) fn capture() -> (Self, DefaultGuard) {
         let logs = Self::default();
+        let guard = tracing::subscriber::set_default(logs.subscriber());
+        (logs, guard)
+    }
+
+    /// A new log as the process's subscriber, on every thread: for a case
+    /// on a runtime of several workers, which nextest runs in a process of
+    /// its own.
+    pub(crate) fn capture_everywhere() -> Self {
+        let logs = Self::default();
+        tracing::subscriber::set_global_default(logs.subscriber()).unwrap();
+        logs
+    }
+
+    /// A subscriber that writes JSON lines at `debug` into this log.
+    fn subscriber(&self) -> impl tracing::Subscriber + Send + Sync + use<> {
         let config = LogConfig {
             format: LogFormat::Json,
             filter: "debug".parse().unwrap(),
         };
-        let subscriber = tracing_subscriber::registry().with(layer_with(
+        tracing_subscriber::registry().with(layer_with(
             &config,
             &NoRules,
             false,
-            Waking(logs.clone()),
-        ));
-        let guard = tracing::subscriber::set_default(subscriber);
-        (logs, guard)
+            Waking(self.clone()),
+        ))
     }
 
     /// The lines so far.

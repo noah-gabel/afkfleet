@@ -109,6 +109,21 @@ impl Ledger {
             .emit(event)
     }
 
+    /// Has `bot`'s live session show `observation` from now on: what the
+    /// bot sees, which a scripted mode waits for before its first hook
+    /// (Plan.md P15.20's load case).
+    pub(crate) fn show(&self, bot: BotId, observation: fleet_core::mc::Observation) {
+        let book = self.0.lock().unwrap();
+        book.runs
+            .iter()
+            .filter(|run| !run.dead)
+            .flat_map(|run| &run.sessions)
+            .rfind(|session| session.bot == bot && session.live())
+            .expect("the bot has a live session")
+            .controller
+            .show(observation);
+    }
+
     /// Whether `bot` has a live session in a run that didn't crash.
     pub(crate) fn live(&self, bot: BotId) -> bool {
         let book = self.0.lock().unwrap();

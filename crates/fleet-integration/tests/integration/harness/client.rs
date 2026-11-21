@@ -226,6 +226,7 @@ impl Owner {
                 name: name.to_owned(),
                 visibility: ModeVisibility::Private,
                 steps: every_quarter_second(action),
+                script: None,
             })
             .await
             .unwrap()
@@ -245,6 +246,25 @@ impl Owner {
                 name: name.to_owned(),
                 visibility: ModeVisibility::Private,
                 steps,
+                script: None,
+            })
+            .await
+            .unwrap()
+    }
+
+    /// A new private scripted mode `name` of the Owner's with `script`,
+    /// through the route that takes any command (Plan.md P15.21).
+    pub(crate) async fn scripted_mode(
+        &self,
+        name: &str,
+        script: fleet_api_types::script::ModeScriptRequest,
+    ) -> ModeResponse {
+        self.client
+            .create_mode_with_commands(&CreateModeRequest {
+                name: name.to_owned(),
+                visibility: ModeVisibility::Private,
+                steps: ModeSteps(Vec::new()),
+                script: Some(script),
             })
             .await
             .unwrap()
@@ -278,6 +298,7 @@ impl Owner {
                     name: mode.name.as_str().to_owned(),
                     visibility: ModeVisibility::Private,
                     steps: every_quarter_second(action),
+                    script: None,
                 },
             )
             .await

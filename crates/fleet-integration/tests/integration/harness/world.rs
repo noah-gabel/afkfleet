@@ -29,7 +29,7 @@ pub(crate) struct World {
     pub(crate) server: Server,
     pub(crate) owner: Owner,
     seeds: AtomicU64,
-    _guard: DefaultGuard,
+    _guard: Option<DefaultGuard>,
     // Last, so the folder goes after everything that holds its files.
     dir: TempDir,
 }
@@ -38,6 +38,16 @@ impl World {
     /// A server as `options` say, with its Owner logged in.
     pub(crate) async fn new(options: ServerOptions) -> Self {
         let (logs, guard) = Logs::capture();
+        Self::with_logs(options, logs, Some(guard)).await
+    }
+
+    /// The same, its log the process's on every thread: for a case on a
+    /// runtime of several workers ([`Logs::capture_everywhere`]).
+    pub(crate) async fn on_every_thread(options: ServerOptions) -> Self {
+        Self::with_logs(options, Logs::capture_everywhere(), None).await
+    }
+
+    async fn with_logs(options: ServerOptions, logs: Logs, guard: Option<DefaultGuard>) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let server = Server::start(dir.path(), options).await;
         let owner = Owner::log_in(&server).await;

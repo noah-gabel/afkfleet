@@ -14,12 +14,16 @@
 //!   agent's dial fails fast and it backs off.
 //!   [`Proxy::close_gate_after`] closes it by itself after a number of
 //!   connections.
+//! - [`Proxy::watch_writes`] / [`Proxy::writes`]: when the agent's side
+//!   wrote, read by a case that measures how long its stream stays silent
+//!   (Plan.md P15.20's load case). TLS hides what each write holds.
 //!
 //! Its tasks die with it.
 
 use core::time::Duration;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -37,11 +41,15 @@ const DIAL: Duration = Duration::from_secs(5);
 /// serve's own port waits (`grpc::listener`'s pace).
 const ACCEPT_PAUSE: Duration = Duration::from_millis(100);
 
+/// When the agent's side of a connection wrote, while a case watches.
+type Writes = Arc<Mutex<Option<Vec<Instant>>>>;
+
 /// One agent's proxy; see the [module docs](self).
 #[derive(Debug)]
 pub(crate) struct Proxy {
     address: SocketAddr,
     shared: Arc<Mutex<Shared>>,
+    writes: Writes,
     _accepting: JoinSet<()>,
 }
 
@@ -90,11 +98,18 @@ impl Proxy {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let shared = Arc::new(Mutex::new(Shared::default()));
+        let writes = Writes::default();
         let mut accepting = JoinSet::new();
-        accepting.spawn(accept(listener, upstream, Arc::clone(&shared)));
+        accepting.spawn(accept(
+            listener,
+            upstream,
+            Arc::clone(&shared),
+            Arc::clone(&writes),
+        ));
         Self {
             address,
             shared,
+            writes,
             _accepting: accepting,
         }
     }
@@ -135,6 +150,22 @@ impl Proxy {
         }
     }
 
+    /// From now on, the time of each write the agent's side makes is kept.
+    pub(crate) fn watch_writes(&self) {
+        *self.writes.lock().unwrap() = Some(Vec::new());
+    }
+
+    /// The times kept since [`Proxy::watch_writes`] or the last call, in
+    /// order; keeping goes on.
+    pub(crate) fn writes(&self) -> Vec<Instant> {
+        self.writes
+            .lock()
+            .unwrap()
+            .as_mut()
+            .map(core::mem::take)
+            .unwrap_or_default()
+    }
+
     /// The open connections close.
     pub(crate) fn cut_open(&self) {
         let mut shared = self.shared.lock().unwrap();
@@ -146,7 +177,12 @@ impl Proxy {
 
 /// Accepts connections until the proxy is dropped, which drops this task's
 /// pumps too.
-async fn accept(listener: TcpListener, upstream: GrpcAddress, shared: Arc<Mutex<Shared>>) {
+async fn accept(
+    listener: TcpListener,
+    upstream: GrpcAddress,
+    shared: Arc<Mutex<Shared>>,
+    writes: Writes,
+) {
     let mut pumps = JoinSet::new();
     loop {
         let Ok((client, _)) = listener.accept().await else {
@@ -173,23 +209,24 @@ async fn accept(listener: TcpListener, upstream: GrpcAddress, shared: Arc<Mutex<
         let (client_read, client_write) = client.into_split();
         let (server_read, server_write) = server.into_split();
         pumps.spawn(pump(
-            client_read,
-            server_write,
+            (client_read, server_write),
             silenced.clone(),
             cuts.clone(),
+            Some(Arc::clone(&writes)),
         ));
-        pumps.spawn(pump(server_read, client_write, silenced, cuts));
+        pumps.spawn(pump((server_read, client_write), silenced, cuts, None));
     }
 }
 
 /// Forwards `from` to `to` until either side closes, the connection is cut,
 /// or it's silenced, after which it forwards nothing and holds both halves
-/// open until it's cut.
+/// open until it's cut. Each read's time goes to `writes` while a case
+/// watches.
 async fn pump(
-    mut from: OwnedReadHalf,
-    mut to: OwnedWriteHalf,
+    (mut from, mut to): (OwnedReadHalf, OwnedWriteHalf),
     mut silenced: watch::Receiver<bool>,
     mut cut: watch::Receiver<bool>,
+    writes: Option<Writes>,
 ) {
     let mut bytes = vec![0_u8; 16 * 1024];
     let mut held = cut.clone();
@@ -209,6 +246,12 @@ async fn pump(
                     return;
                 }
                 Ok(read) => {
+                    // The guard goes before the write's await.
+                    if let Some(writes) = &writes
+                        && let Some(times) = writes.lock().unwrap().as_mut()
+                    {
+                        times.push(Instant::now());
+                    }
                     if to.write_all(&bytes[..read]).await.is_err() {
                         return;
                     }
