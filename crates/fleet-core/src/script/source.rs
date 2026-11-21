@@ -84,6 +84,31 @@ impl TryFrom<&str> for ScriptSource {
     }
 }
 
+/// `raw` made safe to show as a script, for whoever reads one it didn't
+/// check itself (a client reading the server's answer): what a
+/// [`ScriptSource`] may never hold is dropped, a Windows line end becomes a
+/// line break, and the text is cut at [`ScriptSource::MAX_BYTES`] bytes, at
+/// a character's edge. Line breaks and tabs stay, so a valid source comes
+/// back as it is.
+#[must_use]
+pub fn clean_source(raw: &str) -> String {
+    let mut clean = String::with_capacity(raw.len().min(ScriptSource::MAX_BYTES));
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\r' && chars.peek() == Some(&'\n') {
+            continue;
+        }
+        if is_forbidden_in_source(c) {
+            continue;
+        }
+        if clean.len().saturating_add(c.len_utf8()) > ScriptSource::MAX_BYTES {
+            break;
+        }
+        clean.push(c);
+    }
+    clean
+}
+
 /// Whether `c` may never be in a script: a control character other than
 /// a line break and a tab, a text-direction mark or an invisible character.
 fn is_forbidden_in_source(c: char) -> bool {
@@ -257,5 +282,30 @@ mod tests {
         fn any_text_never_panics(text in any::<String>()) {
             let _ = ScriptSource::try_from(text);
         }
+
+        /// Whatever it's given, a cleaned text is a source, and a source is
+        /// left as it is.
+        #[test]
+        fn a_cleaned_text_is_always_a_source(
+            text in "[ -~\\r\\n\\t\u{7}\u{fc}\u{202e}\u{200b}\u{1D538}]{0,300}"
+        ) {
+            let clean = clean_source(&text);
+
+            prop_assert_eq!(
+                ScriptSource::try_from(clean.as_str()).map(String::from),
+                Ok(clean.clone())
+            );
+            prop_assert_eq!(clean_source(&clean), clean);
+        }
+    }
+
+    #[test]
+    fn cleaning_keeps_a_source_and_drops_what_one_may_not_hold() {
+        assert_eq!(clean_source(AFK), AFK);
+        assert_eq!(clean_source("a\r\nb\u{202e}c\u{7}d\r"), "a\nbcd");
+        let long = "\u{1D538}".repeat(5000);
+        let cut = clean_source(&long);
+        assert_eq!(cut.len(), ScriptSource::MAX_BYTES);
+        assert!(long.starts_with(&cut));
     }
 }

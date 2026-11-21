@@ -99,10 +99,11 @@ pub(super) struct Session {
 }
 
 /// What an accepted hello hands its welcome: when it was accepted, and its
-/// capacity and bots.
+/// capacity, script API level and bots.
 struct Accepted {
     connected_at: DateTime<Utc>,
     capacity: AgentCapacity,
+    script_api: u32,
     running: Vec<BotSnapshot>,
 }
 
@@ -235,6 +236,7 @@ impl Session {
             agent = %self.admitted.name,
             version = %hello.agent_version,
             capacity = hello.capacity.get(),
+            script_api = hello.script_api,
             "an agent connected"
         );
         Ok((
@@ -242,6 +244,7 @@ impl Session {
             Accepted {
                 connected_at,
                 capacity: hello.capacity,
+                script_api: hello.script_api,
                 running: hello.running,
             },
         ))
@@ -270,6 +273,7 @@ impl Session {
                     halt: self.halt.clone(),
                     connected_at,
                     capacity: accepted.capacity,
+                    script_api: accepted.script_api,
                     running: accepted.running,
                     welcome,
                 },
@@ -657,6 +661,8 @@ fn reported(message: AgentMessage) -> Option<(BotId, Reported)> {
                 }
                 BotEventKind::ModeChatSent(message) => Reported::ModeChatSent(message),
                 BotEventKind::Alert(notification) => Reported::Alert(notification),
+                BotEventKind::ScriptStatus(state) => Reported::ScriptStatus(state),
+                BotEventKind::ScriptLog(line) => Reported::ScriptLog(line),
                 BotEventKind::Removed => return None,
             };
             Some((bot_id, reported))

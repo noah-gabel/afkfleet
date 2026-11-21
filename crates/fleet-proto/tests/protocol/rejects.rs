@@ -54,6 +54,7 @@ fn spec() -> BotSpec {
         conflict_texts: ConflictTexts::try_new(&["Logged in from another location"]).unwrap(),
         // Not the default, so a reader that ignored the field would show.
         chat_rate: fleet_core::chat::ChatRate::try_new(5, 2).unwrap(),
+        chat_formats: fleet_core::chat::ChatFormats::try_new(&["<{sender}> "]).unwrap(),
     }
 }
 
@@ -87,6 +88,7 @@ fn hello() -> wire::Hello {
         protocol_version: 1,
         capacity: 50,
         running: vec![wire_snapshot()],
+        script_api: 1,
     }
 }
 

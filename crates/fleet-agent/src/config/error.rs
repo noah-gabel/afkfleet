@@ -5,6 +5,7 @@ use fleet_core::disconnect::ConflictTextsError;
 use fleet_core::mode::UnknownPresetError;
 use fleet_core::net::{IpNetError, PrivateTargetsError};
 use fleet_core::resilience::{CircuitPolicyError, RetryPolicyError};
+use fleet_core::script::{ScriptError, ScriptSource};
 use fleet_core::value::{AgentNameError, McUsernameError, ServerAddressError};
 use fleet_startup::config::{LogFilterError, UnknownLogFormatError};
 
@@ -109,6 +110,34 @@ pub enum ProblemKind {
         /// The position of the earlier entry with the same account.
         with: usize,
     },
+    /// A bot names both a preset `mode` and a `script`.
+    #[error("a bot runs a mode or a script, not both")]
+    ModeAndScript,
+    /// A bot's script file can't be read as a script's text.
+    #[error(transparent)]
+    ScriptFile(ScriptFileError),
+    /// A bot's script, its settings or its declarations break one of
+    /// fleet-core's rules; the message names the place, never the text.
+    #[error(transparent)]
+    Script(ScriptError),
+}
+
+/// Why a bot's script file wasn't read (Plan.md P15.22). No message holds
+/// what the file holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ScriptFileError {
+    /// There's no file at the path.
+    #[error("there's no file at this path")]
+    NotFound,
+    /// The OS wouldn't open or read it.
+    #[error("the file can't be read: {0}")]
+    Unreadable(std::io::ErrorKind),
+    /// It holds more than a script may.
+    #[error("the file is longer than {max} bytes", max = ScriptSource::MAX_BYTES)]
+    TooLarge,
+    /// It isn't UTF-8 text.
+    #[error("the file isn't UTF-8 text")]
+    NotUtf8,
 }
 
 #[cfg(test)]

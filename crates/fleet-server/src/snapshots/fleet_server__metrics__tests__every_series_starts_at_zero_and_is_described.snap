@@ -125,6 +125,11 @@ afkfleet_retention_runs_total{outcome="failed"} 0
 afkfleet_retention_runs_total{outcome="stopped"} 0
 afkfleet_retention_runs_total{outcome="success"} 0
 
+# HELP afkfleet_script_reports_dropped_total Reports about a bot's script over what the server takes in for one bot, dropped, by kind.
+# TYPE afkfleet_script_reports_dropped_total counter
+afkfleet_script_reports_dropped_total{kind="log"} 0
+afkfleet_script_reports_dropped_total{kind="status"} 0
+
 # HELP afkfleet_server_certificate_not_after_timestamp_seconds When the gRPC port's server certificate ends, in Unix seconds; 0 without [grpc]. After it no agent can connect: renew it with pki server-cert before.
 # TYPE afkfleet_server_certificate_not_after_timestamp_seconds gauge
 afkfleet_server_certificate_not_after_timestamp_seconds 0

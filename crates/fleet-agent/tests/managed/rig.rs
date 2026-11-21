@@ -52,6 +52,7 @@ pub(crate) fn spec_on(n: u8, account: u8) -> BotSpec {
         desired: DesiredRunState::Running,
         conflict_texts: ConflictTexts::default(),
         chat_rate: fleet_core::chat::ChatRate::default(),
+        chat_formats: fleet_core::chat::ChatFormats::default(),
     }
 }
 
@@ -265,6 +266,7 @@ impl Rig {
             protocol_version: fleet_proto::PROTOCOL_VERSION,
             capacity: AgentCapacity::try_from(4).unwrap(),
             running,
+            script_api: 1,
         });
         let first = outbound.next().await.expect("the hello");
         assert!(matches!(

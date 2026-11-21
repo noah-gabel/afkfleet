@@ -117,6 +117,10 @@ pub enum BotWriteError {
     /// modes can't be probed.
     #[error("the mode isn't one the user may use")]
     UnusableMode,
+    /// A scripted mode for a bot whose agent's live stream runs a lower
+    /// script API level than the mode needs (ADR-0036, D13).
+    #[error("the bot's agent doesn't run the mode's script API level")]
+    AgentTooOld,
     /// A restart, reset or resume that can't act on the bot now.
     #[error(transparent)]
     Refused(CommandRefusal),

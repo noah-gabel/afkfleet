@@ -10,7 +10,7 @@
 use core::time::Duration;
 
 use fleet_core::bot::{BotSpec, BotState, DesiredRunState};
-use fleet_core::chat::{IncomingChat, PlayerChatKind};
+use fleet_core::chat::{ChatFormats, IncomingChat, PlayerChatKind};
 use fleet_core::mc::{Guards, LetGo, Observation, SessionError, SessionEvent};
 use fleet_core::mode::{Action, GameAction, HotbarSlot, ModeDefinition, Schedule, Step};
 use fleet_core::script::{
@@ -1522,6 +1522,83 @@ async fn a_players_line_with_the_replys_text_matches_nothing() {
         logged(&mut harness).len(),
         2,
         "the server's own line matches"
+    );
+}
+
+/// A mode that reads `Server: restarting in {minutes} minutes` at any time:
+/// a line a plugin's format `{sender}: ` would print for a player named
+/// `Server` (ADR-0037, C2).
+fn server_says(source: &str) -> ScriptDraft {
+    ScriptDraft {
+        patterns: vec![PatternDraft {
+            key: "restart".to_owned(),
+            when: When::AnyTime,
+            text: "Server: restarting in {minutes} minutes".to_owned(),
+            captures: vec![CaptureDraft {
+                name: "minutes".to_owned(),
+                kind: CaptureKind::Integer { min: 0, max: 60 },
+            }],
+        }],
+        ..draft(source)
+    }
+}
+
+const LOGS_A_RESTART: &str =
+    "fn on_chat(key, values) {\n  log.info(`${key} ${values.minutes}`);\n}";
+
+/// The server's chat formats come with the bot's spec (P15.34): a line one
+/// of them fits is a player's, and never read.
+#[tokio::test(start_paused = true)]
+async fn a_line_the_servers_chat_formats_name_a_players_is_never_read() {
+    let harness = Setup::new().start().await;
+    harness
+        .apply(BotSpec {
+            chat_formats: ChatFormats::try_new(&["{sender}: "]).unwrap(),
+            ..scripted(server_says(LOGS_A_RESTART))
+        })
+        .await;
+    let controller = join(&harness, 0).await;
+    let mut harness = harness;
+
+    emit(&controller, system("Server: restarting in 5 minutes"));
+    pass(ms(1)).await;
+
+    assert_eq!(lines(&mut harness), Vec::<String>::new());
+}
+
+/// A spec whose formats changed reaches a running script at once, without a
+/// new session: a format added stops a line from being read, and one taken
+/// away lets it through again.
+#[tokio::test(start_paused = true)]
+async fn a_change_of_the_chat_formats_applies_within_the_session() {
+    let (mut harness, controller) = online(server_says(LOGS_A_RESTART)).await;
+    let line = || system("Server: restarting in 5 minutes");
+
+    emit(&controller, line());
+    pass(ms(1)).await;
+    let without = lines(&mut harness);
+    harness
+        .apply(BotSpec {
+            chat_formats: ChatFormats::try_new(&["{sender}: "]).unwrap(),
+            ..scripted(server_says(LOGS_A_RESTART))
+        })
+        .await;
+    pass(ms(1_000)).await;
+    emit(&controller, line());
+    pass(ms(1)).await;
+    let with = lines(&mut harness);
+    harness.apply(scripted(server_says(LOGS_A_RESTART))).await;
+    pass(ms(1_000)).await;
+    emit(&controller, line());
+    pass(ms(1)).await;
+
+    assert_eq!(without, ["restart 5"]);
+    assert_eq!(with, Vec::<String>::new());
+    assert_eq!(lines(&mut harness), ["restart 5"]);
+    assert_eq!(
+        harness.fake.session_count(),
+        1,
+        "the same session throughout"
     );
 }
 

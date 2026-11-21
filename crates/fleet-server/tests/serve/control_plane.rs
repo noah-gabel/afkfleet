@@ -290,6 +290,7 @@ async fn welcomed_agent(
         protocol_version: PROTOCOL_VERSION,
         capacity: 10,
         running: Vec::new(),
+        script_api: 1,
     };
     agent
         .send(wire::AgentMessage {
@@ -1204,6 +1205,7 @@ async fn connected_agent(
         protocol_version: PROTOCOL_VERSION,
         capacity: 10,
         running: Vec::new(),
+        script_api: 1,
     };
     agent
         .send(wire::AgentMessage {

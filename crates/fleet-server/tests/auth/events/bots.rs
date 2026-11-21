@@ -303,6 +303,80 @@ async fn died_and_alert_carry_only_the_bot_its_time_and_state(
     );
 }
 
+/// What an agent reports about a bot's script reaches each viewer who may
+/// see the bot, and only them, as plain text: a status with its problem's
+/// place and a log line, cleaned of what a terminal or the app would read
+/// as markup's control (P15.23). The stranger hears none of it.
+#[sqlx::test(migrations = false)]
+async fn a_bots_script_status_and_log_reach_only_its_viewers_as_plain_text(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    use fleet_core::script::{
+        Hook, LogKind, ProblemKind, ReportText, ScriptLogLine, ScriptPlace, ScriptProblem,
+        ScriptState,
+    };
+
+    let setup = setup(options).await;
+    let watched = watched(&setup).await;
+    let served = Served::start(&setup).await;
+    let (mut sockets, mut stranger) = sockets(&setup, &served, &watched).await;
+    let now = written(setup.clock.now());
+    let bot = watched.bot.to_string();
+    let raw = "<b>bal</b> \u{1b}[31m§cred\u{202e}";
+    let message = ReportText::clean(raw);
+    assert!(!message.as_str().contains('\u{1b}') && !message.as_str().contains('\u{202e}'));
+
+    agent_event(
+        &setup,
+        watched.bot,
+        watched.agent,
+        LiveEventKind::ScriptStatus(ScriptState::Stopped(ScriptProblem {
+            kind: ProblemKind::Error,
+            hook: Some(Hook::Chat),
+            place: ScriptPlace::new(3, 7),
+            message: message.clone(),
+        })),
+    );
+    agent_event(
+        &setup,
+        watched.bot,
+        watched.agent,
+        LiveEventKind::ScriptLog(ScriptLogLine {
+            kind: LogKind::Line,
+            text: message.clone(),
+        }),
+    );
+    setup.events.bots(&[watched.own]);
+
+    for (name, socket) in &mut sockets {
+        assert_eq!(
+            next_event_after_pings(socket).await,
+            json!({
+                "type": "bot_script", "bot_id": bot, "at": now,
+                "script": { "state": "stopped", "problem": {
+                    "kind": "error", "hook": "on_chat", "line": 3, "column": 7,
+                    "message": message.as_str()
+                } }
+            }),
+            "{name}"
+        );
+        assert_eq!(
+            next_event_after_pings(socket).await,
+            json!({
+                "type": "bot_script_log", "bot_id": bot, "at": now,
+                "log": { "kind": "line", "text": message.as_str() }
+            }),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        next_event_after_pings(&mut stranger).await["bot_id"],
+        json!(watched.own.to_string()),
+        "the stranger's next frame is their own bot's"
+    );
+}
+
 /// Each viewer's frames for a hint and a death, against what their REST
 /// answer shows: the planted server address only at Control or more, the
 /// agent's name only for Admins and the Owner, the owner's username only

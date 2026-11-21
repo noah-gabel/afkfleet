@@ -887,8 +887,12 @@ expression: document
             "maxLength": 32,
             "type": "string"
           },
+          "script": {
+            "$ref": "#/components/schemas/ModeScriptRequest",
+            "description": "Its script, for a scripted mode, which only an Admin or the Owner\nwrites (ADR-0036, D15); `steps` is then `[]`. The server checks\nits rules and answers each at its field."
+          },
           "steps": {
-            "description": "Its steps, at most 32, in the order they run when due together.",
+            "description": "Its steps, at most 32, in the order they run when due together;\n`[]` for a scripted mode.",
             "items": {
               "$ref": "#/components/schemas/ModeStepRequest"
             },
@@ -1081,7 +1085,8 @@ expression: document
           "mode_in_use",
           "too_many_connections",
           "agent_not_disabled",
-          "server_settings_changed"
+          "server_settings_changed",
+          "agent_too_old"
         ],
         "type": "string"
       },
@@ -1121,6 +1126,10 @@ expression: document
             "$ref": "#/components/schemas/ChatLine",
             "description": "`chat`: the line as the viewer's history shows it."
           },
+          "log": {
+            "$ref": "#/components/schemas/ScriptLogLine",
+            "description": "`bot_script_log`: a line of the bot's script's log."
+          },
           "mode": {
             "$ref": "#/components/schemas/ModeResponse",
             "description": "`mode`: the mode as the viewer's `GET /modes` lists it now."
@@ -1136,6 +1145,10 @@ expression: document
           "request": {
             "maxLength": 36,
             "type": "string"
+          },
+          "script": {
+            "$ref": "#/components/schemas/ScriptStatus",
+            "description": "`bot_script`: the bot's script's status."
           },
           "state": {
             "$ref": "#/components/schemas/BotStateKind",
@@ -1164,7 +1177,9 @@ expression: document
           "chat_sent",
           "chat_failed",
           "mode",
-          "mode_removed"
+          "mode_removed",
+          "bot_script",
+          "bot_script_log"
         ],
         "type": "string"
       },
@@ -1208,6 +1223,16 @@ expression: document
       "FieldError": {
         "description": "A field that broke a rule.",
         "properties": {
+          "column": {
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "line": {
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
           "message": {
             "maxLength": 256,
             "type": "string"
@@ -1852,6 +1877,152 @@ expression: document
         ],
         "type": "object"
       },
+      "ModeCapture": {
+        "description": "A pattern's capture as its viewer may see it: its `type` and the fields\nthat type takes.",
+        "properties": {
+          "decimal_mark": {
+            "$ref": "#/components/schemas/ModeDecimalMark",
+            "description": "`amount`: the character before its decimals."
+          },
+          "max": {
+            "type": "number"
+          },
+          "min": {
+            "type": "number"
+          },
+          "name": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "maxLength": 32,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ModeCaptureKind",
+            "description": "What it reads."
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "type": "object"
+      },
+      "ModeCaptureKind": {
+        "description": "What a pattern's capture reads.",
+        "enum": [
+          "integer",
+          "amount",
+          "word"
+        ],
+        "type": "string"
+      },
+      "ModeCaptureRequest": {
+        "additionalProperties": false,
+        "description": "A pattern's capture in a request: its `type` and the fields that type\ntakes, no others (`integer`: `min`, `max`; `amount`: `min`, `max`,\n`decimal_mark`; `word`: `options`).",
+        "properties": {
+          "decimal_mark": {
+            "$ref": "#/components/schemas/ModeDecimalMark",
+            "description": "`amount`: the character before its decimals, `.` or `,`."
+          },
+          "max": {
+            "type": "number"
+          },
+          "min": {
+            "type": "number"
+          },
+          "name": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "maxLength": 32,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ModeCaptureKind",
+            "description": "What it reads."
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "type": "object"
+      },
+      "ModeDecimalMark": {
+        "description": "Which character an amount writes before its decimals; the other is its\nthousands separator.",
+        "enum": [
+          ".",
+          ","
+        ],
+        "type": "string"
+      },
+      "ModeMessage": {
+        "description": "A declared message as its viewer may see it.",
+        "properties": {
+          "arguments_hidden": {
+            "description": "Whether a command's arguments and values were left out for this\nviewer (S15).",
+            "type": "boolean"
+          },
+          "key": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 1024,
+            "type": "string"
+          },
+          "values": {
+            "description": "Its values; none when its arguments are hidden.",
+            "items": {
+              "$ref": "#/components/schemas/ModeValue"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "text",
+          "values",
+          "arguments_hidden"
+        ],
+        "type": "object"
+      },
+      "ModeMessageRequest": {
+        "additionalProperties": false,
+        "description": "A message a scripted mode declares, in a request.",
+        "properties": {
+          "key": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 1024,
+            "type": "string"
+          },
+          "values": {
+            "description": "The values the text holds, at most 8.",
+            "items": {
+              "$ref": "#/components/schemas/ModeValueRequest"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "text",
+          "values"
+        ],
+        "type": "object"
+      },
       "ModeOwnership": {
         "description": "Whose a mode is, as every viewer may know it (S14): who exactly owns\nsomeone else's is the mode's `owner`, for Admins and the Owner only.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on one always keeps a default branch.",
         "enum": [
@@ -1878,6 +2049,69 @@ expression: document
         },
         "required": [
           "items"
+        ],
+        "type": "object"
+      },
+      "ModePattern": {
+        "description": "A declared chat pattern as its viewer may see it.",
+        "properties": {
+          "captures": {
+            "description": "Its captures.",
+            "items": {
+              "$ref": "#/components/schemas/ModeCapture"
+            },
+            "type": "array"
+          },
+          "key": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 1024,
+            "type": "string"
+          },
+          "when": {
+            "$ref": "#/components/schemas/PatternWhen",
+            "description": "When it counts."
+          }
+        },
+        "required": [
+          "key",
+          "when",
+          "text",
+          "captures"
+        ],
+        "type": "object"
+      },
+      "ModePatternRequest": {
+        "additionalProperties": false,
+        "description": "A line of the server's own chat a scripted mode declares it reads, in a\nrequest (ADR-0037, C3).",
+        "properties": {
+          "captures": {
+            "description": "The captures the text holds, at most 4.",
+            "items": {
+              "$ref": "#/components/schemas/ModeCaptureRequest"
+            },
+            "type": "array"
+          },
+          "key": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 1024,
+            "type": "string"
+          },
+          "when": {
+            "$ref": "#/components/schemas/PatternWhen",
+            "description": "When it counts: only in a window after the script's own command, or\nat any time, the riskier kind (ADR-0037, C4, C5)."
+          }
+        },
+        "required": [
+          "key",
+          "when",
+          "text",
+          "captures"
         ],
         "type": "object"
       },
@@ -1912,8 +2146,12 @@ expression: document
             "$ref": "#/components/schemas/ModeOwnership",
             "description": "Whose it is, as far as every viewer may know: built in, the\nviewer's, or someone else's (S14)."
           },
+          "script": {
+            "$ref": "#/components/schemas/ModeScript",
+            "description": "A scripted mode's body: its script and what it sets and declares,\nfor every viewer, a declared command as a chat step's is (S15).\nAbsent for a step mode."
+          },
           "steps": {
-            "description": "Its steps. A viewer who may not edit it sees each command a chat\nstep sends as its `/` and name alone (S15).",
+            "description": "Its steps. A viewer who may not edit it sees each command a chat\nstep sends as its `/` and name alone (S15). None for a scripted\nmode.",
             "items": {
               "$ref": "#/components/schemas/ModeStep"
             },
@@ -2013,6 +2251,116 @@ expression: document
         ],
         "type": "object"
       },
+      "ModeScript": {
+        "description": "A scripted mode's body as its viewer may see it: whole for one who may\nedit the mode, each declared command its `/` and name alone for\neveryone else (S15).",
+        "properties": {
+          "any_time_chat": {
+            "description": "Whether one of its patterns counts at any time, not only as a reply\nto its own command: the riskier kind, which the app marks (ADR-0037,\nC5).",
+            "type": "boolean"
+          },
+          "api": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "block_guard": {
+            "items": {
+              "maxLength": 128,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "leash": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "messages": {
+            "description": "The messages the script may send.",
+            "items": {
+              "$ref": "#/components/schemas/ModeMessage"
+            },
+            "type": "array"
+          },
+          "patterns": {
+            "description": "The server's chat lines the script reads.",
+            "items": {
+              "$ref": "#/components/schemas/ModePattern"
+            },
+            "type": "array"
+          },
+          "source": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "tool_guard": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "api",
+          "source",
+          "leash",
+          "tool_guard",
+          "block_guard",
+          "messages",
+          "patterns",
+          "any_time_chat"
+        ],
+        "type": "object"
+      },
+      "ModeScriptRequest": {
+        "additionalProperties": false,
+        "description": "A scripted mode's body in a request, beside empty `steps`: the script,\nwhat it sets and what it declares. The server sets the API level\nitself, checks each rule at its field and compiles the script without\nrunning it.",
+        "properties": {
+          "block_guard": {
+            "items": {
+              "maxLength": 128,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "leash": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "messages": {
+            "description": "The messages the script may send, at most 16.",
+            "items": {
+              "$ref": "#/components/schemas/ModeMessageRequest"
+            },
+            "type": "array"
+          },
+          "patterns": {
+            "description": "The server's chat lines the script reads, at most 8.",
+            "items": {
+              "$ref": "#/components/schemas/ModePatternRequest"
+            },
+            "type": "array"
+          },
+          "source": {
+            "maxLength": 16384,
+            "type": "string"
+          },
+          "tool_guard": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source",
+          "leash",
+          "tool_guard",
+          "block_guard",
+          "messages",
+          "patterns"
+        ],
+        "type": "object"
+      },
       "ModeStep": {
         "description": "One step of a mode as its viewer may see it.",
         "properties": {
@@ -2062,6 +2410,88 @@ expression: document
         ],
         "type": "object"
       },
+      "ModeValue": {
+        "description": "A declared value as its viewer may see it: its `type` and the fields\nthat type takes.",
+        "properties": {
+          "max": {
+            "type": "number"
+          },
+          "min": {
+            "type": "number"
+          },
+          "name": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "maxLength": 32,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "places": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ModeValueKind",
+            "description": "What it is."
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "type": "object"
+      },
+      "ModeValueKind": {
+        "description": "What a declared value is.",
+        "enum": [
+          "integer",
+          "decimal",
+          "word"
+        ],
+        "type": "string"
+      },
+      "ModeValueRequest": {
+        "additionalProperties": false,
+        "description": "A declared value in a request: its `type` and the fields that type\ntakes, no others (`integer`: `min`, `max`; `decimal`: `min`, `max`,\n`places`; `word`: `options`).",
+        "properties": {
+          "max": {
+            "type": "number"
+          },
+          "min": {
+            "type": "number"
+          },
+          "name": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "maxLength": 32,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "places": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ModeValueKind",
+            "description": "What it is."
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "type": "object"
+      },
       "ModeVisibility": {
         "description": "Who may see a mode: its owner (and those who manage the owner's\naccounts: the Owner, and Admins for Members' modes), or everyone. A\nbuilt-in mode is shared.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on one always keeps a default branch.",
         "enum": [
@@ -2083,6 +2513,14 @@ expression: document
           "new_password"
         ],
         "type": "object"
+      },
+      "PatternWhen": {
+        "description": "When a chat pattern counts.",
+        "enum": [
+          "reply",
+          "any_time"
+        ],
+        "type": "string"
       },
       "PreviewChatFormatsRequest": {
         "additionalProperties": false,
@@ -2201,6 +2639,122 @@ expression: document
         "maximum": 9007199254740991,
         "minimum": -9007199254740991,
         "type": "integer"
+      },
+      "ScriptHookName": {
+        "description": "A script's hook.",
+        "enum": [
+          "on_join",
+          "on_world_change",
+          "on_death",
+          "on_respawn",
+          "on_timer",
+          "on_chat",
+          "on_stop"
+        ],
+        "type": "string"
+      },
+      "ScriptLogKind": {
+        "description": "What a line of a bot's script's log is about: `line` is the script's\nown, every other kind the runtime's about its chat or its end.",
+        "enum": [
+          "line",
+          "sent",
+          "not_sent",
+          "window_opened",
+          "window_expired",
+          "window_dropped",
+          "matched",
+          "refused",
+          "stop_failed"
+        ],
+        "type": "string"
+      },
+      "ScriptLogLine": {
+        "description": "A line of a bot's script's log, as `bot_script_log` carries it.",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ScriptLogKind",
+            "description": "What it's about."
+          },
+          "text": {
+            "maxLength": 200,
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "text"
+        ],
+        "type": "object"
+      },
+      "ScriptProblem": {
+        "description": "What stopped or refused a bot's script.",
+        "properties": {
+          "column": {
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "hook": {
+            "$ref": "#/components/schemas/ScriptHookName",
+            "description": "The hook that ran, for a script that stopped."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ScriptProblemKind",
+            "description": "Its kind."
+          },
+          "line": {
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "message": {
+            "maxLength": 200,
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "message"
+        ],
+        "type": "object"
+      },
+      "ScriptProblemKind": {
+        "description": "What stopped or refused a script.",
+        "enum": [
+          "compile",
+          "error",
+          "misuse",
+          "limit",
+          "state"
+        ],
+        "type": "string"
+      },
+      "ScriptStateKind": {
+        "description": "Where a bot's script is in its life.",
+        "enum": [
+          "running",
+          "stopped",
+          "refused",
+          "crashed"
+        ],
+        "type": "string"
+      },
+      "ScriptStatus": {
+        "description": "A bot's script's status, as `bot_script` carries it.",
+        "properties": {
+          "problem": {
+            "$ref": "#/components/schemas/ScriptProblem",
+            "description": "`stopped`, `refused`: what, where, and the engine's message."
+          },
+          "state": {
+            "$ref": "#/components/schemas/ScriptStateKind",
+            "description": "Where it is."
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
       },
       "ServerSettingsPage": {
         "description": "`GET /server-settings`: one page of the servers' settings, newest first.",
@@ -2400,6 +2954,10 @@ expression: document
           "name": {
             "maxLength": 32,
             "type": "string"
+          },
+          "script": {
+            "$ref": "#/components/schemas/ModeScriptRequest",
+            "description": "Its script, under `CreateModeRequest`'s rules."
           },
           "steps": {
             "description": "Its steps, at most 32, under `CreateModeRequest`'s rules.",
@@ -6109,6 +6667,16 @@ expression: document
             },
             "description": "No such bot, or one the caller may not see."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`agent_too_old`: a scripted mode, and the bot's agent is connected with a version that doesn't run its script API level."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -7942,7 +8510,7 @@ expression: document
                 }
               }
             },
-            "description": "`mode_needs_step_up`: the steps send a command off the allowlist, which only `POST /modes/with-commands` takes; `forbidden`: a shared mode, which needs an Admin or the Owner."
+            "description": "`mode_needs_step_up`: the steps send a command off the allowlist, which only `POST /modes/with-commands` takes; `forbidden`: a shared mode or a scripted one, each of which needs an Admin or the Owner."
           },
           "409": {
             "content": {
@@ -7962,7 +8530,7 @@ expression: document
                 }
               }
             },
-            "description": "A field breaks its rule, named at its own path (`name`, `steps[3].action.message`): one error, the earliest step's first."
+            "description": "A field breaks its rule, named at its own path (`name`, `steps[3].action.message`, `script.messages[1].text`): one error, the earliest first. A script that isn't a program is `script.source` with Rhai's message, its `line` and its `column`."
           },
           "429": {
             "content": {
@@ -8058,7 +8626,7 @@ expression: document
                 }
               }
             },
-            "description": "A shared mode, which needs an Admin or the Owner."
+            "description": "A shared mode or a scripted one, each of which needs an Admin or the Owner."
           },
           "409": {
             "content": {
@@ -8078,7 +8646,7 @@ expression: document
                 }
               }
             },
-            "description": "A field breaks its rule, named at its own path (`name`, `steps[3].action.message`): one error, the earliest step's first."
+            "description": "A field breaks its rule, named at its own path (`name`, `steps[3].action.message`, `script.messages[1].text`): one error, the earliest first. A script that isn't a program is `script.source` with Rhai's message, its `line` and its `column`."
           },
           "429": {
             "content": {
@@ -8283,7 +8851,7 @@ expression: document
                 }
               }
             },
-            "description": "`mode_needs_step_up`: the steps send a command off the allowlist, which only `PUT /modes/{id}/with-commands` takes; `forbidden`: the caller may see the mode but not edit it, or not with this visibility. A built-in mode is read-only."
+            "description": "`mode_needs_step_up`: the steps send a command off the allowlist, which only `PUT /modes/{id}/with-commands` takes; `forbidden`: the caller may see the mode but not edit it, or not with this visibility, or it's a scripted mode before or after and the caller isn't an Admin or the Owner. A built-in mode is read-only."
           },
           "404": {
             "content": {
@@ -8303,7 +8871,7 @@ expression: document
                 }
               }
             },
-            "description": "`mode_changed`: the mode changed since the caller read `version`; `mode_in_use_by_others`: a bot uses the mode that the caller couldn't set the edited mode on."
+            "description": "`mode_changed`: the mode changed since the caller read `version`; `mode_in_use_by_others`: a bot uses the mode that the caller couldn't set the edited mode on; `agent_too_old`: the edit makes it a scripted mode, and a bot that uses it is on an agent that doesn't run its script API level."
           },
           "422": {
             "content": {
@@ -8313,7 +8881,7 @@ expression: document
                 }
               }
             },
-            "description": "A field breaks its rule, named at its own path (`version`, `name`, `steps[3].action.message`): one error, the earliest step's first."
+            "description": "A field breaks its rule, named at its own path (`version`, `name`, `steps[3].action.message`, `script.leash`): one error, the earliest first. A script that isn't a program is `script.source` with Rhai's message, its `line` and its `column`."
           },
           "429": {
             "content": {
@@ -8420,7 +8988,7 @@ expression: document
                 }
               }
             },
-            "description": "The caller may see the mode but not edit it, or not with this visibility. A built-in mode is read-only."
+            "description": "The caller may see the mode but not edit it, or not with this visibility, or it's a scripted mode before or after and the caller isn't an Admin or the Owner. A built-in mode is read-only."
           },
           "404": {
             "content": {
@@ -8440,7 +9008,7 @@ expression: document
                 }
               }
             },
-            "description": "`mode_changed`: the mode changed since the caller read `version`; `mode_in_use_by_others`: a bot uses the mode that the caller couldn't set the edited mode on."
+            "description": "`mode_changed`: the mode changed since the caller read `version`; `mode_in_use_by_others`: a bot uses the mode that the caller couldn't set the edited mode on; `agent_too_old`: the edit makes it a scripted mode, and a bot that uses it is on an agent that doesn't run its script API level."
           },
           "422": {
             "content": {
@@ -8450,7 +9018,7 @@ expression: document
                 }
               }
             },
-            "description": "A field breaks its rule, named at its own path (`version`, `name`, `steps[3].action.message`): one error, the earliest step's first."
+            "description": "A field breaks its rule, named at its own path (`version`, `name`, `steps[3].action.message`, `script.leash`): one error, the earliest first. A script that isn't a program is `script.source` with Rhai's message, its `line` and its `column`."
           },
           "429": {
             "content": {

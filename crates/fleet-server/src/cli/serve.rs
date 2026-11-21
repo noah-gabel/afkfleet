@@ -635,7 +635,11 @@ fn fleet_services(
     // One allowlist for both: a mode's `unlisted_command` (S68) is what the bots' mode switch
     // authorizes with (R113).
     let allowlist = &config.chat.command_allowlist;
-    let modes = mode_service(clock, random, store, hints).with_allowlist(allowlist.clone());
+    // The live streams hold an edit that makes a mode a script's to the
+    // agents of the bots that use it (ADR-0036, D13).
+    let modes = mode_service(clock, random, store, hints)
+        .with_allowlist(allowlist.clone())
+        .with_live_agents(Arc::new(registry.clone()));
     let server_settings =
         ServerSettingsService::new(Arc::clone(clock), Arc::clone(random), Arc::clone(store))
             .with_reconcile(Arc::clone(&hints.reconcile));
@@ -1092,6 +1096,7 @@ fn control_plane_services(
         IngestTimings::default(),
         IngestBounds::default(),
     );
+    let ingest = ingest.with_metrics(ports.metrics.clone());
     let ingest_writer = ingest_writer.with_metrics(ports.metrics.clone());
     let control = control_service(
         ControlPorts {

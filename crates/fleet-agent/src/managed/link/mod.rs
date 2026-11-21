@@ -36,6 +36,7 @@ pub mod ends;
 use core::time::Duration;
 use std::sync::Arc;
 
+use fleet_core::script::ScriptApiLevel;
 use fleet_core::value::{AgentCapacity, AgentName, AgentVersion};
 use fleet_proto::PROTOCOL_VERSION;
 use fleet_proto::control::{
@@ -335,6 +336,7 @@ impl Link {
             protocol_version: PROTOCOL_VERSION,
             capacity: self.parts.hello.capacity,
             running,
+            script_api: u32::from(ScriptApiLevel::NEWEST.get()),
         };
         let (generation, outbound) = self.parts.outbox.open(hello);
         Ok((generation, channel, outbound))

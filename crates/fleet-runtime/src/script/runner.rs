@@ -68,8 +68,9 @@ pub struct ScriptParts {
     /// agent, a manual one in tests (ADR-0040's amendment).
     pub stopwatch: Arc<dyn Stopwatch>,
     /// The server's chat formats, which tell a player's line from the
-    /// server's own (ADR-0037, C2).
-    pub formats: ChatFormats,
+    /// server's own (ADR-0037, C2): the bot's spec's, the current ones at
+    /// every line, so a change reaches a running script at once (P15.34).
+    pub formats: watch::Receiver<ChatFormats>,
     /// Cancelled to stop the mode in an orderly way while the session
     /// goes on living: `on_stop` runs, then everything is released.
     pub stop: CancellationToken,
@@ -509,7 +510,9 @@ impl<'a, S: SessionHandle> ScriptRunner<'a, S> {
         }
         let now = self.clock.now();
         self.expire(now);
-        let Some(line) = candidate_line(chat, &self.parts.formats) else {
+        // Borrowed for this call only, never across an await.
+        let formats = self.parts.formats.borrow().clone();
+        let Some(line) = candidate_line(chat, &formats) else {
             return ControlFlow::Continue(());
         };
         let patterns = self.script.patterns();

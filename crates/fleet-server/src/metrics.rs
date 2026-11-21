@@ -29,6 +29,7 @@
 //! | `afkfleet_session_grants_total` | counter | `kind` ([`GrantKind`]), `fresh` |
 //! | `afkfleet_session_denials_total` | counter | `reason` ([`SessionDenial`]) |
 //! | `afkfleet_ingest_chat_dropped_total` | counter | `reason` ([`NotTaken`]) |
+//! | `afkfleet_script_reports_dropped_total` | counter | `kind` ([`ScriptReportKind`]) |
 //! | `afkfleet_ingest_rows_total` | counter | `outcome`: `stored`, `skipped`, `lost` |
 //! | `afkfleet_retention_rows_deleted_total` | counter | `kind`: each kind of [`Deleted`] |
 //! | `afkfleet_retention_runs_total` | counter | `outcome`: `success`, `failed`, `stopped` |
@@ -52,6 +53,7 @@ use fleet_core::placement::Unplaced;
 use metrics::{NoopRecorder, Recorder, counter, describe_counter, describe_gauge, gauge};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 
+use crate::app::agents::script_gate::ScriptReportKind;
 use crate::app::retention::{Deleted, Phase};
 use crate::ports::ingest::NotTaken;
 
@@ -80,6 +82,8 @@ const SESSION_GRANTS: &str = "afkfleet_session_grants_total";
 const SESSION_DENIALS: &str = "afkfleet_session_denials_total";
 /// Chat lines the ingest didn't take.
 const CHAT_DROPPED: &str = "afkfleet_ingest_chat_dropped_total";
+/// Reports about a bot's script over its bot's rate, dropped.
+const SCRIPT_REPORTS_DROPPED: &str = "afkfleet_script_reports_dropped_total";
 /// Chat rows the ingest's batches stored, skipped or lost.
 const INGEST_ROWS: &str = "afkfleet_ingest_rows_total";
 /// Rows the retention deleted.
@@ -492,6 +496,12 @@ impl ServerMetrics {
         self.record(|| counter!(SESSION_DENIALS, "reason" => why.label()).increment(1));
     }
 
+    /// A report of `kind` about a bot's script was over its bot's rate,
+    /// and dropped (Plan.md P15.23).
+    pub fn script_report_dropped(&self, kind: ScriptReportKind) {
+        self.record(|| counter!(SCRIPT_REPORTS_DROPPED, "kind" => kind.label()).increment(1));
+    }
+
     /// The ingest didn't take a chat row, as `why` says.
     pub fn chat_dropped(&self, why: NotTaken) {
         self.record(|| counter!(CHAT_DROPPED, "reason" => not_taken_label(why)).increment(1));
@@ -643,6 +653,13 @@ fn register() {
     );
     for why in NOT_TAKEN {
         counter!(CHAT_DROPPED, "reason" => not_taken_label(why)).increment(0);
+    }
+    describe_counter!(
+        SCRIPT_REPORTS_DROPPED,
+        "Reports about a bot's script over what the server takes in for one bot, dropped, by kind."
+    );
+    for kind in ScriptReportKind::ALL {
+        counter!(SCRIPT_REPORTS_DROPPED, "kind" => kind.label()).increment(0);
     }
     describe_counter!(
         INGEST_ROWS,

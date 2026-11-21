@@ -14,6 +14,7 @@ mod chat;
 mod credentials;
 mod disconnect;
 mod mode;
+mod script;
 
 use chrono::{DateTime, Utc};
 use fleet_core::id::IdError;
@@ -23,6 +24,7 @@ use crate::{ConvertError, Problem};
 
 pub(crate) use chat::chat_message_from_wire;
 pub(crate) use credentials::{session_from_wire, session_to_wire};
+pub(crate) use script::{log_from_wire, log_to_wire, status_from_wire, status_to_wire};
 
 /// The earliest time the wire accepts: 0000-01-01T00:00:00.000Z, the
 /// database's and the API's earliest too.

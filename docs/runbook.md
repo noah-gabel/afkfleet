@@ -251,6 +251,7 @@ sh setup.sh update
 - **Agents older than 0.1.2 never renew their certificate.** Update each before its certificate ends, 60 days after it enrolled ([Agents' certificates](#agents-certificates)): it renews at its first connection. An agent on 0.1.2 beside a server that's still older keeps running, logs "the server doesn't renew certificates yet" and renews within an hour of the server's update.
 - **The app from 0.1.2 on asks for the password once, at login.** Only a new password and a new authenticator ask again ([ADR-0028](adr/0028-a-session-is-enough.md)). An app on 0.1.2 beside a server that's still older says "This server is older than the app and still asks for your password here. Ask its owner to update it." where the older server wants the password: update the server. An older app beside a server on 0.1.2 works, and already without those prompts.
 - **An agent older than its server's modes** can't read a schedule or an action it doesn't know (`on_respawn`, say, or `enter_minecart`, new in 0.1.3), and refuses a step its own version's rules don't allow (a right-click every 200 ms, allowed from 0.1.3 on, where older agents want 250 ms): its stream ends as `unreadable` and reconnects in a loop, logging "a message from the server couldn't be read" with the field, while its bots keep their old modes and take no command. Update the agent; until then, switching its bots off that mode brings the stream back. So after the server's update, update every agent before a mode uses what's new.
+- **Scripted modes need agents that run scripts.** The server sends a scripted mode only to an agent whose version runs its script API level: setting one on a bot whose agent is older answers "This bot's agent runs a version that can't run this scripted mode. Update the agent first.", and a bot on an older agent is let go and waits for one that runs it. Update every agent before you write scripted modes.
 - **Going back** is a restore, never an older `fetch`. A server rolled back past a mode feature reads such modes as corrupt: switch the bots off them, or delete them, before you restore an older backup.
 - **When `fetch` stops halfway** it leaves `.afkfleet-fetch` for a look and says why; `RELEASE` still names the old release. Fix what it named, then remove the folder and fetch again. Success: as above.
   ```sh
@@ -547,6 +548,7 @@ The key metrics (all counters end in `_total`; times are Unix seconds, 0 until t
 | `afkfleet_session_denials_total` | `reason`: why, one of 22 fixed values | Session requests denied (the fresh-session limit counts as `limit="fresh_sessions"` above) |
 | `afkfleet_ingest_chat_dropped_total` | `reason`: `stream_full`, `queue_full`, `closed` | Chat from agents the ingest didn't take |
 | `afkfleet_ingest_rows_total` | `outcome`: `stored`, `skipped`, `lost` | The ingest's chat rows |
+| `afkfleet_script_reports_dropped_total` | `kind`: `status`, `log` | Reports about a bot's script past what the server takes from one bot (a status 10 at once and one more every 10 s, a log line 30 at once and one more a second), dropped: an agent that sends more is broken or hostile |
 | `afkfleet_retention_runs_total` | `outcome`: `success`, `failed`, `stopped` | Retention runs, once a minute |
 | `afkfleet_retention_phase_failures_total` | `phase`: `sessions`, `invites`, `enrollment_tokens`, `chat_by_age`, `chat_by_size`, `audit` | Retention phases that failed |
 | `afkfleet_retention_rows_deleted_total` | `kind`: `sessions`, `rotations`, `invites`, `enrollments`, `chat_by_age`, `chat_by_size`, `audit_entries` | Rows the retention deleted |
@@ -750,6 +752,7 @@ docker compose logs --tail 50 agent
 - **"session-token refreshes were still running…"** at a shutdown, then `reauth_required`: a rotated refresh token was lost; link the account again.
 - **Backing off while the minute's summary shows `fresh_sessions` refusals:** the bot asked for more fresh sessions than its hourly limit allows.
 - **"the server didn't confirm a respawn; retrying"** at `warn`: the Minecraft server ignored a respawn request for 5 s; twelve in a row end the session `respawn_failed`, and the bot joins again.
+- **A bot on a scripted mode that waits for an agent** while agents are online: none of them runs scripts yet. Update the agents (see [Updating](#updating)).
 - **`connect_failed` with `blocked`:** the bot points at an address its agent refuses ([An agent next to a local Minecraft server](#an-agent-next-to-a-local-minecraft-server)).
 
 ## Incident response

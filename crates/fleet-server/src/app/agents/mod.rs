@@ -19,7 +19,8 @@
 //! - [`ingest`]: what agents report about the bots they hold, chat and
 //!   sticky states written in batches and everything published on the bus
 //!   (P10.8, S70), behind the [`Ingest`](crate::ports::ingest::Ingest) port
-//!   the gRPC port calls.
+//!   the gRPC port calls; a bot's script's status and log through
+//!   [`script_gate`], at a bounded rate a bot (P15.23).
 //! - [`AgentService`]: the agents' list, disabling one (P10.10, S31), and
 //!   releasing a disabled one's bots, from the server's host (P10.5, S32)
 //!   or over the API (P11.9; ADR-0020, S49).
@@ -48,6 +49,7 @@ pub mod assignments;
 pub mod connections;
 pub mod ingest;
 pub mod renewal;
+pub mod script_gate;
 pub mod session_grants;
 
 use std::sync::Arc;

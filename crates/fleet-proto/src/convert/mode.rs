@@ -1,20 +1,30 @@
-//! A mode, as structured messages that mirror [`ModeDefinition`]'s steps
-//! (ADR-0019). Reading rebuilds a [`ModeDraft`] and validates it, so the
-//! receiver keeps fleet-core's mode rules whatever the sender did, and a step
-//! whose action or schedule this version doesn't know is refused.
+//! A mode, as structured messages that mirror [`ModeDefinition`]'s body
+//! (ADR-0019; ADR-0036, D13). Reading rebuilds a [`ModeDraft`] and validates
+//! it, so the receiver keeps fleet-core's mode rules whatever the sender did,
+//! and a step whose action or schedule this version doesn't know is refused.
+//! A scripted mode has its script and no steps; both at once is refused
+//! (the [`script`](super::script) module reads the script).
 
 use core::time::Duration;
 
-use fleet_core::mode::{Action, HotbarSlot, ModeDefinition, ModeDraft, Schedule, Step};
+use fleet_core::mode::{Action, HotbarSlot, ModeBody, ModeDefinition, ModeDraft, Schedule, Step};
 
+use super::script::{script_from_wire, script_to_wire};
 use super::{chat_message_from_wire, required};
 use crate::generated as wire;
 use crate::{ConvertError, Problem};
 
 impl From<ModeDefinition> for wire::ModeDefinition {
     fn from(mode: ModeDefinition) -> Self {
-        Self {
-            steps: mode.steps().iter().map(step_to_wire).collect(),
+        match mode.body() {
+            ModeBody::Steps(steps) => Self {
+                steps: steps.iter().map(step_to_wire).collect(),
+                script: None,
+            },
+            ModeBody::Script(script) => Self {
+                steps: Vec::new(),
+                script: Some(script_to_wire(script.as_ref().clone())),
+            },
         }
     }
 }
@@ -23,6 +33,15 @@ impl TryFrom<wire::ModeDefinition> for ModeDefinition {
     type Error = ConvertError;
 
     fn try_from(mode: wire::ModeDefinition) -> Result<Self, ConvertError> {
+        if let Some(script) = mode.script {
+            if !mode.steps.is_empty() {
+                return Err(ConvertError::new(
+                    "ModeDefinition.steps",
+                    Problem::TwoBodies,
+                ));
+            }
+            return Ok(Self::scripted(script_from_wire(script)?));
+        }
         let steps = mode
             .steps
             .into_iter()

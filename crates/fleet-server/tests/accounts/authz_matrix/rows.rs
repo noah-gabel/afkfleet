@@ -133,6 +133,8 @@ pub(crate) enum Fleet {
     BotMode {
         off_allowlist: bool,
     },
+    /// The holder's shared scripted mode (ADR-0036, D15).
+    BotScriptedMode,
     ResetFailedBot,
     ResumePausedBot,
 }
@@ -140,8 +142,23 @@ pub(crate) enum Fleet {
 /// The rows of modes and the servers' settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mode {
-    Create { shared: bool, off_allowlist: bool },
-    Update { of: Whose, off_allowlist: bool },
+    Create {
+        shared: bool,
+        off_allowlist: bool,
+    },
+    /// A scripted mode, which only an Admin or the Owner writes (ADR-0036,
+    /// D15).
+    CreateScripted {
+        shared: bool,
+    },
+    Update {
+        of: Whose,
+        off_allowlist: bool,
+    },
+    /// A step mode edited into a script.
+    UpdateToScript {
+        of: Whose,
+    },
     Delete(Whose),
     CreateSettings,
     UpdateSettings,
@@ -203,6 +220,19 @@ fn swinging() -> Value {
         "schedule": { "type": "every", "interval_ms": 20_000, "jitter_ms": 0 },
         "probability": 100,
     }])
+}
+
+/// A scripted mode's body: a script that does nothing, with nothing
+/// declared.
+fn script() -> Value {
+    json!({
+        "source": "fn on_join(first) {}\n",
+        "leash": 8,
+        "tool_guard": 2,
+        "block_guard": [],
+        "messages": [],
+        "patterns": [],
+    })
 }
 
 /// A step that sends `command` at start.
@@ -388,6 +418,18 @@ async fn fleet(case: Fleet, path: &str, world: &World) -> Call {
                 .await;
             Call::to(bot).with(json!({ "mode_id": mode.to_string() }))
         }
+        Fleet::BotScriptedMode => {
+            let mut stored = script();
+            stored["api"] = json!(1);
+            let mode = world
+                .mode_of(
+                    world.holder,
+                    ModeVisibility::Shared,
+                    &json!({ "script": stored }),
+                )
+                .await;
+            Call::to(bot).with(json!({ "mode_id": mode.to_string() }))
+        }
         Fleet::ResetFailedBot => {
             world
                 .rested(&LastReport {
@@ -438,6 +480,12 @@ async fn mode(case: Mode, path: &str, world: &World) -> Call {
             "visibility": if shared { "shared" } else { "private" },
             "steps": steps(off_allowlist),
         })),
+        Mode::CreateScripted { shared } => Call::to(path).with(json!({
+            "name": "A new mode",
+            "visibility": if shared { "shared" } else { "private" },
+            "steps": [],
+            "script": script(),
+        })),
         Mode::Update { of, off_allowlist } => {
             let shared = of == Whose::HoldersShared;
             Call::to(at_id(path, &mode_of(world, of).await)).with(json!({
@@ -445,6 +493,16 @@ async fn mode(case: Mode, path: &str, world: &World) -> Call {
                 "name": "Renamed",
                 "visibility": if shared { "shared" } else { "private" },
                 "steps": steps(off_allowlist),
+            }))
+        }
+        Mode::UpdateToScript { of } => {
+            let shared = of == Whose::HoldersShared;
+            Call::to(at_id(path, &mode_of(world, of).await)).with(json!({
+                "version": 1,
+                "name": "Renamed",
+                "visibility": if shared { "shared" } else { "private" },
+                "steps": [],
+                "script": script(),
             }))
         }
         Mode::Delete(of) => Call::to(at_id(path, &mode_of(world, of).await)),
@@ -566,6 +624,7 @@ fn fleet_rows() -> Vec<Row> {
         PATCH "/api/v1/bots/{id}" "" => F::BotWith(r#"{ "server_address": "mc.example.com" }"#);
         PUT "/api/v1/bots/{id}/mode" "a mode with an allowlisted command" => F::BotMode { off_allowlist: false };
         PUT "/api/v1/bots/{id}/mode" "a mode with a command off the allowlist" => F::BotMode { off_allowlist: true };
+        PUT "/api/v1/bots/{id}/mode" "a shared scripted mode" => F::BotScriptedMode;
         POST "/api/v1/bots/{id}/start" "" => F::Bot;
         POST "/api/v1/bots/{id}/stop" "" => F::Bot;
         POST "/api/v1/bots/{id}/restart" "a bot that runs nowhere" => F::Bot;
@@ -588,11 +647,15 @@ fn mode_rows() -> Vec<Row> {
         GET "/api/v1/modes" "" => Plain;
         POST "/api/v1/modes" "a private mode" => M::Create { shared: false, off_allowlist: false };
         POST "/api/v1/modes" "a shared mode" => M::Create { shared: true, off_allowlist: false };
+        POST "/api/v1/modes" "a private scripted mode" => M::CreateScripted { shared: false };
+        POST "/api/v1/modes" "a shared scripted mode" => M::CreateScripted { shared: true };
         POST "/api/v1/modes/with-commands" "a private mode with a command off the allowlist" => M::Create { shared: false, off_allowlist: true };
         POST "/api/v1/modes/with-commands" "a shared mode with a command off the allowlist" => M::Create { shared: true, off_allowlist: true };
         PUT "/api/v1/modes/{id}" "the caller's own" => M::Update { of: Mine, off_allowlist: false };
         PUT "/api/v1/modes/{id}" "a Member's shared mode" => M::Update { of: HoldersShared, off_allowlist: false };
         PUT "/api/v1/modes/{id}" "a Member's private mode" => M::Update { of: HoldersPrivate, off_allowlist: false };
+        PUT "/api/v1/modes/{id}" "the caller's own, into a script" => M::UpdateToScript { of: Mine };
+        PUT "/api/v1/modes/{id}" "a Member's shared mode, into a script" => M::UpdateToScript { of: HoldersShared };
         PUT "/api/v1/modes/{id}/with-commands" "the caller's own, a command off the allowlist" => M::Update { of: Mine, off_allowlist: true };
         PUT "/api/v1/modes/{id}/with-commands" "a Member's shared mode, a command off the allowlist" => M::Update { of: HoldersShared, off_allowlist: true };
         DELETE "/api/v1/modes/{id}" "the caller's own" => M::Delete(Mine);

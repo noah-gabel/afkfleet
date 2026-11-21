@@ -16,6 +16,7 @@
 //! after each.
 
 mod scripted;
+mod stream;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -91,7 +92,7 @@ impl Meter {
     }
 
     /// One report line for what `phase` used since the last one.
-    fn lap(&mut self, phase: &str) {
+    pub(super) fn lap(&mut self, phase: &str) {
         let (cpu, memory) = self.read();
         let wall = self.last.0.elapsed();
         let used = cpu.saturating_sub(self.last.1);

@@ -27,7 +27,7 @@ use super::error::{store_error, unique_violation};
 use crate::ports::page::Page;
 use crate::ports::server_settings::{
     NewServerSettings, ServerFormats, ServerSettingsChange, ServerTexts, StoredServerSettings,
-    UnreadableFormats, UnreadableSettings, WriteServerSettingsError,
+    TextsOfServer, UnreadableFormats, UnreadableSettings, WriteServerSettingsError,
 };
 use crate::ports::store::StoreError;
 
@@ -214,16 +214,17 @@ pub(super) async fn delete(
     Ok(done.rows_affected() == 1)
 }
 
-/// Every server's conflict texts, for the fleet's snapshot (ADR-0020, R132):
-/// a row whose server doesn't read back fails the read, since its bots
-/// can't be told; one whose texts don't is unreadable, by its server, with
-/// its rowid and, when it reads, its ID.
+/// Every server's conflict texts and chat formats, for the fleet's snapshot
+/// (ADR-0020, R132; Plan.md P15.34): a row whose server doesn't read back
+/// fails the read, since its bots can't be told; one whose texts or formats
+/// don't is unreadable, by its server, with its rowid and, when it reads,
+/// its ID: its bots are never sent empty ones, which would fail open.
 pub(super) async fn texts_by_server(
     conn: &mut SqliteConnection,
 ) -> Result<ServerTexts, StoreError> {
     let rows = sqlx::query!(
         r#"SELECT rowid AS "rowid!: i64", id AS "id!", server AS "server!",
-                  conflict_texts AS "conflict_texts!"
+                  conflict_texts AS "conflict_texts!", chat_formats AS "chat_formats!"
            FROM server_settings"#
     )
     .fetch_all(conn)
@@ -236,14 +237,30 @@ pub(super) async fn texts_by_server(
             column: "server",
             rowid: row.rowid,
         })?;
-        if let Some(read) = stored_texts(&row.conflict_texts) {
-            texts.readable.insert(server, read);
-        } else {
-            let unread = UnreadableSettings {
-                rowid: row.rowid,
-                id: parse_id(&row.id),
-            };
-            texts.unreadable.insert(server, unread);
+        let unread = |column| UnreadableSettings {
+            rowid: row.rowid,
+            id: parse_id(&row.id),
+            column,
+        };
+        match (
+            stored_texts(&row.conflict_texts),
+            stored_formats(&row.chat_formats),
+        ) {
+            (Some(conflict_texts), Some(chat_formats)) => {
+                texts.readable.insert(
+                    server,
+                    TextsOfServer {
+                        conflict_texts,
+                        chat_formats,
+                    },
+                );
+            }
+            (None, _) => {
+                texts.unreadable.insert(server, unread("conflict_texts"));
+            }
+            (Some(_), None) => {
+                texts.unreadable.insert(server, unread("chat_formats"));
+            }
         }
     }
     Ok(texts)

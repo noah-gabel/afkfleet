@@ -36,6 +36,10 @@ message fleet.v1.AgentMessage
   3 status: fleet.v1.BotSnapshot (oneof msg)
   4 event: fleet.v1.BotEvent (oneof msg)
   5 session_request: fleet.v1.SessionRequest (oneof msg)
+message fleet.v1.AmountRange
+  1 min: double
+  2 max: double
+  3 decimal_mark: fleet.v1.DecimalMark
 message fleet.v1.AssignBot
   1 spec: fleet.v1.BotSpec
   2 restore: fleet.v1.StickyState
@@ -52,6 +56,8 @@ message fleet.v1.BotEvent
   7 mode_chat_sent: fleet.v1.ModeChatSent (oneof kind)
   8 alert: fleet.v1.BotNotification (oneof kind)
   9 removed: fleet.v1.Unit (oneof kind)
+  10 script_status: fleet.v1.ScriptStatus (oneof kind)
+  11 script_log: fleet.v1.ScriptLogLine (oneof kind)
 message fleet.v1.BotNotification
   1 paused: fleet.v1.PauseReason (oneof notification)
   2 failed: fleet.v1.FailReason (oneof notification)
@@ -68,6 +74,7 @@ message fleet.v1.BotSpec
   5 desired: fleet.v1.DesiredRunState
   6 conflict_texts: repeated string
   7 chat_rate: fleet.v1.ChatRate
+  8 chat_formats: repeated string
 message fleet.v1.BotState
   1 stopped: fleet.v1.Unit (oneof state)
   2 awaiting_session: fleet.v1.BotState.AwaitingSession (oneof state)
@@ -94,6 +101,11 @@ message fleet.v1.BotState.Stopping
 message fleet.v1.ChatFailed
   1 request_id: bytes
   2 reason: fleet.v1.ChatFailedReason
+message fleet.v1.ChatPattern
+  1 key: string
+  2 when: fleet.v1.PatternWhen
+  3 text: string
+  4 captures: repeated fleet.v1.PatternCapture
 message fleet.v1.ChatRate
   1 interval_secs: uint32
   2 burst: uint32
@@ -102,6 +114,19 @@ message fleet.v1.ChatSender
   2 uuid: optional bytes
 message fleet.v1.ChatSent
   1 request_id: bytes
+message fleet.v1.DecimalRange
+  1 min: double
+  2 max: double
+  3 places: uint32
+message fleet.v1.DeclaredMessage
+  1 key: string
+  2 text: string
+  3 values: repeated fleet.v1.DeclaredValue
+message fleet.v1.DeclaredValue
+  1 name: string
+  2 integer: fleet.v1.IntegerRange (oneof kind)
+  3 decimal: fleet.v1.DecimalRange (oneof kind)
+  4 word: fleet.v1.Words (oneof kind)
 message fleet.v1.DisconnectReason
   1 kicked: fleet.v1.Kick (oneof reason)
   2 connection_closed: fleet.v1.Unit (oneof reason)
@@ -128,11 +153,15 @@ message fleet.v1.Hello
   3 protocol_version: uint32
   4 capacity: uint32
   5 running: repeated fleet.v1.BotSnapshot
+  6 script_api: uint32
 message fleet.v1.IncomingChat
   1 kind: fleet.v1.ChatKind
   2 sender: fleet.v1.ChatSender
   3 text: string
   4 truncated: bool
+message fleet.v1.IntegerRange
+  1 min: int64
+  2 max: int64
 message fleet.v1.Kick
   1 key: optional string
   2 message: string
@@ -143,6 +172,7 @@ message fleet.v1.ModeChatSent
   1 message: string
 message fleet.v1.ModeDefinition
   1 steps: repeated fleet.v1.Step
+  2 script: fleet.v1.Script
 message fleet.v1.OfflineSession
   1 username: string
 message fleet.v1.OnlineSession
@@ -150,6 +180,11 @@ message fleet.v1.OnlineSession
   2 uuid: bytes
   3 access_token: string
   4 expires_at_unix_ms: optional int64
+message fleet.v1.PatternCapture
+  1 name: string
+  2 integer: fleet.v1.IntegerRange (oneof kind)
+  3 amount: fleet.v1.AmountRange (oneof kind)
+  4 word: fleet.v1.Words (oneof kind)
 message fleet.v1.ReconcileFull
   1 bots: repeated fleet.v1.AssignBot
 message fleet.v1.Reject
@@ -165,6 +200,28 @@ message fleet.v1.Schedule
 message fleet.v1.Schedule.Every
   1 interval_ms: uint64
   2 jitter_ms: uint64
+message fleet.v1.Script
+  1 api: uint32
+  2 source: string
+  3 leash: uint32
+  4 tool_guard: uint32
+  5 block_guard: repeated string
+  6 messages: repeated fleet.v1.DeclaredMessage
+  7 patterns: repeated fleet.v1.ChatPattern
+message fleet.v1.ScriptLogLine
+  1 kind: fleet.v1.ScriptLogKind
+  2 text: string
+message fleet.v1.ScriptProblem
+  1 kind: fleet.v1.ScriptProblemKind
+  2 hook: fleet.v1.ScriptHook
+  3 line: optional uint32
+  4 column: optional uint32
+  5 message: string
+message fleet.v1.ScriptStatus
+  1 running: fleet.v1.Unit (oneof status)
+  2 stopped: fleet.v1.ScriptProblem (oneof status)
+  3 refused: fleet.v1.ScriptProblem (oneof status)
+  4 crashed: fleet.v1.Unit (oneof status)
 message fleet.v1.SendChat
   1 request_id: bytes
   2 bot_id: bytes
@@ -208,6 +265,8 @@ message fleet.v1.UpdateBotSpec
 message fleet.v1.Welcome
   1 heartbeat_interval_ms: uint64
   2 agent_id: bytes
+message fleet.v1.Words
+  1 options: repeated string
 enum fleet.v1.AccountRestriction
   0 ACCOUNT_RESTRICTION_UNSPECIFIED
   1 ACCOUNT_RESTRICTION_BANNED
@@ -240,6 +299,10 @@ enum fleet.v1.ConnectFailure
   4 CONNECT_FAILURE_HOST_UNAVAILABLE
   5 CONNECT_FAILURE_OTHER
   6 CONNECT_FAILURE_BLOCKED
+enum fleet.v1.DecimalMark
+  0 DECIMAL_MARK_UNSPECIFIED
+  1 DECIMAL_MARK_POINT
+  2 DECIMAL_MARK_COMMA
 enum fleet.v1.DesiredRunState
   0 DESIRED_RUN_STATE_UNSPECIFIED
   1 DESIRED_RUN_STATE_RUNNING
@@ -259,6 +322,10 @@ enum fleet.v1.Lifecycle
   1 LIFECYCLE_RESTART
   2 LIFECYCLE_RESET
   3 LIFECYCLE_RESUME
+enum fleet.v1.PatternWhen
+  0 PATTERN_WHEN_UNSPECIFIED
+  1 PATTERN_WHEN_REPLY
+  2 PATTERN_WHEN_ANY_TIME
 enum fleet.v1.PauseReason
   0 PAUSE_REASON_UNSPECIFIED
   1 PAUSE_REASON_DUPLICATE_LOGIN
@@ -271,6 +338,33 @@ enum fleet.v1.RejectReason
   5 REJECT_REASON_ALREADY_CONNECTED
   6 REJECT_REASON_CERTIFICATE_REVOKED
   7 REJECT_REASON_CERTIFICATE_EXPIRED
+enum fleet.v1.ScriptHook
+  0 SCRIPT_HOOK_UNSPECIFIED
+  1 SCRIPT_HOOK_JOIN
+  2 SCRIPT_HOOK_WORLD_CHANGE
+  3 SCRIPT_HOOK_DEATH
+  4 SCRIPT_HOOK_RESPAWN
+  5 SCRIPT_HOOK_TIMER
+  6 SCRIPT_HOOK_CHAT
+  7 SCRIPT_HOOK_STOP
+enum fleet.v1.ScriptLogKind
+  0 SCRIPT_LOG_KIND_UNSPECIFIED
+  1 SCRIPT_LOG_KIND_LINE
+  2 SCRIPT_LOG_KIND_SENT
+  3 SCRIPT_LOG_KIND_NOT_SENT
+  4 SCRIPT_LOG_KIND_WINDOW_OPENED
+  5 SCRIPT_LOG_KIND_WINDOW_EXPIRED
+  6 SCRIPT_LOG_KIND_WINDOW_DROPPED
+  7 SCRIPT_LOG_KIND_MATCHED
+  8 SCRIPT_LOG_KIND_REFUSED
+  9 SCRIPT_LOG_KIND_STOP_FAILED
+enum fleet.v1.ScriptProblemKind
+  0 SCRIPT_PROBLEM_KIND_UNSPECIFIED
+  1 SCRIPT_PROBLEM_KIND_COMPILE
+  2 SCRIPT_PROBLEM_KIND_ERROR
+  3 SCRIPT_PROBLEM_KIND_MISUSE
+  4 SCRIPT_PROBLEM_KIND_LIMIT
+  5 SCRIPT_PROBLEM_KIND_STATE
 enum fleet.v1.SessionServerFailure
   0 SESSION_SERVER_FAILURE_UNSPECIFIED
   1 SESSION_SERVER_FAILURE_UNREACHABLE

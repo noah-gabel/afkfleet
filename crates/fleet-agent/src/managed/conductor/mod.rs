@@ -50,7 +50,9 @@ use std::sync::Arc;
 use fleet_core::bot::{BotSnapshot, BotSpec, DesiredRunState, Lifecycle, StickyState};
 use fleet_core::id::BotId;
 use fleet_proto::control::{Assignment, LifecycleCommand, SendChat};
-use fleet_runtime::{ChatTicket, Fleet, FleetError, FleetEvent, FleetEventKind, RuntimeClock};
+use fleet_runtime::{
+    ChatTicket, Fleet, FleetError, FleetEvent, FleetEventKind, RuntimeClock, ScriptEvent,
+};
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time::MissedTickBehavior;
@@ -557,10 +559,14 @@ impl Conductor {
                     debug!(bot_id = %bot, "a chat outcome nobody waits for was dropped");
                 }
             }
-            // A script's status and log reach the server with the wire's
-            // messages for them (Plan.md P15.20, P15.23); until then they
-            // stay on the agent, in its `debug` log.
-            FleetEventKind::Script(_) => {}
+            // Reported as fleet-core's types, a sent message by its key
+            // alone (Plan.md P15.20, P15.23).
+            FleetEventKind::Script(ScriptEvent::Status(status)) => {
+                self.outbox.script_status(bot, at, status.report());
+            }
+            FleetEventKind::Script(ScriptEvent::Log(line)) => {
+                self.outbox.script_log(bot, at, line.report());
+            }
             FleetEventKind::Removed => {
                 let _ = self.book.removed(bot);
                 self.credentials.forget(bot);

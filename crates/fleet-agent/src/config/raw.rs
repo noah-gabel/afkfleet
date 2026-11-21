@@ -188,8 +188,29 @@ pub(crate) struct RawBot {
     pub(crate) username: Option<String>,
     pub(crate) server: Option<String>,
     pub(crate) mode: Option<String>,
+    /// A scripted mode instead of `mode` (Plan.md P15.22).
+    pub(crate) script: Option<RawScript>,
     #[serde(default)]
     pub(crate) conflict_texts: Vec<String>,
+}
+
+/// A bot's `script`: the file of its text, and its settings and
+/// declarations under the API's names; fleet-core checks them.
+#[derive(Debug, Deserialize)]
+#[serde(
+    deny_unknown_fields,
+    expecting = "a table with a script file and its settings"
+)]
+pub(crate) struct RawScript {
+    pub(crate) file: Option<String>,
+    pub(crate) leash: Option<u8>,
+    pub(crate) tool_guard: Option<u8>,
+    #[serde(default)]
+    pub(crate) block_guard: Vec<String>,
+    #[serde(default)]
+    pub(crate) messages: Vec<fleet_core::script::MessageDraft>,
+    #[serde(default)]
+    pub(crate) patterns: Vec<fleet_core::script::PatternDraft>,
 }
 
 /// `[control_plane]`.

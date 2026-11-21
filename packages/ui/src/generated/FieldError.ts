@@ -9,6 +9,17 @@ export type FieldError = {
  */
 path: string, 
 /**
- * Which rule it broke. It names the rule, never the value.
+ * Which rule it broke. It names the rule, never the value; for a
+ * script that isn't a program, it's the engine's message about the
+ * caller's own script.
  */
-message: string, };
+message: string, 
+/**
+ * The line, from 1, of the place in the field's text that broke it,
+ * when one is known: a script's line (ADR-0036, D14).
+ */
+line?: number, 
+/**
+ * The column, from 1, with `line`.
+ */
+column?: number, };

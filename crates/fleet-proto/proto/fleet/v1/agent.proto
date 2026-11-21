@@ -61,6 +61,10 @@ message Hello {
   uint32 capacity = 4;
   // The status of every bot the agent runs, at most 1000, each bot once.
   repeated BotSnapshot running = 5;
+  // The script API level the agent runs: 0, or absent, for an agent from
+  // before scripts. The server never sends it a scripted mode of a higher
+  // level (ADR-0036, D13).
+  uint32 script_api = 6;
 }
 
 // A sign of life. It carries no time: the server stamps it with its own clock.
@@ -88,7 +92,112 @@ message BotEvent {
     BotNotification alert = 8;
     // The agent removed the bot; this is its last event.
     Unit removed = 9;
+    // Where the bot's script is in its life: said when it starts and stops,
+    // and again at every join. Its refusal by the agent's own engine is one,
+    // per bot, with the error and its line (ADR-0036, D13).
+    ScriptStatus script_status = 10;
+    // A line of the bot's script's log.
+    ScriptLogLine script_log = 11;
   }
+}
+
+// Where a bot's script is in its life (Plan.md P15.20). Its texts are the
+// script's own or the engine's about it: the server reads them as untrusted
+// text, one line of at most 200 characters, whatever was sent.
+message ScriptStatus {
+  // The status.
+  oneof status {
+    // Its hooks run.
+    Unit running = 1;
+    // It failed or hit a limit; it runs nothing until its next start.
+    ScriptProblem stopped = 2;
+    // The agent's engine refused it, so it never ran.
+    ScriptProblem refused = 3;
+    // The agent's runtime failed while one of its hooks ran.
+    Unit crashed = 4;
+  }
+}
+
+// What stopped or refused a script, and where.
+message ScriptProblem {
+  // Its kind.
+  ScriptProblemKind kind = 1;
+  // The hook that ran, for a script that stopped.
+  ScriptHook hook = 2;
+  // Its line, from 1, when the engine gave one; with `column`.
+  optional uint32 line = 3;
+  // Its column, from 1, when the engine gave one; with `line`.
+  optional uint32 column = 4;
+  // The engine's message about the script.
+  string message = 5;
+}
+
+// A problem's kind.
+enum ScriptProblemKind {
+  // Not set; never valid.
+  SCRIPT_PROBLEM_KIND_UNSPECIFIED = 0;
+  // The script isn't a program the engine takes.
+  SCRIPT_PROBLEM_KIND_COMPILE = 1;
+  // A hook failed.
+  SCRIPT_PROBLEM_KIND_ERROR = 2;
+  // The script used the API in a way it may not.
+  SCRIPT_PROBLEM_KIND_MISUSE = 3;
+  // A limit: operations, time, the stack, the size of a value.
+  SCRIPT_PROBLEM_KIND_LIMIT = 4;
+  // The script's state broke its rules.
+  SCRIPT_PROBLEM_KIND_STATE = 5;
+}
+
+// A script's hook.
+enum ScriptHook {
+  // None: a refusal, which no hook ran.
+  SCRIPT_HOOK_UNSPECIFIED = 0;
+  // `on_join`.
+  SCRIPT_HOOK_JOIN = 1;
+  // `on_world_change`.
+  SCRIPT_HOOK_WORLD_CHANGE = 2;
+  // `on_death`.
+  SCRIPT_HOOK_DEATH = 3;
+  // `on_respawn`.
+  SCRIPT_HOOK_RESPAWN = 4;
+  // `on_timer`.
+  SCRIPT_HOOK_TIMER = 5;
+  // `on_chat`.
+  SCRIPT_HOOK_CHAT = 6;
+  // `on_stop`.
+  SCRIPT_HOOK_STOP = 7;
+}
+
+// One line of a script's log (ADR-0037, C7).
+message ScriptLogLine {
+  // What the line is about.
+  ScriptLogKind kind = 1;
+  // The line.
+  string text = 2;
+}
+
+// What a line of a script's log is about.
+enum ScriptLogKind {
+  // Not set; never valid.
+  SCRIPT_LOG_KIND_UNSPECIFIED = 0;
+  // A line the script wrote.
+  SCRIPT_LOG_KIND_LINE = 1;
+  // A declared message was handed to the session.
+  SCRIPT_LOG_KIND_SENT = 2;
+  // A declared message wasn't sent.
+  SCRIPT_LOG_KIND_NOT_SENT = 3;
+  // A reply's window opened.
+  SCRIPT_LOG_KIND_WINDOW_OPENED = 4;
+  // A reply's window ran out.
+  SCRIPT_LOG_KIND_WINDOW_EXPIRED = 5;
+  // A reply's window never opened.
+  SCRIPT_LOG_KIND_WINDOW_DROPPED = 6;
+  // A chat pattern matched.
+  SCRIPT_LOG_KIND_MATCHED = 7;
+  // `chat.send` or `chat.expect` was refused.
+  SCRIPT_LOG_KIND_REFUSED = 8;
+  // `on_stop` failed.
+  SCRIPT_LOG_KIND_STOP_FAILED = 9;
 }
 
 // A user's chat message was sent.

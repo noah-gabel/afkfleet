@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE server_settings SET chat_formats = '[\"[{sender}] \"]' WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "bbdfecdbc91e71e2fb246b69cc77ef4b52425c61d9e7377dfdb7aa07516118c2"
+}

@@ -9,7 +9,8 @@
 //!   code it doesn't know.
 //! - `request_id` names the request in the server's log.
 //! - `fields` is there only for `validation_failed`: one [`FieldError`] per
-//!   broken rule.
+//!   broken rule, with the line and the column of a place in a text where
+//!   one is known (a script's, ADR-0036, D14).
 //!
 //! Every text is a [`BoundedText`], cleaned and capped when read.
 
@@ -17,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use utoipa::{PartialSchema as _, ToSchema};
 
+use crate::int::integer_schema;
 use crate::open::{Open, OpenEnum};
 use crate::text::BoundedText;
 
@@ -116,6 +118,10 @@ pub enum ErrorCode {
     /// An edit of a server's settings that changed since the caller read
     /// them: its `version` is stale. Load them again (409; ADR-0020, S77).
     ServerSettingsChanged,
+    /// A scripted mode for a bot whose agent runs a lower script API level
+    /// than the mode needs, set on the bot or saved over a mode it uses: the
+    /// agent must be updated first (409; ADR-0036, D13).
+    AgentTooOld,
 }
 
 impl ErrorCode {
@@ -173,6 +179,9 @@ impl ErrorCode {
             Self::ServerSettingsChanged => {
                 "These settings changed since you opened them. Load them again to see the change."
             }
+            Self::AgentTooOld => {
+                "This bot's agent runs a version that can't run this scripted mode. Update the agent first."
+            }
         }
     }
 }
@@ -208,6 +217,7 @@ impl OpenEnum for ErrorCode {
         Self::TooManyConnections,
         Self::AgentNotDisabled,
         Self::ServerSettingsChanged,
+        Self::AgentTooOld,
     ];
 
     fn as_str(self) -> &'static str {
@@ -241,6 +251,7 @@ impl OpenEnum for ErrorCode {
             Self::TooManyConnections => "too_many_connections",
             Self::AgentNotDisabled => "agent_not_disabled",
             Self::ServerSettingsChanged => "server_settings_changed",
+            Self::AgentTooOld => "agent_too_old",
         }
     }
 }
@@ -298,10 +309,23 @@ pub struct FieldError {
     #[ts(type = "string")]
     #[schema(schema_with = BoundedText::<FIELD_PATH_MAX_CHARS>::schema)]
     pub path: BoundedText<FIELD_PATH_MAX_CHARS>,
-    /// Which rule it broke. It names the rule, never the value.
+    /// Which rule it broke. It names the rule, never the value; for a
+    /// script that isn't a program, it's the engine's message about the
+    /// caller's own script.
     #[ts(type = "string")]
     #[schema(schema_with = BoundedText::<FIELD_MESSAGE_MAX_CHARS>::schema)]
     pub message: BoundedText<FIELD_MESSAGE_MAX_CHARS>,
+    /// The line, from 1, of the place in the field's text that broke it,
+    /// when one is known: a script's line (ADR-0036, D14).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[schema(schema_with = integer_schema::<1, { u32::MAX }>, nullable = false)]
+    pub line: Option<u32>,
+    /// The column, from 1, with `line`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[schema(schema_with = integer_schema::<1, { u32::MAX }>, nullable = false)]
+    pub column: Option<u32>,
 }
 
 impl FieldError {
@@ -311,6 +335,18 @@ impl FieldError {
         Self {
             path: BoundedText::new(path),
             message: BoundedText::new(message),
+            line: None,
+            column: None,
+        }
+    }
+
+    /// The same, at `line` and `column` of the field's text, each from 1.
+    #[must_use]
+    pub fn at_place(self, line: Option<u32>, column: Option<u32>) -> Self {
+        Self {
+            line: line.filter(|line| *line > 0),
+            column: column.filter(|column| *column > 0),
+            ..self
         }
     }
 }
@@ -356,10 +392,11 @@ mod tests {
             ErrorCode::TooManyConnections => 26,
             ErrorCode::AgentNotDisabled => 27,
             ErrorCode::ServerSettingsChanged => 28,
+            ErrorCode::AgentTooOld => 29,
         }
     }
 
-    const CODES: usize = 29;
+    const CODES: usize = 30;
 
     #[test]
     fn all_lists_every_code_exactly_once() {
@@ -501,6 +538,11 @@ mod tests {
         ErrorCode::ServerSettingsChanged,
         "server_settings_changed",
         "These settings changed since you opened them. Load them again to see the change."
+    )]
+    #[case(
+        ErrorCode::AgentTooOld,
+        "agent_too_old",
+        "This bot's agent runs a version that can't run this scripted mode. Update the agent first."
     )]
     #[case(
         ErrorCode::TooManyConnections,

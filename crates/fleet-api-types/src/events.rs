@@ -64,6 +64,13 @@
 //! - `chat_sent`: `bot_id` and `request`: the bot sent that user's line.
 //! - `chat_failed`: `bot_id` and `request`: it didn't. Viewers with Control or
 //!   more also get its `failure`, when the server knows one.
+//! - `bot_script`: `bot_id`, `at` and `script`, the bot's script's
+//!   [`ScriptStatus`]: running, or stopped or refused with what and where,
+//!   or crashed. It comes when a script starts or stops and again at every
+//!   join, to every viewer who may see the bot (P15.23).
+//! - `bot_script_log`: `bot_id`, `at` and `log`, a [`ScriptLogLine`]
+//!   of the bot's script's log, plain text, to every viewer who may see the
+//!   bot. A declared message is named by its key alone (P15.23).
 //! - `mode`: `mode_id` and `mode`, the [`ModeResponse`] this viewer's
 //!   `GET /modes` lists for it now: created, or changed.
 //! - `mode_removed`: `mode_id`. The viewer may no longer see the mode, or
@@ -83,6 +90,7 @@ use crate::int::integer_schema;
 use crate::mfa::TOKEN_MAX_CHARS;
 use crate::modes::ModeResponse;
 use crate::open::{Open, OpenEnum};
+use crate::script::{ScriptLogLine, ScriptStatus};
 use crate::secret::SecretText;
 use crate::time::Timestamp;
 
@@ -159,6 +167,10 @@ pub enum EventMessageKind {
     Mode,
     /// The viewer may no longer see a mode, or it's gone.
     ModeRemoved,
+    /// A bot's script's status: running, stopped, refused or crashed.
+    BotScript,
+    /// A line of a bot's script's log.
+    BotScriptLog,
 }
 
 impl OpenEnum for EventMessageKind {
@@ -174,6 +186,8 @@ impl OpenEnum for EventMessageKind {
         Self::ChatFailed,
         Self::Mode,
         Self::ModeRemoved,
+        Self::BotScript,
+        Self::BotScriptLog,
     ];
 
     fn as_str(self) -> &'static str {
@@ -189,6 +203,8 @@ impl OpenEnum for EventMessageKind {
             Self::ChatFailed => "chat_failed",
             Self::Mode => "mode",
             Self::ModeRemoved => "mode_removed",
+            Self::BotScript => "bot_script",
+            Self::BotScriptLog => "bot_script_log",
         }
     }
 }
@@ -214,7 +230,8 @@ pub struct EventMessage {
     #[ts(optional)]
     #[schema(nullable = false)]
     pub bot: Option<BotResponse>,
-    /// `bot_died`, `bot_alert`: when the server heard it.
+    /// `bot_died`, `bot_alert`, `bot_script`, `bot_script_log`: when the
+    /// server heard it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(as = "Option<String>", optional)]
     #[schema(schema_with = Timestamp::schema, nullable = false)]
@@ -256,6 +273,16 @@ pub struct EventMessage {
     #[ts(optional)]
     #[schema(nullable = false)]
     pub mode: Option<ModeResponse>,
+    /// `bot_script`: the bot's script's status.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[schema(nullable = false)]
+    pub script: Option<ScriptStatus>,
+    /// `bot_script_log`: a line of the bot's script's log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[schema(nullable = false)]
+    pub log: Option<ScriptLogLine>,
 }
 
 impl EventMessage {
@@ -273,6 +300,8 @@ impl EventMessage {
             failure: None,
             mode_id: None,
             mode: None,
+            script: None,
+            log: None,
         }
     }
 
@@ -378,6 +407,30 @@ impl EventMessage {
         }
     }
 
+    /// `bot_script`: `bot`'s script's `status`, as the server heard it
+    /// `at`.
+    #[must_use]
+    pub fn bot_script(bot: BotId, at: Timestamp, status: ScriptStatus) -> Self {
+        Self {
+            bot_id: Some(bot),
+            at: Some(at),
+            script: Some(status),
+            ..Self::of(EventMessageKind::BotScript)
+        }
+    }
+
+    /// `bot_script_log`: a `line` of `bot`'s script's log, as the server
+    /// heard it `at`.
+    #[must_use]
+    pub fn bot_script_log(bot: BotId, at: Timestamp, line: ScriptLogLine) -> Self {
+        Self {
+            bot_id: Some(bot),
+            at: Some(at),
+            log: Some(line),
+            ..Self::of(EventMessageKind::BotScriptLog)
+        }
+    }
+
     /// `mode_removed`: the viewer may no longer see `mode`, or it's gone.
     #[must_use]
     pub fn mode_removed(mode: ModeId) -> Self {
@@ -429,6 +482,8 @@ impl EventMessage {
             }
             EventMessageKind::Mode => self.mode_id.is_some() && self.mode.is_some(),
             EventMessageKind::ModeRemoved => self.mode_id.is_some(),
+            EventMessageKind::BotScript => bot && self.at.is_some() && self.script.is_some(),
+            EventMessageKind::BotScriptLog => bot && self.at.is_some() && self.log.is_some(),
         };
         if carried {
             Received::Event(Box::new(self))
@@ -540,7 +595,9 @@ mod tests {
                 "chat_sent",
                 "chat_failed",
                 "mode",
-                "mode_removed"
+                "mode_removed",
+                "bot_script",
+                "bot_script_log"
             ]
         );
     }

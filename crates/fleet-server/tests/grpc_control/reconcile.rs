@@ -30,7 +30,9 @@ use fleet_server::ports::live_agents::LiveAgents as _;
 use fleet_server::ports::store::Store as _;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
-use super::support::{CAPACITY, Settings, barrier, hello, removed, report, snapshot, start, text};
+use super::support::{
+    CAPACITY, Port, Settings, barrier, hello, removed, report, snapshot, start, text,
+};
 
 fn ids(assignments: &[Assignment]) -> Vec<BotId> {
     assignments
@@ -58,6 +60,85 @@ fn sticky_paused() -> StickyState {
     StickyState::Paused(PauseReason::Conflict {
         kind: ConflictKind::DuplicateLogin,
     })
+}
+
+impl Port {
+    /// Puts `bot` on a scripted mode of API level 1, its owner's, as the
+    /// API stores one.
+    async fn on_scripted_mode(&self, bot: BotId) {
+        let row = self.bot_row(bot).await.unwrap();
+        let owner = self
+            .db
+            .accounts()
+            .find(row.account)
+            .await
+            .unwrap()
+            .unwrap()
+            .owner;
+        let mode = fleet_core::id::ModeId::new_v7(self.clock.now(), [9; 10]).unwrap();
+        let definition: ModeDefinition = serde_json::from_str(r#"{"script":{"api":1,"source":"fn on_join(first) {}","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}}"#).unwrap();
+        let mut tx = self.db.write().await.unwrap();
+        tx.modes()
+            .insert(&fleet_server::ports::modes::NewMode {
+                id: mode,
+                owner,
+                name: "Scripted".parse().unwrap(),
+                visibility: fleet_core::authz::ModeVisibility::Private,
+                definition,
+                created_at: self.clock.now(),
+            })
+            .await
+            .unwrap();
+        assert!(tx.bots().set_mode(bot, mode).await.unwrap());
+        tx.commit(super::support::setup_entry(self.clock.now()))
+            .await
+            .unwrap();
+    }
+}
+
+/// An agent whose hello has no script API level, one from before scripts,
+/// is never given a scripted bot over the real port: its welcome's
+/// reconcile holds only the step mode's bot, which shows the pass ran
+/// (ADR-0036, D13).
+#[sqlx::test(migrations = false)]
+async fn an_agent_whose_hello_has_no_script_api_is_never_given_a_scripted_bot(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let port = start(options, Settings::reconciling()).await;
+    let agent = port.enroll(1, "agent-1").await;
+    let scripted = port.bot(1).await;
+    let canary = port.bot(2).await;
+    port.on_scripted_mode(scripted).await;
+
+    let mut call = port.welcomed_at(&agent, 0, CAPACITY).await;
+
+    assert_eq!(ids(&call.reconciled().await), [canary]);
+    assert_eq!(port.bot_row(scripted).await.unwrap().agent, None);
+    port.stop().await;
+}
+
+/// The same agent at Phase 15's level gets the scripted bot, its script in
+/// the spec.
+#[sqlx::test(migrations = false)]
+async fn an_agent_at_the_script_api_level_gets_the_scripted_bot_with_its_script(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let port = start(options, Settings::reconciling()).await;
+    let agent = port.enroll(1, "agent-1").await;
+    let scripted = port.bot(1).await;
+    port.on_scripted_mode(scripted).await;
+
+    let mut call = port.welcomed_at(&agent, 1, CAPACITY).await;
+    let reconciled = call.reconciled().await;
+
+    assert_eq!(ids(&reconciled), [scripted]);
+    assert_eq!(
+        reconciled[0].spec.mode.script_api(),
+        Some(fleet_core::script::ScriptApiLevel::V1)
+    );
+    port.stop().await;
 }
 
 #[sqlx::test(migrations = false)]

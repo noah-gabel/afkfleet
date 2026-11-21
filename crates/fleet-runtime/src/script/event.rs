@@ -11,8 +11,11 @@
 use core::fmt;
 
 use fleet_core::chat::ChatMessage;
-use fleet_core::script::{Captured, ChatMatch, Ident};
-use fleet_script::{CompileError, Refused, ScriptError, ScriptErrorKind};
+use fleet_core::script::{
+    Captured, ChatMatch, Ident, LogKind, ProblemKind, ReportText, ScriptLogLine, ScriptPlace,
+    ScriptProblem, ScriptState,
+};
+use fleet_script::{CompileError, Refused, ScriptError, ScriptErrorKind, SourcePosition};
 
 use crate::chat::{ChatError, ChatFailure};
 
@@ -66,6 +69,53 @@ impl ScriptStatus {
             Self::Refused(_) => Some("refused"),
             Self::Crashed => Some("crashed"),
         }
+    }
+
+    /// The status as the agent reports it to the server (Plan.md P15.20):
+    /// fleet-core's report, every text in it cleaned and bounded. A
+    /// refusal is the per-bot refusal of ADR-0036's D13.
+    #[must_use]
+    pub fn report(&self) -> ScriptState {
+        match self {
+            Self::Running => ScriptState::Running,
+            Self::Stopped(error) => ScriptState::Stopped(stopped(error)),
+            Self::Refused(error) => ScriptState::Refused(refused(error)),
+            Self::Crashed => ScriptState::Crashed,
+        }
+    }
+}
+
+/// A place in fleet-core's terms; `None` for one that doesn't count from 1.
+fn place(at: Option<SourcePosition>) -> Option<ScriptPlace> {
+    at.and_then(|at| ScriptPlace::new(at.line, at.column))
+}
+
+/// A stopped script's problem: its kind, its hook, its place and the
+/// engine's message.
+fn stopped(error: &ScriptError) -> ScriptProblem {
+    let kind = match error.kind {
+        ScriptErrorKind::Limit(_) => ProblemKind::Limit,
+        ScriptErrorKind::StateNotAMap
+        | ScriptErrorKind::StateNotPlain
+        | ScriptErrorKind::StateInUse => ProblemKind::State,
+        ScriptErrorKind::Misuse(_) => ProblemKind::Misuse,
+        ScriptErrorKind::Failed { .. } => ProblemKind::Error,
+    };
+    ScriptProblem {
+        kind,
+        hook: Some(error.hook),
+        place: place(error.at),
+        message: ReportText::clean(&error.kind.to_string()),
+    }
+}
+
+/// A refused script's problem: no hook ran.
+fn refused(error: &CompileError) -> ScriptProblem {
+    ScriptProblem {
+        kind: ProblemKind::Compile,
+        hook: None,
+        place: place(error.at),
+        message: ReportText::clean(&error.kind.to_string()),
     }
 }
 
@@ -152,6 +202,63 @@ pub enum ScriptLog {
 }
 
 impl ScriptLog {
+    /// The line as the agent reports it to the server (Plan.md P15.23):
+    /// its kind, and the agent's wording, cleaned and bounded.
+    ///
+    /// **A declared message is named by its key alone:** its text and its
+    /// values are a command's arguments, which only a viewer with Manage
+    /// reads (ADR-0020, S6, S9), and a script's log reaches every viewer of
+    /// the bot. A match's values are what the server printed, which the
+    /// bot's chat shows them already.
+    #[must_use]
+    pub fn report(&self) -> ScriptLogLine {
+        let (kind, text) = match self {
+            Self::Line(line) => (LogKind::Line, line.clone()),
+            Self::Sent { key, message: _ } => (LogKind::Sent, format!("sent `{key}`")),
+            Self::NotSent { key, reason } => {
+                (LogKind::NotSent, format!("`{key}` wasn't sent: {reason}"))
+            }
+            Self::WindowOpened { pattern } => {
+                (LogKind::WindowOpened, format!("waiting for `{pattern}`"))
+            }
+            Self::WindowExpired { pattern } => (
+                LogKind::WindowExpired,
+                format!("`{pattern}` didn't come in time"),
+            ),
+            Self::WindowDropped { pattern } => (
+                LogKind::WindowDropped,
+                format!("not waiting for `{pattern}`: its command wasn't sent"),
+            ),
+            Self::Matched { pattern, values } => {
+                let values: Vec<String> = values
+                    .iter()
+                    .map(|value| format!("{} = {}", value.name, value.value))
+                    .collect();
+                let text = if values.is_empty() {
+                    format!("`{pattern}` matched")
+                } else {
+                    format!("`{pattern}` matched: {}", values.join(", "))
+                };
+                (LogKind::Matched, text)
+            }
+            Self::Refused(refused) => (
+                LogKind::Refused,
+                format!(
+                    "{} refused ({}), {} time{}",
+                    refused.asked.as_str(),
+                    refused.reason.as_str(),
+                    refused.times,
+                    if refused.times == 1 { "" } else { "s" }
+                ),
+            ),
+            Self::StopFailed(error) => (LogKind::StopFailed, format!("on_stop failed: {error}")),
+        };
+        ScriptLogLine {
+            kind,
+            text: ReportText::clean(&text),
+        }
+    }
+
     /// A pattern's match as a log line.
     #[must_use]
     pub fn matched(found: &ChatMatch) -> Self {
@@ -254,6 +361,161 @@ mod tests {
         assert_eq!(
             shown,
             [("amount", "1250.5"), ("count", "-3"), ("state", "open")]
+        );
+    }
+
+    // --- What the agent reports (Plan.md P15.20, P15.23) ---
+
+    #[test]
+    fn a_status_is_reported_with_its_kind_hook_place_and_the_engines_message() {
+        let stop = ScriptStatus::Stopped(ScriptError {
+            kind: ScriptErrorKind::Failed {
+                message: "Function not found: jmp ()".to_owned(),
+            },
+            hook: Hook::Timer,
+            at: Some(SourcePosition { line: 4, column: 7 }),
+        });
+        let limit = stopped(ScriptErrorKind::Limit(Limit::HookTime));
+        let refusal = ScriptStatus::Refused(CompileError {
+            kind: fleet_script::CompileErrorKind::UndefinedVariable {
+                name: "kees".to_owned(),
+            },
+            at: Some(SourcePosition { line: 2, column: 3 }),
+        });
+
+        assert_eq!(ScriptStatus::Running.report(), ScriptState::Running);
+        assert_eq!(ScriptStatus::Crashed.report(), ScriptState::Crashed);
+        assert_eq!(
+            stop.report(),
+            ScriptState::Stopped(ScriptProblem {
+                kind: ProblemKind::Error,
+                hook: Some(Hook::Timer),
+                place: ScriptPlace::new(4, 7),
+                message: ReportText::clean("Function not found: jmp ()"),
+            })
+        );
+        let ScriptState::Stopped(problem) = limit.report() else {
+            panic!("a limit stops the script");
+        };
+        assert_eq!((problem.kind, problem.place), (ProblemKind::Limit, None));
+        assert_eq!(
+            refusal.report(),
+            ScriptState::Refused(ScriptProblem {
+                kind: ProblemKind::Compile,
+                hook: None,
+                place: ScriptPlace::new(2, 3),
+                message: ReportText::clean("`kees` isn't defined"),
+            })
+        );
+    }
+
+    #[test]
+    fn every_way_a_script_stops_is_reported_as_its_kind() {
+        let kinds = [
+            (ScriptErrorKind::Limit(Limit::HookTime), ProblemKind::Limit),
+            (ScriptErrorKind::StateNotAMap, ProblemKind::State),
+            (ScriptErrorKind::StateNotPlain, ProblemKind::State),
+            (ScriptErrorKind::StateInUse, ProblemKind::State),
+            (
+                ScriptErrorKind::Misuse(Misuse::TapOnly),
+                ProblemKind::Misuse,
+            ),
+        ];
+        for (kind, expected) in kinds {
+            let ScriptState::Stopped(problem) = stopped(kind).report() else {
+                panic!("a stopped script");
+            };
+            assert_eq!(problem.kind, expected);
+        }
+    }
+
+    #[test]
+    fn a_sent_message_is_reported_by_its_key_never_its_text_or_values() {
+        let sent = ScriptLog::Sent {
+            key: Ident::try_from("pay").unwrap(),
+            message: ChatMessage::try_from("/pay AfkMain 1250.50").unwrap(),
+        };
+
+        let line = sent.report();
+
+        assert_eq!(line.kind, LogKind::Sent);
+        assert_eq!(line.text.as_str(), "sent `pay`");
+    }
+
+    #[test]
+    fn every_line_is_reported_as_its_kind_and_cleaned() {
+        let key = Ident::try_from("balance").unwrap();
+        let found = ScriptLog::matched(&ChatMatch {
+            key: key.clone(),
+            values: vec![(Ident::try_from("amount").unwrap(), Captured::Amount(1250.5))],
+        });
+        let lines = [
+            (
+                ScriptLog::Line("§cdone\ntoday".to_owned()),
+                LogKind::Line,
+                "done | today",
+            ),
+            (
+                ScriptLog::NotSent {
+                    key: key.clone(),
+                    reason: NotSent::Refused(ChatError::RateLimited),
+                },
+                LogKind::NotSent,
+                "`balance` wasn't sent: the bot's chat rate limit is reached",
+            ),
+            (
+                ScriptLog::WindowOpened {
+                    pattern: key.clone(),
+                },
+                LogKind::WindowOpened,
+                "waiting for `balance`",
+            ),
+            (
+                ScriptLog::WindowExpired {
+                    pattern: key.clone(),
+                },
+                LogKind::WindowExpired,
+                "`balance` didn't come in time",
+            ),
+            (
+                ScriptLog::WindowDropped {
+                    pattern: key.clone(),
+                },
+                LogKind::WindowDropped,
+                "not waiting for `balance`: its command wasn't sent",
+            ),
+            (
+                found,
+                LogKind::Matched,
+                "`balance` matched: amount = 1250.5",
+            ),
+            (
+                ScriptLog::Refused(Refused {
+                    asked: fleet_script::Asked::Send,
+                    reason: fleet_core::script::Refusal::TooSoon,
+                    times: 3,
+                }),
+                LogKind::Refused,
+                "send refused (too_soon), 3 times",
+            ),
+        ];
+
+        for (log, kind, text) in lines {
+            let line = log.report();
+            assert_eq!((line.kind, line.text.as_str()), (kind, text));
+        }
+        let failed = ScriptLog::StopFailed(ScriptError {
+            kind: ScriptErrorKind::Misuse(Misuse::UnknownMessage),
+            hook: Hook::Stop,
+            at: None,
+        });
+        assert_eq!(failed.report().kind, LogKind::StopFailed);
+        assert!(
+            failed
+                .report()
+                .text
+                .as_str()
+                .starts_with("on_stop failed: ")
         );
     }
 

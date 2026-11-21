@@ -58,7 +58,7 @@ pub(crate) fn config(bots: &[(&str, ModePreset)]) -> AgentConfig {
                 .map(|&(name, mode)| StandaloneBot {
                     username: name.parse().unwrap(),
                     server: "localhost".try_into().unwrap(),
-                    mode,
+                    mode: mode.into(),
                     conflict_texts: ConflictTexts::default(),
                 })
                 .collect(),

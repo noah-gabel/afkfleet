@@ -149,6 +149,7 @@ async fn rig(setup: &Setup, account: AccountId) -> Rig {
                 halt: Halt::default(),
                 connected_at: now,
                 capacity: AgentCapacity::try_from(10_u32).unwrap(),
+                script_api: 1,
                 running: Vec::new(),
                 welcome: wire::ServerMessage::default(),
             },

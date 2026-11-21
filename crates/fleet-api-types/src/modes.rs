@@ -15,6 +15,13 @@
 //!   changes nothing and answers the mode (S21); a stale `version` is 409
 //!   `mode_changed`, and an edit a bot that uses the mode would refuse from
 //!   this caller is 409 `mode_in_use_by_others` (S17).
+//! - **A scripted mode** has `script` and an empty `steps` (ADR-0036,
+//!   D13): only an Admin or the Owner creates or edits one (D15, 403
+//!   otherwise), its rules are answered at their fields under `script`,
+//!   and a text that isn't a program is a 422 at `script.source` with the
+//!   line and the column (D14). A scripted mode set on a bot whose agent
+//!   runs an older script API level, directly or through an edit of a mode
+//!   it uses, is 409 `agent_too_old`. See the `script` module.
 //! - **`DELETE /modes/{id}`** deletes a mode no bot uses;
 //!   one a bot uses is 409 `mode_in_use` (S16, S17).
 //! - **The steps** are ADR-0010's mode JSON
@@ -49,6 +56,7 @@ use crate::chat::message_rule;
 use crate::ids::{ModeId, id_schema};
 use crate::int::integer_schema;
 use crate::open::{Open, OpenEnum};
+use crate::script::{ModeScript, ModeScriptRequest};
 use crate::text::BoundedText;
 use crate::time::Timestamp;
 use crate::users::UserLabel;
@@ -73,6 +81,9 @@ const MAX_MS: u32 = u32::MAX;
 /// server can tell: another of the owner's modes, or, for a shared one, a
 /// shared mode, has it.
 pub const MODE_NAME_TAKEN: &str = "is already another mode's name";
+
+/// The field message of steps beside a script (ADR-0036, D13).
+pub const MODE_SCRIPT_HAS_NO_STEPS: &str = "must be empty for a scripted mode";
 
 /// The field message of a built-in mode's name (S13, R4).
 pub const MODE_NAME_RESERVED: &str = "is a built-in mode's name";
@@ -271,11 +282,20 @@ pub struct CreateModeRequest {
     /// Who may see it; a shared mode needs an Admin or the Owner.
     #[garde(skip)]
     pub visibility: ModeVisibility,
-    /// Its steps, at most 32, in the order they run when due together.
+    /// Its steps, at most 32, in the order they run when due together;
+    /// `[]` for a scripted mode.
     #[garde(dive)]
     #[ts(as = "Vec<ModeStepRequest>")]
     #[schema(value_type = Vec<ModeStepRequest>)]
     pub steps: ModeSteps,
+    /// Its script, for a scripted mode, which only an Admin or the Owner
+    /// writes (ADR-0036, D15); `steps` is then `[]`. The server checks
+    /// its rules and answers each at its field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[garde(skip)]
+    #[ts(optional)]
+    #[schema(nullable = false)]
+    pub script: Option<ModeScriptRequest>,
 }
 
 /// `PUT /modes/{id}`: the mode as it should be from now on, and the version
@@ -302,6 +322,12 @@ pub struct UpdateModeRequest {
     #[ts(as = "Vec<ModeStepRequest>")]
     #[schema(value_type = Vec<ModeStepRequest>)]
     pub steps: ModeSteps,
+    /// Its script, under `CreateModeRequest`'s rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[garde(skip)]
+    #[ts(optional)]
+    #[schema(nullable = false)]
+    pub script: Option<ModeScriptRequest>,
 }
 
 /// The garde rule of a mode's name: a valid `ModeName` that isn't a
@@ -832,8 +858,16 @@ pub struct ModeResponse {
     #[schema(schema_with = Timestamp::schema)]
     pub updated_at: Timestamp,
     /// Its steps. A viewer who may not edit it sees each command a chat
-    /// step sends as its `/` and name alone (S15).
+    /// step sends as its `/` and name alone (S15). None for a scripted
+    /// mode.
     pub steps: Vec<ModeStep>,
+    /// A scripted mode's body: its script and what it sets and declares,
+    /// for every viewer, a declared command as a chat step's is (S15).
+    /// Absent for a step mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[schema(nullable = false)]
+    pub script: Option<ModeScript>,
 }
 
 /// One step of a mode as its viewer may see it.
@@ -1071,6 +1105,7 @@ mod tests {
             name: name.to_owned(),
             visibility: ModeVisibility::Private,
             steps: serde_json::from_value(steps).unwrap(),
+            script: None,
         }
     }
 

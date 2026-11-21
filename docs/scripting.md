@@ -262,6 +262,7 @@ A script itself is limited too:
 - **No anonymous functions** (`|x| x + 1`). Give the function a name and pass `Fn("name")`: `list.filter(Fn("is_big"))`.
 - **Nothing outside a function:** a script is functions only, so no `let` or `const` at the top. A value every function needs is a function that returns it, or lives in `state`.
 - **No `import`, no `eval`, no `sleep`, no clock.** A script's only output is its actions and its log: `print` and `debug` go nowhere.
+- **No raw strings** (`#"…"#`): write a text in quotes, or in backticks across lines.
 - **No variable, parameter, loop variable or caught error named like a game object** or `state`.
 
 ### Errors

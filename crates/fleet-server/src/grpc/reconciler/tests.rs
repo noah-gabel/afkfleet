@@ -37,7 +37,7 @@ use crate::ports::agent_connections::{Admitted, StreamEnd};
 use crate::ports::assignments::{AssignError, Assigned};
 use crate::ports::bots::{Bot, BotRecord, Fleet, ReleaseRecord, UnreadableBot};
 use crate::ports::live_agents::LiveAgents as _;
-use crate::ports::server_settings::UnreadableSettings;
+use crate::ports::server_settings::{TextsOfServer, UnreadableSettings};
 use crate::ports::store::StoreError;
 
 const T0: &str = "2027-01-15T08:00:00Z";
@@ -319,10 +319,24 @@ impl Stream {
 }
 
 /// Agent `n`'s stream, welcomed with `capacity` and the hello `running`, its
-/// `Welcome` taken off; its queue holds `depth` messages.
+/// `Welcome` taken off; its queue holds `depth` messages. Its hello is at
+/// Phase 15's script API level.
 fn connect(
     registry: &AgentRegistry,
     n: u8,
+    capacity: u32,
+    running: Vec<BotSnapshot>,
+    depth: usize,
+) -> Stream {
+    connect_at(registry, n, 1, capacity, running, depth)
+}
+
+/// The same, its hello at `script_api`: 0 for an agent from before
+/// scripts, whose hello has no level.
+fn connect_at(
+    registry: &AgentRegistry,
+    n: u8,
+    script_api: u32,
     capacity: u32,
     running: Vec<BotSnapshot>,
     depth: usize,
@@ -351,6 +365,7 @@ fn connect(
                 halt: Halt::default(),
                 connected_at: at(T0),
                 capacity: AgentCapacity::try_from(capacity).unwrap(),
+                script_api,
                 running,
                 welcome,
             },
@@ -845,11 +860,13 @@ fn server_key(address: &str) -> ServerKey {
 impl Store {
     /// Gives `server` the conflict texts `entries`.
     fn texts(&self, server: &str, entries: &[&str]) {
-        self.state()
-            .fleet
-            .server_texts
-            .readable
-            .insert(server_key(server), texts(entries));
+        self.state().fleet.server_texts.readable.insert(
+            server_key(server),
+            TextsOfServer {
+                conflict_texts: texts(entries),
+                chat_formats: fleet_core::chat::ChatFormats::default(),
+            },
+        );
     }
 }
 
@@ -925,7 +942,11 @@ async fn the_fallback_server_brings_its_own_texts_and_an_unreadable_row_sends_no
         state.fleet.server_texts.readable.clear();
         state.fleet.server_texts.unreadable.insert(
             server_key("play.example.com"),
-            UnreadableSettings { rowid: 1, id: None },
+            UnreadableSettings {
+                rowid: 1,
+                id: None,
+                column: "conflict_texts",
+            },
         );
     }
     running.hints.changed(Change::Store);
@@ -1323,12 +1344,17 @@ fn broken_settings(store: &Store, settings: ServerSettingsId) {
         UnreadableSettings {
             rowid: 4,
             id: Some(settings),
+            column: "conflict_texts",
         },
     );
     // A row no bot plays on is logged too; this one's ID doesn't read.
     texts.insert(
         server_key("empty.example.com"),
-        UnreadableSettings { rowid: 5, id: None },
+        UnreadableSettings {
+            rowid: 5,
+            id: None,
+            column: "chat_formats",
+        },
     );
     for n in [7, 8, 9] {
         state.fleet.unreadable.push(UnreadableBot {
@@ -1420,8 +1446,10 @@ async fn an_unreadable_servers_settings_row_is_logged_once_a_pass_not_once_per_b
         let id = &line["server_settings_id"];
         if line["server"] == "broken.example.com:25565" {
             assert_eq!(id, &settings.to_string(), "{line}");
+            assert_eq!(line["column"], "conflict_texts", "{line}");
         } else {
             assert!(id.is_null(), "an ID that doesn't read isn't named: {line}");
+            assert_eq!(line["column"], "chat_formats", "{line}");
         }
     }
     let bots = buffer
@@ -1433,6 +1461,219 @@ async fn an_unreadable_servers_settings_row_is_logged_once_a_pass_not_once_per_b
         "only the bot whose own row doesn't read, once a pass"
     );
     assert!(bots.iter().all(|line| line["bot_id"] == bot(6).to_string()));
+    running.stop().await;
+}
+
+// --- A scripted mode and the agents' script API levels (ADR-0036, D13) ------------------
+
+/// A scripted mode of API level 1, which an agent from before scripts
+/// doesn't run.
+fn scripted() -> ModeDefinition {
+    serde_json::from_str(r#"{"script":{"api":1,"source":"fn on_join(first) {}","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}}"#).unwrap()
+}
+
+/// `record(n)` on the scripted mode.
+fn scripted_record(n: u8) -> BotRecord {
+    let mut record = record(n);
+    record.mode = scripted();
+    record
+}
+
+/// Every message queued on `stream` until none comes.
+async fn drained(stream: &mut Stream) -> Vec<ServerMessage> {
+    let mut messages = Vec::new();
+    while let Some(message) = stream.next().await {
+        messages.push(message);
+    }
+    messages
+}
+
+/// The bots `messages` give the agent a spec of: assigned, reconciled or
+/// updated.
+fn specs_in(messages: &[ServerMessage]) -> Vec<BotId> {
+    messages
+        .iter()
+        .flat_map(|message| match message {
+            ServerMessage::Assign(assignment) => vec![assignment.spec.id],
+            ServerMessage::Reconcile(assignments) => assignments
+                .iter()
+                .map(|assignment| assignment.spec.id)
+                .collect(),
+            ServerMessage::Update(spec) => vec![spec.id],
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
+/// A waiting scripted bot goes only to an agent whose hello runs its
+/// level; one that finds no room there waits, and an agent before scripts
+/// still gets a step mode's bot.
+#[tokio::test(start_paused = true)]
+async fn a_scripted_bot_is_placed_only_on_an_agent_that_runs_its_level() {
+    let registry = registry();
+    let store = Store::with(Vec::new(), &[1, 2]);
+    let mut old = connect_at(&registry, 1, 0, 5, Vec::new(), 8);
+    let mut current = connect_at(&registry, 2, 1, 1, Vec::new(), 8);
+    let running = start(&registry, &store, 8);
+    assert_eq!(reconciled(old.next().await), []);
+    assert_eq!(reconciled(current.next().await), []);
+
+    {
+        let mut state = store.state();
+        state.fleet.bots.push(scripted_record(1));
+        state.fleet.bots.push(record(2));
+        state.fleet.bots.push(scripted_record(3));
+    }
+    running.hints.changed(Change::Store);
+    let to_old = drained(&mut old).await;
+    let to_current = drained(&mut current).await;
+
+    assert_eq!(specs_in(&to_old), [bot(2)], "{to_old:?}");
+    assert_eq!(specs_in(&to_current).len(), 1, "{to_current:?}");
+    let placed = specs_in(&to_current)[0];
+    assert!([bot(1), bot(3)].contains(&placed));
+    let mut calls = store.calls();
+    calls.sort_by_key(|call| format!("{call:?}"));
+    let mut expected = vec![
+        Call::Assign(bot(2), agent(1)),
+        Call::Assign(placed, agent(2)),
+    ];
+    expected.sort_by_key(|call| format!("{call:?}"));
+    assert_eq!(calls, expected, "the other scripted bot waits");
+    running.stop().await;
+}
+
+/// An agent that comes back from before scripts, still running a scripted
+/// bot it was given, gets a full reconcile without it, so it removes the
+/// bot, and no spec of its mode, not even one that stops it; the bot is
+/// unassigned as `agent_too_old` (a resync).
+#[tokio::test(start_paused = true)]
+async fn an_agent_that_comes_back_older_gets_no_spec_of_its_scripted_bot_and_lets_it_go() {
+    let registry = registry();
+    let mut stored = scripted_record(1);
+    stored.bot.agent = Some(agent(1));
+    let store = Store::with(vec![stored], &[1]);
+    let mut stream = connect_at(&registry, 1, 0, 5, vec![online(1)], 8);
+    // What its hello said of the bot, which the unassign records.
+    let last = Some(LastReport {
+        state: LastState::Online,
+        at: at(T0),
+    });
+
+    let running = start(&registry, &store, 8);
+    let messages = drained(&mut stream).await;
+
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert_eq!(reconciled(messages.into_iter().next()), [], "left out");
+    assert_eq!(
+        store.calls(),
+        [Call::Unassign(
+            bot(1),
+            agent(1),
+            UnassignReason::AgentTooOld,
+            last
+        )]
+    );
+    running.stop().await;
+}
+
+/// An agent before scripts whose hello doesn't list the scripted bot it
+/// was given frees it at once, and the bot goes to an agent that runs its
+/// level, never back to the old one (a reconnect).
+#[tokio::test(start_paused = true)]
+async fn a_scripted_bot_whose_agent_reconnects_older_without_it_moves_to_one_that_runs_it() {
+    let registry = registry();
+    let mut stored = scripted_record(1);
+    stored.bot.agent = Some(agent(1));
+    let store = Store::with(vec![stored], &[1, 2]);
+    let mut old = connect_at(&registry, 1, 0, 5, Vec::new(), 8);
+    let mut current = connect_at(&registry, 2, 1, 5, Vec::new(), 8);
+
+    let running = start(&registry, &store, 8);
+    let to_old = drained(&mut old).await;
+    running.hints.changed(Change::Store);
+    let to_current = drained(&mut current).await;
+
+    assert_eq!(specs_in(&to_old), [], "{to_old:?}");
+    assert_eq!(specs_in(&to_current), [bot(1)], "{to_current:?}");
+    let calls = store.calls();
+    assert!(
+        matches!(
+            calls.first(),
+            Some(Call::Detach(id, from, DetachReason::NotRunning, _)) if *id == bot(1) && *from == agent(1)
+        ),
+        "{calls:?}"
+    );
+    assert!(calls.contains(&Call::Assign(bot(1), agent(2))), "{calls:?}");
+    assert_eq!(store.agent_of(bot(1)), Some(agent(2)));
+    running.stop().await;
+}
+
+/// An agent replaced by one from before scripts while it runs a scripted
+/// bot: the new stream's welcome carries no spec of the bot, and the bot is
+/// let go as `agent_too_old` (a downgrade).
+#[tokio::test(start_paused = true)]
+async fn a_scripted_bots_agent_downgraded_while_it_runs_never_gets_its_spec() {
+    let registry = registry();
+    let mut stored = scripted_record(1);
+    stored.bot.agent = Some(agent(1));
+    let store = Store::with(vec![stored], &[1]);
+    let mut current = connect_at(&registry, 1, 1, 5, vec![online(1)], 8);
+    let running = start(&registry, &store, 8);
+    assert_eq!(ids_of(reconciled(current.next().await)), [bot(1)]);
+
+    // The session drops its lease when its stream ends.
+    assert!(registry.end(agent(1), StreamEnd::StreamError));
+    drop(current);
+    let mut older = connect_at(&registry, 1, 0, 5, vec![online(1)], 8);
+    running.hints.changed(Change::Welcomed(agent(1)));
+    let messages = drained(&mut older).await;
+
+    assert_eq!(specs_in(&messages), [], "{messages:?}");
+    assert!(
+        matches!(messages.first(), Some(ServerMessage::Reconcile(bots)) if bots.is_empty()),
+        "{messages:?}"
+    );
+    assert_eq!(
+        store.calls(),
+        [Call::Unassign(
+            bot(1),
+            agent(1),
+            UnassignReason::AgentTooOld,
+            registry.latest(bot(1)).map(|report| report.last())
+        )]
+    );
+    running.stop().await;
+}
+
+/// A bot's mode edited into a script while it runs on an agent before
+/// scripts: an unassign, which carries no spec, never an update that
+/// would carry the script (ADR-0036, D13).
+#[tokio::test(start_paused = true)]
+async fn a_mode_that_becomes_a_script_while_its_bot_runs_on_an_older_agent_unassigns_it() {
+    let registry = registry();
+    let store = Store::with(vec![on(1, 1)], &[1]);
+    let mut stream = connect_at(&registry, 1, 0, 5, vec![online(1)], 8);
+    let running = start(&registry, &store, 8);
+    assert_eq!(ids_of(reconciled(stream.next().await)), [bot(1)]);
+
+    store.change(bot(1), |record| record.mode = scripted());
+    running.hints.changed(Change::Store);
+    let messages = drained(&mut stream).await;
+
+    assert!(
+        matches!(messages.as_slice(), [ServerMessage::Unassign(id)] if *id == bot(1)),
+        "{messages:?}"
+    );
+    assert_eq!(
+        store.calls(),
+        [Call::Unassign(
+            bot(1),
+            agent(1),
+            UnassignReason::AgentTooOld,
+            registry.latest(bot(1)).map(|report| report.last())
+        )]
+    );
     running.stop().await;
 }
 

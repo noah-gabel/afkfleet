@@ -49,6 +49,8 @@ metrics-exporter-prometheus.workspace = true
 rustls.workspace = true
 # The Owner's password and the vault key in their secret wrappers.
 secrecy.workspace = true
+# A script's draft as the API's body, for the scripted load test on the real stream (P15.20).
+serde_json.workspace = true
 # The load test's reading of its own process: CPU time and memory (P13.4, ADR-0032).
 sysinfo.workspace = true
 # SQLite's commit hook on the server's write connection, set by a crash case's child

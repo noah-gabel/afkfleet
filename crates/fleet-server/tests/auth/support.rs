@@ -38,7 +38,7 @@ use fleet_server::app::invites::InviteService;
 use fleet_server::app::lockout::LockoutService;
 use fleet_server::app::login::LoginService;
 use fleet_server::app::mfa::{MfaPorts, MfaService};
-use fleet_server::app::modes::ModeService;
+use fleet_server::app::modes::{Compiler, ModeService};
 use fleet_server::app::users::UserService;
 use fleet_server::config::{Argon2Params, HttpConfig, RateLimitConfig};
 use fleet_server::grpc::registry::AgentRegistry;
@@ -194,6 +194,9 @@ pub(crate) struct Options {
     /// The live events sockets' bounds: serve's, unless a test runs them
     /// short (P11.5).
     pub(crate) sockets: SocketTimings,
+    /// What checks a scripted mode's text at save: fleet-script's, unless a
+    /// test watches it or makes it fail (ADR-0036, D14).
+    pub(crate) compiler: Compiler,
 }
 
 impl Default for Options {
@@ -206,6 +209,7 @@ impl Default for Options {
             allowlist: CommandAllowlist::default(),
             chat_wait: ChatWait::default(),
             sockets: SocketTimings::default(),
+            compiler: Compiler::fleet_script(),
         }
     }
 }
@@ -1361,8 +1365,8 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         modes: mode_service(
             &clock,
             &random,
-            &hooked,
-            &settings.allowlist,
+            (&hooked, &registry),
+            (&settings.allowlist, settings.compiler),
             (&hints, &heard),
         ),
         server_settings: server_settings_service(&clock, &random, &hooked, &hints),
@@ -1486,14 +1490,15 @@ fn bot_service(
     .with_chat_wait(chat_wait)
 }
 
-/// The modes' service as serve builds it, over `hooked`, with `allowlist`,
+/// The modes' service as serve builds it, over `hooked`, reading the
+/// agents' live streams in `registry`, with `allowlist` and `compiler`,
 /// recording its hints to the reconciler in `hints` and to the sockets in
 /// `heard`.
 fn mode_service(
     clock: &ManualClock,
     random: &SeededRandom,
-    hooked: &HookedStore,
-    allowlist: &CommandAllowlist,
+    (hooked, registry): (&HookedStore, &AgentRegistry),
+    (allowlist, compiler): (&CommandAllowlist, Compiler),
     (hints, heard): (&Arc<Hinted>, &Arc<Heard>),
 ) -> ModeService {
     ModeService::new(
@@ -1504,6 +1509,8 @@ fn mode_service(
     .with_allowlist(allowlist.clone())
     .with_reconcile(Arc::clone(hints) as Arc<dyn Reconcile>)
     .with_live_hints(Arc::clone(heard) as Arc<dyn LiveHints>)
+    .with_live_agents(Arc::new(registry.clone()))
+    .with_compiler(compiler)
 }
 
 /// The servers' settings over the hooked store, hinting `hints` after each

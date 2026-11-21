@@ -18,6 +18,7 @@ use chrono::{DateTime, Utc};
 use fleet_core::bot::{BotNotification, BotSnapshot, LastReport};
 use fleet_core::chat::{ChatMessage, IncomingChat};
 use fleet_core::id::{AgentId, BotId, ChatRequestId};
+use fleet_core::script::{ScriptLogLine, ScriptState};
 use fleet_proto::control::ChatFailedReason;
 use tokio::sync::Semaphore;
 
@@ -54,6 +55,12 @@ pub enum Reported {
     ChatSent(ChatRequestId),
     /// The server's chat message `request` wasn't sent, and why (P11.3).
     ChatFailed(ChatRequestId, ChatFailedReason),
+    /// Where the bot's script is in its life, its texts cleaned as the
+    /// stream's edge read them (Plan.md P15.23).
+    ScriptStatus(ScriptState),
+    /// A line of the bot's script's log, cleaned as the stream's edge read
+    /// it (Plan.md P15.23).
+    ScriptLog(ScriptLogLine),
 }
 
 /// One stream's share of the ingest's chat queue: at most its permits of

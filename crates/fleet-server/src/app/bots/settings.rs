@@ -1,7 +1,9 @@
 //! The two settings a user changes on a bot (Plan.md P11.2; ADR-0019, S47,
 //! S53, S55): the server it joins (Manage) and its mode
 //! (Control, or Manage when the mode sends a command off the allowlist; the
-//! mode must be one the user may see).
+//! mode must be one the user may see; a scripted mode only while the bot's
+//! agent, when it's live, runs the script API level the mode needs: 409
+//! otherwise, ADR-0036, D13).
 //!
 //! Where an address points isn't checked here: the agent checks the address
 //! it resolves before it connects (S46).
@@ -10,7 +12,7 @@ use fleet_core::audit::{AuditAction, AuditError, AuditMetadata};
 use fleet_core::authz::{AuthzError, Permission, ResourceContext, UserRef, authorize};
 use fleet_core::id::{BotId, ModeId};
 use fleet_core::value::{Host, ServerAddress};
-use tracing::info;
+use tracing::{debug, info};
 
 use super::{BotService, BotWriteError, reread};
 use crate::app::users::{ActingUser, Rechecked};
@@ -61,7 +63,8 @@ impl BotService {
     ///
     /// # Errors
     /// [`BotWriteError::SessionGone`], [`BotWriteError::NotFound`],
-    /// [`BotWriteError::UnusableMode`], [`BotWriteError::Denied`], and the
+    /// [`BotWriteError::UnusableMode`], [`BotWriteError::Denied`],
+    /// [`BotWriteError::AgentTooOld`], and the
     /// server's failures.
     pub async fn set_mode(
         &self,
@@ -99,7 +102,20 @@ impl BotService {
         let check = self.allowlist.check_mode(&stored.definition);
         authorize(&actor, Permission::SetBotMode(check), &account.context())
             .map_err(BotWriteError::Denied)?;
-        if bot.mode == mode || !tx.bots().set_mode(id, mode).await? {
+        if bot.mode == mode {
+            return Ok(Configured::Unchanged);
+        }
+        // A scripted mode never goes to an agent below its level: one whose
+        // live stream says so is refused here; one that's offline is held to
+        // it by the reconciler at its next hello (ADR-0036, D13).
+        if let (Some(needs), Some(agent)) = (stored.definition.script_api(), bot.agent)
+            && let Some(stream) = self.live.live(agent)
+            && !needs.runs_on(stream.script_api)
+        {
+            debug!(user_id = %by.actor.id, bot_id = %id, agent_id = %agent, "a scripted mode was refused: the bot's agent runs an older script API");
+            return Err(BotWriteError::AgentTooOld);
+        }
+        if !tx.bots().set_mode(id, mode).await? {
             return Ok(Configured::Unchanged);
         }
         let metadata = AuditMetadata::new()

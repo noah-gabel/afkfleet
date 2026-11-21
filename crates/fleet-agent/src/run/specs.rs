@@ -71,6 +71,8 @@ pub(crate) fn standalone_specs(
                 conflict_texts: bot.conflict_texts.clone(),
                 // No server sets it here: the default (ADR-0020, S3).
                 chat_rate: fleet_core::chat::ChatRate::default(),
+                // No server tells a player's line apart here (ADR-0037, C2).
+                chat_formats: fleet_core::chat::ChatFormats::default(),
             })
         })
         .collect()
@@ -88,7 +90,7 @@ mod tests {
         StandaloneBot {
             username: name.parse().unwrap(),
             server: "localhost:25566".try_into().unwrap(),
-            mode,
+            mode: mode.into(),
             conflict_texts: ConflictTexts::try_new(&["logged in from another location"]).unwrap(),
         }
     }

@@ -53,4 +53,4 @@ pub use allowlist::{CommandAllowlist, CommandAllowlistError, CommandCheck};
 pub use authorize::{AuthzError, authorize, effective_level, implicit_manage};
 pub use context::{Actor, ResourceContext, UserRef};
 pub use level::{GrantLevel, LevelError, ModeVisibility, Role};
-pub use permission::Permission;
+pub use permission::{ModeKind, Permission};

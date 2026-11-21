@@ -81,6 +81,7 @@ pub mod modes;
 pub mod open;
 pub mod openapi;
 pub mod page;
+pub mod script;
 pub mod secret;
 pub mod server_settings;
 pub mod sessions;

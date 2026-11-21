@@ -27,6 +27,17 @@
 //!   `version` is 409 `mode_changed` (S18), a taken name 422 on `name`, and
 //!   a bot using the mode that the caller couldn't set it on 409
 //!   `mode_in_use_by_others` (S17).
+//! - **A scripted mode** (ADR-0036, D13 to D15): its body is `script` beside
+//!   an empty `steps` (422 at `steps` otherwise). `authorize()` asks with
+//!   the kind the request names before anything reads the script, so a
+//!   Member's is a 403 that no validator and no compiler ever saw. Its
+//!   fleet-core rules are 422s at their fields under `script`; then the
+//!   service compiles it in `spawn_blocking`, never running a hook, and a
+//!   text that isn't a program is a 422 at `script.source` with Rhai's
+//!   message, its line and its column; a compiler that fails is the generic
+//!   500 with its request ID. An edit that makes the mode a script's while a
+//!   bot that uses it is on an agent that doesn't run it is 409
+//!   `agent_too_old`.
 //! - **Deleting** (`DELETE /api/v1/modes/{id}`): a mode
 //!   the caller may not see is 404, one they may not delete 403 (a built-in
 //!   one for everyone); the service checks again in its transaction and
@@ -40,16 +51,19 @@ use axum::http::StatusCode;
 use core::num::NonZeroU32;
 
 use fleet_api_types::modes::{
-    CreateModeRequest, MODE_NAME_TAKEN, ModePage, ModeResponse, UpdateModeRequest,
+    CreateModeRequest, MODE_NAME_TAKEN, MODE_SCRIPT_HAS_NO_STEPS, ModePage, ModeResponse,
+    ModeSteps, UpdateModeRequest,
 };
+use fleet_api_types::script::ModeScriptRequest;
 use fleet_api_types::{ErrorResponse, FieldError, PageQuery};
-use fleet_core::authz::{Permission, ResourceContext};
+use fleet_core::authz::{ModeKind, Permission, ResourceContext};
 use fleet_core::id::ModeId;
-use fleet_core::mode::ModeName;
+use fleet_core::mode::{ModeDefinition, ModeName};
 
 use super::{acting, mode_response, page};
 use crate::app::modes::{
-    CreateModeError, DeleteModeError, ListModesError, ModeEdit, ModeRoute, UpdateModeError,
+    CreateModeError, DeleteModeError, ListModesError, ModeEdit, ModeRoute, ScriptCheckError,
+    UpdateModeError,
 };
 use crate::http::error::ApiError;
 use crate::http::extractors::{AuthUser, ValidJson, ValidPath, ValidQuery};
@@ -113,9 +127,9 @@ pub(crate) async fn list(
         (status = 201, description = "The new mode, as its creator sees it.", body = ModeResponse),
         (status = 400, description = "A body of the wrong shape: an unknown field or `type`, a value of the wrong type, or a number its type can't hold. The answer never repeats what it read.", body = ErrorResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "`mode_needs_step_up`: the steps send a command off the allowlist, which only `POST /modes/with-commands` takes; `forbidden`: a shared mode, which needs an Admin or the Owner.", body = ErrorResponse),
+        (status = 403, description = "`mode_needs_step_up`: the steps send a command off the allowlist, which only `POST /modes/with-commands` takes; `forbidden`: a shared mode or a scripted one, each of which needs an Admin or the Owner.", body = ErrorResponse),
         (status = 409, description = "`conflict`: the caller already owns 50 modes.", body = ErrorResponse),
-        (status = 422, description = "A field breaks its rule, named at its own path (`name`, `steps[3].action.message`): one error, the earliest step's first.", body = ErrorResponse),
+        (status = 422, description = "A field breaks its rule, named at its own path (`name`, `steps[3].action.message`, `script.messages[1].text`): one error, the earliest first. A script that isn't a program is `script.source` with Rhai's message, its `line` and its `column`.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
             headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
         (status = "default", description = "Any other answer the server gives, in the error envelope.", body = ErrorResponse),
@@ -142,9 +156,9 @@ pub(crate) async fn create(
         (status = 201, description = "The new mode, as its creator sees it.", body = ModeResponse),
         (status = 400, description = "A body of the wrong shape: an unknown field or `type`, a value of the wrong type, or a number its type can't hold. The answer never repeats what it read.", body = ErrorResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "A shared mode, which needs an Admin or the Owner.", body = ErrorResponse),
+        (status = 403, description = "A shared mode or a scripted one, each of which needs an Admin or the Owner.", body = ErrorResponse),
         (status = 409, description = "`conflict`: the caller already owns 50 modes.", body = ErrorResponse),
-        (status = 422, description = "A field breaks its rule, named at its own path (`name`, `steps[3].action.message`): one error, the earliest step's first.", body = ErrorResponse),
+        (status = 422, description = "A field breaks its rule, named at its own path (`name`, `steps[3].action.message`, `script.messages[1].text`): one error, the earliest first. A script that isn't a program is `script.source` with Rhai's message, its `line` and its `column`.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
             headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
         (status = "default", description = "Any other answer the server gives, in the error envelope.", body = ErrorResponse),
@@ -168,17 +182,18 @@ async fn creating(
     request: &CreateModeRequest,
     route: ModeRoute,
 ) -> Result<(StatusCode, Json<ModeResponse>), ApiError> {
-    // garde checked every rule already, so a refusal here is a bug.
-    let definition = request
-        .steps
-        .definition()
-        .map_err(|_| ApiError::internal("the steps' rules already hold: garde checked them"))?;
     let name = ModeName::try_from(request.name.as_str()).map_err(ApiError::internal)?;
     let visibility = request.visibility.into();
+    // Before anything reads a script: a Member's never reaches a validator
+    // or the compiler (ADR-0036, D15).
     user.require(
-        Permission::CreateMode { visibility },
+        Permission::CreateMode {
+            visibility,
+            kind: requested_kind(request.script.as_ref()),
+        },
         &ResourceContext::Global,
     )?;
+    let definition = requested(&request.steps, request.script.as_ref())?;
     // The pointer comes after `forbidden`: only a caller the twin would take
     // ever sees it (S16).
     if !route.takes(state.modes.command_check(&definition)) {
@@ -196,6 +211,7 @@ async fn creating(
                 ApiError::Validation(vec![FieldError::new("name", MODE_NAME_TAKEN)])
             }
             CreateModeError::Store(error) => ApiError::from(error),
+            CreateModeError::Script(error) => not_a_program(error),
             other @ (CreateModeError::WrongRoute { .. }
             | CreateModeError::Mint(_)
             | CreateModeError::Audit(_)) => ApiError::internal(other),
@@ -223,10 +239,10 @@ async fn creating(
         (status = 200, description = "The mode as it now is, as the caller sees it: at the next version, or unchanged when the edit shows the same as the stored mode.", body = ModeResponse),
         (status = 400, description = "A body of the wrong shape: an unknown field or `type`, a value of the wrong type, or a number its type can't hold. The answer never repeats what it read.", body = ErrorResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "`mode_needs_step_up`: the steps send a command off the allowlist, which only `PUT /modes/{id}/with-commands` takes; `forbidden`: the caller may see the mode but not edit it, or not with this visibility. A built-in mode is read-only.", body = ErrorResponse),
+        (status = 403, description = "`mode_needs_step_up`: the steps send a command off the allowlist, which only `PUT /modes/{id}/with-commands` takes; `forbidden`: the caller may see the mode but not edit it, or not with this visibility, or it's a scripted mode before or after and the caller isn't an Admin or the Owner. A built-in mode is read-only.", body = ErrorResponse),
         (status = 404, description = "No such mode, or one the caller may not see.", body = ErrorResponse),
-        (status = 409, description = "`mode_changed`: the mode changed since the caller read `version`; `mode_in_use_by_others`: a bot uses the mode that the caller couldn't set the edited mode on.", body = ErrorResponse),
-        (status = 422, description = "A field breaks its rule, named at its own path (`version`, `name`, `steps[3].action.message`): one error, the earliest step's first.", body = ErrorResponse),
+        (status = 409, description = "`mode_changed`: the mode changed since the caller read `version`; `mode_in_use_by_others`: a bot uses the mode that the caller couldn't set the edited mode on; `agent_too_old`: the edit makes it a scripted mode, and a bot that uses it is on an agent that doesn't run its script API level.", body = ErrorResponse),
+        (status = 422, description = "A field breaks its rule, named at its own path (`version`, `name`, `steps[3].action.message`, `script.leash`): one error, the earliest first. A script that isn't a program is `script.source` with Rhai's message, its `line` and its `column`.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
             headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
         (status = "default", description = "Any other answer the server gives, in the error envelope.", body = ErrorResponse),
@@ -255,10 +271,10 @@ pub(crate) async fn update(
         (status = 200, description = "The mode as it now is, as the caller sees it: at the next version, or unchanged when the edit shows the same as the stored mode.", body = ModeResponse),
         (status = 400, description = "A body of the wrong shape: an unknown field or `type`, a value of the wrong type, or a number its type can't hold. The answer never repeats what it read.", body = ErrorResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "The caller may see the mode but not edit it, or not with this visibility. A built-in mode is read-only.", body = ErrorResponse),
+        (status = 403, description = "The caller may see the mode but not edit it, or not with this visibility, or it's a scripted mode before or after and the caller isn't an Admin or the Owner. A built-in mode is read-only.", body = ErrorResponse),
         (status = 404, description = "No such mode, or one the caller may not see.", body = ErrorResponse),
-        (status = 409, description = "`mode_changed`: the mode changed since the caller read `version`; `mode_in_use_by_others`: a bot uses the mode that the caller couldn't set the edited mode on.", body = ErrorResponse),
-        (status = 422, description = "A field breaks its rule, named at its own path (`version`, `name`, `steps[3].action.message`): one error, the earliest step's first.", body = ErrorResponse),
+        (status = 409, description = "`mode_changed`: the mode changed since the caller read `version`; `mode_in_use_by_others`: a bot uses the mode that the caller couldn't set the edited mode on; `agent_too_old`: the edit makes it a scripted mode, and a bot that uses it is on an agent that doesn't run its script API level.", body = ErrorResponse),
+        (status = 422, description = "A field breaks its rule, named at its own path (`version`, `name`, `steps[3].action.message`, `script.leash`): one error, the earliest first. A script that isn't a program is `script.source` with Rhai's message, its `line` and its `column`.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
             headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
         (status = "default", description = "Any other answer the server gives, in the error envelope.", body = ErrorResponse),
@@ -285,11 +301,6 @@ async fn editing(
     request: UpdateModeRequest,
     route: ModeRoute,
 ) -> Result<Json<ModeResponse>, ApiError> {
-    // garde checked every rule already, so a refusal here is a bug.
-    let definition = request
-        .steps
-        .definition()
-        .map_err(|_| ApiError::internal("the steps' rules already hold: garde checked them"))?;
     let name = ModeName::try_from(request.name.as_str()).map_err(ApiError::internal)?;
     let version = NonZeroU32::new(request.version)
         .ok_or_else(|| ApiError::internal("the version is at least 1: garde checked it"))?;
@@ -301,10 +312,19 @@ async fn editing(
     user.require(
         Permission::UpdateMode {
             visibility: listed.mode.visibility,
+            kind: ModeKind::of(&listed.mode.definition),
         },
         &context,
     )?;
-    user.require(Permission::UpdateMode { visibility }, &context)?;
+    // Before anything reads a script, as for creating (ADR-0036, D15).
+    user.require(
+        Permission::UpdateMode {
+            visibility,
+            kind: requested_kind(request.script.as_ref()),
+        },
+        &context,
+    )?;
+    let definition = requested(&request.steps, request.script.as_ref())?;
     // The pointer comes after `forbidden`: only a caller the twin would take
     // ever sees it (S16).
     if !route.takes(state.modes.command_check(&definition)) {
@@ -329,7 +349,9 @@ async fn editing(
                 ApiError::Validation(vec![FieldError::new("name", MODE_NAME_TAKEN)])
             }
             UpdateModeError::InUseByOthers => ApiError::ModeInUseByOthers,
+            UpdateModeError::AgentTooOld => ApiError::AgentTooOld,
             UpdateModeError::Store(error) => ApiError::from(error),
+            UpdateModeError::Script(error) => not_a_program(error),
             other @ (UpdateModeError::WrongRoute { .. }
             | UpdateModeError::VersionExhausted
             | UpdateModeError::Lost
@@ -337,6 +359,61 @@ async fn editing(
         })?;
     let check = state.modes.command_check(&edited.mode().mode.definition);
     Ok(Json(mode_response(&user.actor(), edited.mode(), check)?))
+}
+
+/// What a request's body is made of, read before the script itself: a
+/// request with `script` asks to write a scripted mode.
+const fn requested_kind(script: Option<&ModeScriptRequest>) -> ModeKind {
+    match script {
+        Some(_) => ModeKind::Script,
+        None => ModeKind::Steps,
+    }
+}
+
+/// The mode a request's body makes: its steps, or its script beside empty
+/// steps. garde checked the steps' rules already, so a refusal there is a
+/// bug; a script's rules are each a 422 at its field under `script`, with
+/// the line and the column of a place in its text.
+fn requested(
+    steps: &ModeSteps,
+    script: Option<&ModeScriptRequest>,
+) -> Result<ModeDefinition, ApiError> {
+    let Some(script) = script else {
+        return steps
+            .definition()
+            .map_err(|_| ApiError::internal("the steps' rules already hold: garde checked them"));
+    };
+    if !steps.0.is_empty() {
+        return Err(ApiError::Validation(vec![FieldError::new(
+            "steps",
+            MODE_SCRIPT_HAS_NO_STEPS,
+        )]));
+    }
+    script
+        .script()
+        .map(ModeDefinition::scripted)
+        .map_err(|error| {
+            ApiError::Validation(vec![
+                FieldError::new(&error.path, &error.message).at_place(error.line, error.column),
+            ])
+        })
+}
+
+/// A script that isn't a program, as the caller's own mistake: 422 at
+/// `script.source` with Rhai's message, its line and its column. A compiler
+/// that failed is an internal fault: the generic 500 with its request ID.
+fn not_a_program(error: ScriptCheckError) -> ApiError {
+    match error {
+        ScriptCheckError::NotAProgram(error) => {
+            let (line, column) = error
+                .at
+                .map_or((None, None), |at| (Some(at.line), Some(at.column)));
+            ApiError::Validation(vec![
+                FieldError::new("script.source", &error.kind.to_string()).at_place(line, column),
+            ])
+        }
+        other @ ScriptCheckError::CompilerFailed(_) => ApiError::internal(other),
+    }
 }
 
 /// `DELETE /api/v1/modes/{id}`: deletes a mode no bot uses.

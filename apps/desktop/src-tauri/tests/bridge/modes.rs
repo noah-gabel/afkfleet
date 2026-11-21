@@ -38,6 +38,7 @@ fn create(name: &str, message: Option<&str>) -> CreateModeRequest {
         name: name.to_owned(),
         visibility: ModeVisibility::Private,
         steps: ModeSteps(vec![step(message)]),
+        script: None,
     }
 }
 
@@ -47,6 +48,7 @@ fn update(version: u32, name: &str, message: Option<&str>) -> UpdateModeRequest 
         name: name.to_owned(),
         visibility: ModeVisibility::Private,
         steps: ModeSteps(vec![step(message)]),
+        script: None,
     }
 }
 

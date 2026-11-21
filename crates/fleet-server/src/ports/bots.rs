@@ -410,6 +410,15 @@ pub trait BotWrites: Send {
     /// doesn't read back.
     async fn accounts_with_mode(&mut self, mode: ModeId) -> Result<Vec<AccountId>, StoreError>;
 
+    /// The agents that bots running `mode` are assigned to, in ID order,
+    /// each once, read in this transaction: what an edit that makes the mode
+    /// a script's is checked against (ADR-0036, D13).
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`] for an ID that
+    /// doesn't read back.
+    async fn agents_with_mode(&mut self, mode: ModeId) -> Result<Vec<AgentId>, StoreError>;
+
     /// Sets whether `bot` should run. Whether it changed: `false` when it
     /// says so already, or no such bot.
     ///

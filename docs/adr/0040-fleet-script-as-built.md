@@ -1,6 +1,6 @@
 # 0040. `fleet-script` as built: an engine an instance, a sandbox tighter than planned, and what was measured
 
-- **Status:** Accepted. Decided under ADR-0025. The two points put to the user are answered, and a hook is bounded in time, in the [amendment](#amendment-2026-11-18-a-hooks-time-and-the-users-answers) of 2026-11-18; the point that amendment put to them is answered at its end (2026-11-21: scripts keep `try` and `catch`)
+- **Status:** Accepted. Decided under ADR-0025. The two points put to the user are answered, and a hook is bounded in time, in the [amendment](#amendment-2026-11-18-a-hooks-time-and-the-users-answers) of 2026-11-18; the point that amendment put to them is answered at its end (2026-11-21: scripts keep `try` and `catch`). A raw string is refused since the amendment of 2026-11-21 (A6), which the fuzzer prompted on group E's CI.
 - **Date:** 2026-11-17
 - **Related:** Plan.md Phase 15 (P15.5 to P15.9, P15.31); [ADR-0036](0036-scripted-modes.md) (D3 to D6, D14, D18) and [ADR-0037](0037-scripts-read-system-chat.md) (C4, C6), whose decisions this builds; [the script reference](../scripting.md); ADR-0010 (time and randomness are parameters), ADR-0030 (fuzz targets); `deny.toml`; `crates/fleet-script`, `crates/fleet-fuzz/src/script.rs`
 
@@ -253,3 +253,13 @@ The user's answer to PR #126: **scripts keep them; the time bound ends a caught 
 - **What it can't catch its way past:** a hook's operations and time, a second's, the state's limits, the stack guard and the depth of its calls. Each of the instance's own stops sticks (E4), so the next thing a script does after a `catch` ends the hook again.
 - **Tests that hold it:** the suite's `time` module (a caught end, and the reviewer's three cases against the OS's clock), `a_script_cant_catch_its_way_past_the_stack_guard`, and the sandbox tests of a caught data-size error.
 - **The reference** says the same in "Errors", unchanged.
+
+## Amendment (2026-11-21): no raw strings
+### A6. A raw string is refused at its own place *(found by the fuzzer on group E's CI)*
+`script_compile` found, on PR #128's CI, a script whose compile error was placed at column 41 of an empty line. The cause is Rhai 1.27.0's tokenizer (read in its source, `parse_raw_string_literal`): in a raw string, `#"…"#`, a line break right after a `"` is taken without starting a new line, so every place after it is a line too high and its column runs on from the line before. The scan that finds places (E3's) didn't read raw strings either, so its places after one could be wrong too.
+
+- **So a script holds no raw string:** `compile` refuses one with `CompileErrorKind::RawString` at its `#`, the first in the text, wherever it is (in code or in a text's `${ … }`; never a `#{` map or a `#` inside a text or a comment). A mistake Rhai finds before it comes first, at its own place, which a raw string later in the text can't have moved; any place Rhai gives at or after one is replaced by the raw string's. The scan now runs before Rhai's parse, reads raw strings whole, and judges nothing else.
+- **Nothing is lost:** quotes and backticks write every text a raw string can, and no example uses one. It tightens the language, so the sandbox is no weaker.
+- **The other position quirks the source shows don't move a place outside the text:** a lone carriage return (which `ScriptSource` refuses), an empty piece of a text in backticks placed at no position, and `\${` counted one column short.
+- **Tests:** `a_raw_string_is_refused_at_its_place`, `a_mistake_before_a_raw_string_comes_first`, `a_map_and_a_hash_in_a_text_are_no_raw_strings`, the scan's `it_finds_the_first_raw_string` and `a_raw_string_is_skipped_whole`, and the input as a `script_compile` seed (`RAW_STRING`), which the old code failed exactly as CI did ("column 13 of 0").
+- **The reference** lists raw strings with what the language leaves out.

@@ -23,6 +23,7 @@ fn hello() -> wire::Hello {
         protocol_version: PROTOCOL_VERSION,
         capacity: 50,
         running: Vec::new(),
+        script_api: 1,
     }
 }
 

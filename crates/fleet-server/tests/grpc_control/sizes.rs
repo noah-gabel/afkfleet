@@ -60,6 +60,7 @@ fn largest_hello(name: &str) -> wire::AgentMessage {
         protocol_version: PROTOCOL_VERSION,
         capacity: AgentCapacity::try_from(1000_u32).unwrap(),
         running: (0..MAX_BOTS).map(largest_snapshot).collect(),
+        script_api: u32::MAX,
     }))
     .unwrap()
 }
@@ -131,6 +132,7 @@ async fn a_hello_with_more_than_1000_bots_is_refused_unread(
             protocol_version: PROTOCOL_VERSION,
             capacity: 10,
             running: vec![wire::BotSnapshot::default(); MAX_BOTS + 1],
+            script_api: 1,
         })),
     };
 

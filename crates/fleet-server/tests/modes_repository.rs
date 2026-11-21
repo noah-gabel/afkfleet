@@ -280,27 +280,59 @@ async fn an_on_respawn_step_reads_back_and_an_unknown_schedule_is_corrupt(
     );
 }
 
-/// Until the server and the wire know scripts (Plan.md P15.20, P15.21), a
-/// stored scripted mode is read as a server from before scripts reads it:
-/// not at all. It never reads as a mode without steps, which a bot would
-/// then run as nothing (ADR-0036, D13).
+/// Since the server validates a script at save and the wire carries one
+/// (Plan.md P15.20, P15.21), a stored scripted mode reads back as itself,
+/// group A's guard gone: its script, its settings and its declarations,
+/// never as a mode without steps (ADR-0036, D13).
 #[sqlx::test(migrations = false)]
-async fn a_stored_scripted_mode_isnt_read_before_the_server_knows_scripts(
+async fn a_stored_scripted_mode_reads_back_as_itself(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
-    let scripted = r#"{"script":{"api":1,"source":"fn on_join(first) {}","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}}"#;
-    // It is a mode fleet-core reads, so only this guard stands in its way.
-    assert!(
-        serde_json::from_str::<ModeDefinition>(scripted)
-            .unwrap()
-            .script()
-            .is_some()
-    );
+    let scripted = r#"{"script":{"api":1,"source":"fn on_join(first) {}","leash":12,"tool_guard":3,"block_guard":["minecraft:cobblestone"],"messages":[{"key":"home","text":"/home","values":[]}],"patterns":[]}}"#;
     let db = database(options).await;
     add_owner(db.write_pool()).await;
     Row {
         json: scripted,
+        ..Row::valid()
+    }
+    .insert(db.write_pool())
+    .await
+    .unwrap();
+
+    let read = db
+        .modes()
+        .find(OTHER.parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        read.definition,
+        serde_json::from_str::<ModeDefinition>(scripted).unwrap()
+    );
+    let script = read.definition.script().unwrap();
+    assert_eq!(read.definition.steps(), []);
+    assert_eq!(
+        (script.leash().blocks(), script.tool_guard().uses_left()),
+        (12, 3)
+    );
+    assert_eq!(script.command_names().collect::<Vec<_>>(), ["home"]);
+}
+
+/// A scripted mode of a level this version doesn't know (a newer server's,
+/// after a downgrade) still doesn't read: it's never run in part
+/// (ADR-0010).
+#[sqlx::test(migrations = false)]
+async fn a_stored_scripted_mode_of_an_unknown_level_is_corrupt(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let newer = r#"{"script":{"api":2,"source":"fn on_join(first) {}","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}}"#;
+    let db = database(options).await;
+    add_owner(db.write_pool()).await;
+    Row {
+        json: newer,
         ..Row::valid()
     }
     .insert(db.write_pool())

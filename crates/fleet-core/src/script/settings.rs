@@ -4,9 +4,11 @@
 use serde::{Deserialize, Serialize};
 
 use super::facts::{Identifier, IdentifierError};
-use super::pattern::{ChatPattern, ChatPatterns, ChatPatternsError, PatternDraft, PatternError};
+use super::pattern::{
+    CaptureKind, ChatPattern, ChatPatterns, ChatPatternsError, PatternDraft, PatternError,
+};
 use super::source::{ScriptSource, ScriptSourceError};
-use super::template::{MessageDraft, MessageTemplate, TemplateError};
+use super::template::{MessageDraft, MessageTemplate, TemplateError, ValueKind};
 
 /// Why a number isn't a [`LeashRadius`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -247,6 +249,15 @@ impl ScriptApiLevel {
     pub const fn get(self) -> u8 {
         self.0
     }
+
+    /// Whether an agent that runs the script API at level `agent` runs a
+    /// script of this level: at this level or above (ADR-0036, D13). An
+    /// agent's level is a plain number, 0 for one from before scripts, so
+    /// a newer agent's level this version doesn't know still counts.
+    #[must_use]
+    pub fn runs_on(self, agent: u32) -> bool {
+        u32::from(self.0) <= agent
+    }
 }
 
 impl TryFrom<u8> for ScriptApiLevel {
@@ -311,6 +322,13 @@ pub enum ScriptError {
     /// The block guard isn't a [`BlockGuard`].
     #[error(transparent)]
     BlockGuard(#[from] BlockGuardError),
+    /// The declarations hold more than [`Script::MAX_DECLARED_BYTES`] bytes
+    /// of text together.
+    #[error("the mode's declarations hold {bytes} bytes of text; the limit is {max}", max = Script::MAX_DECLARED_BYTES)]
+    DeclarationsTooLarge {
+        /// How many they hold.
+        bytes: usize,
+    },
     /// There are more than [`Script::MAX_MESSAGES`] declared messages.
     #[error("the mode declares {count} messages; the limit is {max}", max = Script::MAX_MESSAGES)]
     TooManyMessages {
@@ -374,6 +392,16 @@ pub struct Script {
 impl Script {
     /// The most messages a mode declares.
     pub const MAX_MESSAGES: usize = 16;
+
+    /// The most bytes of UTF-8 a mode's declarations hold together: every
+    /// key, text, name and word of its messages and chat patterns, and every
+    /// block its block guard lists (Plan.md P15.20). Each list has its own
+    /// bound already, but together they would allow about 0.6 MB, and a
+    /// full reconcile carries a mode once for each of an agent's 1,000
+    /// bots: with the source's 16 KiB, this keeps the largest one within
+    /// what an agent reads (ADR-0019, S25). A real mode's are a few hundred
+    /// bytes.
+    pub const MAX_DECLARED_BYTES: usize = 16 * 1024;
 
     /// The API level the script was validated at.
     #[must_use]
@@ -441,16 +469,20 @@ impl TryFrom<ScriptDraft> for Script {
     /// Checks a scripted mode's body.
     ///
     /// The checks run in this order, the first problem winning: the API
-    /// level, the source, the leash, the tool guard, the block guard; the
-    /// messages (how
-    /// many, then each in order: itself, a key used before); the patterns
-    /// (each in order, then the list).
+    /// level, the source, the leash, the tool guard, the block guard; how
+    /// much text the declarations hold together; the messages (how many,
+    /// then each in order: itself, a key used before); the patterns (each
+    /// in order, then the list).
     fn try_from(draft: ScriptDraft) -> Result<Self, ScriptError> {
+        let declared = declared_bytes(&draft);
         let api = ScriptApiLevel::try_from(draft.api)?;
         let source = ScriptSource::try_from(draft.source)?;
         let leash = LeashRadius::try_from(draft.leash)?;
         let tool_guard = ToolGuard::try_from(draft.tool_guard)?;
         let block_guard = BlockGuard::try_from(draft.block_guard)?;
+        if declared > Self::MAX_DECLARED_BYTES {
+            return Err(ScriptError::DeclarationsTooLarge { bytes: declared });
+        }
 
         let count = draft.messages.len();
         if count > Self::MAX_MESSAGES {
@@ -490,6 +522,36 @@ impl TryFrom<ScriptDraft> for Script {
             patterns,
         })
     }
+}
+
+/// How many bytes of UTF-8 `draft`'s declarations hold together: what
+/// [`Script::MAX_DECLARED_BYTES`] bounds.
+fn declared_bytes(draft: &ScriptDraft) -> usize {
+    let words = |options: &[String]| options.iter().map(String::len).sum::<usize>();
+    let blocks = draft.block_guard.iter().map(String::len).sum::<usize>();
+    let messages = draft.messages.iter().map(|message| {
+        let values = message.values.iter().map(|value| {
+            value.name.len()
+                + match &value.kind {
+                    ValueKind::Word { options } => words(options),
+                    ValueKind::Integer { .. } | ValueKind::Decimal { .. } => 0,
+                }
+        });
+        message.key.len() + message.text.len() + values.sum::<usize>()
+    });
+    let patterns = draft.patterns.iter().map(|pattern| {
+        let captures = pattern.captures.iter().map(|capture| {
+            capture.name.len()
+                + match &capture.kind {
+                    CaptureKind::Word { options } => words(options),
+                    CaptureKind::Integer { .. } | CaptureKind::Amount { .. } => 0,
+                }
+        });
+        pattern.key.len() + pattern.text.len() + captures.sum::<usize>()
+    });
+    blocks
+        .saturating_add(messages.sum::<usize>())
+        .saturating_add(patterns.sum::<usize>())
 }
 
 impl From<Script> for ScriptDraft {
@@ -586,6 +648,83 @@ mod tests {
         }
     }
 
+    // --- How much the declarations hold together ---
+
+    /// A message `home_{n}` that sends one of 32 words, each 32 characters
+    /// of 4 bytes: 4 KiB of words.
+    fn wide_words(n: usize) -> MessageDraft {
+        MessageDraft {
+            key: format!("home_{n}"),
+            text: "/home {name}".to_owned(),
+            values: vec![ValueDraft {
+                name: "name".to_owned(),
+                kind: ValueKind::Word {
+                    options: (0..32)
+                        .map(|word| format!("{word:02}{}", "\u{1D538}".repeat(30)))
+                        .collect(),
+                },
+            }],
+        }
+    }
+
+    #[test]
+    fn a_modes_declarations_hold_at_most_16_kib_of_text_together() {
+        // Each message alone is valid; five of them are 19 KiB of words.
+        let draft = ScriptDraft {
+            block_guard: vec!["cobblestone".to_owned()],
+            messages: (0..5).map(wide_words).collect(),
+            ..draft_of("")
+        };
+        let words = 5 * 32 * (2 + 30 * 4);
+        let names = 5 * ("home_0".len() + "/home {name}".len() + "name".len());
+
+        assert_eq!(
+            Script::try_from(draft),
+            Err(ScriptError::DeclarationsTooLarge {
+                bytes: words + names + "cobblestone".len()
+            })
+        );
+    }
+
+    #[test]
+    fn declarations_within_16_kib_are_taken() {
+        let draft = ScriptDraft {
+            messages: (0..2).map(wide_words).collect(),
+            ..balance()
+        };
+
+        assert!(Script::try_from(draft).is_ok());
+        assert_eq!(
+            ScriptError::DeclarationsTooLarge { bytes: 20_000 }.to_string(),
+            "the mode's declarations hold 20000 bytes of text; the limit is 16384"
+        );
+    }
+
+    #[test]
+    fn a_patterns_texts_count_too() {
+        let mut draft = balance();
+        draft.patterns = (0..8)
+            .map(|n| PatternDraft {
+                key: format!("sold_{n}"),
+                when: When::AnyTime,
+                text: "Sold: {what}".to_owned(),
+                captures: vec![CaptureDraft {
+                    name: "what".to_owned(),
+                    kind: CaptureKind::Word {
+                        options: (0..32)
+                            .map(|word| format!("{word:02}{}", "\u{1D538}".repeat(30)))
+                            .collect(),
+                    },
+                }],
+            })
+            .collect();
+
+        assert!(matches!(
+            Script::try_from(draft),
+            Err(ScriptError::DeclarationsTooLarge { .. })
+        ));
+    }
+
     // --- The leash, the tool guard, the level ---
 
     #[rstest]
@@ -663,6 +802,15 @@ mod tests {
             ScriptApiLevelError { level: 2 }.to_string(),
             "script API level 2 isn't known here; the newest is 1"
         );
+    }
+
+    #[rstest]
+    #[case::an_agent_from_before_scripts(0, false)]
+    #[case::an_agent_at_the_level(1, true)]
+    #[case::a_newer_agent_this_version_doesnt_know(2, true)]
+    #[case::the_largest_level(u32::MAX, true)]
+    fn a_script_runs_on_an_agent_at_its_level_or_above(#[case] agent: u32, #[case] runs: bool) {
+        assert_eq!(ScriptApiLevel::V1.runs_on(agent), runs);
     }
 
     #[test]

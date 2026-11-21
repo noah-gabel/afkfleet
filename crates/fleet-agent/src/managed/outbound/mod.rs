@@ -7,9 +7,10 @@
 //!   tonic pulls when HTTP/2 has room, so there's no writer task and no
 //!   channel.
 //! - **The classes** (`state`): session requests on their own lane, one per
-//!   bot, which refuses when full; each bot's latest status, its death and
-//!   its removal; alerts and chat answers in order; chat, the oldest dropped
-//!   past 64 per bot or 1024 in all. Past a never-drop class's cap, which an
+//!   bot, which refuses when full; each bot's latest status, its death, its
+//!   script's latest status and its removal; alerts and chat answers in
+//!   order; chat and a script's log, the oldest dropped past 64 per bot or
+//!   1024 in all. Past a never-drop class's cap, which an
 //!   honest run can't reach, the item is refused, counted with one `warn`,
 //!   and the stream ends, so the next hello resyncs.
 //! - **The order:** the hello first; nothing until `Welcome`; statuses and
@@ -39,6 +40,7 @@ use chrono::{DateTime, Utc};
 use fleet_core::bot::{BotNotification, BotSnapshot};
 use fleet_core::chat::{ChatMessage, IncomingChat};
 use fleet_core::id::{BotId, ChatRequestId};
+use fleet_core::script::{ScriptLogLine, ScriptState};
 use fleet_proto::control::{ChatFailedReason, Hello, SessionRequest};
 use tracing::{debug, warn};
 
@@ -219,6 +221,19 @@ impl Outbox {
         let mut inner = self.lock();
         let pushed = inner.state.died(bot, at);
         inner.pushed(pushed, "per_bot");
+    }
+
+    /// Queues a bot's script's status: its latest, as a death waits.
+    pub fn script_status(&self, bot: BotId, at: DateTime<Utc>, state: ScriptState) {
+        let mut inner = self.lock();
+        let pushed = inner.state.script(bot, at, state);
+        inner.pushed(pushed, "per_bot");
+    }
+
+    /// Queues a line of a bot's script's log, with chat: the oldest is
+    /// dropped first.
+    pub fn script_log(&self, bot: BotId, at: DateTime<Utc>, line: ScriptLogLine) {
+        self.chat(bot, at, Chat::ScriptLog(line));
     }
 
     /// Queues a bot's removal: its last event.

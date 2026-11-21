@@ -43,6 +43,9 @@ fleet-core.workspace = true
 # The control plane's wire format: the enrollment's messages and the generated service
 # (ADR-0019).
 fleet-proto.workspace = true
+# A scripted mode checked as a program when it's saved, in `spawn_blocking` (ADR-0036, D2,
+# D14).
+fleet-script.workspace = true
 # The config loader and errors, the `[log]` types and the log layer (ADR-0015).
 fleet-startup.workspace = true
 garde = { workspace = true, features = ["derive"] }

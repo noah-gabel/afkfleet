@@ -174,7 +174,10 @@ fn wire_mode() -> impl Strategy<Value = wire::ModeDefinition> {
         4 => vec(wire_step(), 0..=4),
         1 => vec(wire_step(), 30..=35),
     ]
-    .prop_map(|steps| wire::ModeDefinition { steps })
+    .prop_map(|steps| wire::ModeDefinition {
+        steps,
+        script: None,
+    })
 }
 
 /// The draft a wire mode stands for, mapped independently of the crate, or

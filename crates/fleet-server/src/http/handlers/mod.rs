@@ -65,10 +65,12 @@ use fleet_api_types::chat::{ChatDirection, ChatFailure, ChatLine, ChatLineKind, 
 use fleet_api_types::modes::{
     ModeOwnership, ModeResponse, ModeStep, ModeVisibility as ApiModeVisibility,
 };
+use fleet_api_types::script::ModeScript;
 use fleet_api_types::users::UserLabel;
 use fleet_api_types::{BoundedText, FieldError, PageQuery, SafeInt, SecretText, Timestamp};
 use fleet_core::authz::{
-    Actor, CommandCheck, GrantLevel, ModeVisibility, Permission, Role, authorize, effective_level,
+    Actor, CommandCheck, GrantLevel, ModeKind, ModeVisibility, Permission, Role, authorize,
+    effective_level,
 };
 use fleet_core::chat::{ChatFormats, ChatMessage, ChatSender, Redacted};
 use fleet_core::id::UserId;
@@ -328,8 +330,10 @@ fn mode_response(
         .map_err(|_| ApiError::internal("a mode the viewer may not see was answered"))?;
     let may = |permission| authorize(viewer, permission, &context).is_ok();
     let mode = &listed.mode;
+    let kind = ModeKind::of(&mode.definition);
     let editable = may(Permission::UpdateMode {
         visibility: mode.visibility,
+        kind,
     });
     let switched = match mode.visibility {
         ModeVisibility::Private => ModeVisibility::Shared,
@@ -354,6 +358,7 @@ fn mode_response(
         deletable: may(Permission::DeleteMode),
         visibility_editable: may(Permission::UpdateMode {
             visibility: switched,
+            kind,
         }),
         unlisted_command: check.needs_manage(),
         version: mode.version.get(),
@@ -365,6 +370,12 @@ fn mode_response(
             .iter()
             .map(|step| ModeStep::of(step, |message| shown(message, editable)))
             .collect(),
+        // Whole for whoever may edit it, a declared command its name alone
+        // below that (S15).
+        script: mode
+            .definition
+            .script()
+            .map(|script| ModeScript::of(script, editable)),
     })
 }
 
@@ -704,14 +715,18 @@ mod tests {
 
                     let answer = mode_response(&viewer, &listed, check(&listed)).unwrap();
 
-                    let editable = may(Permission::UpdateMode { visibility });
+                    let kind = ModeKind::of(&listed.mode.definition);
+                    let editable = may(Permission::UpdateMode { visibility, kind });
                     assert_eq!(answer.editable, editable, "{case}");
                     // `/login` is off the default, empty allowlist (S68).
                     assert!(answer.unlisted_command, "{case}");
                     assert_eq!(answer.deletable, may(Permission::DeleteMode), "{case}");
                     assert_eq!(
                         answer.visibility_editable,
-                        may(Permission::UpdateMode { visibility: other }),
+                        may(Permission::UpdateMode {
+                            visibility: other,
+                            kind
+                        }),
                         "{case}"
                     );
                     assert_eq!(

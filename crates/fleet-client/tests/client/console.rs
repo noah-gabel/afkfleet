@@ -1435,6 +1435,46 @@ fn each_event_kind_reads_as_its_console_line() {
     }
 }
 
+/// A bot's script's status is one line with its problem's kind, hook and
+/// place, and a line of its log one with its kind (P15.23).
+#[test]
+fn a_scripts_status_and_log_read_as_one_line_each() {
+    use serde_json::json;
+
+    let cases = [
+        (
+            json!({
+                "type": "bot_script", "bot_id": EVENT_BOT, "at": EVENT_AT,
+                "script": { "state": "stopped", "problem": {
+                    "kind": "error", "hook": "on_chat", "line": 3, "column": 7,
+                    "message": "Function not found: pay"
+                } }
+            }),
+            format!(
+                "bot {EVENT_BOT} script stopped: error in on_chat at 3:7: Function not found: pay at {EVENT_AT}"
+            ),
+        ),
+        (
+            json!({
+                "type": "bot_script", "bot_id": EVENT_BOT, "at": EVENT_AT,
+                "script": { "state": "running" }
+            }),
+            format!("bot {EVENT_BOT} script running at {EVENT_AT}"),
+        ),
+        (
+            json!({
+                "type": "bot_script_log", "bot_id": EVENT_BOT, "at": EVENT_AT,
+                "log": { "kind": "sent", "text": "sent `balance`" }
+            }),
+            format!("bot {EVENT_BOT} script log sent: sent `balance` at {EVENT_AT}"),
+        ),
+    ];
+
+    for (frame, expected) in cases {
+        assert_eq!(event_line_of(&frame), expected, "{frame}");
+    }
+}
+
 #[test]
 fn a_mode_event_never_prints_its_steps() {
     let shown = event_line_of(&a_mode_frame("/warp canary-secret"));

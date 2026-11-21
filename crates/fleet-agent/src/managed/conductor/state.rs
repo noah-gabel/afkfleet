@@ -205,6 +205,7 @@ mod tests {
             desired: DesiredRunState::Running,
             conflict_texts: ConflictTexts::default(),
             chat_rate: fleet_core::chat::ChatRate::default(),
+            chat_formats: fleet_core::chat::ChatFormats::default(),
         }
     }
 

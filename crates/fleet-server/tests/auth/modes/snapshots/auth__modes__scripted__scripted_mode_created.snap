@@ -1,0 +1,69 @@
+---
+source: crates/fleet-server/tests/auth/modes/scripted.rs
+expression: "redacted(&seen.body, &[(id.clone(), \"the mode\")])"
+---
+{
+  "created_at": "[T0]",
+  "deletable": true,
+  "editable": true,
+  "id": "[the mode]",
+  "name": "Balance",
+  "owner": {
+    "id": "[id]",
+    "username": "admin"
+  },
+  "ownership": "mine",
+  "script": {
+    "any_time_chat": true,
+    "api": 1,
+    "block_guard": [
+      "minecraft:cobblestone"
+    ],
+    "leash": 8,
+    "messages": [
+      {
+        "arguments_hidden": false,
+        "key": "home",
+        "text": "/home hunter2-secret",
+        "values": []
+      },
+      {
+        "arguments_hidden": false,
+        "key": "pay",
+        "text": "/pay AfkMain {amount}",
+        "values": [
+          {
+            "max": 1000.0,
+            "min": 1.0,
+            "name": "amount",
+            "places": 2,
+            "type": "decimal"
+          }
+        ]
+      }
+    ],
+    "patterns": [
+      {
+        "captures": [
+          {
+            "max": 60,
+            "min": 0,
+            "name": "m",
+            "type": "integer"
+          }
+        ],
+        "key": "restart",
+        "text": "Restarting in {m} minutes",
+        "when": "any_time"
+      }
+    ],
+    "source": "fn on_join(first) {\n    chat.send(\"home\");\n}\n",
+    "tool_guard": 2
+  },
+  "steps": [],
+  "unlisted_command": false,
+  "updated_at": "[T0]",
+  "version": 1,
+  "visibility": "shared",
+  "visibility_editable": true
+}

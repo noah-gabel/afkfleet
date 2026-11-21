@@ -13,8 +13,8 @@ use std::time::Duration;
 use figment::Jail;
 use fleet_agent::config::{
     AgentConfig, AgentMode, ConfigError, ControlPlaneConfig, LogConfig, LogFilter, LogFilterError,
-    LogFormat, ParseError, ParseProblem, ParseSource, ProblemKind, Problems, StandaloneBot,
-    UnknownLogFormatError, load,
+    LogFormat, ParseError, ParseProblem, ParseSource, ProblemKind, Problems, ScriptFileError,
+    StandaloneBot, StandaloneMode, UnknownLogFormatError, load,
 };
 use fleet_core::bot::BotAccount;
 use fleet_core::disconnect::{ConflictTexts, ConflictTextsError};
@@ -183,13 +183,13 @@ conflict_texts = ["You logged in from another location"]
                 StandaloneBot {
                     username: "AfkBot1".parse().unwrap(),
                     server: "localhost:25565".parse().unwrap(),
-                    mode: ModePreset::Afk,
+                    mode: ModePreset::Afk.into(),
                     conflict_texts: ConflictTexts::default(),
                 },
                 StandaloneBot {
                     username: "AfkBot2".parse().unwrap(),
                     server: "mc.example.com".parse().unwrap(),
-                    mode: ModePreset::Farm,
+                    mode: ModePreset::Farm.into(),
                     conflict_texts: ConflictTexts::try_new(&[
                         "You logged in from another location"
                     ])
@@ -1172,5 +1172,134 @@ mode = "afk"
         let error = parse_error(load_toml(jail, toml));
 
         assert!(error.to_string().contains("public_targets"), "{error}");
+    });
+}
+
+// --- A bot's script file (Plan.md P15.22) ------------------------------------------------
+
+/// A script that sends `balance` when the bot joins.
+const BALANCE: &str = "fn on_join(first) {\r\n    chat.send(\"balance\");\r\n}\r\n";
+
+/// A config whose one bot runs the script file `file` with `settings`, the
+/// rest of its inline table.
+fn scripted(file: &str, settings: &str) -> String {
+    format!(
+        "name = \"agent-1\"\n\n[[standalone.bots]]\nusername = \"AfkBot1\"\nserver = \"localhost:25565\"\nscript = {{ file = {file}{settings} }}\n"
+    )
+}
+
+/// A bot names a script file in place of a preset: its text read once at
+/// load (a Windows file's CR LF read as line breaks), its settings and
+/// declarations under the API's names, at the newest script API level, the
+/// settings left out at their defaults.
+#[test]
+fn a_bot_runs_a_script_file_with_its_settings_and_declarations() {
+    in_jail(|jail| {
+        jail.create_file("balance.rhai", BALANCE).unwrap();
+        let file = jail.directory().join("balance.rhai");
+        let toml = scripted(
+            &toml_path(&file),
+            ", leash = 12, block_guard = [\"cobblestone\"], messages = [{ key = \"balance\", text = \"/balance\", values = [] }]",
+        );
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        let expected = fleet_core::script::Script::try_from(fleet_core::script::ScriptDraft {
+            api: fleet_core::script::ScriptApiLevel::NEWEST.get(),
+            source: BALANCE.replace("\r\n", "\n"),
+            leash: 12,
+            tool_guard: 2,
+            block_guard: vec!["cobblestone".to_owned()],
+            messages: vec![fleet_core::script::MessageDraft {
+                key: "balance".to_owned(),
+                text: "/balance".to_owned(),
+                values: Vec::new(),
+            }],
+            patterns: Vec::new(),
+        })
+        .unwrap();
+        assert_eq!(
+            bots(&config)[0].mode,
+            StandaloneMode::Script {
+                file,
+                script: expected.clone()
+            }
+        );
+        assert_eq!(
+            bots(&config)[0].mode.definition(),
+            fleet_core::mode::ModeDefinition::scripted(expected)
+        );
+        assert_eq!(bots(&config)[0].mode.name(), "script");
+    });
+}
+
+/// What's wrong with a bot's script is named at its key, and no message
+/// holds what the file holds.
+#[test]
+fn a_scripts_problems_are_named_at_their_keys_without_the_files_text() {
+    in_jail(|jail| {
+        jail.create_file("big.rhai", &"// hunter2\n".repeat(2000))
+            .unwrap();
+        std::fs::write(
+            jail.directory().join("binary.rhai"),
+            [0xff, 0xfe, b'h', b'u'],
+        )
+        .unwrap();
+        jail.create_file("fine.rhai", "fn on_join(first) {}\n// hunter2\n")
+            .unwrap();
+        let path = |name: &str| toml_path(&jail.directory().join(name));
+        let cases = [
+            (
+                format!(
+                    "name = \"agent-1\"\n\n[[standalone.bots]]\nusername = \"AfkBot1\"\nserver = \"localhost\"\nmode = \"afk\"\nscript = {{ file = {} }}\n",
+                    path("fine.rhai")
+                ),
+                "standalone.bots[0].script",
+                ProblemKind::ModeAndScript,
+            ),
+            (
+                scripted("'fine.rhai'", ""),
+                "standalone.bots[0].script.file",
+                ProblemKind::NotAbsolute,
+            ),
+            (
+                "name = \"agent-1\"\n\n[[standalone.bots]]\nusername = \"AfkBot1\"\nserver = \"localhost\"\nscript = { leash = 8 }\n"
+                    .to_owned(),
+                "standalone.bots[0].script.file",
+                ProblemKind::Missing,
+            ),
+            (
+                scripted(&path("missing.rhai"), ""),
+                "standalone.bots[0].script.file",
+                ProblemKind::ScriptFile(ScriptFileError::NotFound),
+            ),
+            (
+                scripted(&path("big.rhai"), ""),
+                "standalone.bots[0].script.file",
+                ProblemKind::ScriptFile(ScriptFileError::TooLarge),
+            ),
+            (
+                scripted(&path("binary.rhai"), ""),
+                "standalone.bots[0].script.file",
+                ProblemKind::ScriptFile(ScriptFileError::NotUtf8),
+            ),
+            (
+                scripted(&path("fine.rhai"), ", leash = 0"),
+                "standalone.bots[0].script",
+                ProblemKind::Script(fleet_core::script::ScriptError::Leash(
+                    fleet_core::script::LeashRadiusError { blocks: 0 },
+                )),
+            ),
+        ];
+
+        for (toml, key, kind) in cases {
+            let result = load_toml(jail, &toml);
+            let shown = format!("{result:?}");
+            let problems = invalid(result);
+            assert_eq!(keys(&problems), [key], "{toml}");
+            assert_eq!(kinds(&problems), [kind], "{toml}");
+            assert!(!shown.contains("hunter2"), "{shown}");
+            assert!(!problems.to_string().contains("hunter2"));
+        }
     });
 }

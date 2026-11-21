@@ -524,3 +524,49 @@ fn the_declarations_are_the_programs_own() {
     assert_eq!(program.script().messages().len(), 3);
     assert_eq!(program.script().patterns().len(), 2);
 }
+
+/// A raw string, `#"…"#`, isn't part of the language here: Rhai 1.27.0's
+/// tokenizer loses a line when one holds a quote right before a line
+/// break, so every place after it would be a line off, and the scan that
+/// finds places doesn't read them either. It's refused at its own place,
+/// and the place of the mistake after it is never shown wrong (the fuzzer
+/// found the input on CI, 2026-11-21: an error at column 41 of an empty
+/// line).
+#[test]
+fn a_raw_string_is_refused_at_its_place() {
+    let quoted = refused("fn f() {\n    let s = #\"a\"\nb\"#;\n\n    let t = ) ;\n}");
+    let hashes = refused("fn on_join(first) {\n  let s = ##\"a \"# b\"##;\n}");
+
+    assert_eq!(
+        quoted,
+        CompileError {
+            kind: CompileErrorKind::RawString,
+            at: Some(at(2, 13)),
+        }
+    );
+    assert_eq!(hashes.kind, CompileErrorKind::RawString);
+    assert_eq!(hashes.at, Some(at(2, 11)));
+}
+
+/// A mistake before the raw string comes first, at its own place, which a
+/// raw string later in the text can't have moved.
+#[test]
+fn a_mistake_before_a_raw_string_comes_first() {
+    let error = refused("fn f() {\n  let b = ;\n}\nfn g() { let s = #\"a\"#; }");
+
+    assert_eq!(
+        error.kind,
+        CompileErrorKind::Syntax {
+            message: "Unexpected ';'".to_owned()
+        }
+    );
+    assert_eq!(error.at, Some(at(2, 11)));
+}
+
+/// A map's `#{` and a `#` inside a text are no raw strings.
+#[test]
+fn a_map_and_a_hash_in_a_text_are_no_raw_strings() {
+    let source = "fn f() {\n  let m = #{ a: \"#\" };\n  let s = \"#\\\"x\\\"#\";\n  let t = `#\"${ 1 }\"#`;\n  m\n}\n";
+
+    assert!(compile(&script_of(draft(source))).is_ok(), "{source}");
+}

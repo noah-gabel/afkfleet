@@ -608,14 +608,9 @@ fn fleet_records(
             Ok(record) => match unreadable_texts(server_texts, &record) {
                 // Left alone, as a bot whose mode doesn't read (S37, R132),
                 // and logged by its server's row, not on its own.
-                Some(rowid) => unreadable.push(UnreadableBot {
+                Some((rowid, column)) => unreadable.push(UnreadableBot {
                     by_server: true,
-                    ..unreadable_bot(
-                        row,
-                        server_settings::SERVER_SETTINGS,
-                        "conflict_texts",
-                        rowid,
-                    )?
+                    ..unreadable_bot(row, server_settings::SERVER_SETTINGS, column, rowid)?
                 }),
                 None => bots.push(record),
             },
@@ -630,14 +625,14 @@ fn fleet_records(
     Ok((bots, unreadable))
 }
 
-/// The rowid of `record`'s server's settings when their texts don't read
-/// back.
-fn unreadable_texts(texts: &ServerTexts, record: &BotRecord) -> Option<i64> {
+/// The rowid of `record`'s server's settings, and the column, when their
+/// texts or chat formats don't read back.
+fn unreadable_texts(texts: &ServerTexts, record: &BotRecord) -> Option<(i64, &'static str)> {
     let server = record.bot.server.as_ref()?;
     texts
         .unreadable
         .get(&ServerKey::from(server))
-        .map(|row| row.rowid)
+        .map(|row| (row.rowid, row.column))
 }
 
 /// Every bot with its account's owner, for [`access`], and the chat formats
@@ -1008,6 +1003,33 @@ pub(super) async fn accounts_with_mode(
         parse_id(&row.account_id).ok_or(StoreError::Corrupt {
             table: BOTS,
             column: "account_id",
+            rowid: row.rowid,
+        })
+    })
+    .collect()
+}
+
+/// The agents that bots running `mode` are assigned to, each once.
+pub(super) async fn agents_with_mode(
+    conn: &mut SqliteConnection,
+    mode: ModeId,
+) -> Result<Vec<AgentId>, StoreError> {
+    let mode = id_text(mode);
+    // The index bots_mode_id finds them (0014).
+    sqlx::query!(
+        r#"SELECT MIN(rowid) AS "rowid!: i64", agent_id AS "agent_id!"
+           FROM bots WHERE mode_id = ? AND agent_id IS NOT NULL
+           GROUP BY agent_id ORDER BY agent_id"#,
+        mode
+    )
+    .fetch_all(conn)
+    .await
+    .map_err(store_error)?
+    .into_iter()
+    .map(|row| {
+        parse_id(&row.agent_id).ok_or(StoreError::Corrupt {
+            table: BOTS,
+            column: "agent_id",
             rowid: row.rowid,
         })
     })

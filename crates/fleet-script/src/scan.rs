@@ -1,14 +1,18 @@
 //! A scan of a script's text for the places Rhai's public API doesn't
 //! give: where each function is defined, where something stands outside
-//! a function, and where a `for` or a `catch` names its variable.
+//! a function, where a `for` or a `catch` names its variable, and where
+//! the first raw string is (`#"…"#`, which a script may not hold:
+//! ADR-0040's amendment, A6).
 //!
-//! It runs only on text Rhai has already parsed, so it needn't judge
-//! anything; it skips comments and texts as Rhai's tokenizer does and
-//! reads names, braces and parentheses. A place it can't find is `None`,
+//! It judges nothing but a raw string, so it may run before Rhai has
+//! parsed the text; it skips comments and texts as Rhai's tokenizer does
+//! and reads names, braces and parentheses. A place it can't find is `None`,
 //! never a wrong one, with one consequence that matters: a `for` or a
 //! `catch` it didn't see isn't checked for a game object's name. Rhai
 //! would then hand the loop the game object instead of the loop's own
 //! value, which fails where it runs.
+
+use core::cell::Cell;
 
 use crate::error::SourcePosition;
 
@@ -41,6 +45,8 @@ pub(crate) struct Scanned {
     pub(crate) bindings: Vec<Binding>,
     /// The first thing outside every function.
     pub(crate) outside: Option<SourcePosition>,
+    /// The first raw string, wherever it is.
+    pub(crate) raw_string: Option<SourcePosition>,
 }
 
 impl Scanned {
@@ -71,6 +77,8 @@ struct Lexer<'a> {
     column: u32,
     /// How many texts in backticks the scan is inside of.
     nesting: u32,
+    /// Where the first raw string is, even one inside a text's `${ … }`.
+    raw_string: &'a Cell<Option<SourcePosition>>,
 }
 
 /// How deep texts in backticks may hold code that holds such a text. Rhai
@@ -137,6 +145,41 @@ impl Lexer<'_> {
         }
     }
 
+    /// How many `#` come before a `"` right after the `#` just taken:
+    /// `Some` for a raw string's opening, with its count of `#` in all.
+    fn raw_opening(&self) -> Option<usize> {
+        let mut ahead = self.chars.clone();
+        let mut hashes = 1_usize;
+        loop {
+            match ahead.next()? {
+                '#' => hashes = hashes.saturating_add(1),
+                '"' => return Some(hashes),
+                _ => return None,
+            }
+        }
+    }
+
+    /// Skips a raw string whose first `#` is taken, to the `"` and as
+    /// many `#` that close it; nothing in it is an escape.
+    fn skip_raw(&mut self, hashes: usize) {
+        for _ in 0..hashes {
+            self.bump();
+        }
+        while let Some(c) = self.bump() {
+            if c != '"' {
+                continue;
+            }
+            let mut closing = 0_usize;
+            while closing < hashes && self.chars.peek() == Some(&'#') {
+                self.bump();
+                closing = closing.saturating_add(1);
+            }
+            if closing == hashes {
+                return;
+            }
+        }
+    }
+
     /// Skips a text in backticks whose opening one is taken. A doubled
     /// backtick is one of its characters, and `${ … }` holds code, which
     /// is skipped by its braces, texts inside it included.
@@ -194,6 +237,13 @@ impl Iterator for Lexer<'_> {
                     self.skip_block();
                 }
                 '"' => self.skip_text('"'),
+                '#' if let Some(hashes) = self.raw_opening() => {
+                    if self.raw_string.get().is_none() {
+                        self.raw_string.set(Some(at));
+                    }
+                    self.skip_raw(hashes);
+                    return Some((Token::Symbol('#'), at));
+                }
                 '`' => self.skip_template(),
                 // A character in quotes: 'x' or an escape. A lone quote
                 // isn't valid Rhai; it's taken as a symbol.
@@ -220,11 +270,13 @@ impl Iterator for Lexer<'_> {
 
 /// Scans a script's text.
 pub(crate) fn scan(source: &str) -> Scanned {
+    let raw_string = Cell::new(None);
     let mut tokens = Lexer {
         chars: source.chars().peekable(),
         line: 1,
         column: 0,
         nesting: 0,
+        raw_string: &raw_string,
     }
     .peekable();
     let mut scanned = Scanned::default();
@@ -283,6 +335,8 @@ pub(crate) fn scan(source: &str) -> Scanned {
             }
         }
     }
+    drop(tokens);
+    scanned.raw_string = raw_string.get();
     scanned
 }
 
@@ -423,6 +477,31 @@ x;",
 
         // No overflow of the stack, and no place made up.
         assert_eq!(scan(&deep).outside, None);
+    }
+
+    /// The first raw string's place, wherever it is: in code or in a
+    /// text's `${ … }`; never a `#{`, nor a `#` in a text or a comment
+    /// (ADR-0040's amendment, A6).
+    #[rstest]
+    #[case(r##"fn f() { #"a"# }"##, Some(at(1, 10)))]
+    #[case(r###"fn f() { `${ ##"}"## }` }"###, Some(at(1, 14)))]
+    #[case(r##"fn f() { #{ a: "#\"" } } // #"x"#"##, None)]
+    #[case(r##"fn f() { /* #"x"# */ }"##, None)]
+    fn it_finds_the_first_raw_string(
+        #[case] source: &str,
+        #[case] expected: Option<SourcePosition>,
+    ) {
+        assert_eq!(scan(source).raw_string, expected);
+    }
+
+    /// A raw string is skipped whole, its quotes and braces with it, to the
+    /// quote and as many `#` that close it.
+    #[test]
+    fn a_raw_string_is_skipped_whole() {
+        let scanned = scan("fn f() { ##\"}\"# fn g() {\"## }\nx;");
+
+        assert_eq!(scanned.outside, Some(at(2, 1)));
+        assert_eq!(scanned.definitions.len(), 1);
     }
 
     #[test]

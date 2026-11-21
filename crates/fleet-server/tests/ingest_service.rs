@@ -632,6 +632,104 @@ async fn statuses_deaths_alerts_and_outcomes_are_published_at_once_and_never_wri
     assert_eq!(tick, Tick::Idle, "nothing of theirs is written");
 }
 
+/// What an agent reports about a bot's script is held to the bot's rate
+/// on the server, whatever the agent sends, by the server's own time
+/// (P15.23): a flood gets each kind's burst through, the rest is dropped
+/// and counted by kind, another bot's report still passes, nothing of it
+/// is written, and the rate refills as the server's time passes.
+#[sqlx::test(migrations = false)]
+async fn a_bots_script_reports_beyond_its_rate_are_dropped_and_counted_and_others_pass(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    use fleet_core::script::{LogKind, ReportText, ScriptLogLine, ScriptState};
+    use fleet_server::app::agents::script_gate::ScriptGate;
+
+    let world = World::new(options).await;
+    let other = world.add_bot(2, Some(world.agent)).await;
+    let bus = EventBus::new();
+    let mut events = bus.subscribe();
+    let metrics = fleet_server::metrics::Metrics::prometheus();
+    let (front, mut writer) = ingest(
+        Arc::new(world.db.clone()),
+        Arc::new(ScriptedMarks::default()),
+        bus.clone(),
+        IngestTimings::default(),
+        IngestBounds::default(),
+    );
+    let front = front.with_metrics(metrics.recording().clone());
+    let share = front.share();
+    let line = Reported::ScriptLog(ScriptLogLine {
+        kind: LogKind::Line,
+        text: ReportText::clean("tick"),
+    });
+    let status = Reported::ScriptStatus(ScriptState::Running);
+
+    for _ in 0..100 {
+        front.take(&share, world.report(T0, line.clone())).unwrap();
+        front
+            .take(&share, world.report(T0, status.clone()))
+            .unwrap();
+    }
+    front
+        .take(
+            &share,
+            Report {
+                bot: other,
+                ..world.report(T0, status.clone())
+            },
+        )
+        .unwrap();
+    // A second later: one more line, no more status.
+    front
+        .take(&share, world.report(T0 + 1000, line.clone()))
+        .unwrap();
+    front
+        .take(&share, world.report(T0 + 1000, line.clone()))
+        .unwrap();
+    front
+        .take(&share, world.report(T0 + 1000, status.clone()))
+        .unwrap();
+    let mut published = std::collections::BTreeMap::<(BotId, &str), usize>::new();
+    while let Ok(event) = events.try_recv() {
+        let event = event.agent().unwrap().clone();
+        let kind = match event.kind {
+            LiveEventKind::ScriptStatus(_) => "status",
+            LiveEventKind::ScriptLog(_) => "log",
+            other => panic!("{other:?}"),
+        };
+        *published.entry((event.bot, kind)).or_default() += 1;
+    }
+    let tick = writer.tick().await;
+
+    let log_burst = usize::try_from(ScriptGate::LOG_BURST).unwrap();
+    let status_burst = usize::try_from(ScriptGate::STATUS_BURST).unwrap();
+    assert_eq!(
+        published,
+        std::collections::BTreeMap::from([
+            ((world.bot, "log"), log_burst + 1),
+            ((world.bot, "status"), status_burst),
+            ((other, "status"), 1),
+        ])
+    );
+    let text = metrics.render().text();
+    assert!(
+        text.contains(&format!(
+            "afkfleet_script_reports_dropped_total{{kind=\"log\"}} {}",
+            102 - log_burst - 1
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "afkfleet_script_reports_dropped_total{{kind=\"status\"}} {}",
+            101 - status_burst
+        )),
+        "{text}"
+    );
+    assert_eq!(tick, Tick::Idle, "nothing of a script's is written");
+}
+
 #[sqlx::test(migrations = false)]
 async fn a_streams_share_bounds_its_rows_in_flight_until_they_are_written(
     _pool: SqlitePoolOptions,
@@ -1310,6 +1408,7 @@ fn held_registry(
                 halt: Halt::default(),
                 connected_at: at(T0),
                 capacity: AgentCapacity::try_from(4_u32).unwrap(),
+                script_api: 1,
                 running: vec![snapshot(
                     BotState::Online {
                         since: at(T0),
