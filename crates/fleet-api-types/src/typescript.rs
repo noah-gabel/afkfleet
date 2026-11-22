@@ -36,8 +36,9 @@ use crate::accounts::{
 };
 use crate::agents::{AgentPage, AgentResponse, AgentStatus};
 use crate::app::{
-    AppVersion, BotCommandResponse, LiveUpdateMessage, LoginStepResponse, LogoutResponse,
-    ScriptCheck, ScriptCheckRequest, ServerProfileRequest, ServerProfileResponse,
+    AppVersion, BotCommandResponse, ConversionNote, ConversionNoteKind, LiveUpdateMessage,
+    LoginStepResponse, LogoutResponse, ScriptCheck, ScriptCheckRequest, ScriptConversion,
+    ScriptConvertRequest, ServerProfileRequest, ServerProfileResponse,
     ServerProfileState, SetupStepResponse, UpdateCheck, WindowTheme,
 };
 use crate::audit::AuditPage;
@@ -266,6 +267,10 @@ fn write_app(config: &Config) -> Result<(), TypeScriptError> {
     BotCommandResponse::export_all(config).map_err(TypeScriptError::Export)?;
     ScriptCheckRequest::export_all(config).map_err(TypeScriptError::Export)?;
     ScriptCheck::export_all(config).map_err(TypeScriptError::Export)?;
+    ScriptConvertRequest::export_all(config).map_err(TypeScriptError::Export)?;
+    ScriptConversion::export_all(config).map_err(TypeScriptError::Export)?;
+    ConversionNote::export_all(config).map_err(TypeScriptError::Export)?;
+    ConversionNoteKind::export_all(config).map_err(TypeScriptError::Export)?;
     ScriptApi::export_all(config).map_err(TypeScriptError::Export)
 }
 

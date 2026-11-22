@@ -1045,7 +1045,7 @@ test("modes: the list, the editor, a conflict, and a locked one", async ({ page,
   await bothThemes(page, "a locked mode, its command cut");
 });
 
-test("scripts: the editor with its marks, a mode's declarations and a bot's script", async ({
+test("scripts: the editor with its marks, a conversion, a mode's declarations and a bot's script", async ({
   page,
   context,
 }) => {
@@ -1101,6 +1101,27 @@ test("scripts: the editor with its marks, a mode's declarations and a bot's scri
   await expect(main.getByRole("button", { name: /`kees` isn't defined$/ })).toBeVisible();
   // Two columns scroll each by itself, so the window is as tall as the script's sections.
   await bothThemes(page, "a new scripted mode, an example and its marks", { height: 1500 });
+
+  // A step mode converted (P15.27): the steps the fake answers with the real conversion.
+  await nav(page, "Modes");
+  await main.getByRole("link", { name: "New mode" }).click();
+  await main.getByLabel("Name").fill("Swing");
+  const steps = (name: string) => main.getByRole("group", { name, exact: true });
+  const first = (name: string) => steps(name).getByRole("group", { name: "Step 1", exact: true });
+  await steps("When it joins").getByRole("button", { name: "Add step" }).click();
+  await first("When it joins")
+    .getByLabel("What it does")
+    .selectOption({ label: "Select a hotbar slot" });
+  await steps("While it's online").getByRole("button", { name: "Add step" }).click();
+  await first("While it's online").getByLabel("What it does").selectOption({ label: "Swing arm" });
+  await first("While it's online").getByLabel("Every", { exact: true }).fill("20");
+  await first("While it's online").getByLabel("Plus up to, at random", { exact: true }).fill("0");
+  await main.getByRole("button", { name: "Convert to script" }).click();
+  await expect(main.getByRole("region", { name: "Converted to a script" })).toBeVisible();
+  await expect(editor).toContainText("swing(); // while it's online, step 1");
+  await bothThemes(page, "a step mode converted to a script, and what it does differently", {
+    height: 1500,
+  });
 
   await nav(page, "Modes");
   await main.getByRole("link", { name: "Open Balance" }).click();

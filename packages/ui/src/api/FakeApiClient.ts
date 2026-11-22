@@ -51,6 +51,8 @@ import type { RegisterRequest } from "../generated/RegisterRequest";
 import type { RegisterResponse } from "../generated/RegisterResponse";
 import type { ScriptCheck } from "../generated/ScriptCheck";
 import type { ScriptCheckRequest } from "../generated/ScriptCheckRequest";
+import type { ScriptConversion } from "../generated/ScriptConversion";
+import type { ScriptConvertRequest } from "../generated/ScriptConvertRequest";
 import type { ServerProfileRequest } from "../generated/ServerProfileRequest";
 import type { ServerProfileResponse } from "../generated/ServerProfileResponse";
 import type { ServerProfileState } from "../generated/ServerProfileState";
@@ -345,6 +347,10 @@ export class FakeApiClient implements ApiClient {
 
   async checkScript(request: ScriptCheckRequest): Promise<ScriptCheck> {
     return this.#handler("checkScript", [request])(request);
+  }
+
+  async convertToScript(request: ScriptConvertRequest): Promise<ScriptConversion> {
+    return this.#handler("convertToScript", [request])(request);
   }
 
   async installUpdate(): Promise<void> {

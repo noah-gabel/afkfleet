@@ -75,6 +75,7 @@
     "allow-check-update",
     "allow-install-update",
     "allow-app-version",
-    "allow-check-script"
+    "allow-check-script",
+    "allow-convert-to-script"
   ]
 }

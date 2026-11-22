@@ -681,6 +681,39 @@
       "inputs": [{ "source": "fn on_join(first) {\n    keys.jump.tap();\n}\n" }],
       "args": { "request": { "source": "fn on_join(first) {\n    keys.jump.tap();\n}\n" } },
       "expect": { "ok": {} }
+    },
+    {
+      "command": "convert_to_script",
+      "method": "convertToScript",
+      "inputs": [
+        {
+          "steps": [
+            { "action": { "type": "jump" }, "schedule": { "type": "at_start" }, "probability": 100 }
+          ]
+        }
+      ],
+      "args": {
+        "request": {
+          "steps": [
+            { "action": { "type": "jump" }, "schedule": { "type": "at_start" }, "probability": 100 }
+          ]
+        }
+      },
+      "expect": {
+        "ok": {
+          "script": {
+            "api": 1,
+            "source": "// Converted from a step mode: each line marked with a step does what\n// that step did. What a script does differently is in the script\n// reference, under \"Converting a step mode\".\n\nfn on_join(first) {\n    keys.jump.tap(); // when it joins, step 1\n}\n",
+            "leash": 8,
+            "tool_guard": 2,
+            "block_guard": [],
+            "messages": [],
+            "patterns": [],
+            "any_time_chat": false
+          },
+          "notes": []
+        }
+      }
     }
   ]
 }

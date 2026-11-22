@@ -166,6 +166,8 @@ export function watched(client: ApiClient, stores: AppStores, events: WatchEvent
     appVersion: () => client.appVersion(),
     // Not watched: the app's Rust side answers it with no network call (ADR-0045).
     checkScript: (request) => client.checkScript(request),
+    // Not watched either: the app's Rust side writes the script, with no network call (ADR-0046).
+    convertToScript: (request) => client.convertToScript(request),
   };
 }
 

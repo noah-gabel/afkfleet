@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-convert-to-script"
+description = "Enables the convert_to_script command without any pre-configured scope."
+commands.allow = ["convert_to_script"]
+
+[[permission]]
+identifier = "deny-convert-to-script"
+description = "Denies the convert_to_script command without any pre-configured scope."
+commands.deny = ["convert_to_script"]
