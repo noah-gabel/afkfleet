@@ -43,6 +43,11 @@
 //!   a mode that had none, once the stored mode is read
 //!   ([`UpdateModeError::Stopgap`]). A mode that has it keeps it through
 //!   an edit and keeps running: its removal is the next release's.
+//! - **A scripted mode stays a script** (ADR-0046, C6): an edit that would
+//!   make it steps is refused once the stored mode is read
+//!   ([`UpdateModeError::ScriptStays`]). An app older than the server shows
+//!   a scripted mode as one without steps, and saving it there would lose
+//!   the script.
 //! - **Deleting** ([`ModeService::delete`]): one write
 //!   transaction re-reads the acting user and the mode, asks `authorize()`
 //!   for `DeleteMode`, refuses a mode any bot uses, whoever's (S17), deletes
@@ -231,6 +236,11 @@ pub enum UpdateModeError {
     /// A scripted mode whose text isn't a program, or whose compiler failed.
     #[error(transparent)]
     Script(ScriptCheckError),
+    /// The edit would turn a scripted mode into steps, which no editor of
+    /// this release does and an app of the last one would, by saving a
+    /// scripted mode it reads as one without steps (ADR-0046, C6).
+    #[error("a scripted mode stays a script")]
+    ScriptStays,
     /// The edit brings the stopgap `enter_minecart` into a mode that had no
     /// such step, at `step` (from 0); a mode that has one keeps it
     /// (ADR-0036, D17).
@@ -520,6 +530,11 @@ impl ModeService {
                 debug!(user_id = %by.actor.id, mode_id = %id, "a mode edit was refused");
                 UpdateModeError::Denied(error)
             })?;
+        }
+        // A script stays one: an older app would save it as no steps.
+        if (as_it_is.1, as_it_will_be.1) == (ModeKind::Script, ModeKind::Steps) {
+            debug!(user_id = %by.actor.id, mode_id = %id, "a mode edit was refused: it would turn a script into steps");
+            return Err(UpdateModeError::ScriptStays);
         }
         keeps_the_stopgap_out(&stored.mode.definition, &edit.definition).inspect_err(|_| {
             debug!(user_id = %by.actor.id, mode_id = %id, "a mode edit was refused: it brings in the stopgap that's going away");

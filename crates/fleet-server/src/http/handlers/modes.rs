@@ -51,8 +51,8 @@ use axum::http::StatusCode;
 use core::num::NonZeroU32;
 
 use fleet_api_types::modes::{
-    CreateModeRequest, MODE_NAME_TAKEN, MODE_SCRIPT_HAS_NO_STEPS, MODE_STOPGAP_GOING, ModePage,
-    ModeResponse, ModeSteps, UpdateModeRequest,
+    CreateModeRequest, MODE_NAME_TAKEN, MODE_SCRIPT_HAS_NO_STEPS, MODE_SCRIPT_STAYS,
+    MODE_STOPGAP_GOING, ModePage, ModeResponse, ModeSteps, UpdateModeRequest,
 };
 use fleet_api_types::script::{self, ModeScriptRequest};
 use fleet_api_types::{ErrorResponse, FieldError, PageQuery};
@@ -354,6 +354,9 @@ async fn editing(
             UpdateModeError::Store(error) => ApiError::from(error),
             UpdateModeError::Script(error) => not_a_program(error),
             UpdateModeError::Stopgap { step } => stopgap_going(step),
+            UpdateModeError::ScriptStays => {
+                ApiError::Validation(vec![FieldError::new("steps", MODE_SCRIPT_STAYS)])
+            }
             other @ (UpdateModeError::WrongRoute { .. }
             | UpdateModeError::VersionExhausted
             | UpdateModeError::Lost
