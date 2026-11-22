@@ -531,13 +531,8 @@ impl ModeService {
                 UpdateModeError::Denied(error)
             })?;
         }
-        // A script stays one: an older app would save it as no steps.
-        if (as_it_is.1, as_it_will_be.1) == (ModeKind::Script, ModeKind::Steps) {
-            debug!(user_id = %by.actor.id, mode_id = %id, "a mode edit was refused: it would turn a script into steps");
-            return Err(UpdateModeError::ScriptStays);
-        }
-        keeps_the_stopgap_out(&stored.mode.definition, &edit.definition).inspect_err(|_| {
-            debug!(user_id = %by.actor.id, mode_id = %id, "a mode edit was refused: it brings in the stopgap that's going away");
+        allowed_change(&stored.mode.definition, &edit.definition).inspect_err(|error| {
+            debug!(user_id = %by.actor.id, mode_id = %id, %error, "a mode edit was refused");
         })?;
         if shows_the_same(&stored.mode, &edit) {
             // Dropping the transaction writes nothing (S21).
@@ -814,15 +809,18 @@ fn stopgap(definition: &ModeDefinition) -> Option<usize> {
         .position(|step| step.action == Action::EnterMinecart)
 }
 
-/// Whether an edit from `was` to `will_be` keeps the stopgap out: a mode
-/// that has it keeps it, and none gains it (ADR-0036, D17).
+/// Whether an edit from `was` to `will_be` is one a mode may make: a
+/// scripted mode stays a script, as an older app would save it as no steps
+/// (ADR-0046, C6), and the stopgap stays out, as a mode that has it keeps
+/// it and none gains it (ADR-0036, D17).
 ///
 /// # Errors
-/// [`UpdateModeError::Stopgap`] at the step that brings it in.
-fn keeps_the_stopgap_out(
-    was: &ModeDefinition,
-    will_be: &ModeDefinition,
-) -> Result<(), UpdateModeError> {
+/// [`UpdateModeError::ScriptStays`] for a script made steps, and
+/// [`UpdateModeError::Stopgap`] at the step that brings the stopgap in.
+fn allowed_change(was: &ModeDefinition, will_be: &ModeDefinition) -> Result<(), UpdateModeError> {
+    if (ModeKind::of(was), ModeKind::of(will_be)) == (ModeKind::Script, ModeKind::Steps) {
+        return Err(UpdateModeError::ScriptStays);
+    }
     match (stopgap(was), stopgap(will_be)) {
         (None, Some(step)) => Err(UpdateModeError::Stopgap { step }),
         _ => Ok(()),
