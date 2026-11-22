@@ -1018,7 +1018,7 @@ test("modes: the list, the editor, a conflict, and a locked one", async ({ page,
   await main.getByLabel("Name").fill("Fishing");
   const joining = main.getByRole("group", { name: "When it joins", exact: true });
   await joining.getByRole("button", { name: "Add step" }).click();
-  await bothThemes(page, "the mode editor", { small: true, smallHeight: 1000 });
+  await bothThemes(page, "the mode editor", { small: true, smallHeight: 1100 });
   await joining
     .getByRole("group", { name: "Step 1", exact: true })
     .getByLabel("What it does")
