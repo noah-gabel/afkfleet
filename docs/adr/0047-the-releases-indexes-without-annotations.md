@@ -28,6 +28,7 @@ Nothing ran the merge before a tag: release.test.mjs answers docker with a stand
 - **The registry** is the official `registry:3.1.2` (CNCF distribution), pinned by its multi-arch index digest, the newest release, built on 2026-11-05 (Plan.md §5). Every name is the run's own (`afkfleet-release-images-<pid>-<random>`), and the registry, its volume and every tag it made are removed at its end.
 - **It prints the Docker and Buildx versions** it ran with, first.
 - **Red first:** its first CI run, with the merge still giving annotations, failed as v0.2.0's release did: Docker 28.0.4 and Buildx v0.39.0 on `ubuntu-24.04`, all four stand-ins pushed, then `release merge: refused: creating ghcr.io/afkfleet-check/afkfleet-server:0.2.0 failed: ERROR: annotations are not supported for Docker manifest lists; …` (its names are GHCR's, standing for the local registry).
+- **Green with D1:** the same job on the same runner image passed, its check in 9 s and the job in 17 s. Each index came out as `application/vnd.docker.distribution.manifest.list.v2+json` of two `application/vnd.docker.distribution.manifest.v2+json`, as the Context says, and the second merge refused: `… exists already: a release never overwrites a tag`.
 
 ### D1. Each index is made without annotations
 `docker buildx imagetools create --tag <name>:X.Y.Z <name>@<arm64 digest> <name>@<amd64 digest>`, and nothing else. The checks before and after stay as ADR-0022 set them.
