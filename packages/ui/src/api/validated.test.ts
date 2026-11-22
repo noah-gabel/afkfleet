@@ -220,7 +220,11 @@ describe("validated, a script's check (ADR-0045)", () => {
 });
 
 describe("validated, a conversion to a script (ADR-0046)", () => {
-  const jump = { action: { type: "jump" }, schedule: { type: "at_start" }, probability: 100 } as const;
+  const jump = {
+    action: { type: "jump" },
+    schedule: { type: "at_start" },
+    probability: 100,
+  } as const;
 
   it("passes a step mode's steps through", async () => {
     const { fake, api } = client();
@@ -234,9 +238,7 @@ describe("validated, a conversion to a script (ADR-0046)", () => {
     const { fake, api } = client();
 
     expect(
-      await refusedFields(
-        api.convertToScript({ steps: [{ ...jump, probability: 1.5 }] }),
-      ),
+      await refusedFields(api.convertToScript({ steps: [{ ...jump, probability: 1.5 }] })),
     ).toEqual(["steps[0].probability"]);
     expect(
       await refusedFields(
