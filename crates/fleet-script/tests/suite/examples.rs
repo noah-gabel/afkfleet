@@ -91,6 +91,29 @@ fn the_reference_shows_every_example_as_its_file_has_it() {
     }
 }
 
+/// The reference's tables are what the description writes (`just gen`):
+/// no table names a member the engine doesn't have, or misses one it has.
+#[test]
+fn the_references_tables_are_the_descriptions() {
+    let reference = include_str!("../../../../docs/scripting.md").replace("\r\n", "\n");
+
+    let written = fleet_script::with_tables(&reference).unwrap();
+
+    assert!(
+        written == reference,
+        "docs/scripting.md's tables differ from the description: run `just gen`"
+    );
+    // Every object and the hooks have their table, and so do the reasons.
+    for object in fleet_script::API {
+        assert!(
+            reference.contains(&format!("<!-- generated table: {} -->", object.name)),
+            "no table of {}",
+            object.name
+        );
+    }
+    assert!(reference.contains("<!-- generated table: reasons -->"));
+}
+
 #[test]
 fn the_balance_example_declares_what_the_reference_says() {
     let script = Script::try_from(example("balance").draft()).unwrap();

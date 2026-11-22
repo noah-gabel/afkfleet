@@ -39,6 +39,7 @@ use crate::error::Misuse;
 use crate::turn::{Answer, HoldLength, SharedTurn, Value, lock};
 
 pub(crate) mod describe;
+pub(crate) mod reference;
 
 /// The game objects' names, in the reference's order. With `state`, these
 /// are the names a script can't give a variable.
