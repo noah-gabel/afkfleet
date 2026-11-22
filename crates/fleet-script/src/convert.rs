@@ -179,8 +179,9 @@ fn swing() {
 }
 ";
 
-/// `definition`'s steps as a script, with what it does differently; see
-/// the [module docs](self).
+/// `definition`'s steps as a script, with what it does differently
+/// ([`Conversion`]): each step a line of a hook, marked as the mode's
+/// editor names it, as ADR-0046 (C1, C2) sets out.
 ///
 /// # Errors
 /// [`ConvertError::NotSteps`] for a scripted mode;
