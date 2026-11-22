@@ -49,6 +49,8 @@ import type { RegisterRequest } from "../generated/RegisterRequest";
 import type { RegisterResponse } from "../generated/RegisterResponse";
 import type { ScriptCheck } from "../generated/ScriptCheck";
 import type { ScriptCheckRequest } from "../generated/ScriptCheckRequest";
+import type { ScriptConversion } from "../generated/ScriptConversion";
+import type { ScriptConvertRequest } from "../generated/ScriptConvertRequest";
 import type { ServerProfileRequest } from "../generated/ServerProfileRequest";
 import type { ServerProfileResponse } from "../generated/ServerProfileResponse";
 import type { ServerProfileState } from "../generated/ServerProfileState";
@@ -254,6 +256,13 @@ export interface ApiClient {
    * off the UI's thread, and never runs it; a check that fails rejects with `script_check`.
    */
   checkScript(request: ScriptCheckRequest): Promise<ScriptCheck>;
+  /**
+   * A step mode's steps as the script that does what they do, with what it does differently, or
+   * why they can't be one (Plan.md P15.27; ADR-0046). The app's Rust side writes it and stores
+   * nothing. A chat step can hold a password, so it's always a direct call; steps that break a
+   * rule reject with `invalid_input` at their fields.
+   */
+  convertToScript(request: ScriptConvertRequest): Promise<ScriptConversion>;
 }
 
 /** A method of the API. */
@@ -333,4 +342,5 @@ export const API_METHODS = [
   "installUpdate",
   "appVersion",
   "checkScript",
+  "convertToScript",
 ] as const satisfies readonly ApiMethod[];

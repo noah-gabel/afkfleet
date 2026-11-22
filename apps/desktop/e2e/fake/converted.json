@@ -1,0 +1,30 @@
+{
+  "description": "What the e2e fake's convert_to_script answers for the steps of the conversion story (apps/desktop/e2e/specs/convert-story.spec.ts): the real converter's answer for them, which the desktop crate's script_convert::tests::the_e2e_fakes_conversion_is_the_real_one holds equal. Any other steps get a problem at `steps`.",
+  "request": {
+    "steps": [
+      {
+        "action": { "type": "select_hotbar_slot", "slot": 0 },
+        "schedule": { "type": "at_start" },
+        "probability": 100
+      },
+      {
+        "action": { "type": "swing_arm" },
+        "schedule": { "type": "every", "interval_ms": 20000, "jitter_ms": 0 },
+        "probability": 100
+      }
+    ]
+  },
+  "answer": {
+    "script": {
+      "api": 1,
+      "source": "// Converted from a step mode: each line marked with a step does what\n// that step did. What a script does differently is in the script\n// reference, under \"Converting a step mode\".\n\nfn on_join(first) {\n    hotbar.select(1); // when it joins, step 1\n    timer.every(20000, \"online_1\"); // while it's online, step 1\n}\n\nfn on_timer(name) {\n    switch name {\n        \"online_1\" => {\n            swing(); // while it's online, step 1\n        },\n    }\n}\n\n// Swings the arm as a left click does, unless the crosshair is on an\n// entity, which a left click would hit.\nfn swing() {\n    let target = bot.looking_at;\n    if target == () || target.kind != \"entity\" {\n        mouse.left.tap();\n    }\n}\n",
+      "leash": 8,
+      "tool_guard": 2,
+      "block_guard": [],
+      "messages": [],
+      "patterns": [],
+      "any_time_chat": false
+    },
+    "notes": [{ "step": 1, "kind": "swing_skips_entities" }]
+  }
+}

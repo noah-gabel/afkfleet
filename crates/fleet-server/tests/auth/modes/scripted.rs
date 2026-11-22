@@ -23,6 +23,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 use super::{CANARY, MODES, metadata, named, swinging, swinging_body};
 use crate::support::{Options, Person, Seen, Setup, redacted, setup_entry, setup_with};
+use fleet_api_types::modes::MODE_SCRIPT_STAYS;
 
 /// A script that sends `home` when the bot joins.
 const SOURCE: &str = "fn on_join(first) {\n    chat.send(\"home\");\n}\n";
@@ -361,6 +362,47 @@ async fn a_member_sees_a_shared_scripts_commands_without_their_arguments(
 }
 
 // --- Its rules and the compile (ADR-0036, D14) ------------------------------------------
+
+/// An app of the last release reads a scripted mode as one without steps,
+/// and saving it there sends steps and no script: the server refuses an
+/// edit that turns a scripted mode into steps, so its script is never lost,
+/// and writes nothing (ADR-0046, C6).
+#[sqlx::test(migrations = false)]
+async fn an_edit_never_turns_a_scripted_mode_into_steps_as_an_older_app_would_save_it(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = scripted_setup(options, Compiler::fleet_script()).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+    let id = setup.scripted_mode(&admin, "Balance", "private").await;
+    let before = setup.db.modes().find(id).await.unwrap();
+    let as_an_older_app_saves_it =
+        json!({ "version": 1, "name": "Balance", "visibility": "private", "steps": [] });
+    let with_steps = {
+        let mut body = swinging_body("Balance");
+        body["version"] = json!(1);
+        body
+    };
+
+    for body in [as_an_older_app_saves_it, with_steps] {
+        let seen = setup.put_mode(&admin, id, body).await;
+
+        assert_eq!(seen.status, 422, "{}", seen.text);
+        let fields = seen.body["error"]["fields"].as_array().unwrap();
+        assert_eq!(
+            (
+                fields.len(),
+                fields[0]["path"].clone(),
+                fields[0]["message"].clone()
+            ),
+            (1, json!("steps"), json!(MODE_SCRIPT_STAYS)),
+            "{}",
+            seen.text
+        );
+    }
+    assert_eq!(setup.db.modes().find(id).await.unwrap(), before);
+    assert_eq!(setup.entries_of(&AuditAction::MODE_UPDATE).await, []);
+}
 
 /// A text that isn't a program is one 422 at `script.source`, with Rhai's
 /// message about the caller's own script, its line and its column; nothing

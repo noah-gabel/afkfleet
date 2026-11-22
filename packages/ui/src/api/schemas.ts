@@ -455,6 +455,11 @@ export const scriptCheckRequest = z.strictObject({
     ),
 });
 
+/** A step mode's steps to convert to a script, under the same rules as a mode's (ADR-0046). */
+export const scriptConvertRequest = z.strictObject({
+  steps: modeSteps,
+});
+
 /** A command for `/command`: a chat line that starts with `/` once trimmed (S8). */
 export const chatCommandRequest = z.strictObject({
   message: chatMessage.refine(

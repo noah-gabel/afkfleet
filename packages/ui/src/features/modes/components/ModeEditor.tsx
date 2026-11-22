@@ -26,6 +26,12 @@
 //   the Owner, who alone write scripts; anyone else's new mode is steps. A scripted mode sends its
 //   body and no steps; the server's error at `script.source` shows at its line in the editor, and
 //   one in a one-line text (a message's, a pattern's) names its character.
+// - **Convert to script** (P15.27, ADR-0046): offered on a step mode to whoever writes scripts.
+//   The form's steps go to the app's Rust side, a direct call since a chat step can hold a
+//   password, and the script it writes fills the form as a loaded scripted mode does, with a
+//   notice of what it does differently, each step named as this form names it. Nothing is sent
+//   to the server until Save; "Keep the steps" puts the form back as it was. A step that keeps
+//   the steps from being a script, or breaks a rule, shows its text at its field, as a save's.
 
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -55,22 +61,32 @@ import { inView } from "../../../lib/inView";
 import { useWriteAction } from "../../admin/hooks/useWriteAction";
 import type { Place } from "../../scripts/components/ScriptEditor";
 import { rememberMode, rereadModes } from "../cache";
+import { noteLine, placesOf } from "../conversion";
 import {
   bodyOf,
   copyOfValues,
   isEditable,
   type ModeValues,
   SECTIONS,
+  stepsOf,
   stepTotal,
   valuesOf,
 } from "../modeForm";
+import { scriptValuesOf } from "../scriptForm";
 import {
   atCharacter,
   CANCEL,
   CAP_REACHED,
+  CONVERT,
+  CONVERT_HINT,
+  CONVERTED_EVERY_SCRIPT,
+  CONVERTED_HEADING,
+  CONVERTED_NOTHING_ELSE,
+  CONVERTED_SAVE,
   copyName,
   created,
   IN_USE_BY_OTHERS,
+  KEEP_THE_STEPS,
   KIND_FIELD,
   KIND_TEXT,
   LEFT_THE_LIST,
@@ -170,6 +186,12 @@ export function ModeEditor({
   const [reloading, setReloading] = useState(false);
   const [goneToSave, setGoneToSave] = useState(false);
   const [scriptProblem, setScriptProblem] = useState<FieldError | null>(null);
+  // A conversion to a script not saved yet: the form before it, and its notice's lines.
+  const [converted, setConverted] = useState<{
+    readonly before: ModeValues;
+    readonly notes: readonly string[];
+  } | null>(null);
+  const [converting, setConverting] = useState(false);
   const writes = useWriteAction();
   const form = useForm<ModeValues>({ resolver: startClean, defaultValues: initial });
   const paths = useRef<Readonly<Record<string, Path<ModeValues>>>>({});
@@ -232,6 +254,7 @@ export function ModeEditor({
     if (!alive.current) {
       return;
     }
+    setConverted(null);
     if (creating) {
       toast.success(copying || row !== undefined ? savedCopy(saved.name) : created(saved.name));
       void navigate({ to: "/modes/$id", params: { id: saved.id }, replace: true });
@@ -308,6 +331,55 @@ export function ModeEditor({
     }
   });
 
+  /** The form's steps as a script; see the module comment. */
+  async function convert(): Promise<void> {
+    const before = form.getValues();
+    const built = stepsOf(before);
+    paths.current = built.paths;
+    form.clearErrors();
+    setFormError(undefined);
+    setConflict(null);
+    wait.reset();
+    setConverting(true);
+    try {
+      const answer = await api.convertToScript({ steps: built.steps });
+      if (!alive.current) {
+        return;
+      }
+      if (answer.script === undefined) {
+        const fields = answer.problem === undefined ? [] : [answer.problem];
+        const refused: CommandError = { code: "invalid_input", message: "", fields };
+        if (!showFieldErrors(form.setError, refused, paths.current)) {
+          setFormError(fields.map((field) => field.message).join("\n"));
+        }
+        return;
+      }
+      const places = placesOf(before);
+      // A reset, not a setValue: the script's lists are field arrays, as for an example.
+      form.reset(
+        { ...before, kind: "script", script: scriptValuesOf(answer.script) },
+        { keepDefaultValues: true },
+      );
+      setConverted({ before, notes: answer.notes.map((note) => noteLine(note, places)) });
+    } catch (rejection) {
+      if (alive.current) {
+        show(toApiError(rejection).error, row === undefined);
+      }
+    } finally {
+      if (alive.current) {
+        setConverting(false);
+      }
+    }
+  }
+
+  /** The form as it was before the conversion. */
+  function keepTheSteps(): void {
+    if (converted !== null) {
+      form.reset(converted.before, { keepDefaultValues: true });
+      setConverted(null);
+    }
+  }
+
   /** The form as a new private mode, under the suggested name if it still has the loaded one. */
   function saveAsCopy(): void {
     if (form.getValues("name").trim() === form.formState.defaultValues?.name) {
@@ -356,6 +428,7 @@ export function ModeEditor({
       return;
     }
     setConflict(null);
+    setConverted(null);
     const fresh = cachedModes(queryClient).find((one) => one.id === row.id);
     if (fresh !== undefined && isEditable(fresh)) {
       setVersion(fresh.version);
@@ -366,7 +439,7 @@ export function ModeEditor({
   const gone = left || goneToSave;
   // While a write runs, what's sent is what's on the screen; and while Load again reads, nothing
   // starts that its answer would write over.
-  const locked = sending || reloading || writes.running !== null;
+  const locked = sending || reloading || converting || writes.running !== null;
   const view = { readOnly: false, locked, copying };
   const keepAsCopy = (
     <Button
@@ -404,6 +477,22 @@ export function ModeEditor({
                 </NativeSelect>
               )}
             </FormField>
+          ) : null}
+          {kind === "steps" && writesScripts && !gone ? (
+            <div className="flex flex-col items-start gap-1">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={locked || wait.waiting !== null}
+                aria-describedby={`${formId}-convert`}
+                onClick={() => void convert()}
+              >
+                {CONVERT}
+              </Button>
+              <p id={`${formId}-convert`} className="text-sm text-muted-foreground">
+                {CONVERT_HINT}
+              </p>
+            </div>
           ) : null}
           {row === undefined ? (
             <p className="text-sm text-muted-foreground">{STARTS_PRIVATE}</p>
@@ -457,6 +546,37 @@ export function ModeEditor({
       }
       notes={
         <>
+          {converted === null || kind !== "script" ? null : (
+            <section
+              ref={inView}
+              aria-labelledby={`${formId}-converted`}
+              className="flex flex-col gap-2 rounded-md border p-3 text-sm"
+            >
+              <h2 id={`${formId}-converted`} className="font-semibold">
+                {CONVERTED_HEADING}
+              </h2>
+              <p>{CONVERTED_SAVE}</p>
+              {converted.notes.length === 0 ? (
+                <p>{CONVERTED_NOTHING_ELSE}</p>
+              ) : (
+                <ul className="flex list-disc flex-col gap-1 pl-5">
+                  {converted.notes.map((note) => (
+                    <li key={note}>{note}</li>
+                  ))}
+                </ul>
+              )}
+              <p className="text-muted-foreground">{CONVERTED_EVERY_SCRIPT}</p>
+              <Button
+                type="button"
+                variant="outline"
+                className="self-start"
+                disabled={locked}
+                onClick={keepTheSteps}
+              >
+                {KEEP_THE_STEPS}
+              </Button>
+            </section>
+          )}
           {formError === undefined ? null : (
             <p ref={inView} role="alert" className="text-sm whitespace-pre-line text-destructive">
               {formError}

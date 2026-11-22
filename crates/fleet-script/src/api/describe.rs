@@ -332,6 +332,27 @@ pub fn reasons() -> [&'static str; Refusal::ALL.len()] {
     Refusal::ALL.map(Refusal::as_str)
 }
 
+/// What `reason` means, in a line: the reference's table of reasons.
+#[must_use]
+pub const fn reason_meaning(reason: Refusal) -> &'static str {
+    match reason {
+        Refusal::TooSoon => "The action came faster than its limit allows (see Limits).",
+        Refusal::Dead => "The bot is dead.",
+        Refusal::NotInWorld => "The bot is between worlds, or its session is ending.",
+        Refusal::Leashed => "The bot is at the end of its leash, and this would take it further.",
+        Refusal::MiningGuard => "The block reaches below the bot's feet.",
+        Refusal::ToolGuard => "The held tool is nearly used up.",
+        Refusal::BlockGuard => "The block isn't one the mode lists for mining.",
+        Refusal::BadValue => {
+            "A number outside its range, an angle that isn't a number, an unknown kind."
+        }
+        Refusal::TooMany => "No room for another timer.",
+        Refusal::NoCommand => {
+            "chat.expect without a declared command sent before it in the same hook."
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;

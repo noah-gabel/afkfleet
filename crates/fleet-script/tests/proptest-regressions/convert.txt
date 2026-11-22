@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc e1c729d3cc8ca80691400b71f0e36a3cadcbd14c15d3eae6dfc1c15ed0185a31 # shrinks to steps = [Step { action: UseItem, schedule: Every { interval: 200ms, jitter: 0ns }, probability: 100 }], on_entity = false
+cc b05e39d27c03f8dd9c8482899eb35fd948c63a89fc17910629d48d1a0e6b539c # shrinks to steps = [Step { action: HoldUse { on: true }, schedule: Every { interval: 500ms, jitter: 0ns }, probability: 100 }], on_entity = false

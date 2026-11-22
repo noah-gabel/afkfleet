@@ -126,8 +126,15 @@ export const ACTION_TEXT: Readonly<Record<ModeActionKind, string>> = {
   attack_facing_entity: "Attack what's in front (left-click)",
   select_hotbar_slot: "Select a hotbar slot",
   send_chat: "Send chat or a command",
-  enter_minecart: "Get into the nearest minecart",
+  enter_minecart: "Get into the nearest minecart (going away)",
 };
+
+/**
+ * Under a step that gets into the nearest minecart: the stopgap goes in the next release, and a
+ * new step doesn't offer it (Plan.md P15.27; ADR-0036, D17).
+ */
+export const STOPGAP_HINT =
+  'Going away in the next release. Convert to script does this with vehicle.mount("minecart"), which passes over a minecart someone sits in.';
 
 export const YAW_FIELD = "Yaw (left or right, as F3 shows it)";
 export const PITCH_FIELD = "Pitch (up or down, as F3 shows it)";
@@ -367,3 +374,44 @@ export function atCharacter(message: string, column: number): string {
 }
 /** A mode whose script reads chat at any time, on its card and its screen (ADR-0037, C5). */
 export const MARK_ANY_TIME_CHAT = "Reads the server's chat at any time.";
+
+// --- Convert to script (Plan.md P15.27; ADR-0046) ----------------------------------------------
+
+/** The way from steps to a script, for whoever writes scripts. */
+export const CONVERT = "Convert to script";
+export const CONVERT_HINT =
+  "Writes these steps as a script that does the same. Nothing is saved until you save.";
+/** The notice after a conversion. */
+export const CONVERTED_HEADING = "Converted to a script";
+export const CONVERTED_SAVE =
+  "Check the script and what's different, then save to keep it. Until then the mode keeps its steps.";
+/** What every script does differently from steps, whatever they were. */
+export const CONVERTED_EVERY_SCRIPT =
+  "In every script, the bot lets go of every key and button when it dies, respawns or changes worlds, and its timers wait while it's dead.";
+export const CONVERTED_NOTHING_ELSE = "Nothing else differs.";
+export const KEEP_THE_STEPS = "Keep the steps";
+
+/** A step as the notes name it: its section's heading and its number there. */
+export function stepPlace(heading: string, n: number): string {
+  return `${heading}, step ${n}`;
+}
+
+/** Milliseconds as seconds: 0.5 s, 30 s. */
+function seconds(ms: number): string {
+  return `${ms / 1000} s`;
+}
+
+/** What a converted step does differently, after its place (`where`). */
+export const NOTE_TEXT = {
+  swing_skips_entities: () =>
+    "swings only while the crosshair isn't on an entity. A script swings with a left click, which would hit one.",
+  slower: (everyMs: number) =>
+    `runs at most every ${seconds(everyMs)}, a script's shortest for it.`,
+  hold_repeats: () =>
+    "holds the right button, which uses an item that isn't used over time again every 4 ticks.",
+  mount_skips_occupied: () =>
+    "passes over a minecart someone sits in and gets into the nearest free one.",
+  gap_capped: () => "waits at most 24 hours between two runs, a timer's longest.",
+  shares_limit: (everyMs: number, other: string) =>
+    `shares a script's limit of once every ${seconds(everyMs)} with ${other}: a run that close to one of its runs is skipped.`,
+} as const;

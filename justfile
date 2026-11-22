@@ -133,9 +133,12 @@ fmt:
 # are ever deleted from packages/ui/src/generated/ (ADR-0015). The gRPC code isn't
 # exported or committed: fleet-proto's build script generates it at every build, and a
 # snapshot test pins the wire schema it comes from (ADR-0019).
-# Export the API's TypeScript types (fleet-api-types) to packages/ui/src/generated/.
+# Export the API's TypeScript types (fleet-api-types) to packages/ui/src/generated/, and
+# write the script reference's tables from fleet-script's description of the API
+# (docs/scripting.md's marked tables, ADR-0046).
 gen:
     cargo run -p fleet-api-types --example typescript -- write packages/ui/src/generated
+    cargo run -p fleet-script --example reference -- write docs/scripting.md
 
 # Prepare sqlx's offline query data in crates/fleet-server/.sqlx/ (needs sqlx-cli 0.9.0).
 # Run it after changing a query or adding a migration; every build reads that data
@@ -156,9 +159,11 @@ _sqlx-db $DATABASE_URL=sqlx_db:
     node -e "require('node:fs').mkdirSync(process.argv[1], { recursive: true })" "{{ justfile_directory() / 'target' }}"
     cargo sqlx database reset -y
 
-# Fail if packages/ui/src/generated/ isn't exactly a fresh export (the ts-types-fresh job).
+# Fail if packages/ui/src/generated/ isn't exactly a fresh export, or a table of the script
+# reference isn't what the description writes (the ts-types-fresh job).
 gen-check:
     cargo run -p fleet-api-types --example typescript -- check packages/ui/src/generated
+    cargo run -p fleet-script --example reference -- check docs/scripting.md
 
 # Fail if a migration that exists on main was modified, deleted or renamed: merged
 # migrations are never edited (ADR-0015). Needs an up-to-date origin/main; CI fetches it.

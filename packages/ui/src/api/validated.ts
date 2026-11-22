@@ -202,6 +202,8 @@ export function validated(client: ApiClient): ApiClient {
     installUpdate: async () => client.installUpdate(),
     appVersion: async () => client.appVersion(),
     checkScript: async (request) => client.checkScript(check(schemas.scriptCheckRequest, request)),
+    convertToScript: async (request) =>
+      client.convertToScript(check(schemas.scriptConvertRequest, request)),
   };
 }
 

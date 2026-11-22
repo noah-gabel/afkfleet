@@ -37,6 +37,7 @@ function client() {
     installUpdate: ok,
     appVersion: ok,
     checkScript: ok,
+    convertToScript: ok,
     serverProfile: ok,
     setServerProfile: ok,
     checkServer: ok,
@@ -213,6 +214,36 @@ describe("validated, a script's check (ADR-0045)", () => {
     ).toEqual(["source"]);
     expect(
       await refusedFields(api.checkScript({ source: "", api: 1 } as unknown as { source: string })),
+    ).toEqual([""]);
+    expect(fake.calls).toEqual([]);
+  });
+});
+
+describe("validated, a conversion to a script (ADR-0046)", () => {
+  const jump = {
+    action: { type: "jump" },
+    schedule: { type: "at_start" },
+    probability: 100,
+  } as const;
+
+  it("passes a step mode's steps through", async () => {
+    const { fake, api } = client();
+
+    await api.convertToScript({ steps: [jump] });
+
+    expect(fake.calls).toEqual([{ method: "convertToScript", args: [{ steps: [jump] }] }]);
+  });
+
+  it("refuses steps the wire can't carry, and any other field, before the app converts them", async () => {
+    const { fake, api } = client();
+
+    expect(
+      await refusedFields(api.convertToScript({ steps: [{ ...jump, probability: 1.5 }] })),
+    ).toEqual(["steps[0].probability"]);
+    expect(
+      await refusedFields(
+        api.convertToScript({ steps: [], name: "x" } as unknown as { steps: [] }),
+      ),
     ).toEqual([""]);
     expect(fake.calls).toEqual([]);
   });

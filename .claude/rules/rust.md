@@ -25,6 +25,8 @@ Under CLAUDE.md's "Only `fleet-mc` may depend on `azalea`":
 - **The state is looked at only through `state.rs`,** with `try_read`: Rhai's own access to a locked shared value waits 50 ms.
 - **A function of the API is registered in `api.rs` and described in `api/describe.rs`;** a test holds the two equal. It returns plain data (a map, a number, a text), never a type of ours, so a script can keep it in its state.
 - **The examples are the files in `crates/fleet-script/scripts/`.** The reference shows them word for word; a test holds that.
+- **The reference's tables are generated** from `api/describe.rs` (a reason's meaning is its `reason_meaning`): `just gen` writes every table `docs/scripting.md` marks (`<!-- generated table: … -->`), and the suite holds them equal. Never edit a table between the marks (ADR-0046).
+- **"Convert to script" is `convert.rs`:** a step mode written as the script that does what its steps do, with what it does differently as notes. Its tests run fleet-core's `ModePlan` beside the converted script (`tests/suite/convert.rs`): a new action or schedule of a step mode, or a change to a call a converted step makes, changes the converter and keeps them equal (ADR-0046).
 - **A hook runs on a thread with at least 2 MiB of stack** (a runtime worker or a test's thread): the instance ends a hook at 1 MiB.
 - **An instance is handed a `Stopwatch`** (fleet-core's port) and ends a hook at 5 ms and a second's hooks at 20 ms: a hook's operations don't bound its time (ADR-0040's amendment). fleet-script itself reads no clock; tests time a hook with fleet-testkit's `ManualStopwatch`, never with the OS's clock, except the three tests of the reviewer's cases, which assert why a hook stopped and never how long it took.
 

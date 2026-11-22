@@ -70,7 +70,7 @@ The full table, with every recipe and how to write one, is in `.claude/rules/com
 - `just check`: formatting, clippy, docs, nextest, doctests, the generated-code and hardening checks, the `scripts/` tests, biome, `tsc`, Vitest and `just e2e`. **Run it before saying a task is done.**
 - `just test [crate]`: nextest for the workspace or one crate.
 - `just test-slow`: the container tests (needs Docker), after touching `fleet-mc`, Docker files or anything container-based.
-- `just fmt`; `just gen` after changing a DTO; `just db-prepare` after changing a query or adding a migration.
+- `just fmt`; `just gen` after changing a DTO or the script API's description (it writes the script reference's tables too); `just db-prepare` after changing a query or adding a migration.
 - `just cov` (the coverage gates) and, on Windows, `just cov-desktop` (the desktop crate's gate).
 - `just tidy`: frees the disk space builds leave behind (incremental data, this workspace's own crates' build units, coverage data, the mutation runs), at the start of every task or group; `just tidy --dry-run` only measures.
 

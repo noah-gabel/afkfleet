@@ -1,14 +1,16 @@
 # Scripted modes: the script reference
 
-> **Draft: Phase 15 is being built, group by group, and no script runs on a bot yet.** This is the reference as a script author would read it, written with the plan for Phases 15 and 16 ([Plan.md](../Plan.md), [ADR-0036](adr/0036-scripted-modes.md), [ADR-0037](adr/0037-scripts-read-system-chat.md)). Part 1 is Phase 15's API. Part 2 is Phase 16's, inventory and menus. Names and numbers can still change while each group is built; whatever changes, changes here in the same pull request.
->
-> **Built so far:** the language, the check at save and everything in Part 1 as a script sees it (`fleet-script`, group B, [ADR-0040](adr/0040-fleet-script-as-built.md)). The four examples below are files in that crate, and its tests run them as written. What a bot then does with a script's actions comes with the next groups.
+This is the reference for script authors: Admins and the Owner, who write scripted modes in the app's mode editor. Part 1 is the API that runs today. Part 2 is planned for Phase 16 (inventory and menus) and doesn't run yet. The design behind it is in [ADR-0036](adr/0036-scripted-modes.md) and [ADR-0037](adr/0037-scripts-read-system-chat.md), and how it was built in ADR-0040 to [ADR-0046](adr/0046-the-stopgaps-way-out-and-phase-15s-check.md).
+
+**The tables of each object's members, of the hooks and of the reasons are generated** from the one description of the API that the editor's completion and hover read too (`crates/fleet-script/src/api/describe.rs`): `just gen` writes them, and a test holds them equal. Change a member there, never in a table here.
 
 A scripted mode is a mode whose behaviour is a small program instead of a list of steps. The program is written in [Rhai](https://rhai.rs/book/), a small language that looks like JavaScript and Rust.
 
 **A script is a virtual player at a vanilla client.** It presses the keys and the mouse buttons a player presses, looks where a player looks, and reads what a player sees on the screen. Each input behaves as it does in the vanilla client: holding the right button with a block in hand clicks again every 4 ticks, holding the left one on a block mines it. Nothing a player can't do is in the API.
 
 **Whether a server allows what your script does is yours to check.** Many servers have rules about automated farming, trading and auction buying.
+
+**A scripted mode runs only on an agent that runs scripts:** an agent of this release or later. The server never sends one to an older agent; a bot whose agent is older waits, and its page says the agent must be updated.
 
 ## Three things to know
 1. **Hooks.** The script defines functions the runtime calls when something happens: the bot joined, it died, a timer is due, the server answered a command. A hook runs to its end at once; there is no `wait()`. To do something later, set a timer or hold a key for a time.
@@ -36,15 +38,22 @@ fn on_timer(name) {
 ### Hooks
 A script defines the hooks it needs and leaves the others out. A function whose name starts with `on_` and isn't in this table is refused when the mode is saved, so a misspelled hook can't go unnoticed.
 
+<!-- generated table: hooks -->
 | Hook | When it runs |
 |---|---|
-| `fn on_join(first)` | The bot is in the world after connecting. `first` is `true` for the first join since the bot was started, and `false` after a reconnect |
-| `fn on_world_change()` | The server moved the bot to another world without a disconnect: a proxy's lobby and then the real server, or a portal |
-| `fn on_death()` | The bot died. It can't act until it's back |
-| `fn on_respawn()` | The bot lives again after a death |
-| `fn on_timer(name)` | A timer the script set is due |
-| `fn on_chat(key, values)` | The server printed a line that fits one of the mode's declared patterns (see [`chat`](#chat)) |
-| `fn on_stop()` | The script stops in an orderly way: the bot is stopped or removed, its agent shuts down, its mode is changed, or the mode was edited. It can change `state` and send one declared message, which goes out at once, ahead of anything still waiting in the bot's chat queue; every key and button is released by the runtime right after it. It doesn't run after an error or a disconnect, and a bot whose session doesn't answer is stopped without it after two seconds |
+| `fn on_join(first)` | The bot is in the world after connecting; first is false after a reconnect. |
+| `fn on_world_change()` | The server moved the bot to another world without a disconnect. |
+| `fn on_death()` | The bot died. |
+| `fn on_respawn()` | The bot lives again after a death. |
+| `fn on_timer(name)` | A timer the script set is due. |
+| `fn on_chat(key, values)` | The server printed a line that fits one of the mode's declared patterns. |
+| `fn on_stop()` | The script stops in an orderly way. |
+<!-- end of generated table -->
+
+- **`on_join(first)`:** `first` is `true` for the first join since the bot was started, and `false` after a reconnect.
+- **`on_world_change()`:** a proxy's lobby and then the real server, or a portal.
+- **`on_death()`:** the bot can't act until it's back.
+- **`on_stop()`** runs when the bot is stopped or removed, its agent shuts down, its mode is changed, or the mode was edited. It can change `state` and send one declared message, which goes out at once, ahead of anything still waiting in the bot's chat queue; every key and button is released by the runtime right after it. It doesn't run after an error or a disconnect, and a bot whose session doesn't answer is stopped without it after two seconds.
 
 **Nothing is held at the start of `on_join`, `on_world_change`, `on_death` and `on_respawn`.** Each of them puts the bot somewhere new, so the runtime lets go of every key and button first, and the hook decides again.
 
@@ -79,45 +88,56 @@ if !mouse.left.tap().ok {
 }
 ```
 
+<!-- generated table: reasons -->
 | Reason | Meaning |
 |---|---|
-| `too_soon` | The action came faster than its limit allows (see [Limits](#limits)) |
-| `dead` | The bot is dead |
-| `not_in_world` | The bot is between worlds, or its session is ending |
-| `leashed` | The bot is at the end of its leash, and this would take it further |
-| `mining_guard` | The block reaches below the bot's feet |
-| `tool_guard` | The held tool is nearly used up |
-| `block_guard` | The block isn't one the mode lists for mining |
-| `bad_value` | A number outside its range, an angle that isn't a number, an unknown kind |
-| `too_many` | No room for another timer |
-| `no_command` | `chat.expect` without a declared command sent before it in the same hook |
+| `too_soon` | The action came faster than its limit allows (see Limits). |
+| `dead` | The bot is dead. |
+| `not_in_world` | The bot is between worlds, or its session is ending. |
+| `leashed` | The bot is at the end of its leash, and this would take it further. |
+| `mining_guard` | The block reaches below the bot's feet. |
+| `tool_guard` | The held tool is nearly used up. |
+| `block_guard` | The block isn't one the mode lists for mining. |
+| `bad_value` | A number outside its range, an angle that isn't a number, an unknown kind. |
+| `too_many` | No room for another timer. |
+| `no_command` | chat.expect without a declared command sent before it in the same hook. |
+<!-- end of generated table -->
 
 A release is never refused.
 
 ### `keys`
 The keys of a vanilla keyboard.
 
-| Key | Vanilla binding |
+<!-- generated table: keys -->
+| Member | What it is or does |
 |---|---|
-| `keys.forward`, `keys.back`, `keys.left`, `keys.right` | W, S, A, D |
-| `keys.jump` | Space |
-| `keys.sneak` | Shift |
-| `keys.sprint` | Ctrl |
-| `keys.drop` | Q: drops one of the held item |
-| `keys.drop_stack` | Ctrl+Q: drops the held stack |
-| `keys.swap_offhand` | F |
+| `keys.forward` | W: walk forward. |
+| `keys.back` | S: walk back. |
+| `keys.left` | A: strafe left. |
+| `keys.right` | D: strafe right. |
+| `keys.jump` | Space. |
+| `keys.sneak` | Shift. |
+| `keys.sprint` | Ctrl. |
+| `keys.drop` | Q: drops one of the held item. Tap only. |
+| `keys.drop_stack` | Ctrl+Q: drops the held stack. Tap only. |
+| `keys.swap_offhand` | F: swaps the held item with the offhand's. Tap only. |
+| `keys.release_all()` | Lets go of every key. |
+<!-- end of generated table -->
 
-Every key has `tap()`. The first seven can also be held:
+Every key has `tap()`, and the first seven can also be held. Each of them is an input:
 
-| Method | What it does |
+<!-- generated table: input -->
+| On a key or a button | What it is or does |
 |---|---|
-| `tap()` | Press and let go: one jump, one step's worth of walking, one dropped item |
-| `hold()` | Press and keep it down until `release()` |
-| `hold_for(ms)` | Press, and let go by itself after `ms` milliseconds (50 to 600,000) |
-| `release()` | Let go |
-| `held` | Whether it's down now (a property, not a method) |
+| `tap()` | Press and let go. |
+| `hold()` | Press and keep down until release(). |
+| `hold_for(ms)` | Press, and let go by itself after ms milliseconds (50 to 600,000). |
+| `hold_until_used()` | The right button only: hold until the item is used up once. |
+| `release()` | Let go. Never refused. |
+| `held` | Whether it's down now. |
+<!-- end of generated table -->
 
-`keys.release_all()` lets go of every key. Holding one of the three keys that only tap (`keys.drop.hold()`) is a mistake no value excuses: the script stops there, with the line.
+Holding one of the three keys that only tap (`keys.drop.hold()`) is a mistake no value excuses: the script stops there, with the line.
 
 ```rhai
 // Three seconds forward, sprinting.
@@ -128,7 +148,15 @@ keys.forward.hold_for(3000);
 **The leash.** A bot walks at most a set number of blocks from where it was put: where it joined, respawned, changed worlds or was teleported by the server. At the end of the leash, a direction key that would take it further, by where it looks, is released and returns `leashed`; walking back and along the edge works. The radius is a setting of the mode (8 blocks unless changed), not of the script, and a script can't move the anchor.
 
 ### `mouse`
-`mouse.left` and `mouse.right`, with the same four methods and `held`.
+
+<!-- generated table: mouse -->
+| Member | What it is or does |
+|---|---|
+| `mouse.left` | Attack; held on a block, mine. |
+| `mouse.right` | Use. |
+<!-- end of generated table -->
+
+Each button is an input, with the same methods and `held` as a key.
 
 **Left button**
 - `tap()` on an entity attacks it once. On anything else it swings the arm.
@@ -144,24 +172,54 @@ keys.forward.hold_for(3000);
 - `hold_until_used()` holds until the item is used up once (one piece of food eaten, one potion drunk) and then lets go by itself.
 
 ### `look`
-| | |
+
+<!-- generated table: look -->
+| Member | What it is or does |
 |---|---|
-| `look.at(yaw, pitch)` | Look in a direction, in degrees as the debug screen shows them: yaw −180 to 180, pitch −90 (up) to 90 (down) |
-| `look.turn(yaw, pitch)` | Turn by that much from where the bot looks now |
-| `look.at_position(x, y, z)` | Look at a point in the world |
-| `look.at_entity(entity)` | Look at an entity `world` returned |
-| `look.yaw`, `look.pitch` | Where the bot looks now |
+| `look.at(yaw, pitch)` | Look in a direction, in degrees: yaw -180 to 180, pitch -90 (up) to 90 (down). |
+| `look.turn(yaw, pitch)` | Turn by that much from where the bot looks now. |
+| `look.at_position(x, y, z)` | Look at a point in the world. |
+| `look.at_entity(entity)` | Look at an entity world returned. |
+| `look.yaw` | Where the bot looks, left and right. |
+| `look.pitch` | Where the bot looks, up and down. |
+<!-- end of generated table -->
+
+Angles are in degrees as the debug screen shows them: yaw −180 to 180, pitch −90 (up) to 90 (down).
 
 ### `hotbar`
-`hotbar.select(n)` selects slot 1 to 9, as the number keys do. `hotbar.selected` is the selected slot.
+
+<!-- generated table: hotbar -->
+| Member | What it is or does |
+|---|---|
+| `hotbar.select(n)` | Select slot 1 to 9. |
+| `hotbar.selected` | The selected slot, 1 to 9. |
+<!-- end of generated table -->
+
+The slots are numbered 1 to 9, as the number keys are.
 
 ### `vehicle`
-- `vehicle.mount("minecart")` gets into the nearest free minecart within reach. A bot that already rides does nothing. With none in reach it keeps looking for ten seconds, then gives up. Whether it worked shows in `bot.riding` at a later hook.
+
+<!-- generated table: vehicle -->
+| Member | What it is or does |
+|---|---|
+| `vehicle.mount(kind)` | Get into the nearest free vehicle of that kind within reach: "minecart". |
+| `vehicle.dismount()` | Get out. |
+<!-- end of generated table -->
+
+- `vehicle.mount("minecart")` gets into the nearest free minecart within reach, passing over one someone sits in. A bot that already rides does nothing. With none in reach it keeps looking for ten seconds, then gives up. Whether it worked shows in `bot.riding` at a later hook.
 - `vehicle.dismount()` gets out, as sneaking does.
 
 Minecarts only, for now: fleet-mc keeps a bot's seat only there ([ADR-0026](adr/0026-a-bot-in-a-minecart.md)).
 
 ### `chat`
+
+<!-- generated table: chat -->
+| Member | What it is or does |
+|---|---|
+| `chat.send(key, values)` | Send the declared message key; values is a map of its values, left out for none. |
+| `chat.expect(key, ms)` | After a declared command in the same hook: read the reply pattern key for ms milliseconds (250 to 30,000). |
+<!-- end of generated table -->
+
 A script sends only messages its mode declares, each with a key. A message can have typed values:
 
 | In the mode's settings | In the script |
@@ -171,6 +229,7 @@ A script sends only messages its mode declares, each with a key. A message can h
 
 - A value is a whole number in a range, a decimal number in a range with a set number of places, or one of a closed list of words.
 - A command's name is always written out in the declaration, never a value. Whoever sets the mode on a bot needs the same rights as for a step mode that sends those commands.
+- Below the right to edit the mode, a declared command shows as its `/` and name alone, as a step's chat does: a command can hold a password.
 - A script can't build text of its own.
 
 **Reading the server's answer.** A script never sees chat as text. The mode declares patterns, each with a key, and a script gets the key and the numbers of a line that fits one:
@@ -194,39 +253,66 @@ A script sends only messages its mode declares, each with a key. A message can h
 - **A value from chat is a number or one of your own words.** It can go into a declared message's value, inside that value's range, and nowhere else: a recipient or a command is always written in the declaration.
 - Every message sent, every window and every match is a line in the script's log, written by the runtime: a message that wasn't sent with the reason, a window that opened, one that ran out, one that never opened because its command wasn't sent, a match with its values, and a `chat.send` or `chat.expect` that was refused. They don't count against the script's own 20 lines a minute; the lines about what was refused have 20 a minute of their own.
 - **A window opens only when the server really got the command.** The bot's chat queue may refuse it (full, or the bot's chat rate used up), or the session may be unable to send it: no window opens then, and the log says why.
+- **Tested on a real server:** a player who writes the reply's exact text as chat, as a whisper or with `/me`, who dies to an item renamed to it or joins under a name as close to it as a name can be, never makes the balance example pay, even inside its window; the server's own line does, inside the window alone.
 
 ### `timer`
-| | |
-|---|---|
-| `timer.after(ms, name)` | Calls `on_timer(name)` once, `ms` milliseconds from now (250 to 86,400,000, which is 24 hours) |
-| `timer.every(ms, name)` | Calls it every `ms` milliseconds (the same range), first after `ms` |
-| `timer.cancel(name)` | Removes that timer |
 
-A name holds one timer: setting it again replaces the old one. Timers wait while the bot is dead or between worlds, and they're cleared when it disconnects, so `on_join` is where a script starts them. Timers that are due at the same moment run one after the other, in the order they were due, and other bots' hooks may run in between: on an agent whose scripts keep it busy, a timer's hook can begin some milliseconds late.
+<!-- generated table: timer -->
+| Member | What it is or does |
+|---|---|
+| `timer.after(ms, name)` | Call on_timer(name) once, ms milliseconds from now (250 to 86,400,000). |
+| `timer.every(ms, name)` | Call on_timer(name) every ms milliseconds, first after ms. |
+| `timer.cancel(name)` | Remove that timer. |
+<!-- end of generated table -->
+
+A name holds one timer: setting it again replaces the old one. A script holds at most 16. Timers wait while the bot is dead or between worlds, and they're cleared when it disconnects, so `on_join` is where a script starts them. Timers that are due at the same moment run one after the other, in the order they were set, and other bots' hooks may run in between: on an agent whose scripts keep it busy, a timer's hook can begin some milliseconds late.
 
 ### `random` and `log`
-- `random.between(low, high)` is a whole number from `low` to `high`, both included. `random.chance(percent)` is `true` that often.
-- `log.info(text)` writes a line into the script's log, which the app shows on the bot's page: up to 200 characters, 20 lines a minute.
+
+<!-- generated table: random -->
+| Member | What it is or does |
+|---|---|
+| `random.between(low, high)` | A whole number from low to high, both included. |
+| `random.chance(percent)` | true that often, in percent. |
+<!-- end of generated table -->
+
+<!-- generated table: log -->
+| Member | What it is or does |
+|---|---|
+| `log.info(text)` | Write a line: up to 200 characters, 20 lines a minute. |
+<!-- end of generated table -->
+
+The log shows on the bot's page in the app.
 
 ### `bot`: read-only
-| | |
+
+<!-- generated table: bot -->
+| Member | What it is or does |
 |---|---|
-| `bot.health` | 0 to 20 |
-| `bot.food` | 0 to 20 |
-| `bot.x`, `bot.y`, `bot.z` | Where its feet are |
-| `bot.dimension` | Such as `"minecraft:overworld"` |
-| `bot.riding` | Whether it sits in a vehicle |
-| `bot.held` | The item in its hand, or `()` for an empty hand: `id` (such as `"minecraft:iron_pickaxe"`), `count`, `durability` (uses left, or `()` for an item that doesn't wear) |
-| `bot.looking_at` | What its crosshair is on within reach, or `()`: `kind` (`"block"` or `"entity"`), `id`, `x`, `y`, `z` |
+| `bot.health` | Health, 0 to 20. |
+| `bot.food` | Food, 0 to 20. |
+| `bot.x` | Where its feet are: east (positive) and west. |
+| `bot.y` | Where its feet are: up (positive) and down. |
+| `bot.z` | Where its feet are: south (positive) and north. |
+| `bot.dimension` | The world it's in, such as "minecraft:overworld". |
+| `bot.riding` | Whether it sits in a vehicle. |
+| `bot.held` | The item in its hand, or () for an empty hand: id, count, durability. |
+| `bot.looking_at` | What its crosshair is on within reach, or (): kind, id, x, y, z. |
+<!-- end of generated table -->
+
+`bot.held` is a map of `id` (such as `"minecraft:iron_pickaxe"`), `count` and `durability` (uses left, or `()` for an item that doesn't wear). `bot.looking_at` is a map of `kind` (`"block"` or `"entity"`), `id`, `x`, `y` and `z`.
 
 ### `world`: read-only
-| | |
-|---|---|
-| `world.nearest(kind)` | The nearest entity of that kind within 16 blocks, or `()`: `kind`, `x`, `y`, `z`, `distance`, `occupied` |
-| `world.nearest_free(kind)` | The same, skipping vehicles someone sits in |
-| `world.block(x, y, z)` | The block's ID there, such as `"minecraft:lava"`, or `()` further than 4 blocks from the bot |
 
-**A hook sees the world as it was when the hook started.** What its own actions changed shows at the next hook.
+<!-- generated table: world -->
+| Member | What it is or does |
+|---|---|
+| `world.nearest(kind)` | The nearest entity of that kind within 16 blocks, or (): kind, x, y, z, distance, occupied. |
+| `world.nearest_free(kind)` | The same, skipping vehicles someone sits in. |
+| `world.block(x, y, z)` | The block's ID there, or () further than 4 blocks from the bot. |
+<!-- end of generated table -->
+
+An entity is a map of `kind`, `x`, `y`, `z`, `distance` and `occupied`. **A hook sees the world as it was when the hook started.** What its own actions changed shows at the next hook.
 
 ### Limits
 A script is never faster than a step mode. The limits sit below the script, so no script can go around them.
@@ -256,7 +342,7 @@ A script itself is limited too:
 | Timers | 16, each 250 ms to 24 hours |
 | Patterns, declared messages | 8, 16 |
 
-**When a script hits a limit or fails,** it stops, every key and button is released, and the bot stays online doing nothing. The app shows the error with its line; a limit has no line, so the app names the hook that ran. It starts again when the bot is started again or its mode is saved or changed.
+**When a script hits a limit or fails,** it stops, every key and button is released, and the bot stays online doing nothing. The app shows the error with its line; a limit has no line, so the app names the hook that ran. It starts again when the bot is started again or its mode is saved or changed. A script that loops, recurses or fills its state stops by itself, and the other bots on its agent go on: tested with hundreds of scripts at their budgets beside step-mode bots.
 
 **What the language leaves out.** It's Rhai without a few things:
 - **No anonymous functions** (`|x| x + 1`). Give the function a name and pass `Fn("name")`: `list.filter(Fn("is_big"))`.
@@ -266,10 +352,36 @@ A script itself is limited too:
 - **No variable, parameter, loop variable or caught error named like a game object** or `state`.
 
 ### Errors
-- **When the mode is saved,** the server checks the script: its syntax, the hook names and their parameters, every variable name, that no variable or parameter is called like a game object, that nothing stands outside a function, and the limits for functions and nesting. An error names its line and column.
-- **A misspelled method** (`keys.forward.hodl()`) can only be found when that line runs: Rhai doesn't know a value's type before. The script stops there, with the line.
+- **When the mode is saved,** the server checks the script: its syntax, the hook names and their parameters, every variable name, that no variable or parameter is called like a game object, that nothing stands outside a function, and the limits for functions and nesting. An error names its line and column. The app's editor runs the same check while you type.
+- **A misspelled method** (`keys.forward.hodl()`) can only be found when that line runs: Rhai doesn't know a value's type before. The script stops there, with the line. The editor marks one it can tell from the API's description.
 - **A wrong value is a result, a wrong program an error.** A number out of range or a text where a number belongs returns `bad_value`, and the script goes on. A key the mode doesn't declare (`chat.send("nope")`), `chat.expect` for a pattern that isn't a reply, a hold of a key that only taps: these stop the script with their line.
 - A script can catch its own errors with `try` and `catch`. It can't catch its way past a limit: the work and the time in a hook, the state's limits and the depth of its calls end the hook whatever it catches. (One exception that gains a script nothing: a text or an array that grows past its limit inside a function called through `Fn(…)` by an array's method can be caught. The hook's work and time still end it.)
+
+### Converting a step mode
+**"Convert to script"** in the mode editor writes a step mode as the script that does what its steps do, for an Admin or the Owner. Nothing changes until the mode is saved, and "Keep the steps" goes back. Every line of the script is marked with the step it does, named as the editor names it (`// while it's online, step 2`).
+
+- **Each step is a line of a hook:** a step when it joins in `on_join`, one after it respawns in `on_respawn`, and a step while it's online on a timer of its own, set in `on_join` and named after it (`online_2`). Steps next to each other on one schedule without jitter share a timer. A jitter is a random part of the gap, drawn again before each run. A probability is a `random.chance` around the step's line; a run it skips is due again all the same.
+- **Each action is the script's call that does it:** `look.at`, `look.turn`, `keys.jump.tap()`, `keys.sneak.hold()` and `release()`, `mouse.right.tap()`, `mouse.right.hold()` and `release()`, `hotbar.select`, and `vehicle.mount("minecart")` for getting into the nearest minecart.
+- **A chat step becomes a declared message,** keyed by its step (`join_1`), and the script sends it by its key: its text is never in the script. Below the right to edit the mode it shows as its `/` and name, as the step did. A brace in its text is written doubled. A step whose command's name holds a brace, or whose text holds an invisible character, can't be declared: the editor says so at the step.
+- **An on-respawn chat goes at most once every 30 seconds,** as the step did.
+
+**What a script does differently.** The editor lists what applies to the mode's own steps when it converts:
+
+| A step | In a script |
+|---|---|
+| Swing the arm | A swing is a left click, which hits an entity under the crosshair, so the converted step swings only while the crosshair is on none |
+| Attack what's in front | A left click on nothing would swing, so the converted step clicks only while the crosshair is on an entity, as the step attacked only one |
+| A swing more often than every 0.5 s, a use more often than every 0.25 s | At most that often: a left click's limit, and a timer's shortest |
+| Two steps that do the same kind of thing | They share that kind's limit: a run that comes too soon after the other's is skipped. Two at the same moment (both when it joins, both after it respawns): the second |
+| Hold right-click | A held right button with an item that isn't used over time uses it again every 4 ticks, as in vanilla |
+| Get into the nearest minecart | Passes over a minecart someone sits in, which the step didn't |
+| A gap longer than 24 hours (an interval plus its jitter) | At most 24 hours, a timer's longest |
+
+And in every script, whatever the steps were: the runtime lets go of every key and button when the bot dies, respawns or changes worlds (a step mode lets go after a respawn only when it has steps for it), and a timer waits while the bot is dead and runs right after the respawn, where a step mode's run while dead did nothing.
+
+**A mode that repeats more than 16 steps on schedules of their own** can't be converted: a script has 16 timers. Put repeating steps with one interval and no jitter next to each other, and they share one.
+
+**Getting into the nearest minecart is going away** in the next release ([ADR-0034](adr/0034-a-stopgap-action-into-the-nearest-minecart.md)): no new step offers it, and a mode can't gain it. A mode that has it keeps it and keeps running until then; convert it before that release.
 
 ### Examples
 #### An AFK farm

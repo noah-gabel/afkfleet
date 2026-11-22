@@ -85,6 +85,16 @@ pub const MODE_NAME_TAKEN: &str = "is already another mode's name";
 /// The field message of steps beside a script (ADR-0036, D13).
 pub const MODE_SCRIPT_HAS_NO_STEPS: &str = "must be empty for a scripted mode";
 
+/// The field message of an edit that would turn a scripted mode into steps:
+/// an app older than the server reads a scripted mode as one without steps,
+/// and saving it there would lose its script (ADR-0046, C6).
+pub const MODE_SCRIPT_STAYS: &str = "can't replace a scripted mode's script: an app older than the server shows the mode without it; update the app";
+
+/// The field message of `enter_minecart` in a new mode, or in an edit of a
+/// mode that didn't have it: the stopgap goes in the next release, and a
+/// script does it (Plan.md P15.27; ADR-0036, D17). A stored mode keeps it.
+pub const MODE_STOPGAP_GOING: &str = "is going away in the next release: a scripted mode gets in with vehicle.mount(\"minecart\"), and Convert to script turns a step mode into one";
+
 /// The field message of a built-in mode's name (S13, R4).
 pub const MODE_NAME_RESERVED: &str = "is a built-in mode's name";
 

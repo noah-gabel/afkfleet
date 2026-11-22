@@ -32,6 +32,7 @@
 //!
 //! Every wait is bounded and wakes on a service's next log line.
 
+mod last_release;
 mod world;
 
 use core::time::Duration;

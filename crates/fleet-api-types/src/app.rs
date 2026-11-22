@@ -25,8 +25,9 @@ use ts_rs::TS;
 use crate::bots::BotResponse;
 use crate::error::{ErrorCode, FieldError, MESSAGE_MAX_CHARS, REQUEST_ID_MAX_CHARS};
 use crate::events::EventMessage;
+use crate::modes::{ModeStepRequest, ModeSteps};
 use crate::open::Open;
-use crate::script::SCRIPT_SOURCE_MAX_BYTES;
+use crate::script::{ModeScript, SCRIPT_SOURCE_MAX_BYTES};
 use crate::text::BoundedText;
 
 /// The most bytes of [`ServerProfileRequest::url`]: far more than any origin,
@@ -343,6 +344,79 @@ pub struct ScriptCheck {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub problem: Option<FieldError>,
+}
+
+/// The `convert_to_script` command's input: a step mode's steps as the
+/// mode editor holds them (Plan.md P15.27; ADR-0046). A chat step can hold
+/// a password, so it's a direct call, never a cached one; the app's Rust
+/// side converts it and stores nothing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Validate, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ScriptConvertRequest {
+    /// The steps, under the server's rules for a mode's steps, each broken
+    /// one answered at its field as the server's 422 would be.
+    #[garde(dive)]
+    #[ts(as = "Vec<ModeStepRequest>")]
+    pub steps: ModeSteps,
+}
+
+/// The `convert_to_script` command's answer: the script the steps make,
+/// with what it does differently, or why the steps can't be one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+pub struct ScriptConversion {
+    /// The scripted mode's body, as the mode editor reads a mode its viewer
+    /// may edit: each declared message whole. None with a `problem`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub script: Option<ModeScript>,
+    /// What the script does differently, by step.
+    pub notes: Vec<ConversionNote>,
+    /// Why the steps can't be a script: a chat step's text a mode can't
+    /// declare, at its `message`, or more timers than a script has, at
+    /// `steps`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub problem: Option<FieldError>,
+}
+
+/// Something a converted step does differently in a script (ADR-0046).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct ConversionNote {
+    /// The step's place in the request's steps, from 0.
+    pub step: u8,
+    /// What's different.
+    pub kind: ConversionNoteKind,
+    /// The other step, for `shares_limit`: its place, from 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub other: Option<u8>,
+    /// For `slower` and `shares_limit`: the shortest time between two runs
+    /// in a script, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub every_ms: Option<u32>,
+}
+
+/// What a converted step does differently. Closed: the app's Rust side and
+/// its UI ship together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversionNoteKind {
+    /// A swing is a left click: skipped while the crosshair is on an
+    /// entity, which a click would hit.
+    SwingSkipsEntities,
+    /// It repeats no faster than `every_ms`, a script's shortest for it.
+    Slower,
+    /// A held right button uses again every 4 game ticks with an item that
+    /// isn't used over time.
+    HoldRepeats,
+    /// It passes over a minecart someone sits in.
+    MountSkipsOccupied,
+    /// A gap between two runs is at most 24 hours.
+    GapCapped,
+    /// It and step `other` share a limit: a run within `every_ms` of the
+    /// other's is refused.
+    SharesLimit,
 }
 
 /// What the `set_window_theme` command takes: the user's theme choice, for

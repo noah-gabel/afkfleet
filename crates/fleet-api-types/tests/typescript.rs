@@ -37,7 +37,7 @@ fn exported() -> (TempDir, BTreeMap<String, String>) {
 }
 
 /// Every file the export writes, sorted: one per type.
-const EXPORTED_FILES: [&str; 162] = [
+const EXPORTED_FILES: [&str; 166] = [
     "AccountKind.ts",
     "AccountLabel.ts",
     "AccountPage.ts",
@@ -82,6 +82,8 @@ const EXPORTED_FILES: [&str; 162] = [
     "CommandErrorCode.ts",
     "ConflictTextResponse.ts",
     "ConnectFailure.ts",
+    "ConversionNote.ts",
+    "ConversionNoteKind.ts",
     "CreateGrantRequest.ts",
     "CreateInviteRequest.ts",
     "CreateModeRequest.ts",
@@ -169,6 +171,8 @@ const EXPORTED_FILES: [&str; 162] = [
     "ScriptApiObject.ts",
     "ScriptCheck.ts",
     "ScriptCheckRequest.ts",
+    "ScriptConversion.ts",
+    "ScriptConvertRequest.ts",
     "ScriptExample.ts",
     "ScriptHookName.ts",
     "ScriptLogKind.ts",
@@ -211,13 +215,15 @@ fn the_export_writes_one_file_per_type() {
 
 /// The desktop app's IPC types (ADR-0017): never on the HTTP wire, so the
 /// `OpenAPI` document leaves them out.
-const APP_TYPES: [&str; 28] = [
+const APP_TYPES: [&str; 32] = [
     "ApiErrorDetails.ts",
     "AppVersion.ts",
     "BotCommandEffect.ts",
     "BotCommandResponse.ts",
     "CommandError.ts",
     "CommandErrorCode.ts",
+    "ConversionNote.ts",
+    "ConversionNoteKind.ts",
     "CustomCaView.ts",
     "LiveDisconnect.ts",
     "LiveRefetchReason.ts",
@@ -232,6 +238,8 @@ const APP_TYPES: [&str; 28] = [
     "ScriptApiObject.ts",
     "ScriptCheck.ts",
     "ScriptCheckRequest.ts",
+    "ScriptConversion.ts",
+    "ScriptConvertRequest.ts",
     "ScriptExample.ts",
     "ServerProfileRequest.ts",
     "ServerProfileResponse.ts",

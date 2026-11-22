@@ -23,6 +23,10 @@
 //! - [`slow_on_respawn`]: the slow on-respawn case (ADR-0020, S26): a real
 //!   Minecraft server in Docker, the agent's bot on the azalea connector;
 //!   `just test-slow` runs it.
+//! - [`slow_scripts`]: Phase 15's check on a real Minecraft server in Docker
+//!   (P15.29, P15.36): the reference's examples as written, and the balance
+//!   example beside a second player whose spoofed lines never count; `just
+//!   test-slow` runs it.
 //! - [`timing`]: the timing contracts between the agent and the server,
 //!   over their constants.
 //! - [`smoke`]: P12.7's smoke tests (ADR-0022, S19): the production compose
@@ -52,5 +56,6 @@ mod loopback;
 mod managed_check;
 mod sftp;
 mod slow_on_respawn;
+mod slow_scripts;
 mod smoke;
 mod timing;

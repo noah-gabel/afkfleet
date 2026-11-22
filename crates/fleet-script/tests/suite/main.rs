@@ -10,6 +10,7 @@
 #![cfg(test)]
 
 mod chat;
+mod convert;
 mod examples;
 mod limits;
 mod objects;

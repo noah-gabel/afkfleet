@@ -29,6 +29,8 @@
 // An authenticator here has one valid code at a time (`code(username)`), which a successful
 // use replaces, like a TOTP code that can't be used twice. A pending setup expects
 // `setupCode()`. Everything is a placeholder (CLAUDE.md).
+import { readFileSync } from "node:fs";
+
 import type { AccountKind } from "@afkfleet/ui/generated/AccountKind";
 import type { AccountPage } from "@afkfleet/ui/generated/AccountPage";
 import type { AccountResponse } from "@afkfleet/ui/generated/AccountResponse";
@@ -77,6 +79,7 @@ import type { ModeVisibility } from "@afkfleet/ui/generated/ModeVisibility";
 import type { PreviewChatFormatsResponse } from "@afkfleet/ui/generated/PreviewChatFormatsResponse";
 import type { RegisterResponse } from "@afkfleet/ui/generated/RegisterResponse";
 import type { ScriptCheck } from "@afkfleet/ui/generated/ScriptCheck";
+import type { ScriptConversion } from "@afkfleet/ui/generated/ScriptConversion";
 import type { ServerProfileState } from "@afkfleet/ui/generated/ServerProfileState";
 import type { ServerSettingsPage } from "@afkfleet/ui/generated/ServerSettingsPage";
 import type { ServerSettingsResponse } from "@afkfleet/ui/generated/ServerSettingsResponse";
@@ -180,6 +183,7 @@ export const COMMANDS = [
   "install_update",
   "app_version",
   "check_script",
+  "convert_to_script",
 ] as const;
 
 /** One command. */
@@ -206,6 +210,48 @@ function checkedScript(source: string): ScriptCheck {
     }
   }
   return {};
+}
+
+/** The conversion story's steps and the real converter's answer for them (converted.json). */
+const CONVERTED: {
+  readonly request: { readonly steps: unknown };
+  readonly answer: ScriptConversion;
+} = JSON.parse(readFileSync(new URL("./converted.json", import.meta.url), "utf8"));
+
+/** Whether two values read from JSON are the same, whatever the order of an object's keys. */
+function sameJson(left: unknown, right: unknown): boolean {
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((item, index) => sameJson(item, right[index]))
+    );
+  }
+  if (typeof left === "object" && left !== null && typeof right === "object" && right !== null) {
+    const keys = Object.keys(left);
+    return (
+      keys.length === Object.keys(right).length &&
+      keys.every((key) =>
+        sameJson((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key]),
+      )
+    );
+  }
+  return left === right;
+}
+
+/**
+ * The app's conversion to a script, stood in for (ADR-0046): the story's steps get the real
+ * converter's answer, which the desktop crate's test holds equal; any other steps a problem.
+ */
+function convertedSteps(steps: unknown): ScriptConversion {
+  if (sameJson(steps, CONVERTED.request.steps)) {
+    return CONVERTED.answer;
+  }
+  return {
+    notes: [],
+    problem: { path: "steps", message: "the e2e fake converts only its story's steps" },
+  };
 }
 
 /** What a command does: its value, or a refusal. */
@@ -890,7 +936,7 @@ export class FakeBackend {
     }
     // Not the theme's, which reaches no server, nor the profile, which only the app holds,
     // nor the updater's, which ask GitHub (ADR-0022, S27), nor the app's version (U37), nor a
-    // script's check, which the app answers itself (ADR-0045).
+    // script's check and a conversion to one, which the app answers itself (ADR-0045, ADR-0046).
     if (
       this.#refusing !== null &&
       command !== "set_window_theme" &&
@@ -898,7 +944,8 @@ export class FakeBackend {
       command !== "check_update" &&
       command !== "install_update" &&
       command !== "app_version" &&
-      command !== "check_script"
+      command !== "check_script" &&
+      command !== "convert_to_script"
     ) {
       // The real logout ends the session in the app whatever the server does, and answers
       // that the server wasn't told (ADR-0022, S1).
@@ -2423,6 +2470,8 @@ export class FakeBackend {
         return value({ version: "0.1.0" });
       case "check_script":
         return value(checkedScript(String(request.source ?? "")));
+      case "convert_to_script":
+        return value(convertedSteps(request.steps));
       case "open_verification_link":
         if (this.#flow === null) {
           return refused("no_verification_link");

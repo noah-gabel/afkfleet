@@ -53,6 +53,8 @@ import type { RegisterRequest } from "@afkfleet/ui/generated/RegisterRequest";
 import type { RegisterResponse } from "@afkfleet/ui/generated/RegisterResponse";
 import type { ScriptCheck } from "@afkfleet/ui/generated/ScriptCheck";
 import type { ScriptCheckRequest } from "@afkfleet/ui/generated/ScriptCheckRequest";
+import type { ScriptConversion } from "@afkfleet/ui/generated/ScriptConversion";
+import type { ScriptConvertRequest } from "@afkfleet/ui/generated/ScriptConvertRequest";
 import type { ServerProfileRequest } from "@afkfleet/ui/generated/ServerProfileRequest";
 import type { ServerProfileResponse } from "@afkfleet/ui/generated/ServerProfileResponse";
 import type { ServerProfileState } from "@afkfleet/ui/generated/ServerProfileState";
@@ -391,6 +393,10 @@ export class TauriApiClient implements ApiClient {
 
   checkScript(request: ScriptCheckRequest): Promise<ScriptCheck> {
     return this.#call("check_script", { request });
+  }
+
+  convertToScript(request: ScriptConvertRequest): Promise<ScriptConversion> {
+    return this.#call("convert_to_script", { request });
   }
 
   appVersion(): Promise<AppVersion> {

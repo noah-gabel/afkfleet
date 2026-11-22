@@ -37,6 +37,10 @@ A mode can be a script instead of steps. Admins and the Owner write them: in **M
 
 Anyone can run a shared script on a bot they control. A mode that reads the server's chat at any time, rather than only as a reply to its own command, is marked, as the riskier kind.
 
+**Convert to script** turns a mode's steps into a script that does the same, for Admins and the Owner: open the mode and press it under its name. The script appears in the editor, each line marked with the step it does, and a note lists what a script does differently, such as a swing that never hits a mob or a player in front of the bot. Nothing changes until you save; **Keep the steps** goes back to them. A chat step becomes one of the script's messages, so a command with a password in it stays hidden from those who can't edit the mode, as it was.
+
+**Get into the nearest minecart is going away** in the next release: a new step doesn't offer it any more, and a mode that has one says so at the step. Such a mode keeps running until then; convert it to a script, whose `vehicle.mount("minecart")` does the same and also passes over a minecart someone sits in.
+
 On a bot's screen, **Script** shows whether its script runs, what stopped it, and its log. **Show in the script** opens the mode at the line of the error. The app shows what the bot reported while it was open: after a restart of the app, a running script's status comes back at the bot's next join. **Waiting for an updated agent** means the bot's mode is a script and every agent online runs a version too old for it: ask the server's admin to update the agent.
 
 ## Updates
