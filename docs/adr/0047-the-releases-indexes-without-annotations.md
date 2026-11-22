@@ -38,3 +38,6 @@ Nothing ran the merge before a tag: release.test.mjs answers docker with a stand
 
 ### D2. The merge prints the Buildx it runs with
 `release.mjs merge` asks `docker buildx version` first, before any registry call, and prints it as `Buildx: …`. A Buildx that doesn't answer refuses the merge, since nothing after it would work. The line sits in the merge job's log right above anything Buildx refuses, so the next runner change shows where it bites; each job's "Set up job" group already names its runner image's version, whose software list has the rest. It's printed by the script, not by a workflow step, so the jobs that hold the token keep their pinned steps.
+
+### D3. v0.2.0 is never released; v0.2.1 is
+v0.2.0's tag stays where it was pushed (docs/releasing.md: a pushed tag is never moved or pushed again), and nothing is released from it. Its `0.2.0-arm64` and `0.2.0-amd64` images stay in the registry, in no index. v0.2.1 carries v0.2.0's code with D1 and D2, so it's the release after v0.1.3, and its notes are v0.2.0's. docs/releasing.md's paragraph on failed runs names it.
