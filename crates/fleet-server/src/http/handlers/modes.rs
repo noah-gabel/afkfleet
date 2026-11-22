@@ -51,8 +51,8 @@ use axum::http::StatusCode;
 use core::num::NonZeroU32;
 
 use fleet_api_types::modes::{
-    CreateModeRequest, MODE_NAME_TAKEN, MODE_SCRIPT_HAS_NO_STEPS, ModePage, ModeResponse,
-    ModeSteps, UpdateModeRequest,
+    CreateModeRequest, MODE_NAME_TAKEN, MODE_SCRIPT_HAS_NO_STEPS, MODE_STOPGAP_GOING, ModePage,
+    ModeResponse, ModeSteps, UpdateModeRequest,
 };
 use fleet_api_types::script::{self, ModeScriptRequest};
 use fleet_api_types::{ErrorResponse, FieldError, PageQuery};
@@ -212,6 +212,7 @@ async fn creating(
             }
             CreateModeError::Store(error) => ApiError::from(error),
             CreateModeError::Script(error) => not_a_program(error),
+            CreateModeError::Stopgap { step } => stopgap_going(step),
             other @ (CreateModeError::WrongRoute { .. }
             | CreateModeError::Mint(_)
             | CreateModeError::Audit(_)) => ApiError::internal(other),
@@ -352,6 +353,7 @@ async fn editing(
             UpdateModeError::AgentTooOld => ApiError::AgentTooOld,
             UpdateModeError::Store(error) => ApiError::from(error),
             UpdateModeError::Script(error) => not_a_program(error),
+            UpdateModeError::Stopgap { step } => stopgap_going(step),
             other @ (UpdateModeError::WrongRoute { .. }
             | UpdateModeError::VersionExhausted
             | UpdateModeError::Lost
@@ -405,6 +407,16 @@ fn not_a_program(error: ScriptCheckError) -> ApiError {
         }
         other @ ScriptCheckError::CompilerFailed(_) => ApiError::internal(other),
     }
+}
+
+/// The stopgap `enter_minecart` where a mode may not gain it: 422 at the
+/// step's action, with the text that points at the conversion (ADR-0036,
+/// D17).
+fn stopgap_going(step: usize) -> ApiError {
+    ApiError::Validation(vec![FieldError::new(
+        &format!("steps[{step}].action.type"),
+        MODE_STOPGAP_GOING,
+    )])
 }
 
 /// `DELETE /api/v1/modes/{id}`: deletes a mode no bot uses.
