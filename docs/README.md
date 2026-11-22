@@ -6,7 +6,7 @@ Every document in this folder. Start with the repository's [README](../README.md
 - [Using the afkfleet app](using-the-app.md), for friends: installing the app, connecting to a server, registering with an invite, 2FA, updates and removing it.
 - [The runbook](runbook.md), for whoever hosts afkfleet on a Linux host with Docker: installing, settings, updates, backups and restores, the keys' copy, metrics, agents on other hosts, incident response and uninstalling.
 - [Releasing afkfleet](releasing.md), for the maintainer: GitHub's setup, the updater's key, each release's steps and the Minecraft version bump.
-- [Scripted modes: the script reference](scripting.md), for whoever writes a mode as a script: hooks, state, the game objects, limits and examples. **A draft:** Phase 15 is being built, Phase 16 is planned.
+- [Scripted modes: the script reference](scripting.md), for whoever writes a mode as a script: hooks, state, the game objects, limits, converting a step mode, and examples. Part 2, inventory and menus, is planned for Phase 16.
 - [Developing afkfleet](development.md), for contributors: the architecture, a local fleet, the binaries' settings and the API, the commands, and the checks only you run with your own account.
 
 ## Security, design and checks
@@ -62,3 +62,4 @@ Each architecture decision record (ADR) holds one decision with its context, its
 - [0043. The script runner in fleet-runtime, and a script's hooks on the async workers](adr/0043-the-script-runner-and-hooks-on-the-async-workers.md)
 - [0044. Scripted modes on the wire, the server and the agent: who writes one, what's checked at save, never below an agent's level, and what an agent reports](adr/0044-scripted-modes-on-the-wire-the-server-and-the-agent.md)
 - [0045. The script editor and a bot's script in the app: CodeMirror in a shadow root, one description, the app's own check, and the chat's ↑ and ↓](adr/0045-the-script-editor-and-a-bots-script-in-the-app.md)
+- [0046. The stopgap's way out and Phase 15's check: a step mode converted to a script, the reference generated, and the examples and the spoofs on a real server](adr/0046-the-stopgaps-way-out-and-phase-15s-check.md)
