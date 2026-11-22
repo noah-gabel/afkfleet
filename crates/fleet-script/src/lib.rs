@@ -17,6 +17,9 @@
 //!   ([`Instance::handle`]) and wakes it when it asked
 //!   ([`Instance::wake`]); each call runs hooks to their end and returns
 //!   the [`Action`]s they asked for, and what they were [`Refused`].
+//! - [`convert`] writes a step mode as the script that does what its
+//!   steps do, with what it does differently ([`Conversion`]): "Convert
+//!   to script" (Plan.md P15.27).
 //! - [`API`] describes every object a script uses, for the reference and
 //!   the editor, and [`EXAMPLES`] are the complete scripts the reference
 //!   shows.
@@ -42,6 +45,7 @@ mod action;
 mod api;
 mod budget;
 mod compile;
+mod convert;
 mod engine;
 mod error;
 mod examples;
@@ -54,6 +58,7 @@ mod turn;
 pub use action::{Action, Asked, PressKind, Refused};
 pub use api::describe::{API, Member, MemberKind, Object, reasons};
 pub use compile::{Program, compile};
+pub use convert::{Conversion, ConvertError, Note, NoteKind, convert};
 pub use error::{
     CompileError, CompileErrorKind, Limit, Misuse, ScriptError, ScriptErrorKind, SourcePosition,
 };
