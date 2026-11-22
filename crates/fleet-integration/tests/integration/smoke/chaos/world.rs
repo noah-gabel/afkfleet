@@ -46,7 +46,7 @@ pub(crate) const BOTS: [&str; 3] = ["AfkBot1", "AfkBot2", "AfkBot3"];
 
 /// Where every bot is sent: the project's Minecraft server, by its service
 /// name.
-const MINECRAFT: &str = "minecraft:25565";
+pub(crate) const MINECRAFT: &str = "minecraft:25565";
 
 /// How long the Minecraft server's first start may take: it downloads its
 /// jar and makes its world.
@@ -104,16 +104,27 @@ const RETRY: &str = "      AFKFLEET_AGENT__RETRY__MAX_DELAY_SECS: \"20\"
 const DATA_CAP: &str = "32m";
 const BACKUPS_CAP: &str = "16m";
 
+/// The agent of the last release, which every agent of this one must
+/// stand beside until it's updated (Plan.md P15.29): the image the release
+/// published, pinned by its index digest.
+pub(crate) const LAST_RELEASE_AGENT: &str = "ghcr.io/noah-gabel/afkfleet-agent:0.1.3@sha256:2bf28e7e7be52d8fdf19a2debb6d46c228d8ee0e2e09ffa2c8e7a9034c98ef93";
+
 /// The compose file a chaos stack adds to the production ones; see the
 /// [module docs](self).
 pub(crate) fn additions(net: Net) -> String {
-    compose_file(net, false)
+    compose_file(net, false, None)
 }
 
 /// [`additions`], with the database's and the backups' volumes capped and
 /// the holder that keeps them mounted.
 pub(crate) fn capped_additions(net: Net) -> String {
-    compose_file(net, true)
+    compose_file(net, true, None)
+}
+
+/// [`additions`], with the second agent [`LAST_RELEASE_AGENT`], pulled when
+/// Docker doesn't have it yet.
+pub(crate) fn last_release_additions(net: Net) -> String {
+    compose_file(net, false, Some(LAST_RELEASE_AGENT))
 }
 
 /// The capped stack's `holder`, which keeps both capped volumes mounted,
@@ -166,7 +177,7 @@ fn capped_volumes() -> String {
     )
 }
 
-fn compose_file(net: Net, capped: bool) -> String {
+fn compose_file(net: Net, capped: bool, second_image: Option<&str>) -> String {
     let play = net.play_subnet();
     let port = api_port(net);
     // The capped stack's server writes its backups into the capped volume.
@@ -179,6 +190,12 @@ fn compose_file(net: Net, capped: bool) -> String {
         (holder_services(), capped_volumes())
     } else {
         (String::new(), String::new())
+    };
+    // The second agent: this release's image, which `just images` built,
+    // or another one, pulled once.
+    let (second_image, pull) = match second_image {
+        Some(image) => (image.to_owned(), "missing"),
+        None => ("${AFKFLEET_AGENT_IMAGE}".to_owned(), "never"),
     };
     format!(
         r#"# The chaos tests' own additions (ADR-0033); never in deploy/.
@@ -220,9 +237,9 @@ services:
       AFKFLEET_AGENT__CONTROL_PLANE__PUBLIC_TARGETS: "false"
       AFKFLEET_AGENT__CONTROL_PLANE__PRIVATE_TARGETS: '["{play}"]'
 {RETRY}  {SECOND_SERVICE}:
-    image: ${{AFKFLEET_AGENT_IMAGE}}
+    image: {second_image}
     profiles: [{SECOND_PROFILE}]
-    pull_policy: never
+    pull_policy: {pull}
     user: "65532:65532"
     read_only: true
     cap_drop: [ALL]
@@ -303,6 +320,23 @@ impl Chaos {
     /// and the second agent, the Owner logged in and the three bots online
     /// on the local agent.
     pub(crate) async fn start(project: &'static str, net: u8, capped: bool) -> Self {
+        let extra = if capped { capped_additions } else { additions };
+        Self::start_with(project, net, capped, extra).await
+    }
+
+    /// [`start`](Self::start), with the second agent of the last release
+    /// (Plan.md P15.29).
+    pub(crate) async fn start_beside_the_last_release(project: &'static str, net: u8) -> Self {
+        Self::start_with(project, net, false, last_release_additions).await
+    }
+
+    /// [`start`](Self::start), with `extra` as the compose file it adds.
+    async fn start_with(
+        project: &'static str,
+        net: u8,
+        capped: bool,
+        extra: fn(Net) -> String,
+    ) -> Self {
         let mut stack = Stack::prepare_as(Spec {
             path: ProxyPath::Host,
             project,
@@ -310,7 +344,7 @@ impl Chaos {
             make_backups: true,
             ops: true,
             grpc: None,
-            extra: Some(if capped { capped_additions } else { additions }),
+            extra: Some(extra),
         });
         if capped {
             // First, and for the test's whole life: a tmpfs volume lives
