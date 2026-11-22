@@ -998,8 +998,8 @@ fn on_join(first) {
 }
 
 fn on_respawn() {
-    vehicle.mount("minecart"); // after a respawn, step 1
-    if !state.respawn_chat { // after a respawn, step 2, at most once every 30 seconds
+    vehicle.mount("minecart"); // after it respawns, step 1
+    if !state.respawn_chat { // after it respawns, step 2, at most once every 30 seconds
         state.respawn_chat = true;
         timer.after(30000, "respawn_chat");
         chat.send("respawn_2");

@@ -521,13 +521,9 @@ impl ModeService {
                 UpdateModeError::Denied(error)
             })?;
         }
-        // A mode that has the stopgap keeps it; none gains it (ADR-0036, D17).
-        if stopgap(&stored.mode.definition).is_none()
-            && let Some(step) = stopgap(&edit.definition)
-        {
+        keeps_the_stopgap_out(&stored.mode.definition, &edit.definition).inspect_err(|_| {
             debug!(user_id = %by.actor.id, mode_id = %id, "a mode edit was refused: it brings in the stopgap that's going away");
-            return Err(UpdateModeError::Stopgap { step });
-        }
+        })?;
         if shows_the_same(&stored.mode, &edit) {
             // Dropping the transaction writes nothing (S21).
             return Ok(Edited::Unchanged(stored));
@@ -801,6 +797,21 @@ fn stopgap(definition: &ModeDefinition) -> Option<usize> {
         .steps()
         .iter()
         .position(|step| step.action == Action::EnterMinecart)
+}
+
+/// Whether an edit from `was` to `will_be` keeps the stopgap out: a mode
+/// that has it keeps it, and none gains it (ADR-0036, D17).
+///
+/// # Errors
+/// [`UpdateModeError::Stopgap`] at the step that brings it in.
+fn keeps_the_stopgap_out(
+    was: &ModeDefinition,
+    will_be: &ModeDefinition,
+) -> Result<(), UpdateModeError> {
+    match (stopgap(was), stopgap(will_be)) {
+        (None, Some(step)) => Err(UpdateModeError::Stopgap { step }),
+        _ => Ok(()),
+    }
 }
 
 async fn checked_bots(

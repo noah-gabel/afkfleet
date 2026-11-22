@@ -275,7 +275,7 @@ enum Section {
     Join,
     /// "While it's online": the repeating steps.
     Online,
-    /// "After a respawn": the steps on respawn.
+    /// "After it respawns": the steps on respawn.
     Respawn,
 }
 
@@ -302,7 +302,7 @@ impl Section {
         match self {
             Self::Join => "when it joins",
             Self::Online => "while it's online",
-            Self::Respawn => "after a respawn",
+            Self::Respawn => "after it respawns",
         }
     }
 }
