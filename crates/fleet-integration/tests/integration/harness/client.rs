@@ -12,7 +12,9 @@ use fleet_api_types::accounts::{
 use fleet_api_types::agents::AgentResponse;
 use fleet_api_types::auth::{LoginRequest, RegisterRequest};
 use fleet_api_types::bots::{BotModeRequest, BotPatchRequest, BotResponse};
-use fleet_api_types::chat::{ChatPage, ChatPageQuery, ChatSendRequest, ChatSendResponse};
+use fleet_api_types::chat::{
+    ChatCommandRequest, ChatPage, ChatPageQuery, ChatSendRequest, ChatSendResponse,
+};
 use fleet_api_types::invites::CreateInviteRequest;
 use fleet_api_types::mfa::CODE_MAX_CHARS;
 use fleet_api_types::modes::{
@@ -362,6 +364,22 @@ impl Owner {
             .send_chat(
                 bot,
                 &ChatSendRequest {
+                    message: text.to_owned(),
+                },
+            )
+            .await
+    }
+
+    /// Has `bot` send the command `text` through `POST /bots/{id}/command`.
+    pub(crate) async fn command(
+        &self,
+        bot: BotId,
+        text: &str,
+    ) -> Result<ChatSendResponse, ClientError> {
+        self.client
+            .send_command(
+                bot,
+                &ChatCommandRequest {
                     message: text.to_owned(),
                 },
             )
