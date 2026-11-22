@@ -63,3 +63,4 @@ Each architecture decision record (ADR) holds one decision with its context, its
 - [0044. Scripted modes on the wire, the server and the agent: who writes one, what's checked at save, never below an agent's level, and what an agent reports](adr/0044-scripted-modes-on-the-wire-the-server-and-the-agent.md)
 - [0045. The script editor and a bot's script in the app: CodeMirror in a shadow root, one description, the app's own check, and the chat's ↑ and ↓](adr/0045-the-script-editor-and-a-bots-script-in-the-app.md)
 - [0046. The stopgap's way out and Phase 15's check: a step mode converted to a script, the reference generated, and the examples and the spoofs on a real server](adr/0046-the-stopgaps-way-out-and-phase-15s-check.md)
+- [0047. The release's indexes without annotations, and its push and merge rehearsed in CI](adr/0047-the-releases-indexes-without-annotations.md)

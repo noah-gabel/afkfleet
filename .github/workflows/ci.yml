@@ -314,3 +314,24 @@ jobs:
           tool: just@${{ env.JUST_VERSION }}
       - run: pnpm install --frozen-lockfile
       - run: just e2e
+
+  # The release workflow's push and merge (scripts/release.mjs), run unchanged on tiny stand-in
+  # images against a registry of the job's own on 127.0.0.1 (ADR-0047): on the release's merge
+  # runner, with no token and nothing pushed anywhere else. A runner whose Docker or Buildx would
+  # break the release turns this job red, and the release's guard refuses a tag on a commit where
+  # CI isn't green.
+  release-images:
+    name: release-images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+        with:
+          tool: just@${{ env.JUST_VERSION }}
+      - run: just release-images-check
