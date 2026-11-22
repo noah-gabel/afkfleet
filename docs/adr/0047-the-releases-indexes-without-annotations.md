@@ -27,3 +27,14 @@ Nothing ran the merge before a tag: release.test.mjs answers docker with a stand
 - **Linux alone.** The daemon must reach the registry on 127.0.0.1. Docker Desktop's daemon runs in its own VM: on this PC a push to the published port failed with `dial tcp 127.0.0.1:56426: connect: connection refused`, while Buildx, on the host, reached it. So the recipe isn't part of `check`; it's part of `ci`.
 - **The registry** is the official `registry:3.1.2` (CNCF distribution), pinned by its multi-arch index digest, the newest release, built on 2026-11-05 (Plan.md §5). Every name is the run's own (`afkfleet-release-images-<pid>-<random>`), and the registry, its volume and every tag it made are removed at its end.
 - **It prints the Docker and Buildx versions** it ran with, first.
+- **Red first:** its first CI run, with the merge still giving annotations, failed as v0.2.0's release did: Docker 28.0.4 and Buildx v0.39.0 on `ubuntu-24.04`, all four stand-ins pushed, then `release merge: refused: creating ghcr.io/afkfleet-check/afkfleet-server:0.2.0 failed: ERROR: annotations are not supported for Docker manifest lists; …` (its names are GHCR's, standing for the local registry).
+
+### D1. Each index is made without annotations
+`docker buildx imagetools create --tag <name>:X.Y.Z <name>@<arm64 digest> <name>@<amd64 digest>`, and nothing else. The checks before and after stay as ADR-0022 set them.
+
+- **Every release so far shipped without them,** and the images' configs carry the same values and more as labels: `org.opencontainers.image.version`, `revision`, `created`, `source`, `licenses`, `title` and `description`, from the Dockerfiles. Nothing a host, the bundle or the app reads changes.
+- **It's the smallest change on the release path.** Buildx's suggestion, OCI media types for the source images, would change how the build jobs export the images and how the push jobs push them (`docker push` sends Docker manifests), in the jobs that hold the registry token, for annotations nobody reads.
+- **Annotations can come back** with OCI images, in a change of their own that the rehearsal (R1) runs first.
+
+### D2. The merge prints the Buildx it runs with
+`release.mjs merge` asks `docker buildx version` first, before any registry call, and prints it as `Buildx: …`. A Buildx that doesn't answer refuses the merge, since nothing after it would work. The line sits in the merge job's log right above anything Buildx refuses, so the next runner change shows where it bites; each job's "Set up job" group already names its runner image's version, whose software list has the rest. It's printed by the script, not by a workflow step, so the jobs that hold the token keep their pinned steps.
