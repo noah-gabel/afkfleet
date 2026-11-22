@@ -38,8 +38,8 @@ use crate::agents::{AgentPage, AgentResponse, AgentStatus};
 use crate::app::{
     AppVersion, BotCommandResponse, ConversionNote, ConversionNoteKind, LiveUpdateMessage,
     LoginStepResponse, LogoutResponse, ScriptCheck, ScriptCheckRequest, ScriptConversion,
-    ScriptConvertRequest, ServerProfileRequest, ServerProfileResponse,
-    ServerProfileState, SetupStepResponse, UpdateCheck, WindowTheme,
+    ScriptConvertRequest, ServerProfileRequest, ServerProfileResponse, ServerProfileState,
+    SetupStepResponse, UpdateCheck, WindowTheme,
 };
 use crate::audit::AuditPage;
 use crate::auth::{
