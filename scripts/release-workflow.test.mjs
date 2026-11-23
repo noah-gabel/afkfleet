@@ -6,7 +6,8 @@
 // its keys, every step word for word, and no build tool.
 // The push jobs load the tested images on a fresh runner and run no repository code but
 // release.mjs, which they alone check out. The scripts it runs are tested in
-// scripts/release.test.mjs and scripts/app-installer.test.mjs.
+// scripts/release.test.mjs and scripts/app-installer.test.mjs. It pins ci.yml's release-images
+// job too, which rehearses the push and merge on the merge job's runner (ADR-0047).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -587,6 +588,35 @@ describe("the merge job", () => {
     for (const banned of ["-arm64", "-amd64", "docker build"]) {
       assert.equal(merge.includes(banned), false, banned);
     }
+  });
+});
+
+describe("CI's rehearsal of the push and merge (ADR-0047)", () => {
+  const rehearsal = jobs(ci).get("release-images");
+
+  it("runs release.mjs's push and merge on the merge job's runner, in CI, which the guard asks for", () => {
+    assert.ok(rehearsal !== undefined, "no release-images job in ci.yml");
+    assert.equal(key(rehearsal, "runs-on"), key(job("merge"), "runs-on"));
+    assert.deepEqual(
+      steps(rehearsal)
+        .map(runOf)
+        .filter((run) => run !== ""),
+      ["just release-images-check"],
+    );
+    assert.match(
+      read("justfile"),
+      /^release-images-check:\n {4}node scripts\/release-images-check\.mjs$/m,
+    );
+  });
+
+  it("holds nothing to write with: read access alone, no token, no secret, no credentials kept", () => {
+    assert.equal(block(ci, "permissions"), "permissions:\n  contents: read");
+    assert.equal(key(rehearsal, "permissions"), null);
+    assert.equal(rehearsal.match(TOKEN), null);
+    for (const banned of ["secrets.", "docker login", "environment:"]) {
+      assert.equal(rehearsal.includes(banned), false, banned);
+    }
+    assert.ok(rehearsal.includes("          persist-credentials: false"));
   });
 });
 

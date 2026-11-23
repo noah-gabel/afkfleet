@@ -27,10 +27,14 @@
 //
 // merge: from both digests files, each index `X.Y.Z` is made with `docker buildx imagetools
 // create` from the digests themselves (`name@sha256:…`), never from the per-architecture tags.
-// First each digest must be one linux image of its architecture, each per-architecture tag must
-// still point at it, and the index's tag must not exist; afterwards the index must hold exactly
-// those two digests, linux/arm64 and linux/amd64. It writes both index digests to GITHUB_OUTPUT,
-// then tries an anonymous pull of each and warns while the packages still need a login.
+// It prints the Buildx version it runs with first, so a runner's change shows in the log. Each
+// digest must be one linux image of its architecture, each per-architecture tag must still point
+// at it, and the index's tag must not exist; afterwards the index must hold exactly those two
+// digests, linux/arm64 and linux/amd64. The index carries no annotations: `docker push` pushed
+// Docker manifests, whose list can't hold any, and Buildx 0.39 refuses them instead of dropping
+// them; the images' configs carry the release's labels (ADR-0047). It writes both index digests
+// to GITHUB_OUTPUT, then tries an anonymous pull of each and warns while the packages still need
+// a login. scripts/release-images-check.mjs runs push and merge against a local registry in CI.
 //
 // notes: the draft release's body, as approved (ADR-0022, U33, U38), on stdout.
 //
@@ -457,7 +461,7 @@ function merge(ctx, args) {
   if (args.length !== 1) {
     throw new Usage("merge takes the folder the digests were downloaded to");
   }
-  const { version, revision, created } = release(ctx.env);
+  const { version } = release(ctx.env);
   const name = owner(ctx.env);
   const byArch = new Map(
     ARCHITECTURES.map((arch) => [
@@ -468,6 +472,8 @@ function merge(ctx, args) {
   if (!(ctx.env.GITHUB_OUTPUT ?? "")) {
     throw new Usage("GITHUB_OUTPUT isn't set");
   }
+  const buildx = ctx.must("docker", ["buildx", "version"], "asking Buildx's version").trim();
+  ctx.out.write(`Buildx: ${buildx || "(it printed no version)"}\n`);
   const repository = (image) => `${REGISTRY}/${name}/${image}`;
   const index = (image) => `${repository(image)}:${version}`;
 
@@ -503,23 +509,11 @@ function merge(ctx, args) {
     const sources = ARCHITECTURES.map(
       (arch) => `${repository(image)}@${byArch.get(arch)?.get(image)}`,
     );
+    // No annotations: the sources are Docker manifests, whose list can't carry any, and
+    // Buildx 0.39 refuses them; each image's config carries the release's labels (ADR-0047).
     ctx.must(
       "docker",
-      [
-        "buildx",
-        "imagetools",
-        "create",
-        "--tag",
-        index(image),
-        ...[
-          `version=${version}`,
-          `revision=${revision}`,
-          `created=${created}`,
-          `source=${SOURCE}`,
-          "licenses=GPL-3.0-or-later",
-        ].flatMap((annotation) => ["--annotation", `index:${LABEL}.${annotation}`]),
-        ...sources,
-      ],
+      ["buildx", "imagetools", "create", "--tag", index(image), ...sources],
       `creating ${index(image)}`,
     );
     const raw = json(

@@ -244,6 +244,7 @@ just app-build # build the desktop app's exe: target/release/afkfleet-desktop.ex
 just app-installer # the NSIS installer, built with no key: target/release/bundle/nsis/, its SHA-256 printed
 just update-rehearsal # rehearse an app update on this PC with a throwaway key, you only (see below)
 just updater-sign key installer sha256 version # sign a release's installer for the updater, the maintainer only (docs/releasing.md)
+just release-images-check # the release's push and merge against a registry of its own, on stand-in images (needs Docker, Linux only; CI runs it)
 just ui-test   # the frontend's Vitest tests
 just e2e       # the Playwright tests in the installed Edge (part of just check)
 just fuzz chat_sender 300 # one fuzz target for 300 s, or every target with `just fuzz` (needs cargo-fuzz)

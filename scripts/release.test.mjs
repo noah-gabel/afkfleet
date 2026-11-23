@@ -24,6 +24,7 @@ import {
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 const OTHER_SHA = "89abcdef0123456789abcdef0123456789abcdef";
 const CREATED = "2026-11-07T12:34:56Z";
+const BUILDX = "github.com/docker/buildx v0.39.0 0123456789abcdef";
 const DIGEST = (n) => `sha256:${String(n).repeat(64).slice(0, 64)}`;
 const RELEASE_ENV = {
   AFKFLEET_IMAGE_VERSION: "0.2.0",
@@ -602,6 +603,7 @@ describe("release merge", () => {
     });
     return [
       ...overrides,
+      { when: "docker buildx version", stdout: `${BUILDX}\n` },
       platform(`afkfleet-server@${DIGEST(1)}`, "arm64"),
       platform(`afkfleet-agent@${DIGEST(2)}`, "arm64"),
       platform(`afkfleet-server@${DIGEST(3)}`, "amd64"),
@@ -632,26 +634,62 @@ describe("release merge", () => {
 
     assert.equal(result.code, 0, result.err);
     const creates = result.calls.filter((call) => call.includes("imagetools create"));
-    const annotations = [
-      "--annotation index:org.opencontainers.image.version=0.2.0",
-      `--annotation index:org.opencontainers.image.revision=${SHA}`,
-      `--annotation index:org.opencontainers.image.created=${CREATED}`,
-      "--annotation index:org.opencontainers.image.source=https://github.com/noah-gabel/afkfleet",
-      "--annotation index:org.opencontainers.image.licenses=GPL-3.0-or-later",
-    ];
     assert.deepEqual(creates, [
       [
         "docker buildx imagetools create --tag ghcr.io/owner/afkfleet-server:0.2.0",
-        ...annotations,
         `ghcr.io/owner/afkfleet-server@${DIGEST(1)} ghcr.io/owner/afkfleet-server@${DIGEST(3)}`,
       ].join(" "),
       [
         "docker buildx imagetools create --tag ghcr.io/owner/afkfleet-agent:0.2.0",
-        ...annotations,
         `ghcr.io/owner/afkfleet-agent@${DIGEST(2)} ghcr.io/owner/afkfleet-agent@${DIGEST(4)}`,
       ].join(" "),
     ]);
     assert.equal(result.outputs, `server_digest=${DIGEST(5)}\nagent_digest=${DIGEST(6)}\n`);
+  });
+
+  it("gives an index no annotation: a list of Docker manifests can't carry one (ADR-0047)", () => {
+    const dir = digests(folder());
+
+    const result = run(dir, ["merge", dir], registry(), RELEASE_ENV);
+
+    assert.equal(result.code, 0, result.err);
+    assert.deepEqual(
+      result.calls.filter((call) => call.includes("--annotation")),
+      [],
+    );
+  });
+
+  it("prints the Buildx it merges with, once, before it asks the registry anything", () => {
+    const dir = digests(folder());
+
+    const result = run(dir, ["merge", dir], registry(), RELEASE_ENV);
+
+    assert.equal(result.code, 0, result.err);
+    assert.equal(result.calls[0], "docker buildx version");
+    assert.equal(result.calls.filter((call) => call === "docker buildx version").length, 1);
+    assert.ok(result.out.split("\n").includes(`Buildx: ${BUILDX}`), result.out);
+  });
+
+  it("refuses when Buildx won't say its version, before the registry", () => {
+    const dir = digests(folder());
+
+    const result = run(
+      dir,
+      ["merge", dir],
+      registry([
+        {
+          when: "docker buildx version",
+          status: 1,
+          stderr: "docker: unknown command: docker buildx\n",
+        },
+      ]),
+      RELEASE_ENV,
+    );
+
+    assert.equal(result.code, 1);
+    assert.match(result.err, /Buildx's version failed: docker: unknown command/);
+    assert.deepEqual(result.calls, ["docker buildx version"]);
+    assert.equal(result.outputs, "");
   });
 
   it("refuses a digest of another platform, a tag that moved, or an index that exists, creating nothing", () => {

@@ -38,7 +38,7 @@ default:
 check: fmt-check clippy docs test doctest db-check gen-check testkit-check tauri-check scripts-test ui-check e2e
 
 # Everything CI runs.
-ci: fmt-check clippy docs test-ci db-check migrations-check gen-check testkit-check tauri-check scripts-test sh-check cov cov-desktop deny stable-check ui-check ui-audit e2e
+ci: fmt-check clippy docs test-ci db-check migrations-check gen-check testkit-check tauri-check scripts-test sh-check release-images-check cov cov-desktop deny stable-check ui-check ui-audit e2e
 
 # Run nextest for the workspace, or for one crate: `just test fleet-core`.
 test crate="":
@@ -217,6 +217,14 @@ image-scan:
     grype docker-archive:target/image-scan/server.tar --only-fixed --fail-on high
     grype docker-archive:target/image-scan/agent.tar --only-fixed --fail-on high
     grype docker-archive:target/image-scan/caddy.tar --only-fixed --fail-on high
+
+# The release workflow's push and merge (scripts/release.mjs), run unchanged on tiny stand-in
+# images against a registry of the run's own on 127.0.0.1, sent there in GHCR's place
+# (ADR-0047). Linux alone: Docker Desktop's daemon can't reach that registry. Part of `ci` and
+# CI's release-images job, on the release's merge runner; not of `check`.
+# Rehearse the release's push and merge against a local registry (needs Docker, on Linux).
+release-images-check:
+    node scripts/release-images-check.mjs
 
 # The scripts an operator runs on the host are POSIX sh, as dash and busybox run them
 # (ADR-0022, S18, U15). Part of `ci` and CI's frontend job, which installs ShellCheck
