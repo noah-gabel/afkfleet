@@ -27,7 +27,7 @@ The user's, 2026-11-09: a `deps/` pull request of its own, before group E's.
 - **Red first:** with `main`'s `deny.toml`, the workspace pass fails on RUSTSEC-2026-0459; with a stale ignore added (RUSTSEC-2026-0346, a rustls advisory no longer in the graph), it fails with `advisory-not-detected`, while the desktop pass with `-A advisory-not-detected` passes; `deny.toml` was restored by checksum after each run.
 
 **2. zlib: both Dockerfiles pin distroless's current index digest, a security exception to the 7-day rule.**
-- **The pin:** `gcr.io/distroless/cc-debian13:nonroot@sha256:cc66d222f0a7ec996b78a99fe76a969bc80b539a5016ad866c14d1949bc6d0ab`, in both Dockerfiles (a test holds them equal).
+- **The pin:** `gcr.io/distroless/cc-debian13:nonroot@sha256:cc66d222f0a7ec996b78a99fe76a969bc80b539a5016ad866c14d1949bc6d0ab`, in both Dockerfiles (a test holds them equal). *(Moved on 2026-11-23 to `sha256:532c7a94f9e96ba9db75eb9388f4227751131c7cb0a411d1a8521af4096135de`, the same exception, for libc6's two High CVEs, CVE-2026-19499 and CVE-2026-5435, which 2.41-12+deb13u5 fixes; that index's amd64 and arm64 images carry it, where this one carries deb13u4.)*
 - **Why the exception:** the user's rule takes the newest release at least 7 days old (ADR-0022, U12, U13), but this is a High finding with a fix, in the base of both shipped images. A distroless image's creation date is fixed at 1970 for reproducible builds, so its digest's age can't be read anyway.
 - **How it was checked:** `docker buildx imagetools inspect gcr.io/distroless/cc-debian13:nonroot` showed exactly that index digest, with `linux/amd64` and `linux/arm64/v8` images.
 

@@ -51,7 +51,7 @@ RUN mkdir -m 0700 /folders /folders/data /folders/backups /folders/keys /folders
 # --- runtime: glibc, libgcc and the CA certificates, no shell, the nonroot user (65532) ---
 # distroless/cc carries /etc/ssl/certs/ca-certificates.crt, which reqwest's
 # platform verifier reads for the Microsoft accounts' calls (ADR-0018).
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cc66d222f0a7ec996b78a99fe76a969bc80b539a5016ad866c14d1949bc6d0ab
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:532c7a94f9e96ba9db75eb9388f4227751131c7cb0a411d1a8521af4096135de
 # The release's labels, from build args the release workflow sets (`just images`
 # reads them from the environment; empty outside a release). Declared here alone,
 # so the shared stages stay word for word (ADR-0022, S22, R24).
