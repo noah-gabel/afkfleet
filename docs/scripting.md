@@ -228,6 +228,7 @@ A script sends only messages its mode declares, each with a key. A message can h
 | `sell`: `/ah sell {price}`, `price` a whole number from 1 to 1,000,000 | `chat.send("sell", #{ price: 1500 })` |
 
 - A value is a whole number in a range, a decimal number in a range with a set number of places, or one of a closed list of words.
+- **A decimal number where a whole one is declared is refused** as `bad_value` today, and nothing is sent: write `amount.floor().to_int()`. A decimal value with places is rounded to the nearest at its last place. Both change with Phase 16 (Part 2).
 - A command's name is always written out in the declaration, never a value. Whoever sets the mode on a bot needs the same rights as for a step mode that sends those commands.
 - Below the right to edit the mode, a declared command shows as its `/` and name alone, as a step's chat does: a command can hold a password.
 - A script can't build text of its own.
@@ -547,8 +548,15 @@ A slot, wherever it comes from:
 | `slot.lore` | Its lore lines as plain text |
 | `slot.lore_number(label)` | The number on the lore line that starts with `label`, or `()`: `"Price: 12,500"`, `"Price: 12.5k"` and `"Price: 3M"` all read as numbers |
 | `slot.lore_has(text)` | Whether a lore line contains `text` |
+| `slot.potion` | The potion's kind, such as `"minecraft:turtle_master"`, for a potion, a splash or lingering potion and a tipped arrow; `()` otherwise. A vanilla potion's kind is in no name or lore |
+| `slot.enchantments` | A map of each enchantment to its level, such as `#{ "minecraft:sharpness": 5 }` |
+| `slot.stored_enchantments` | The same for an enchanted book's stored enchantments |
 
-`number(text)` reads a number the same way out of any text. Names and lore are what the server sent, cleaned like chat: plain text, no formatting, bounded in length.
+`number(text)` reads a number the same way out of any text. Names and lore are what the server sent, cleaned like chat: plain text, no formatting, bounded in length. A slot's components are registry IDs and numbers, never text.
+
+`bot.name` is the bot's own player name, for a script several bots share: a listing whose seller line holds it is the bot's own.
+
+**Declared messages from Phase 16 on:** a decimal number where a whole one is declared counts down to the next whole number, as everywhere else in the API, and a decimal value with places counts down at its last place, so a message never sends more than the script gave. The range is judged after.
 
 ### `inventory`
 The bot's own 36 slots, its armour and its offhand.

@@ -2691,7 +2691,7 @@ What would be left to do:
 > | B | `p16/p16.4-menu-core` | P16.4 to P16.7: fleet-core |
 > | C | `p16/p16.8-mc-menus` | P16.8 to P16.11: fleet-mc and fleet-testkit |
 > | D | `p16/p16.12-menu-scripts` | P16.12 to P16.14: fleet-script and fleet-runtime |
-> | E | `p16/p16.15-menus-in-the-app` | P16.15 and P16.16: the wire, the server, the app |
+> | E | `p16/p16.15-menus-in-the-app` | P16.15, P16.16 and P16.20: the wire, the server, the app |
 > | F | `p16/p16.17-trading-live` | P16.17 to P16.19: the live tests and the DoD |
 >
 > **Changed by the user's answers of 2026-11-16:** group G and its task P16.20, system messages by declared patterns, are gone: the user said yes, and it's built in Phase 15 (P15.30 to P15.36, [ADR-0037](docs/adr/0037-scripts-read-system-chat.md)). Two notes from the user's reviewer are at P16.1 and P16.6.
@@ -2700,7 +2700,9 @@ What would be left to do:
 - [ ] **P16.2** **The measurements:** what a server sends after a click on a vanilla chest, on the bot's own inventory and on a plugin's button, in packets and ticks; how fast clicks may come before a server drops or kicks. The plugin logs each click's time, so the user can join the local test server with their own client and click fast: a step only they run, and optional.
 - [ ] **P16.3** **The two rules fixed from the numbers,** as an amendment to ADR-0036: when a click counts as answered, and the click limit's class.
 - [ ] **P16.4** 🔴 **An item's name and lore** (`fleet-core`): sanitized as chat is, plain text, a name to 64 characters, lore to 16 lines of 128.
+  > Note (P16.4, the user's addition, 2026-11-25) ([ADR-0036](docs/adr/0036-scripted-modes.md), M11): **a slot also carries a closed set of data components, as registry IDs and numbers, never as text:** the potion's kind (`slot.potion`: `"minecraft:turtle_master"`, `"minecraft:long_turtle_master"`, `"minecraft:strong_turtle_master"` and every other kind, for potions, splash and lingering potions and tipped arrows), a tool's enchantments with their levels and an enchanted book's stored ones; at most 16 a slot, each level 0 to 255. A vanilla potion's kind is in no name or lore.
 - [ ] **P16.5** 🔴 **The inventory's and the menu's snapshots:** every slot; the screen's kind, size, title and cursor; the window ID and the state ID.
+  > Note (P16.5, the user's addition, 2026-11-25) ([ADR-0036](docs/adr/0036-scripted-modes.md), M11): each slot with its components of P16.4's note; the snapshot is also what P16.20 shows.
 - [ ] **P16.6** 🔴 **Menu commands and the click guard:** the click kinds (left, right, shift, number key, drop, drop stack), a screen's button, a trade, the anvil's name from a template, close. The guard as a pure decision: the same window, the same state, the same item in the slot, or the reason. **The same item is the whole item** (its ID, count, name, lore and data components), not the ID alone (the user's reviewer's note): two listings of one kind of item differ only there. The rule that a screen takes one click at a time, as a small state machine with a click's three fates.
 - [ ] **P16.7** 🔴 **Number helpers** over P15.30's parser for amounts as servers write them (thousands separators, decimals, the suffixes k, M and B), fuzzed there. The limiter's class for clicks.
 - [ ] **P16.8** 🔴 **Readers and events** (`fleet-mc`): the snapshots from azalea's `Inventory` component; a screen opened, updated and closed as events; a new screen with an old title is a new one.
@@ -2708,13 +2710,20 @@ What would be left to do:
 - [ ] **P16.10** 🔴 **Special screens:** a villager's trade selected, the anvil's name set, a screen's button pressed.
 - [ ] **P16.11** **Live on the vanilla test server:** a chest, a villager, an anvil, an enchanting table.
 - [ ] **P16.12** 🔴 **`inventory` and `menu` in fleet-script:** the objects, the slot's helpers, the hooks `on_menu_open`, `on_menu_update`, `on_menu_close` and `on_click`, API level 2, the generated description; the sell macro and the auction scan as example files.
+  > Note (P16.12, the user's addition, 2026-11-25s) ([ADR-0036](docs/adr/0036-scripted-modes.md), M11 to M13, M15):
+  > - **`slot.potion`, `slot.enchantments`, `slot.stored_enchantments`** (P16.4's note), and **`bot.name`**, the bot's player name, so one shared script can skip its own auction listings by their seller line.
+  > - **Two more example files,** run live on the harness (P16.17): **a farm that sells** (every few minutes it opens the sell menu, sells its Turtle Master potions, drops one listed kind of junk, never "everything else", waits `random.between(300, 900)` ms before every click, then selects the farm's item again and farms on: a held right button with a potion in hand would drink it) and **an auction lister** (it reads the Turtle Master listings' prices from their lore, skips its own, takes the middle of the three cheapest, lists one potion at that price with `/ah sell {price}`, confirms, and collects its expired listings; the declared price range's minimum is the floor a bait listing can't push it below, and the example says so).
+  > - **A decimal for a declared message's whole-number value counts down to the next whole number,** as numbers do elsewhere in the API, and a decimal value with places counts down at its last place instead of rounding up; the range is judged after. Today such a whole value is refused as `bad_value`.
 - [ ] **P16.13** 🔴 **The runtime:** menu updates at most one a tick, a click's fate delivered, the pending rule, a log line for every click not sent, rejected or unanswered.
 - [ ] **P16.14** **Fuzz targets** for a snapshot made from anything a server could send, the number helpers and the click guard; the operation budget measured again on real pages.
 - [ ] **P16.15** 🔴 **The wire and the server at level 2.**
 - [ ] **P16.16** **The app:** the log's trade lines, the two starter templates, autocomplete for the new objects; the threat model's rows for text that steers a script.
+  > Note (P16.16, the user's addition, 2026-11-25) ([ADR-0036](docs/adr/0036-scripted-modes.md), M13, M14): the starter templates are four: the sell macro, the auction scan, the farm that sells and the auction lister. What the bot sees on demand is P16.20.
 - [ ] **P16.17** **Live:** the auction scan and the sell macro on the harness, with the other player buying a listing between the scan and the click.
+  > Note (P16.17, the user's addition, 2026-11-25) ([ADR-0036](docs/adr/0036-scripted-modes.md), M13): **also the farm that sells and the auction lister,** as written: a bait listing below the declared floor is never matched, the lister skips its own listings, and expired ones are collected.
 - [ ] **P16.18** **The long run:** thousands of clicks against the harness, counting double buys and misses without a log line. Both are zero.
 - [ ] **P16.19** **The records and the DoD.**
+- [ ] **P16.20** 🔴 **What the bot sees, on demand** (the user's addition, 2026-11-25; [ADR-0036](docs/adr/0036-scripted-modes.md), M14): on a bot's page, what the bot sees in the screen it has open: each slot's item, count, name, lore and components, as plain text. `GET /api/v1/bots/{id}/screen` for View on the bot (404 below), its own rate-limit class, not audited, in the authorization matrix and the route-coverage test; the agent answers from P16.5's snapshot on its stream within a bound; the bot's page gets a panel with a refresh button.
 
 **DoD:** The reference's sell macro and auction scan run against the harness as written. In the long run no listing is bought twice and no failed or missed buy lacks its log line. A click is never sent to a screen other than the one the script saw.
 
