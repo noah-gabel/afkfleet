@@ -673,13 +673,7 @@ mod tests {
             seen.push(message.unwrap());
         }
 
-        assert_eq!(
-            seen,
-            [
-                Message::Ping(Bytes::new()),
-                Message::Close(None)
-            ]
-        );
+        assert_eq!(seen, [Message::Ping(Bytes::new()), Message::Close(None)]);
         assert!(opened.elapsed() >= timeouts.request * 10);
         drop(socket);
         drop(release);

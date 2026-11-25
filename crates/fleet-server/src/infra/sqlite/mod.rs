@@ -296,11 +296,10 @@ impl Database {
         match self.last.connect().await {
             Ok(mut last) => {
                 // A read opens the WAL, so the close takes care of it.
-                if let Err(error) = sqlx::query_scalar!(
-                    r#"SELECT COUNT(*) AS "count!: i64" FROM sqlite_schema"#
-                )
-                .fetch_one(&mut last)
-                .await
+                if let Err(error) =
+                    sqlx::query_scalar!(r#"SELECT COUNT(*) AS "count!: i64" FROM sqlite_schema"#)
+                        .fetch_one(&mut last)
+                        .await
                 {
                     debug!(error = %error, "the database's last connection couldn't read");
                 }
