@@ -313,8 +313,7 @@ pub(crate) fn act(world: &mut World, bot: Entity, action: GameAction) -> Result<
         | GameAction::UseItem
         | GameAction::HoldUse { .. }
         | GameAction::AttackFacingEntity
-        | GameAction::SelectHotbarSlot { .. }
-        | GameAction::EnterMinecart => Ok(()),
+        | GameAction::SelectHotbarSlot { .. } => Ok(()),
     }
 }
 

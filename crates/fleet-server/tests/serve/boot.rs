@@ -15,7 +15,7 @@ use chrono::DateTime;
 use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::authz::Role;
 use fleet_core::backup::BackupPolicy;
-use fleet_core::id::{AccountId, UserId};
+use fleet_core::id::{AccountId, ModeId, UserId};
 use fleet_core::value::Username;
 use fleet_server::config::{BackupConfig, ServerConfig};
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
@@ -463,4 +463,104 @@ async fn a_start_with_backups_into_a_folder_that_isnt_there_fails() {
     assert!(error.starts_with("the backups' folder can't be used: the backups' folder "));
     assert!(error.ends_with("no-backups-here doesn't exist"), "{error}");
     assert!(!dir.join("no-backups-here").exists());
+}
+
+/// The release after 0.2.1 removed the stopgap `enter_minecart` (ADR-0034;
+/// ADR-0046, C5). A stored mode that still holds it can't be read any more,
+/// so the server refuses to start and names each such mode, before it
+/// listens: the runbook has them converted on the release before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stored_mode_with_enter_minecart_stops_the_start_and_names_each_one() {
+    let dir = test_dir("boot_retired_action");
+    let (listener, address) = listener().await;
+    let config = server_config(&dir, address, false);
+    let database = sqlite::open(&config.database, DatabaseOptions::default())
+        .await
+        .unwrap();
+    let at_start = r#"{"steps":[{"action":{"type":"enter_minecart"},"schedule":{"type":"at_start"},"probability":100}]}"#;
+    let swing = r#"{"steps":[{"action":{"type":"swing_arm"},"schedule":{"type":"every","interval_ms":20000,"jitter_ms":0},"probability":100}]}"#;
+    let owner = add_user(&database).await;
+    let zeta = add_stored_mode(&database, 2, owner, "Zeta cart", at_start).await;
+    add_stored_mode(&database, 3, owner, "Swing", swing).await;
+    let back_in = add_stored_mode(&database, 4, owner, "Back in", at_start).await;
+    database.close().await;
+    let (logs, _guard) = capture();
+
+    let keys = vault_keys(&config);
+    // Bounded: a start that wrongly goes on would wait for a signal forever.
+    let exit = tokio::time::timeout(
+        PATIENCE,
+        serve::run(
+            &config,
+            listener,
+            None,
+            None,
+            ChannelSignals::silent(),
+            keys,
+        ),
+    )
+    .await
+    .expect("the start ended");
+
+    assert_eq!(exit, Exit::StartupFailed);
+    let failed = logs.lines_with("the server can't start").unwrap();
+    assert_eq!(failed.len(), 1, "{}", logs.text());
+    assert_eq!(failed[0]["level"], "ERROR");
+    assert_eq!(
+        failed[0]["error"].as_str().unwrap(),
+        format!(
+            "2 stored modes still hold enter_minecart, which this release removed: \"Back in\" ({back_in}), \"Zeta cart\" ({zeta}); convert each to a script on the release before this one, then update again (docs/runbook.md, \"Updating\")"
+        )
+    );
+    assert!(
+        logs.json_lines()
+            .unwrap()
+            .iter()
+            .all(|line| line["message"] != "the server is listening"),
+        "{}",
+        logs.text()
+    );
+}
+
+/// A Member in the database behind `database`.
+async fn add_user(database: &sqlite::Database) -> UserId {
+    let at = DateTime::from_timestamp_millis(1_800_000_000_000).unwrap();
+    let id = UserId::new_v7(at, [1; 10]).unwrap();
+    let text = id.to_string();
+    sqlx::query!(
+        "INSERT INTO users (id, username, password_hash, role, disabled, created_at, password_changed_at)
+         VALUES (?, 'user1', '$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2g', 'member', 0, '2027-01-15T08:00:00.000Z', '2027-01-15T08:00:00.000Z')",
+        text
+    )
+    .execute(database.write_pool())
+    .await
+    .unwrap();
+    id
+}
+
+/// Mode `n` of `owner`, named `name`, stored as `json` whatever it holds: a
+/// mode no API of this release would take.
+async fn add_stored_mode(
+    database: &sqlite::Database,
+    n: u8,
+    owner: UserId,
+    name: &str,
+    json: &str,
+) -> ModeId {
+    let at = DateTime::from_timestamp_millis(1_800_000_000_000 + i64::from(n) * 60_000).unwrap();
+    let id = ModeId::new_v7(at, [n; 10]).unwrap();
+    let text = id.to_string();
+    let owner = owner.to_string();
+    sqlx::query!(
+        "INSERT INTO modes (id, owner_user_id, name, visibility, definition_json, version, created_at, updated_at)
+         VALUES (?, ?, ?, 'private', ?, 1, '2027-01-15T08:00:00.000Z', '2027-01-15T08:00:00.000Z')",
+        text,
+        owner,
+        name,
+        json
+    )
+    .execute(database.write_pool())
+    .await
+    .unwrap();
+    id
 }

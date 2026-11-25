@@ -85,7 +85,6 @@ fn note(note: &Note) -> Option<ConversionNote> {
         NoteKind::SwingSkipsEntities => (ConversionNoteKind::SwingSkipsEntities, None, None),
         NoteKind::Slower { every } => (ConversionNoteKind::Slower, None, millis(every)),
         NoteKind::HoldRepeats => (ConversionNoteKind::HoldRepeats, None, None),
-        NoteKind::MountSkipsOccupied => (ConversionNoteKind::MountSkipsOccupied, None, None),
         NoteKind::GapCapped => (ConversionNoteKind::GapCapped, None, None),
         NoteKind::SharesLimit { other, every } => (
             ConversionNoteKind::SharesLimit,

@@ -30,8 +30,6 @@ export function noteLine(note: ConversionNote, places: readonly string[]): strin
         return NOTE_TEXT.slower(everyMs);
       case "hold_repeats":
         return NOTE_TEXT.hold_repeats();
-      case "mount_skips_occupied":
-        return NOTE_TEXT.mount_skips_occupied();
       case "gap_capped":
         return NOTE_TEXT.gap_capped();
       case "shares_limit":

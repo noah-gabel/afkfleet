@@ -710,14 +710,6 @@ impl Scene {
         self.number("SelectedItem.components.\"minecraft:damage\"")
             .await
     }
-
-    /// Whether the server has the bot in a vehicle.
-    async fn rides(&self) -> bool {
-        self.server
-            .rcon(&format!("data get entity {NAME} RootVehicle"))
-            .await
-            .contains("has the following entity data")
-    }
 }
 
 /// How many game ticks lay between each two uses the bot sent: the tick
@@ -1082,12 +1074,7 @@ async fn mounting_passes_over_an_occupied_minecart(scene: &mut Scene) {
     assert!(near(place(nearest.position), near_cart, 0.1), "{nearest:?}");
     assert!(near(place(free.position), far_cart, 0.1), "{free:?}");
 
-    // The stopgap action takes the nearest, where a pig sits: nothing.
-    scene.perform(GameAction::EnterMinecart).await;
-    ticks_pass(&scene.session, 40).await;
-    assert!(!scene.rides().await);
-
-    // Mounting takes the free one.
+    // Mounting passes the nearest, where a pig sits, and takes the free one.
     scene.perform(GameAction::Mount).await;
     scene
         .server

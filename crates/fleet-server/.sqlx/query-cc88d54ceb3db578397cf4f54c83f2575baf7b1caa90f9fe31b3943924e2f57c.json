@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT rowid AS \"rowid!: i64\", id AS \"id!\", name AS \"name!\"\n           FROM modes\n           WHERE EXISTS (\n               SELECT 1 FROM json_each(modes.definition_json, '$.steps') AS step\n               WHERE json_extract(step.value, '$.action.type') = 'enter_minecart'\n           )\n           ORDER BY name, id",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "name!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "cc88d54ceb3db578397cf4f54c83f2575baf7b1caa90f9fe31b3943924e2f57c"
+}

@@ -410,8 +410,6 @@ pub enum ConversionNoteKind {
     /// A held right button uses again every 4 game ticks with an item that
     /// isn't used over time.
     HoldRepeats,
-    /// It passes over a minecart someone sits in.
-    MountSkipsOccupied,
     /// A gap between two runs is at most 24 hours.
     GapCapped,
     /// It and step `other` share a limit: a run within `every_ms` of the

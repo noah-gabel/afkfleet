@@ -126,15 +126,7 @@ export const ACTION_TEXT: Readonly<Record<ModeActionKind, string>> = {
   attack_facing_entity: "Attack what's in front (left-click)",
   select_hotbar_slot: "Select a hotbar slot",
   send_chat: "Send chat or a command",
-  enter_minecart: "Get into the nearest minecart (going away)",
 };
-
-/**
- * Under a step that gets into the nearest minecart: the stopgap goes in the next release, and a
- * new step doesn't offer it (Plan.md P15.27; ADR-0036, D17).
- */
-export const STOPGAP_HINT =
-  'Going away in the next release. Convert to script does this with vehicle.mount("minecart"), which passes over a minecart someone sits in.';
 
 export const YAW_FIELD = "Yaw (left or right, as F3 shows it)";
 export const PITCH_FIELD = "Pitch (up or down, as F3 shows it)";
@@ -409,8 +401,6 @@ export const NOTE_TEXT = {
     `runs at most every ${seconds(everyMs)}, a script's shortest for it.`,
   hold_repeats: () =>
     "holds the right button, which uses an item that isn't used over time again every 4 ticks.",
-  mount_skips_occupied: () =>
-    "passes over a minecart someone sits in and gets into the nearest free one.",
   gap_capped: () => "waits at most 24 hours between two runs, a timer's longest.",
   shares_limit: (everyMs: number, other: string) =>
     `shares a script's limit of once every ${seconds(everyMs)} with ${other}: a run that close to one of its runs is skipped.`,

@@ -22,8 +22,8 @@ use fleet_core::mode::{
     Schedule, Step as ModeStep,
 };
 use fleet_core::script::{
-    ActionLimiter, EntityFact, HookEvent, Input, Key, Limited, LookingAt, MouseButton, Press,
-    Script, ScriptDraft, TemplateError,
+    ActionLimiter, HookEvent, Input, Key, Limited, LookingAt, MouseButton, Press, Script,
+    ScriptDraft, TemplateError,
 };
 use fleet_core::time;
 use fleet_script::{
@@ -46,7 +46,6 @@ enum Did {
     Press(Input, PressKind),
     Release(Input),
     Hotbar(u8),
-    Mount,
     Send(String),
 }
 
@@ -194,7 +193,6 @@ fn record_plan(
                     Some(Did::Release(Input::Mouse(MouseButton::Right)))
                 }
                 GameAction::SelectHotbarSlot { slot } => Some(Did::Hotbar(slot.get())),
-                GameAction::EnterMinecart => Some(Did::Mount),
                 other => panic!("a plan never hands out {other:?}"),
             },
         };
@@ -254,7 +252,6 @@ fn kind_of(did: &Did) -> Option<Limited> {
         )),
         Did::Release(_) => None,
         Did::Hotbar(_) => Some(Limited::Hotbar),
-        Did::Mount => Some(Limited::Mount),
         Did::Send(text) => (!text.starts_with('/')).then_some(Limited::PlainChat),
     }
 }
@@ -322,10 +319,6 @@ fn record_script(done: &mut Vec<(u64, Did)>, at: u64, ran: &fleet_script::Ran) {
             Action::LookAt { yaw, pitch } => Some(Did::Look(narrow(*yaw), narrow(*pitch))),
             Action::LookTurn { yaw, pitch } => Some(Did::Turn(narrow(*yaw), narrow(*pitch))),
             Action::SelectHotbar(slot) => Some(Did::Hotbar(slot.get())),
-            Action::Mount(kind) => {
-                assert_eq!(kind.as_str(), "minecraft:minecart");
-                Some(Did::Mount)
-            }
             Action::Send { message, .. } => Some(Did::Send(message.as_str().to_owned())),
             other => panic!("a converted script never asks for {other:?}"),
         };
@@ -493,7 +486,6 @@ fn kinds() -> Vec<(&'static str, Step)> {
         ("hotbar", Step::SelectHotbarSlot { slot: slot(4) }),
         ("plain chat", chat("hello there")),
         ("a command", chat("/login hunter2")),
-        ("enter a minecart", Step::EnterMinecart),
     ]
 }
 
@@ -610,7 +602,6 @@ fn a_mode_of_every_kind_at_once_does_what_its_plan_does_less_what_the_limits_ref
         step(Step::Sneak { on: false }, every(250)),
         step(Step::SwingArm, every(1_000)),
         step(Step::HoldUse { on: true }, Schedule::OnRespawn),
-        step(Step::EnterMinecart, Schedule::OnRespawn),
         step(chat("/spawn"), Schedule::OnRespawn),
         step(
             Step::Look {
@@ -730,7 +721,6 @@ fn any_action() -> impl Strategy<Value = Step> {
         Just(Step::AttackFacingEntity),
         (0u8..=8).prop_map(|n| Step::SelectHotbarSlot { slot: slot(n) }),
         prop::sample::select(vec!["hello", "/spawn", "/home farm", "brb {soon}"]).prop_map(chat),
-        Just(Step::EnterMinecart),
     ]
 }
 
@@ -911,41 +901,6 @@ fn a_chat_step_a_mode_cant_declare_is_named_with_its_step(
     );
 }
 
-#[test]
-fn enter_minecart_becomes_a_mount_that_passes_an_occupied_minecart() {
-    let definition = mode(vec![step(Step::EnterMinecart, Schedule::AtStart)]);
-    let conversion = convert(&definition).unwrap();
-    let program = Arc::new(compile(conversion.script()).unwrap());
-    let mut instance = Instance::new(program, 7, still());
-    let mut world = World::new();
-    // The nearer minecart holds someone; the free one is further.
-    world.entities.push(EntityFact {
-        kind: id("minecart"),
-        position: at(1.5, 64.0, 0.5),
-        occupied: true,
-    });
-    world.minecart(at(3.5, 64.0, 0.5));
-
-    world.run(&mut instance, &HookEvent::Join { first: true });
-
-    assert!(
-        conversion
-            .script()
-            .source()
-            .as_str()
-            .contains("vehicle.mount(\"minecart\"); // when it joins, step 1")
-    );
-    assert_eq!(world.bot.riding, Some(id("minecart")));
-    assert!(world.entities.iter().all(|entity| entity.occupied));
-    assert_eq!(
-        conversion.notes(),
-        [Note {
-            step: 0,
-            kind: NoteKind::MountSkipsOccupied
-        }]
-    );
-}
-
 /// A mode of most kinds of step, in an order the editor wouldn't keep.
 fn a_mode_of_most_kinds() -> ModeDefinition {
     ModeDraft {
@@ -960,7 +915,7 @@ fn a_mode_of_most_kinds() -> ModeDefinition {
             ),
             step(Step::AttackFacingEntity, jittered(650, 150)),
             step(chat("/login hunter2"), Schedule::AtStart),
-            step(Step::EnterMinecart, Schedule::OnRespawn),
+            step(Step::Jump, Schedule::OnRespawn),
             step(chat("/spawn"), Schedule::OnRespawn),
             ModeStep {
                 action: Step::RotateRandom {
@@ -998,7 +953,7 @@ fn on_join(first) {
 }
 
 fn on_respawn() {
-    vehicle.mount("minecart"); // after it respawns, step 1
+    keys.jump.tap(); // after it respawns, step 1
     if !state.respawn_chat { // after it respawns, step 2, at most once every 30 seconds
         state.respawn_chat = true;
         timer.after(30000, "respawn_chat");
@@ -1063,10 +1018,6 @@ fn the_notes_come_by_step_and_a_steps_own_before_a_shared_limit() {
                 }
             },
             Note {
-                step: 4,
-                kind: NoteKind::MountSkipsOccupied
-            },
-            Note {
                 step: 7,
                 kind: NoteKind::SwingSkipsEntities
             },
@@ -1095,7 +1046,6 @@ fn the_notes_come_by_step_and_a_steps_own_before_a_shared_limit() {
 #[case::a_gap_past_a_day(step(Step::Jump, jittered(20 * 3_600_000, 10 * 3_600_000)), vec![
     NoteKind::GapCapped,
 ])]
-#[case::a_minecart(step(Step::EnterMinecart, every(250)), vec![NoteKind::MountSkipsOccupied])]
 #[case::a_look(step(Step::Look { yaw: 0.0, pitch: 0.0 }, every(250)), vec![])]
 fn each_difference_is_a_note_at_its_step(
     #[case] at_its_step: ModeStep,

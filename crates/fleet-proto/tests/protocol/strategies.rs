@@ -124,7 +124,6 @@ fn action() -> impl Strategy<Value = Action> {
             slot: HotbarSlot::try_from(slot).unwrap()
         }),
         chat_message().prop_map(|message| Action::SendChat { message }),
-        Just(Action::EnterMinecart),
     ]
 }
 

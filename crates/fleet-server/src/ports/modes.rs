@@ -82,9 +82,31 @@ impl ListedMode {
     }
 }
 
+/// A stored mode that still holds `enter_minecart`, the stopgap the release
+/// after 0.2.1 removed (ADR-0034; ADR-0046, C5): fleet-core can't read it
+/// any more, so the server refuses to start while one is stored and names
+/// each.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetiredMode {
+    /// The ID.
+    pub id: ModeId,
+    /// Its name.
+    pub name: ModeName,
+}
+
 /// Reading modes through the read connections.
 #[async_trait]
 pub trait ModeReads: Send + Sync + fmt::Debug {
+    /// Every stored mode that still holds `enter_minecart` at any step, by
+    /// name (ADR-0046, C5). It reads the stored JSON with SQLite's own
+    /// functions, since fleet-core's deserializer can't read such a mode;
+    /// a scripted mode has no steps and is never one.
+    ///
+    /// # Errors
+    /// [`StoreError`], [`StoreError::Corrupt`] for a row whose ID or name
+    /// doesn't read back.
+    async fn with_retired_action(&self) -> Result<Vec<RetiredMode>, StoreError>;
+
     /// The mode `id`.
     ///
     /// # Errors

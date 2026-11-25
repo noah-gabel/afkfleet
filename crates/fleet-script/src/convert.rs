@@ -20,11 +20,10 @@
 //! turn `look.turn` with `random.between` scaled to the maximum's decimals,
 //! a jump `keys.jump.tap()`, sneaking `keys.sneak.hold()` and `release()`,
 //! a use `mouse.right.tap()`, holding it `mouse.right.hold()` and
-//! `release()`, a hotbar slot `hotbar.select` (1 to 9), the stopgap
-//! `vehicle.mount("minecart")`, and chat `chat.send` of a message the mode
-//! declares, so a chat step's text is never in the script: below the right
-//! to edit the mode it's shown as a step's is, a command's `/` and name
-//! alone (ADR-0044, E6). A swing and an attack are a left click, which on
+//! `release()`, a hotbar slot `hotbar.select` (1 to 9), and chat
+//! `chat.send` of a message the mode declares, so a chat step's text is
+//! never in the script: below the right to edit the mode it's shown as a
+//! step's is, a command's `/` and name alone (ADR-0044, E6). A swing and an attack are a left click, which on
 //! an entity attacks and on anything else swings, so each checks
 //! `bot.looking_at` first and clicks only where the step would have done
 //! what it says.
@@ -32,8 +31,7 @@
 //! **What a script does differently** is returned as [`Note`]s at their
 //! steps: a swing that skips an entity, an interval below a script's
 //! shortest raised to it, steps that share a limit below the script, a gap
-//! cut at a timer's 24 hours, a mount past an occupied minecart, a held
-//! right button that clicks again. The runtime's own differences, the same
+//! cut at a timer's 24 hours, a held right button that clicks again. The runtime's own differences, the same
 //! for every mode (a script lets go of everything at a death, a respawn and
 //! a world change, and its timers wait while the bot is dead), are the
 //! reference's.
@@ -94,9 +92,6 @@ pub enum NoteKind {
     /// A held right button uses again every 4 game ticks with an item that
     /// isn't used over time, which the step's hold didn't.
     HoldRepeats,
-    /// Gets into the nearest free minecart: one someone sits in is passed
-    /// over, which the step's action didn't do.
-    MountSkipsOccupied,
     /// A gap between two runs is at most 24 hours, a timer's longest.
     GapCapped,
     /// The step does what the step `other` does too, and a script does it
@@ -573,7 +568,6 @@ fn call(steps: &[Step], index: usize, action: &Action) -> String {
             format!("hotbar.select({});", slot.get().saturating_add(1))
         }
         Action::SendChat { .. } => format!("chat.send(\"{}\");", name(steps, index)),
-        Action::EnterMinecart => "vehicle.mount(\"minecart\");".to_owned(),
     }
 }
 
@@ -625,7 +619,6 @@ fn limited(action: &Action) -> Option<Limited> {
         Action::SendChat { message } => {
             (!message.as_str().starts_with('/')).then_some(Limited::PlainChat)
         }
-        Action::EnterMinecart => Some(Limited::Mount),
         Action::Sneak { on: false } | Action::HoldUse { on: false } => None,
     }
 }
@@ -648,9 +641,6 @@ fn notes(steps: &[Step], schedules: &[Option<(Duration, Duration)>]) -> Vec<Note
         }
         if step.action == (Action::HoldUse { on: true }) {
             note(NoteKind::HoldRepeats);
-        }
-        if step.action == Action::EnterMinecart {
-            note(NoteKind::MountSkipsOccupied);
         }
         if let (Schedule::Every { jitter, .. }, Some((_, cut))) = (step.schedule, schedule)
             && cut < jitter

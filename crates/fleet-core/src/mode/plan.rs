@@ -56,10 +56,6 @@ pub enum GameAction {
         /// The slot.
         slot: HotbarSlot,
     },
-    /// Get into the nearest minecart within reach, unless the bot rides
-    /// already. See [`Action::EnterMinecart`] for what it does and how long
-    /// it looks for one (ADR-0034).
-    EnterMinecart,
     /// Press a key or a mouse button and keep it down, as a scripted mode's
     /// `hold()` does (ADR-0036, D4, D9 to D11).
     ///
@@ -91,8 +87,12 @@ pub enum GameAction {
     /// Look at a point in the world.
     LookAtPosition(Position),
     /// Get into the nearest free minecart within reach, unless the bot
-    /// rides already: as [`GameAction::EnterMinecart`], but past a minecart
-    /// someone sits in (ADR-0036, D12).
+    /// rides already (ADR-0036, D12): the bot turns to it, right-clicks it
+    /// and turns back. A minecart someone sits in is passed over, and with
+    /// none in reach the bot keeps looking for one for ten seconds, since a
+    /// bot that just joined has none in reach for a moment. A sneaking bot
+    /// isn't seated, as a sneaking player isn't. It began as the step action
+    /// `enter_minecart` (ADR-0034), removed in the release after 0.2.1.
     Mount,
     /// Get out of the vehicle, as sneaking does. A bot on foot does
     /// nothing.
@@ -344,7 +344,6 @@ fn resolve<R: Rng + ?Sized>(action: &Action, rng: &mut R) -> PlannedAction {
         Action::HoldUse { on } => GameAction::HoldUse { on },
         Action::AttackFacingEntity => GameAction::AttackFacingEntity,
         Action::SelectHotbarSlot { slot } => GameAction::SelectHotbarSlot { slot },
-        Action::EnterMinecart => GameAction::EnterMinecart,
         Action::SendChat { ref message } => return PlannedAction::Chat(message.clone()),
     };
     PlannedAction::Game(game)
@@ -677,7 +676,6 @@ mod tests {
     #[case::hold_use(Action::HoldUse { on: true }, game(GameAction::HoldUse { on: true }))]
     #[case::release_use(Action::HoldUse { on: false }, game(GameAction::HoldUse { on: false }))]
     #[case::attack(Action::AttackFacingEntity, game(GameAction::AttackFacingEntity))]
-    #[case::enter_minecart(Action::EnterMinecart, game(GameAction::EnterMinecart))]
     #[case::select_hotbar_slot(
         Action::SelectHotbarSlot { slot: slot(4) },
         game(GameAction::SelectHotbarSlot { slot: slot(4) })

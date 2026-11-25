@@ -90,11 +90,6 @@ pub const MODE_SCRIPT_HAS_NO_STEPS: &str = "must be empty for a scripted mode";
 /// and saving it there would lose its script (ADR-0046, C6).
 pub const MODE_SCRIPT_STAYS: &str = "can't replace a scripted mode's script: an app older than the server shows the mode without it; update the app";
 
-/// The field message of `enter_minecart` in a new mode, or in an edit of a
-/// mode that didn't have it: the stopgap goes in the next release, and a
-/// script does it (Plan.md P15.27; ADR-0036, D17). A stored mode keeps it.
-pub const MODE_STOPGAP_GOING: &str = "is going away in the next release: a scripted mode gets in with vehicle.mount(\"minecart\"), and Convert to script turns a step mode into one";
-
 /// The field message of a built-in mode's name (S13, R4).
 pub const MODE_NAME_RESERVED: &str = "is a built-in mode's name";
 
@@ -184,9 +179,6 @@ pub enum ModeActionKind {
     SelectHotbarSlot,
     /// Send chat or a command: `message`.
     SendChat,
-    /// Get into the nearest minecart within reach, unless the bot rides
-    /// already. Temporary: it goes once scripted modes exist (ADR-0034).
-    EnterMinecart,
 }
 
 impl OpenEnum for ModeActionKind {
@@ -201,7 +193,6 @@ impl OpenEnum for ModeActionKind {
         Self::AttackFacingEntity,
         Self::SelectHotbarSlot,
         Self::SendChat,
-        Self::EnterMinecart,
     ];
 
     fn as_str(self) -> &'static str {
@@ -216,7 +207,6 @@ impl OpenEnum for ModeActionKind {
             Self::AttackFacingEntity => "attack_facing_entity",
             Self::SelectHotbarSlot => "select_hotbar_slot",
             Self::SendChat => "send_chat",
-            Self::EnterMinecart => "enter_minecart",
         }
     }
 }
@@ -234,7 +224,6 @@ impl From<&Action> for ModeActionKind {
             Action::AttackFacingEntity => Self::AttackFacingEntity,
             Action::SelectHotbarSlot { .. } => Self::SelectHotbarSlot,
             Action::SendChat { .. } => Self::SendChat,
-            Action::EnterMinecart => Self::EnterMinecart,
         }
     }
 }
@@ -534,8 +523,7 @@ const fn action_takes(kind: ModeActionKind) -> &'static [&'static str] {
         ModeActionKind::Jump
         | ModeActionKind::SwingArm
         | ModeActionKind::UseItem
-        | ModeActionKind::AttackFacingEntity
-        | ModeActionKind::EnterMinecart => &[],
+        | ModeActionKind::AttackFacingEntity => &[],
     }
 }
 
@@ -601,7 +589,6 @@ fn action(step: usize, request: &ModeActionRequest) -> Result<Action, ModeFieldE
             on: needed(request.on, field("on"))?,
         },
         ModeActionKind::AttackFacingEntity => Action::AttackFacingEntity,
-        ModeActionKind::EnterMinecart => Action::EnterMinecart,
         ModeActionKind::SelectHotbarSlot => Action::SelectHotbarSlot {
             slot: HotbarSlot::try_from(needed(request.slot, field("slot"))?).map_err(|error| {
                 match error {
@@ -738,8 +725,7 @@ const fn interval_rule(kind: ModeActionKind) -> &'static str {
         | ModeActionKind::Jump
         | ModeActionKind::Sneak
         | ModeActionKind::SwingArm
-        | ModeActionKind::SelectHotbarSlot
-        | ModeActionKind::EnterMinecart => "must be at least 250 ms",
+        | ModeActionKind::SelectHotbarSlot => "must be at least 250 ms",
     }
 }
 
@@ -994,11 +980,7 @@ impl ModeStep {
                 action.message = Some(BoundedText::new(redacted.text));
                 action.arguments_hidden = redacted.arguments_hidden;
             }
-            Action::Jump
-            | Action::SwingArm
-            | Action::UseItem
-            | Action::AttackFacingEntity
-            | Action::EnterMinecart => {}
+            Action::Jump | Action::SwingArm | Action::UseItem | Action::AttackFacingEntity => {}
         }
         let schedule = match step.schedule {
             Schedule::AtStart => ModeSchedule {
@@ -1066,8 +1048,7 @@ mod tests {
             { "action": { "type": "attack_facing_entity" }, "schedule": { "type": "every", "interval_ms": 650, "jitter_ms": 150 }, "probability": 100 },
             { "action": { "type": "select_hotbar_slot", "slot": 8 }, "schedule": { "type": "at_start" }, "probability": 100 },
             { "action": { "type": "send_chat", "message": "/home base" }, "schedule": { "type": "every", "interval_ms": 30000, "jitter_ms": 0 }, "probability": 100 },
-            { "action": { "type": "send_chat", "message": "/spawn" }, "schedule": { "type": "on_respawn" }, "probability": 75 },
-            { "action": { "type": "enter_minecart" }, "schedule": { "type": "at_start" }, "probability": 100 }
+            { "action": { "type": "send_chat", "message": "/spawn" }, "schedule": { "type": "on_respawn" }, "probability": 75 }
         ] })
     }
 
@@ -1421,7 +1402,7 @@ mod tests {
 
     /// Each action kind, in `ModeActionKind::ALL`'s order, with an interval
     /// just under fleet-core's minimum for it and the text that names it.
-    fn interval_minimums() -> [(Value, u32, &'static str); 11] {
+    fn interval_minimums() -> [(Value, u32, &'static str); 10] {
         const ANY: &str = "must be at least 250 ms";
         const USE: &str = "must be at least 200 ms for using an item";
         const ATTACK_OR_USE: &str = "must be at least 500 ms for attacking or the use button";
@@ -1457,7 +1438,6 @@ mod tests {
                 29_999,
                 CHAT,
             ),
-            (json!({ "type": "enter_minecart" }), 249, ANY),
         ]
     }
 
@@ -1674,6 +1654,8 @@ mod tests {
     fn a_shape_error_is_serdes_and_never_a_field_error() {
         let shapes = [
             json!([{ "action": { "type": "fly" }, "schedule": { "type": "at_start" }, "probability": 100 }]),
+            // Removed in the release after 0.2.1 (ADR-0046, C5): unknown now.
+            json!([{ "action": { "type": "enter_minecart" }, "schedule": { "type": "at_start" }, "probability": 100 }]),
             json!([{ "action": { "type": "select_hotbar_slot", "slot": "one" }, "schedule": { "type": "at_start" }, "probability": 100 }]),
             json!([{ "action": { "type": "select_hotbar_slot", "slot": 256 }, "schedule": { "type": "at_start" }, "probability": 100 }]),
             json!([{ "action": { "type": "jump", "colour": "red" }, "schedule": { "type": "at_start" }, "probability": 100 }]),

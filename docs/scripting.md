@@ -361,7 +361,7 @@ A script itself is limited too:
 **"Convert to script"** in the mode editor writes a step mode as the script that does what its steps do, for an Admin or the Owner. Nothing changes until the mode is saved, and "Keep the steps" goes back. Every line of the script is marked with the step it does, named as the editor names it (`// while it's online, step 2`).
 
 - **Each step is a line of a hook:** a step when it joins in `on_join`, one after it respawns in `on_respawn`, and a step while it's online on a timer of its own, set in `on_join` and named after it (`online_2`). Steps next to each other on one schedule without jitter share a timer. A jitter is a random part of the gap, drawn again before each run. A probability is a `random.chance` around the step's line; a run it skips is due again all the same.
-- **Each action is the script's call that does it:** `look.at`, `look.turn`, `keys.jump.tap()`, `keys.sneak.hold()` and `release()`, `mouse.right.tap()`, `mouse.right.hold()` and `release()`, `hotbar.select`, and `vehicle.mount("minecart")` for getting into the nearest minecart.
+- **Each action is the script's call that does it:** `look.at`, `look.turn`, `keys.jump.tap()`, `keys.sneak.hold()` and `release()`, `mouse.right.tap()`, `mouse.right.hold()` and `release()`, and `hotbar.select`.
 - **A chat step becomes a declared message,** keyed by its step (`join_1`), and the script sends it by its key: its text is never in the script. Below the right to edit the mode it shows as its `/` and name, as the step did. A brace in its text is written doubled. A step whose command's name holds a brace, or whose text holds an invisible character, can't be declared: the editor says so at the step.
 - **An on-respawn chat goes at most once every 30 seconds,** as the step did.
 
@@ -374,14 +374,13 @@ A script itself is limited too:
 | A swing more often than every 0.5 s, a use more often than every 0.25 s | At most that often: a left click's limit, and a timer's shortest |
 | Two steps that do the same kind of thing | They share that kind's limit: a run that comes too soon after the other's is skipped. Two at the same moment (both when it joins, both after it respawns): the second |
 | Hold right-click | A held right button with an item that isn't used over time uses it again every 4 ticks, as in vanilla |
-| Get into the nearest minecart | Passes over a minecart someone sits in, which the step didn't |
 | A gap longer than 24 hours (an interval plus its jitter) | At most 24 hours, a timer's longest |
 
 And in every script, whatever the steps were: the runtime lets go of every key and button when the bot dies, respawns or changes worlds (a step mode lets go after a respawn only when it has steps for it), and a timer waits while the bot is dead and runs right after the respawn, where a step mode's run while dead did nothing.
 
 **A mode that repeats more than 16 steps on schedules of their own** can't be converted: a script has 16 timers. Put repeating steps with one interval and no jitter next to each other, and they share one.
 
-**Getting into the nearest minecart is going away** in the next release ([ADR-0034](adr/0034-a-stopgap-action-into-the-nearest-minecart.md)): no new step offers it, and a mode can't gain it. A mode that has it keeps it and keeps running until then; convert it before that release.
+**Getting into the nearest minecart** was a step until 0.2.1 ([ADR-0034](adr/0034-a-stopgap-action-into-the-nearest-minecart.md)); a script does it with `vehicle.mount("minecart")`, which passes over a minecart someone sits in. A step mode that still had it is converted on 0.2.1 before the update: the release after it refuses to start while one is stored (the runbook's "Updating").
 
 ### Examples
 #### An AFK farm

@@ -1,21 +1,23 @@
-//! Getting into the nearest minecart (ADR-0034).
+//! Getting into the nearest free minecart: a scripted mode's
+//! `vehicle.mount("minecart")` (ADR-0036, D12).
 //!
-//! A stopgap for servers that put a bot back beside its minecart instead of
-//! in it; it goes once scripted modes can do this themselves. So it's one
-//! component and one system for minecarts alone, and nothing here is a
+//! It began as the stopgap step action `enter_minecart` of release 0.1.3
+//! (ADR-0034), which the release after 0.2.1 removed (ADR-0046, C5). So it's
+//! one component and one system for minecarts alone, and nothing here is a
 //! search for entities or a layer for vehicles.
 //!
-//! The action, [`enter_minecart`], only marks the bot as [`Entering`]; a bot
-//! that rides already ([`Riding`], whatever it rides) isn't marked. The
-//! click comes from [`enter_when_in_reach`], each game tick while the mark is
+//! The action, [`mount`], only marks the bot as [`Entering`]; a bot that
+//! rides already ([`Riding`], whatever it rides) isn't marked. The click
+//! comes from [`enter_when_in_reach`], each game tick while the mark is
 //! there:
 //!
 //! - **It waits for a minecart, [`PATIENCE`] ticks at most.** Right at a
-//!   join, when a mode's steps at start run, a bot has no minecart within
+//!   join, when a script's `on_join` runs, a bot has no minecart within
 //!   its reach yet, and a tick or two later it has (measured, ADR-0034).
 //!   When none came within reach in that time, the mark goes and nothing
 //!   happened.
-//! - **It takes the nearest minecart within reach.** A minecart is within
+//! - **It takes the nearest free minecart within reach.** One someone sits
+//!   in is passed over, and taken once it's free. A minecart is within
 //!   reach when the line from the bot's eyes to the middle of the minecart's
 //!   box enters the box within the bot's entity interaction range: what a
 //!   player aiming at its middle could click. Only `EntityKind::Minecart`
@@ -73,10 +75,6 @@ pub(crate) const PATIENCE: u32 = 200;
 pub(crate) struct Entering {
     /// How many more game ticks it looks for one.
     ticks_left: u32,
-    /// Whether a minecart someone sits in is passed over: a scripted
-    /// mode's `vehicle.mount`. The stopgap action takes the nearest,
-    /// whoever sits in it (ADR-0034).
-    free_only: bool,
 }
 
 /// Where eyes at `eye` click the box `aabb`, and how far that is, squared:
@@ -92,29 +90,10 @@ fn click_point(eye: Vec3, aabb: &Aabb, range: f64) -> Option<(Vec3, f64)> {
     (distance_squared <= range * range).then_some((at, distance_squared))
 }
 
-/// Marks `bot` as wanting into the nearest minecart: [`enter_when_in_reach`]
+/// Marks `bot` as wanting into the nearest free minecart, as a scripted
+/// mode's `vehicle.mount` does (ADR-0036, D12): [`enter_when_in_reach`]
 /// clicks one as soon as one is within reach. A bot that rides already isn't
 /// marked. See the [module docs](self).
-///
-/// # Errors
-/// [`SessionError::NotInWorld`] if the bot's entity is gone.
-pub(crate) fn enter_minecart(world: &mut World, bot: Entity) -> Result<(), SessionError> {
-    let mut own = world
-        .get_entity_mut(bot)
-        .map_err(|_| SessionError::NotInWorld)?;
-    if own.contains::<Riding>() {
-        debug!("the bot rides already");
-        return Ok(());
-    }
-    own.insert(Entering {
-        ticks_left: PATIENCE,
-        free_only: false,
-    });
-    Ok(())
-}
-
-/// Marks `bot` as wanting into the nearest free minecart, as a scripted
-/// mode's `vehicle.mount` does (ADR-0036, D12).
 ///
 /// # Errors
 /// [`SessionError::NotInWorld`] if the bot's entity is gone.
@@ -128,7 +107,6 @@ pub(crate) fn mount(world: &mut World, bot: Entity) -> Result<(), SessionError> 
     }
     own.insert(Entering {
         ticks_left: PATIENCE,
-        free_only: true,
     });
     Ok(())
 }
@@ -156,7 +134,7 @@ type Others<'world, 'state> = Query<
     Without<LocalEntity>,
 >;
 
-/// Gets each bot marked [`Entering`] into the nearest minecart within its
+/// Gets each bot marked [`Entering`] into the nearest free minecart within its
 /// reach, once one is there; see the [module docs](self). A bot the server
 /// hasn't heard is loaded yet waits: a server ignores its clicks.
 pub(super) fn enter_when_in_reach(
@@ -192,11 +170,9 @@ pub(super) fn enter_when_in_reach(
             .filter(|(_, _, kind)| ***kind == EntityKind::Minecart)
             .filter_map(|(cart, position, _)| {
                 let id = index.get_by_ecs_entity(cart)?;
-                // A scripted mode's bot passes over a minecart someone
-                // sits in, and takes it once it's free.
-                if entering.free_only
-                    && passengers.is_some_and(|passengers| passengers.is_occupied(id))
-                {
+                // A minecart someone sits in is passed over, and taken
+                // once it's free.
+                if passengers.is_some_and(|passengers| passengers.is_occupied(id)) {
                     return None;
                 }
                 let (at, distance_squared) =
@@ -441,11 +417,6 @@ mod tests {
                 .id()
         }
 
-        /// The action, as a mode's step performs it.
-        fn enter(&mut self) -> Result<(), SessionError> {
-            enter_minecart(self.app.world_mut(), self.bot)
-        }
-
         fn tick(&mut self) {
             self.app.world_mut().run_schedule(GameTick);
         }
@@ -533,21 +504,6 @@ mod tests {
         assert_eq!(scene.clicked(), [near]);
     }
 
-    /// The stopgap action is as it was: it doesn't look at who sits where
-    /// (ADR-0034's known limit).
-    #[test]
-    fn the_stopgap_action_still_takes_the_nearest_whoever_sits_in_it() {
-        let mut scene = Scene::new();
-        let near = scene.spawn(EntityKind::Minecart, BESIDE);
-        let _far = scene.spawn(EntityKind::Minecart, FURTHER);
-        scene.seats(near, 1);
-
-        scene.enter().unwrap();
-        scene.tick();
-
-        assert_eq!(scene.clicked(), [near]);
-    }
-
     #[test]
     fn with_every_minecart_in_reach_taken_mounting_waits_for_one_to_be_freed() {
         let mut scene = Scene::new();
@@ -588,31 +544,6 @@ mod tests {
         assert_eq!(scene.clicked(), []);
     }
 
-    #[test]
-    fn a_bot_that_rides_already_isnt_marked_by_mounting() {
-        let mut scene = Scene::new();
-        scene.spawn(EntityKind::Minecart, BESIDE);
-        let bot = scene.bot;
-        scene.app.world_mut().entity_mut(bot).insert(Riding {
-            vehicle: MinecraftEntityId(40),
-        });
-
-        assert_eq!(scene.mount(), Ok(()));
-        scene.tick();
-
-        assert!(!scene.wants_in());
-        assert_eq!(scene.clicked(), []);
-    }
-
-    #[test]
-    fn mounting_for_a_bot_that_is_gone_is_not_in_world() {
-        let mut scene = Scene::new();
-        let bot = scene.bot;
-        scene.app.world_mut().despawn(bot);
-
-        assert_eq!(scene.mount(), Err(SessionError::NotInWorld));
-    }
-
     /// Whether `look` points from `eye` at `point`, within azalea's steps of
     /// 0.15 degrees.
     fn faces(look: LookDirection, eye: Vec3, point: Vec3) -> bool {
@@ -629,7 +560,7 @@ mod tests {
         let mut scene = Scene::new();
         scene.spawn(EntityKind::Minecart, BESIDE);
 
-        assert_eq!(scene.enter(), Ok(()));
+        assert_eq!(scene.mount(), Ok(()));
 
         assert_eq!(scene.did(), []);
         assert!(scene.wants_in());
@@ -639,7 +570,7 @@ mod tests {
     fn at_the_next_tick_the_bot_looks_at_the_minecart_beside_it_and_clicks_it_once() {
         let mut scene = Scene::new();
         let cart = scene.spawn(EntityKind::Minecart, BESIDE);
-        scene.enter().unwrap();
+        scene.mount().unwrap();
 
         scene.tick();
 
@@ -665,7 +596,7 @@ mod tests {
     fn the_bot_keeps_its_own_look_and_azalea_has_it_to_send_again() {
         let mut scene = Scene::new();
         scene.spawn(EntityKind::Minecart, BESIDE);
-        scene.enter().unwrap();
+        scene.mount().unwrap();
 
         scene.tick();
 
@@ -683,7 +614,7 @@ mod tests {
     fn a_look_between_the_action_and_the_click_stays_the_bots_look() {
         let mut scene = Scene::new();
         let cart = scene.spawn(EntityKind::Minecart, BESIDE);
-        scene.enter().unwrap();
+        scene.mount().unwrap();
         let stepped = LookDirection::new(120.0, -30.0);
         *scene
             .app
@@ -705,7 +636,7 @@ mod tests {
     fn a_bot_that_faces_the_minecart_already_only_clicks() {
         let mut scene = Scene::new();
         let cart = scene.spawn(EntityKind::Minecart, BESIDE);
-        scene.enter().unwrap();
+        scene.mount().unwrap();
         scene.tick();
         let Did::Looked(at_the_cart) = scene.did()[0] else {
             panic!("no look: {:?}", scene.did());
@@ -717,7 +648,7 @@ mod tests {
             .unwrap() = at_the_cart;
         scene.did.lock().unwrap().clear();
 
-        scene.enter().unwrap();
+        scene.mount().unwrap();
         scene.tick();
 
         assert!(
@@ -737,7 +668,7 @@ mod tests {
             .get_mut::<PhysicsState>(scene.bot)
             .unwrap()
             .trying_to_crouch = true;
-        scene.enter().unwrap();
+        scene.mount().unwrap();
 
         scene.tick();
 
@@ -757,7 +688,7 @@ mod tests {
         let _farther = scene.spawn(EntityKind::Minecart, Vec3::new(0.5, 64.0625, 2.5));
         let nearer = scene.spawn(EntityKind::Minecart, BESIDE);
         let _farthest = scene.spawn(EntityKind::Minecart, Vec3::new(-1.5, 64.0625, -1.5));
-        scene.enter().unwrap();
+        scene.mount().unwrap();
 
         scene.tick();
 
@@ -773,7 +704,7 @@ mod tests {
     #[test]
     fn a_minecart_that_appears_later_is_clicked_then() {
         let mut scene = Scene::new();
-        scene.enter().unwrap();
+        scene.mount().unwrap();
         for _ in 0..30 {
             scene.tick();
         }
@@ -794,7 +725,7 @@ mod tests {
     #[test]
     fn the_bot_stops_looking_for_a_minecart_after_its_patience() {
         let mut scene = Scene::new();
-        scene.enter().unwrap();
+        scene.mount().unwrap();
         for _ in 0..PATIENCE - 1 {
             scene.tick();
         }
@@ -813,12 +744,12 @@ mod tests {
     #[test]
     fn the_action_again_starts_the_patience_again() {
         let mut scene = Scene::new();
-        scene.enter().unwrap();
+        scene.mount().unwrap();
         for _ in 0..PATIENCE - 1 {
             scene.tick();
         }
 
-        scene.enter().unwrap();
+        scene.mount().unwrap();
         for _ in 0..PATIENCE - 1 {
             scene.tick();
         }
@@ -830,7 +761,7 @@ mod tests {
     fn it_clicks_once_and_never_again() {
         let mut scene = Scene::new();
         scene.spawn(EntityKind::Minecart, BESIDE);
-        scene.enter().unwrap();
+        scene.mount().unwrap();
 
         for _ in 0..40 {
             scene.tick();
@@ -851,7 +782,7 @@ mod tests {
             .entity_mut(scene.bot)
             .insert(Riding { vehicle });
 
-        assert_eq!(scene.enter(), Ok(()));
+        assert_eq!(scene.mount(), Ok(()));
         scene.tick();
 
         assert!(!scene.wants_in());
@@ -862,7 +793,7 @@ mod tests {
     #[test]
     fn a_bot_that_rides_by_the_time_of_the_click_doesnt_click() {
         let mut scene = Scene::new();
-        scene.enter().unwrap();
+        scene.mount().unwrap();
         scene.tick();
         scene.spawn(EntityKind::Minecart, BESIDE);
         scene.app.world_mut().entity_mut(scene.bot).insert(Riding {
@@ -880,7 +811,7 @@ mod tests {
         let mut scene = Scene::new();
         // Four blocks east: the box's near side is beyond 3 blocks.
         scene.spawn(EntityKind::Minecart, Vec3::new(5.0, 64.0625, 0.5));
-        scene.enter().unwrap();
+        scene.mount().unwrap();
 
         for _ in 0..PATIENCE {
             scene.tick();
@@ -899,7 +830,7 @@ mod tests {
     fn only_a_minecart_a_player_rides_counts(#[case] kind: EntityKind) {
         let mut scene = Scene::new();
         scene.spawn(kind, BESIDE);
-        scene.enter().unwrap();
+        scene.mount().unwrap();
 
         scene.tick();
 
@@ -913,7 +844,7 @@ mod tests {
     fn a_minecart_the_server_didnt_tell_the_bot_about_doesnt_count() {
         let mut scene = Scene::new();
         scene.unknown(EntityKind::Minecart, BESIDE);
-        scene.enter().unwrap();
+        scene.mount().unwrap();
 
         scene.tick();
 
@@ -925,7 +856,7 @@ mod tests {
         let mut scene = Scene::new();
         // The line to its middle enters this one's box about 3.6 away.
         let cart = scene.spawn(EntityKind::Minecart, Vec3::new(4.5, 64.0625, 0.5));
-        scene.enter().unwrap();
+        scene.mount().unwrap();
         scene.tick();
         let out_of_reach = scene.did();
         scene
@@ -957,7 +888,7 @@ mod tests {
             .world_mut()
             .entity_mut(scene.bot)
             .remove::<HasClientLoaded>();
-        scene.enter().unwrap();
+        scene.mount().unwrap();
         for _ in 0..PATIENCE + 5 {
             scene.tick();
         }
@@ -984,7 +915,7 @@ mod tests {
         scene.spawn(EntityKind::Minecart, BESIDE);
         scene.app.world_mut().despawn(scene.bot);
 
-        assert_eq!(scene.enter(), Err(SessionError::NotInWorld));
+        assert_eq!(scene.mount(), Err(SessionError::NotInWorld));
         scene.tick();
 
         assert_eq!(scene.did(), []);
@@ -1006,7 +937,7 @@ mod tests {
         scene.spawn(EntityKind::Minecart, BESIDE);
         remove(&mut scene);
 
-        assert_eq!(scene.enter(), Ok(()));
+        assert_eq!(scene.mount(), Ok(()));
         scene.tick();
 
         assert_eq!(scene.did(), []);

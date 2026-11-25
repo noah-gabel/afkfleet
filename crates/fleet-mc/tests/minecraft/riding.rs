@@ -21,9 +21,11 @@
 //!   z =  2     a chest on the floor
 //! ```
 //!
-//! A second scenario, at the file's end, checks the stopgap action that gets
-//! a bot on foot into the nearest minecart (ADR-0034), on a platform with
-//! the rail and the minecart alone; it goes with that action.
+//! A second scenario, at the file's end, checks the mount that gets a bot on
+//! foot into the nearest free minecart, a scripted mode's
+//! `vehicle.mount("minecart")` (ADR-0036, D12), on a platform with the rail
+//! and the minecart alone. It began as the stopgap step action
+//! `enter_minecart` (ADR-0034), removed in the release after 0.2.1.
 
 use core::fmt::Write as _;
 use core::ops::RangeInclusive;
@@ -838,7 +840,7 @@ async fn finds_no_minecart_out_of_reach(scene: &Scene) {
     scene.look(90.0, 10.0).await;
     let before = scene.mark();
 
-    scene.perform(GameAction::EnterMinecart).await;
+    scene.perform(GameAction::Mount).await;
     ticks_pass(&scene.session, PATIENCE_AND_MORE).await;
     let waited = scene.mark();
     scene
@@ -876,7 +878,7 @@ async fn gets_in_from_beside_it_and_the_next_look_applies(scene: &Scene) {
         .await;
     let before = scene.mark();
 
-    scene.perform(GameAction::EnterMinecart).await;
+    scene.perform(GameAction::Mount).await;
     scene
         .perform(GameAction::Look {
             yaw: -45.0,
@@ -899,7 +901,7 @@ async fn gets_in_from_beside_it_and_the_next_look_applies(scene: &Scene) {
 async fn stays_seated(scene: &Scene) {
     let before = scene.mark();
 
-    scene.perform(GameAction::EnterMinecart).await;
+    scene.perform(GameAction::Mount).await;
     ticks_pass(&scene.session, 10).await;
 
     assert_eq!(entity_clicks_since(scene, before), 0);
@@ -938,7 +940,7 @@ async fn gets_in_right_after_a_join(scene: Scene, connector: &AzaleaConnector) -
     };
     let before = scene.mark();
     let asked = Instant::now();
-    scene.perform(GameAction::EnterMinecart).await;
+    scene.perform(GameAction::Mount).await;
 
     within("the click after the join", async {
         while entity_clicks_since(&scene, before) == 0 {
@@ -948,7 +950,7 @@ async fn gets_in_right_after_a_join(scene: Scene, connector: &AzaleaConnector) -
     .await;
     // For ADR-0034's record of how long a server takes to show a minecart.
     eprintln!(
-        "the click came {:?} after the action at the join",
+        "the click came {:?} after the mount at the join",
         asked.elapsed()
     );
     scene.is_seated("the bot after its join").await;
@@ -985,7 +987,7 @@ async fn stays_seated_through_a_join(scene: Scene, connector: &AzaleaConnector) 
         picture,
     };
     let before = scene.mark();
-    scene.perform(GameAction::EnterMinecart).await;
+    scene.perform(GameAction::Mount).await;
     ticks_pass(&scene.session, PATIENCE_AND_MORE).await;
 
     scene.is_seated("the bot that joined seated").await;
@@ -999,7 +1001,7 @@ async fn stays_seated_through_a_join(scene: Scene, connector: &AzaleaConnector) 
 }
 
 #[tokio::test]
-async fn slow_enter_minecart_scenario() {
+async fn slow_mount_scenario() {
     let server = Server::start(Mode::Offline).await;
     let picture = Arc::new(Mutex::new(Picture::default()));
     let _evidence = Evidence(Arc::clone(&picture));

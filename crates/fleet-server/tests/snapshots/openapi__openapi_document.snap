@@ -1825,8 +1825,7 @@ expression: document
           "hold_use",
           "attack_facing_entity",
           "select_hotbar_slot",
-          "send_chat",
-          "enter_minecart"
+          "send_chat"
         ],
         "type": "string"
       },

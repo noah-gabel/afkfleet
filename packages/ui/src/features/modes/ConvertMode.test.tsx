@@ -1,8 +1,7 @@
 // "Convert to script" in the mode editor (Plan.md P15.27; ADR-0036, D17; ADR-0046): offered on a
 // step mode to whoever writes scripts, the form's steps converted by the app's Rust side (a direct
 // call: a chat step can hold a password), the script in the editor with what it does differently
-// named by its steps, "Keep the steps", the save of the script, and a problem at its step. The
-// stopgap `enter_minecart` is offered only on a step that has it, marked as going away.
+// named by its steps, "Keep the steps", the save of the script, and a problem at its step.
 import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
@@ -217,41 +216,5 @@ describe("Convert to script (P15.27)", () => {
     await waitFor(() =>
       expect(within(card("repeating", 1)).getByText("must be 1 to 100")).toBeTruthy(),
     );
-  });
-});
-
-describe("the stopgap step (ADR-0036, D17)", () => {
-  it("isn't offered on a new step", async () => {
-    const { app } = await atMode("new");
-
-    await app.user.click(within(section("atStart")).getByRole("button", { name: "Add step" }));
-
-    const options = within(card("atStart", 1))
-      .getAllByRole("option")
-      .map((option) => option.textContent);
-    expect(options.some((text) => text?.includes("minecart"))).toBe(false);
-  });
-
-  it("stays on a stored step that has it, marked as going away with the way out", async () => {
-    await atMode(modeId(2), {
-      rows: [
-        mode(2, {
-          name: "Back in",
-          steps: [shownStep({ type: "enter_minecart" }, ON_RESPAWN)],
-        }),
-      ],
-    });
-
-    const step = card("onRespawn", 1);
-    expect(
-      (within(step).getByRole("combobox", { name: "What it does" }) as HTMLSelectElement).value,
-    ).toBe("enter_minecart");
-    expect(within(step).getByText(/Going away in the next release/)).toBeTruthy();
-    expect(within(step).getByText(/Convert to script/)).toBeTruthy();
-    // No field of its own: what it does, and its chance.
-    const labels = [...step.querySelectorAll<HTMLInputElement>("input, select")].map(
-      (field) => field.labels?.[0]?.textContent ?? "",
-    );
-    expect(labels).toEqual(["What it does", "Chance (%)"]);
   });
 });

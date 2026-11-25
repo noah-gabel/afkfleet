@@ -356,8 +356,7 @@ impl ModeDefinition {
             | Action::UseItem
             | Action::HoldUse { .. }
             | Action::AttackFacingEntity
-            | Action::SelectHotbarSlot { .. }
-            | Action::EnterMinecart => None,
+            | Action::SelectHotbarSlot { .. } => None,
         });
         steps.chain(declared)
     }
@@ -540,8 +539,7 @@ fn check_action(index: usize, action: &Action) -> Result<(), ModeError> {
         | Action::HoldUse { .. }
         | Action::AttackFacingEntity
         | Action::SelectHotbarSlot { .. }
-        | Action::SendChat { .. }
-        | Action::EnterMinecart => Ok(()),
+        | Action::SendChat { .. } => Ok(()),
     }
 }
 
@@ -600,8 +598,7 @@ const fn min_interval(action: &Action) -> Duration {
         | Action::Jump
         | Action::Sneak { .. }
         | Action::SwingArm
-        | Action::SelectHotbarSlot { .. }
-        | Action::EnterMinecart => ModeDefinition::MIN_INTERVAL,
+        | Action::SelectHotbarSlot { .. } => ModeDefinition::MIN_INTERVAL,
     }
 }
 
@@ -637,8 +634,7 @@ const fn limited_kind(action: &Action, schedule: Schedule) -> Option<LimitedStep
         | Action::Sneak { .. }
         | Action::SwingArm
         | Action::UseItem
-        | Action::SelectHotbarSlot { .. }
-        | Action::EnterMinecart => return None,
+        | Action::SelectHotbarSlot { .. } => return None,
     };
     Some(match schedule {
         Schedule::AtStart => start,
@@ -707,8 +703,7 @@ fn same_action(one: &Action, other: &Action) -> bool {
             | Action::UseItem
             | Action::HoldUse { .. }
             | Action::AttackFacingEntity
-            | Action::SelectHotbarSlot { .. }
-            | Action::EnterMinecart,
+            | Action::SelectHotbarSlot { .. },
             _,
         ) => one == other,
     }
@@ -803,9 +798,6 @@ mod tests {
     #[rstest]
     #[case::shortest_interval(step(Action::Jump, every(ms(250), ms(0))))]
     #[case::shortest_use_interval(step(Action::UseItem, every(ms(200), ms(0))))]
-    #[case::shortest_enter_minecart_interval(step(Action::EnterMinecart, every(ms(250), ms(0))))]
-    #[case::enter_minecart_at_start(at_start(Action::EnterMinecart))]
-    #[case::enter_minecart_on_respawn(on_respawn(Action::EnterMinecart))]
     #[case::shortest_attack_interval(step(Action::AttackFacingEntity, every(ms(500), ms(0))))]
     #[case::shortest_chat_interval(step(chat("hello"), every(ms(30_000), ms(0))))]
     #[case::shortest_hold_interval(step(hold(true), every(ms(500), ms(0))))]
@@ -838,10 +830,6 @@ mod tests {
     #[case::use_below_200_ms(
         step(Action::UseItem, every(ms(199), ms(0))),
         IntervalTooShort { step: 0, min: ms(200) }
-    )]
-    #[case::enter_minecart_below_250_ms(
-        step(Action::EnterMinecart, every(ms(249), ms(0))),
-        IntervalTooShort { step: 0, min: ms(250) }
     )]
     #[case::attack_below_500_ms(
         step(Action::AttackFacingEntity, every(ms(499), ms(1_000))),
@@ -1290,7 +1278,6 @@ mod tests {
             }),
             with_probability(25, repeating(chat("/spawn"))),
             on_respawn(chat("/home")),
-            at_start(Action::EnterMinecart),
         ]);
         let json = serde_json::to_string_pretty(&draft).unwrap();
         insta::assert_snapshot!("all_variants", json);
@@ -1849,7 +1836,6 @@ mod tests {
             Just(Action::AttackFacingEntity),
             slot_action(),
             chat_action(),
-            Just(Action::EnterMinecart),
         ]
     }
 
@@ -1894,7 +1880,6 @@ mod tests {
             Just(Action::SwingArm),
             Just(Action::UseItem),
             slot_action(),
-            Just(Action::EnterMinecart),
         ]
     }
 
