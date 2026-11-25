@@ -651,8 +651,8 @@ mod tests {
                 }
             }
         });
-        let (release, held) = mpsc::channel::<()>();
-        let hold = tokio::task::spawn_blocking(move || held.recv_timeout(SOCKET_WAIT));
+        let (release, stay) = mpsc::channel::<()>();
+        let holder = tokio::task::spawn_blocking(move || stay.recv_timeout(SOCKET_WAIT));
         let key = tokio_tungstenite::tungstenite::handshake::client::generate_key();
         let timeouts = short();
 
@@ -677,7 +677,7 @@ mod tests {
         assert!(opened.elapsed() >= timeouts.request * 10);
         drop(socket);
         drop(release);
-        hold.await.unwrap().unwrap_err();
+        holder.await.unwrap().unwrap_err();
         server.join().unwrap();
     }
 
