@@ -59,6 +59,16 @@
 //! worse. [`Database::close`] waits for every checked-out connection, so its
 //! callers bound it: `migrate` through [`Database::close_within`], `serve`
 //! within its shutdown deadline.
+//!
+//! **The last close is the database's own** (ADR-0048, W1). SQLite removes the
+//! `-wal` and `-shm` files only at a close that finds no other connection
+//! open. sqlx 0.9.0 closes a connection that comes back to a closed pool in
+//! that connection's own return task, so two that come back while a pool
+//! closes close at the same moment, each sees the other open, and the files
+//! stay with nothing left to remove them; `just dev-rotate-key` would read that
+//! `-wal` as a running server. So [`Database::close`] ends with a connection
+//! of its own, opened once both pools have closed every one of theirs: alone,
+//! it removes them, as SQLite's own documentation removes a WAL.
 
 mod accounts;
 mod agents;
@@ -98,6 +108,8 @@ pub use self::store::SqliteWriteTx;
 use crate::config::DatabaseConfig;
 use sqlx::migrate::{MigrateError, Migrator};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection, SqlitePool, SqlitePoolOptions};
+use sqlx::{ConnectOptions as _, Connection as _};
+use tracing::debug;
 
 /// Every migration under `crates/fleet-server/migrations/`, embedded in the
 /// binary. A merged migration is never edited: sqlx records each one's
@@ -208,6 +220,9 @@ pub struct Database {
     reads: store::Reads,
     /// How many write transactions committed ([`Store::commits`](crate::ports::store::Store::commits)).
     commits: Arc<CommitCount>,
+    /// How [`Database::close`]'s last connection opens: a read connection's
+    /// options, which never create the file.
+    last: SqliteConnectOptions,
 }
 
 impl Database {
@@ -233,18 +248,25 @@ impl Database {
             .map_err(OpenError::Connect)?;
         // Unbounded on purpose: a migration must finish or fail (module docs).
         MIGRATOR.run(&write).await.map_err(migrate_error)?;
+        let last = connect_options(base.clone(), PoolRole::Read, &options);
         let read = read_pool(base, &options).await?;
-        Ok(Self::from_pools(write, read, commits))
+        Ok(Self::from_pools(write, read, commits, last))
     }
 
-    /// The database over its two pools, and the count its write pool's hook
-    /// shares.
-    fn from_pools(write: SqlitePool, read: SqlitePool, commits: Arc<CommitCount>) -> Self {
+    /// The database over its two pools, the count its write pool's hook
+    /// shares, and how its last connection opens.
+    fn from_pools(
+        write: SqlitePool,
+        read: SqlitePool,
+        commits: Arc<CommitCount>,
+        last: SqliteConnectOptions,
+    ) -> Self {
         Self {
             write,
             reads: store::Reads { pool: read.clone() },
             read,
             commits,
+            last,
         }
     }
 
@@ -261,11 +283,32 @@ impl Database {
     }
 
     /// Closes the read pool, then the write pool, waiting for checked-out
-    /// connections to come back. The last connection to close checkpoints the
-    /// WAL and removes the `-wal` and `-shm` files.
+    /// connections to come back, then opens one connection alone and closes
+    /// it: that last close checkpoints the WAL and removes the `-wal` and
+    /// `-shm` files, which the pools' own closes may not (the [module
+    /// docs](self)). A last connection that can't open or read (the file is
+    /// gone, the disk is full) leaves them, as a crash would; the next open
+    /// recovers them.
     pub async fn close(&self) {
         self.read.close().await;
         self.write.close().await;
+        // Local file operations, bounded where the caller bounds the close.
+        match self.last.connect().await {
+            Ok(mut last) => {
+                // A read opens the WAL, so the close takes care of it.
+                if let Err(error) =
+                    sqlx::query_scalar!(r#"SELECT COUNT(*) AS "count!: i64" FROM sqlite_schema"#)
+                        .fetch_one(&mut last)
+                        .await
+                {
+                    debug!(error = %error, "the database's last connection couldn't read");
+                }
+                if let Err(error) = last.close().await {
+                    debug!(error = %error, "the database's last connection didn't close cleanly");
+                }
+            }
+            Err(error) => debug!(error = %error, "the database's last connection couldn't open"),
+        }
     }
 
     /// [`Database::close`], waiting at most `limit` for checked-out
@@ -357,12 +400,13 @@ pub async fn open_migrated(
         return Err(error);
     }
     let commits = Arc::new(CommitCount::new());
+    let last = connect_options(base.clone(), PoolRole::Read, &options);
     let write = write_pool(&commits, &options).connect_lazy_with(connect_options(
         base,
         PoolRole::Write,
         &options,
     ));
-    Ok(Database::from_pools(write, read, commits))
+    Ok(Database::from_pools(write, read, commits, last))
 }
 
 /// The write pool's options: one connection, no lifetime, and the hook that

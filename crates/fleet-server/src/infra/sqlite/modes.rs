@@ -12,11 +12,13 @@ use fleet_core::authz::{Actor, ModeVisibility, Role, UserRef};
 use fleet_core::id::{ModeId, UserId};
 use fleet_core::mode::ModeName;
 use fleet_core::value::Username;
-use sqlx::SqliteConnection;
+use sqlx::{SqliteConnection, SqlitePool};
 
 use super::convert::{id_text, parse_id, parse_time, stored_mode, time_text};
 use super::error::{store_error, unique_violation};
-use crate::ports::modes::{ListedMode, ModeChange, ModeOwner, NewMode, StoredMode, WriteModeError};
+use crate::ports::modes::{
+    ListedMode, ModeChange, ModeOwner, NewMode, RetiredMode, StoredMode, WriteModeError,
+};
 use crate::ports::page::Page;
 use crate::ports::store::StoreError;
 
@@ -197,6 +199,43 @@ pub(super) async fn delete(conn: &mut SqliteConnection, id: ModeId) -> Result<bo
     .await
     .map_err(store_error)?;
     Ok(done.rows_affected() == 1)
+}
+
+/// The stored modes that still hold `enter_minecart`; see
+/// [`ModeReads::with_retired_action`].
+///
+/// [`ModeReads::with_retired_action`]: crate::ports::modes::ModeReads::with_retired_action
+pub(super) async fn with_retired_action(pool: &SqlitePool) -> Result<Vec<RetiredMode>, StoreError> {
+    // The table's CHECK keeps `definition_json` a JSON object, so json_each
+    // never fails on a row; a scripted mode has no `$.steps` and yields none.
+    let rows = sqlx::query!(
+        r#"SELECT rowid AS "rowid!: i64", id AS "id!", name AS "name!"
+           FROM modes
+           WHERE EXISTS (
+               SELECT 1 FROM json_each(modes.definition_json, '$.steps') AS step
+               WHERE json_extract(step.value, '$.action.type') = 'enter_minecart'
+           )
+           ORDER BY name, id"#
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(store_error)?;
+    rows.into_iter()
+        .map(|row| {
+            let corrupt = |column| StoreError::Corrupt {
+                table: MODES,
+                column,
+                rowid: row.rowid,
+            };
+            Ok(RetiredMode {
+                id: parse_id(&row.id).ok_or_else(|| corrupt("id"))?,
+                name: ModeName::try_from(row.name.as_str())
+                    .ok()
+                    .filter(|name| name.as_str() == row.name)
+                    .ok_or_else(|| corrupt("name"))?,
+            })
+        })
+        .collect()
 }
 
 /// The mode `id` with its owner; see [`ModeReads::listed`].

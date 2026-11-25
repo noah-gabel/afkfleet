@@ -6,8 +6,9 @@
 //! builds a multi-threaded runtime, installs the stop signals and binds
 //! `[http] bind`; [`run`] derives the lockout's key from the vault's, opens
 //! the database (running every pending migration; outside dev mode the file
-//! must exist, since only `migrate` creates one, ADR-0033), builds the app over the
-//! real clock, the OS's randomness, the vault, the database and Microsoft's
+//! must exist, since only `migrate` creates one, ADR-0033), refuses to go on
+//! while a stored mode still holds the removed `enter_minecart`, naming each
+//! (ADR-0046, C5), builds the app over the real clock, the OS's randomness, the vault, the database and Microsoft's
 //! client (after main.rs installed the TLS provider), and serves.
 //! Every startup failure is one `error` event, "the server can't start",
 //! with the error's whole chain, and exit 1. The last line, "the server
@@ -66,6 +67,7 @@
 //! Tests bind `127.0.0.1:0` themselves and pass the listener to [`run`], so
 //! the config's rule against port 0 never needs an exception.
 
+use core::fmt;
 use core::pin::pin;
 use core::time::Duration;
 use std::io;
@@ -144,13 +146,14 @@ use crate::infra::system::{MonotonicClock, OsRandom, SystemClock, TokioPace};
 use crate::metrics::{Metrics, MetricsRender, ServerMetrics};
 use crate::ports::agent_connections::AgentConnections;
 use crate::ports::live_hints::LiveHints;
+use crate::ports::modes::RetiredMode;
 use crate::ports::msauth::MicrosoftAuthProvider;
 use crate::ports::pace::Pace;
 use crate::ports::passwords::{HashError, Passwords};
 use crate::ports::pki::AgentCertificates;
 use crate::ports::reconcile::{NoReconcile, Reconcile};
 use crate::ports::session_grants::SessionGrants;
-use crate::ports::store::Store;
+use crate::ports::store::{Store, StoreError};
 use crate::ports::tokens::Tokens;
 use crate::ports::vault::Vault;
 
@@ -264,6 +267,48 @@ pub enum StartError {
     /// `[database] backup_dir` can't be used on disk (ADR-0022, S4).
     #[error("the backups' folder can't be used")]
     Backups(#[source] BackupError),
+    /// Stored modes still hold `enter_minecart`, which this release
+    /// removed (ADR-0034; ADR-0046, C5): fleet-core can't read them any
+    /// more, so each is named, to be converted on the release before.
+    #[error("{0}")]
+    RetiredAction(RetiredModes),
+    /// The stored modes couldn't be checked for `enter_minecart`.
+    #[error("the stored modes can't be checked for enter_minecart")]
+    RetiredCheck(#[source] StoreError),
+}
+
+/// The stored modes that still hold `enter_minecart`, at least one, as
+/// [`StartError::RetiredAction`] names them: each by its name and ID, and
+/// what to do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetiredModes(Vec<RetiredMode>);
+
+impl fmt::Display for RetiredModes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0.len() {
+            1 => f.write_str("1 stored mode still holds")?,
+            n => write!(f, "{n} stored modes still hold")?,
+        }
+        f.write_str(" enter_minecart, which this release removed: ")?;
+        for (n, mode) in self.0.iter().enumerate() {
+            if n > 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "\"{}\" ({})", mode.name.as_str(), mode.id)?;
+        }
+        f.write_str("; convert each to a script on the release before this one, then update again (docs/runbook.md, \"Updating\")")
+    }
+}
+
+/// Refuses the start while a stored mode still holds `enter_minecart`
+/// (ADR-0046, C5). It runs right after the database opened, before anything
+/// else reads a mode.
+async fn refuse_retired_modes(database: &Database) -> Result<(), StartError> {
+    match database.modes().with_retired_action().await {
+        Ok(modes) if modes.is_empty() => Ok(()),
+        Ok(modes) => Err(StartError::RetiredAction(RetiredModes(modes))),
+        Err(error) => Err(StartError::RetiredCheck(error)),
+    }
 }
 
 /// Logs `error` with its whole chain as "the server can't start" and
@@ -1190,6 +1235,10 @@ pub async fn run<S: ShutdownSignals>(
         Ok(database) => database,
         Err(error) => return cant_start(&StartError::Database(error)),
     };
+    if let Err(error) = refuse_retired_modes(&database).await {
+        database.close().await;
+        return cant_start(&error);
+    }
     let passwords: Arc<dyn Passwords> =
         match Argon2Passwords::new(config.auth.argon2, Arc::new(OsRandom)).await {
             Ok(passwords) => Arc::new(passwords),

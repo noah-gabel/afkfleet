@@ -336,61 +336,22 @@ fn an_action_case_this_version_doesnt_know_is_refused_as_missing() {
     );
 }
 
-/// `Action` as a reader from before `enter_minecart` declares it: only the
-/// first ten cases, of which the test needs one.
-#[derive(Clone, PartialEq, prost::Message)]
-struct OldAction {
-    #[prost(oneof = "old_action::Case", tags = "3")]
-    action: Option<old_action::Case>,
-}
-
-mod old_action {
-    use fleet_proto::generated as wire;
-
-    /// One of `Action`'s cases before `enter_minecart`.
-    #[derive(Clone, PartialEq, prost::Oneof)]
-    pub(super) enum Case {
-        #[prost(message, tag = "3")]
-        Jump(wire::Unit),
-    }
-}
-
-/// An agent built before `enter_minecart` reads such a step's action as
-/// unset, which its reader refuses (the test above): it never runs the step
-/// as another action (ADR-0034).
+/// The stopgap `enter_minecart` was the action's case 11 until the release
+/// after 0.2.1 removed it (ADR-0034; ADR-0046, C5), and the case is reserved,
+/// never reused. A step a server of 0.2.1 or older sends with it reads as an
+/// action that isn't set, and the whole spec is refused: it's never run as
+/// another action. Case 11 is an empty message, tag `0x5A`.
 #[test]
-fn a_reader_from_before_enter_minecart_sees_its_action_unset() {
-    let enter = wire::Action {
-        action: Some(wire::action::Action::EnterMinecart(wire::Unit {})),
-    };
-    let jump = wire::Action {
-        action: Some(wire::action::Action::Jump(wire::Unit {})),
-    };
-
-    let old = OldAction::decode(enter.encode_to_vec().as_slice()).unwrap();
-    let known = OldAction::decode(jump.encode_to_vec().as_slice()).unwrap();
-
-    assert_eq!(old.action, None);
-    assert_eq!(known.action, Some(old_action::Case::Jump(wire::Unit {})));
-}
-
-/// A step that gets into a minecart crosses the wire as itself.
-#[test]
-fn an_enter_minecart_step_crosses_as_itself() {
-    let enter = Some(wire::Action {
-        action: Some(wire::action::Action::EnterMinecart(wire::Unit {})),
-    });
+fn a_step_with_the_retired_case_11_is_refused_as_missing_its_action() {
+    let retired = wire::Action::decode([0x5A, 0x00].as_slice()).unwrap();
     let mut spec = wire_spec();
-    step(&mut spec, 0).action.clone_from(&enter);
+    step(&mut spec, 0).action = Some(retired.clone());
 
-    let read = BotSpec::try_from(spec).unwrap();
-
+    assert_eq!(retired.action, None);
     assert_eq!(
-        read.mode.steps().first().map(|step| &step.action),
-        Some(&fleet_core::mode::Action::EnterMinecart)
+        BotSpec::try_from(spec),
+        Err(error("Action.action", Problem::Missing).at(0))
     );
-    let written = wire::BotSpec::from(read);
-    assert_eq!(written.mode.unwrap().steps.first().unwrap().action, enter);
 }
 
 /// A right-click every 200 ms crosses the wire: the reader's rules are

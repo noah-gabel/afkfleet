@@ -121,22 +121,6 @@ pub enum Action {
         /// The text.
         message: ChatMessage,
     },
-    /// Get into the nearest minecart within reach (ADR-0034).
-    ///
-    /// The bot turns to the minecart, right-clicks it and turns back to
-    /// where it looked, so a look step keeps its effect whether it comes
-    /// before this one or after it. A bot that already rides something does
-    /// nothing. With no minecart in reach the bot keeps looking for one for
-    /// a few seconds, since a bot that just joined has none in reach for a
-    /// moment, and then gives up.
-    ///
-    /// It's for a server that puts a bot back beside its minecart instead
-    /// of in it: a step at start and on respawn. A sneaking bot isn't
-    /// seated, as a sneaking player isn't.
-    ///
-    /// A stopgap: it goes once scripted modes can do this themselves
-    /// (ADR-0034).
-    EnterMinecart,
 }
 
 #[cfg(test)]
@@ -197,7 +181,6 @@ mod tests {
     #[case::attack(Action::AttackFacingEntity)]
     #[case::select_hotbar_slot(Action::SelectHotbarSlot { slot: slot(8) })]
     #[case::send_chat(Action::SendChat { message: "/spawn".parse().unwrap() })]
-    #[case::enter_minecart(Action::EnterMinecart)]
     fn every_action_round_trips_through_json(#[case] action: Action) {
         let json = serde_json::to_string(&action).unwrap();
         assert_eq!(serde_json::from_str::<Action>(&json).unwrap(), action);
@@ -212,18 +195,11 @@ mod tests {
         assert_eq!(serde_json::from_str::<Action>(json).unwrap(), action);
     }
 
-    #[test]
-    fn enter_minecart_is_tagged_enter_minecart() {
-        let json = r#"{"type":"enter_minecart"}"#;
-
-        assert_eq!(serde_json::to_string(&Action::EnterMinecart).unwrap(), json);
-        assert_eq!(
-            serde_json::from_str::<Action>(json).unwrap(),
-            Action::EnterMinecart
-        );
-    }
-
     #[rstest]
+    // The stopgap of release 0.1.3, removed in the release after 0.2.1
+    // (ADR-0034; ADR-0046, C5): a mode that still holds it is no mode any
+    // more, and the server refuses to start while one is stored.
+    #[case::the_retired_enter_minecart(r#"{"type":"enter_minecart"}"#)]
     #[case::unknown_type(r#"{"type":"fly"}"#)]
     #[case::missing_type(r#"{"yaw":1.0,"pitch":2.0}"#)]
     #[case::tuple_notation(r#"{"type":"select_hotbar_slot","slot":[3]}"#)]

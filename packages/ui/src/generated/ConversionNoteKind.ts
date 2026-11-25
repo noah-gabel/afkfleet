@@ -4,4 +4,4 @@
  * What a converted step does differently. Closed: the app's Rust side and
  * its UI ship together.
  */
-export type ConversionNoteKind = "swing_skips_entities" | "slower" | "hold_repeats" | "mount_skips_occupied" | "gap_capped" | "shares_limit";
+export type ConversionNoteKind = "swing_skips_entities" | "slower" | "hold_repeats" | "gap_capped" | "shares_limit";

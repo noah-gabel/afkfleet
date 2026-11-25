@@ -1,0 +1,4 @@
+# The harness runs Mojang's server, patched by Paper, in a test-only image that
+# is never pushed or shipped, as the vanilla test server's EULA=TRUE does
+# (ADR-0049): https://aka.ms/MinecraftEULA
+eula=true

@@ -342,7 +342,6 @@ const MODE_ACTION_KINDS: { readonly [K in ModeActionKind]: K } = {
   attack_facing_entity: "attack_facing_entity",
   select_hotbar_slot: "select_hotbar_slot",
   send_chat: "send_chat",
-  enter_minecart: "enter_minecart",
 };
 
 const modeActionKind = z.enum(MODE_ACTION_KINDS);

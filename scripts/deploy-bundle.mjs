@@ -59,6 +59,7 @@ export const DEVELOPMENT_ONLY = [
   "compose.dev.yaml",
   "compose.dod.yaml",
   "compose.isolated.yaml",
+  "compose.paper.yaml",
   "dev",
   "dod",
   "docker",

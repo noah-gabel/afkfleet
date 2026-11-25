@@ -178,8 +178,6 @@ describe("a step's card (S12, U68, U70, U72)", () => {
     ["Attack what's in front (left-click)", []],
     ["Select a hotbar slot", ["Slot"]],
     ["Send chat or a command", ["Message"]],
-    // Getting into the nearest minecart isn't offered on a new step (P15.27): a stored step's
-    // card is ConvertMode.test.tsx's.
   ])("shows only %s's fields", async (kind, expected) => {
     const found = await asKind(kind);
 

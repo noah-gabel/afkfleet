@@ -45,7 +45,6 @@ import {
   SNEAK_FIELD,
   SNEAK_START,
   SNEAK_STOP,
-  STOPGAP_HINT,
   stepLabel,
   UNIT_TEXT,
   unitLabel,
@@ -189,15 +188,10 @@ export function StepCard({
         </legend>
         {/* Beside the legend, not in it: the group's name is its legend, for a screen reader. */}
         {handle}
-        {/* The stopgap goes in the next release: a step that has it keeps it, and no other offers
-            it (P15.27, ADR-0036, D17). */}
         {choice(
           "kind",
           WHAT_IT_DOES,
-          ACTION_KINDS.filter((kind) => kind !== "enter_minecart" || step.kind === kind).map(
-            (kind) => ({ value: kind, text: ACTION_TEXT[kind] }),
-          ),
-          step.kind === "enter_minecart" ? STOPGAP_HINT : undefined,
+          ACTION_KINDS.map((kind) => ({ value: kind, text: ACTION_TEXT[kind] })),
         )}
         {step.kind === "look" ? (
           <>

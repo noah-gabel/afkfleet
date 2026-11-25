@@ -72,7 +72,7 @@ use fleet_server::ports::live_hints::{LiveHints, ModeEvent};
 use fleet_server::ports::login_attempts::{LoginAttemptReads, LoginAttemptWrites};
 use fleet_server::ports::mfa::{MfaReads, MfaWrites};
 use fleet_server::ports::modes::{
-    ListedMode, ModeChange, ModeReads, ModeWrites, NewMode, StoredMode, WriteModeError,
+    ListedMode, ModeChange, ModeReads, ModeWrites, NewMode, RetiredMode, StoredMode, WriteModeError,
 };
 use fleet_server::ports::page::Page;
 use fleet_server::ports::passwords::{HashError, Passwords, VerifyError};
@@ -828,6 +828,10 @@ struct HookedModes {
 
 #[async_trait]
 impl ModeReads for HookedModes {
+    async fn with_retired_action(&self) -> Result<Vec<RetiredMode>, StoreError> {
+        self.inner.modes().with_retired_action().await
+    }
+
     async fn find(&self, id: ModeId) -> Result<Option<StoredMode>, StoreError> {
         self.inner.modes().find(id).await
     }

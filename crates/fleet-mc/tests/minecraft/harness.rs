@@ -1,10 +1,13 @@
 //! The slow tests' local Minecraft servers, and helpers to drive sessions
 //! against them.
 //!
-//! Every server is an `itzg/minecraft-server` container with the image and
-//! `VERSION` pinned in `deploy/compose.dev.yaml` (the `pins` test checks
-//! that). Only its game port is published, on `127.0.0.1` and a random port;
-//! RCON stays inside the container and is reached with `rcon-cli`.
+//! Every vanilla server is an `itzg/minecraft-server` container with the
+//! image and `VERSION` pinned in `deploy/compose.dev.yaml` (the `pins` test
+//! checks that). The Paper harness (Plan.md P16.1, ADR-0049) is the image
+//! `just paper-image` builds from `deploy/docker/paper.Dockerfile`, Paper 26.1.2
+//! with afkfleet's test plugin. Only a server's game port is published, on
+//! `127.0.0.1` and a random port; RCON stays inside the container and is
+//! reached with `rcon-cli`, or the harness's own `rcon`.
 
 use core::future::Future;
 use core::time::Duration;
@@ -27,6 +30,11 @@ pub(crate) const TAG: &str =
     "2026.9.2-java25@sha256:de5d1b1a83eba576f6c8a688fac2a3523ce457724cdebc8ea48d7818b74cdf6e";
 /// The Minecraft version of the pinned azalea (ADR-0003).
 pub(crate) const VERSION: &str = "26.1";
+
+/// The Paper harness's image, as `just paper-image` builds it; never pulled.
+pub(crate) const PAPER_IMAGE: &str = "afkfleet-paper";
+/// Its tag.
+pub(crate) const PAPER_TAG: &str = "test";
 
 /// The game port inside the container.
 const GAME_PORT: u16 = 25_565;
@@ -51,6 +59,8 @@ pub(crate) enum Mode {
 pub(crate) struct Server {
     container: ContainerAsync<GenericImage>,
     port: u16,
+    /// The program in the container that runs an RCON command.
+    rcon: &'static str,
 }
 
 impl Server {
@@ -108,7 +118,62 @@ impl Server {
             .get_host_port_ipv4(GAME_PORT.tcp())
             .await
             .expect("the container's game port isn't published");
-        Self { container, port }
+        Self {
+            container,
+            port,
+            rcon: "rcon-cli",
+        }
+    }
+
+    /// Starts the Paper harness (ADR-0049) and waits until it's done
+    /// loading. Its image must have been built: `just test-slow` builds it
+    /// first (`just paper-image`), and nothing pulls one of that name.
+    pub(crate) async fn start_paper() -> Self {
+        let built = std::process::Command::new("docker")
+            .args(["image", "inspect", "--format", "{{.Id}}"])
+            .arg(format!("{PAPER_IMAGE}:{PAPER_TAG}"))
+            .output()
+            .expect("docker didn't run (is Docker running?)");
+        assert!(
+            built.status.success(),
+            "the Paper harness's image isn't built: run `just paper-image` (`just test-slow` does)"
+        );
+        let container = GenericImage::new(PAPER_IMAGE, PAPER_TAG)
+            .with_wait_for(WaitFor::message_on_stdout("Done ("))
+            .with_mapped_port(0, GAME_PORT.tcp())
+            .with_host_config_modifier(|config| {
+                config.publish_all_ports = Some(false);
+                for binding in config
+                    .port_bindings
+                    .iter_mut()
+                    .flat_map(|bindings| bindings.values_mut())
+                    .flatten()
+                    .flatten()
+                {
+                    binding.host_ip = Some("127.0.0.1".to_owned());
+                }
+            })
+            .with_startup_timeout(STARTUP)
+            .start()
+            .await
+            .expect("the Paper harness didn't start");
+        let port = container
+            .get_host_port_ipv4(GAME_PORT.tcp())
+            .await
+            .expect("the container's game port isn't published");
+        Self {
+            container,
+            port,
+            rcon: "rcon",
+        }
+    }
+
+    /// Everything the server has written to its console so far.
+    pub(crate) async fn log(&self) -> String {
+        let out = within("the server's log", self.container.stdout_to_vec())
+            .await
+            .expect("no log");
+        String::from_utf8_lossy(&out).into_owned()
     }
 
     /// The server's address, as a session connects to it.
@@ -120,7 +185,7 @@ impl Server {
     pub(crate) async fn rcon(&self, command: &str) -> String {
         let mut result = within(
             "an RCON command",
-            self.container.exec(ExecCommand::new(["rcon-cli", command])),
+            self.container.exec(ExecCommand::new([self.rcon, command])),
         )
         .await
         .expect("rcon-cli couldn't run");

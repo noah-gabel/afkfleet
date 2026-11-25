@@ -2,8 +2,8 @@
 //! `GET /api/v1/modes` and what each viewer sees of a mode; `POST
 //! /api/v1/modes` and its twin, with the pointer, the cap, names,
 //! the re-checks and the audit entry. Editing is in [`edits`], deleting in [`deletion`],
-//! a scripted mode's routes in [`scripted`], and the stopgap `enter_minecart`, refused in
-//! a new mode, in [`stopgap`].
+//! a scripted mode's routes in [`scripted`], and a step mode converted to a script, with
+//! the removed `enter_minecart`, in [`converted`].
 
 use std::collections::BTreeMap;
 
@@ -20,10 +20,10 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 use super::support::{Meanwhile, Options, Person, Seen, Setup, at, redacted, setup, setup_with};
 
+mod converted;
 mod deletion;
 mod edits;
 mod scripted;
-mod stopgap;
 
 /// The modes' list.
 const MODES: &str = "/api/v1/modes";

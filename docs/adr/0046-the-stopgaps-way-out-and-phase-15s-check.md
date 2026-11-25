@@ -79,6 +79,13 @@ fleet-integration's `slow_scripts`: the real server and the real managed agent o
 - **Repeated before they were trusted:** see "What was measured".
 - **An agent of the last release:** `slow_smoke_an_agent_of_the_last_release_is_sent_no_script_and_refuses_nothing`, on the chaos world's stack with its second agent the image v0.1.3 published, pinned by its index digest. This release's agent is stopped, disabled and released, so the three bots go to the old one and run there; a scripted mode can't be set on one of them (409 `agent_too_old`), a new bot on it waits for a newer agent and never reaches the old one, the old agent's stream never ends and its log holds no warning or error. The old agent reads this release's agent config and compose file unchanged: neither changed since v0.1.3.
 
+### C5, as built: the removal (Phase 16, group A, 2026-11-25)
+The release after 0.2.1 removes the stopgap as C5 and ADR-0034 planned, the tag v0.2.1 checked first:
+- **fleet-core** has no `enter_minecart` any more: such a step's JSON is an unknown action. A script's `vehicle.mount` keeps the machinery (`riding/enter.rs`), now always past a minecart someone sits in; its unit tests and the live `slow_mount_scenario` (once `slow_enter_minecart_scenario`) run on the mount.
+- **The wire's case 11 is reserved** (`reserved 11; reserved "enter_minecart";`): an older server's step with it reads as an action that isn't set, and the whole spec is refused.
+- **`serve` refuses to start while a stored mode holds it,** right after the database opens and before anything reads a mode: "the server can't start" with `N stored modes still hold enter_minecart, which this release removed: "<name>" (<id>), …; convert each to a script on the release before this one, then update again`. fleet-core can't read such a mode any more, so the server finds them in the stored JSON with SQLite's own `json_each` (`ModeReads::with_retired_action`); a scripted mode has no steps and is never one. This release adds no migration, so going back to convert is the release before, unchanged.
+- **The API's kind and the app's entry go:** a request with it is a body of the wrong shape (400). The converter loses its `MountSkipsOccupied` note, which only that step had.
+
 ## What was measured
 On this PC (Windows 11, Docker Desktop), 2026-11-22, against the pinned test server (26.1):
 

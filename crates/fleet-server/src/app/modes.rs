@@ -37,12 +37,6 @@
 //!   ([`UpdateModeError::AgentTooOld`]). The audit entries say whether the
 //!   mode is steps or a script, and for a script how many of its chat
 //!   patterns count at any time (ADR-0037, C5).
-//! - **The stopgap `enter_minecart`** (ADR-0034; ADR-0036, D17): a new mode
-//!   with it is refused before anything is read
-//!   ([`CreateModeError::Stopgap`]), and so is an edit that brings it into
-//!   a mode that had none, once the stored mode is read
-//!   ([`UpdateModeError::Stopgap`]). A mode that has it keeps it through
-//!   an edit and keeps running: its removal is the next release's.
 //! - **A scripted mode stays a script** (ADR-0046, C6): an edit that would
 //!   make it steps is refused once the stored mode is read
 //!   ([`UpdateModeError::ScriptStays`]). An app older than the server shows
@@ -64,7 +58,7 @@ use fleet_core::authz::{
     ResourceContext, UserRef, authorize,
 };
 use fleet_core::id::{ModeId, UserId};
-use fleet_core::mode::{Action, ModeDefinition, ModeName, mode_cap_reached};
+use fleet_core::mode::{ModeDefinition, ModeName, mode_cap_reached};
 use fleet_core::script::{Script, ScriptDraft, When};
 use fleet_core::system::{Clock, MintError, SecureRandom, mint};
 use fleet_script::CompileError;
@@ -158,13 +152,6 @@ pub enum CreateModeError {
     /// A scripted mode whose text isn't a program, or whose compiler failed.
     #[error(transparent)]
     Script(ScriptCheckError),
-    /// The step at `step` (from 0) is the stopgap `enter_minecart`, which no
-    /// new mode takes: it goes in the next release (ADR-0036, D17).
-    #[error("step {step} is the stopgap that's going away")]
-    Stopgap {
-        /// The step's place in the mode.
-        step: usize,
-    },
     /// The steps send a command off the allowlist, which only the twin
     /// route takes: the handler should have pointed there first, so this is
     /// a bug (S16).
@@ -241,14 +228,6 @@ pub enum UpdateModeError {
     /// scripted mode it reads as one without steps (ADR-0046, C6).
     #[error("a scripted mode stays a script")]
     ScriptStays,
-    /// The edit brings the stopgap `enter_minecart` into a mode that had no
-    /// such step, at `step` (from 0); a mode that has one keeps it
-    /// (ADR-0036, D17).
-    #[error("step {step} brings in the stopgap that's going away")]
-    Stopgap {
-        /// The step's place in the edited mode.
-        step: usize,
-    },
     /// The edit makes the mode need a script API level that the agent of a
     /// bot that uses it doesn't run, by its live stream (ADR-0036, D13).
     #[error("a bot that uses the mode is on an agent that doesn't run it")]
@@ -626,10 +605,6 @@ impl ModeService {
         if !route.takes(check) {
             return Err(CreateModeError::WrongRoute { route });
         }
-        if let Some(step) = stopgap(&definition) {
-            debug!(user_id = %by.actor.id, "a mode was refused: it holds the stopgap that's going away");
-            return Err(CreateModeError::Stopgap { step });
-        }
         self.checked(&definition)
             .await
             .map_err(CreateModeError::Script)?;
@@ -793,6 +768,19 @@ fn shows_the_same(stored: &StoredMode, edit: &ModeEdit) -> bool {
         && edit.definition.same_as_shown(&stored.definition)
 }
 
+/// Whether an edit from `was` to `will_be` is one a mode may make: a
+/// scripted mode stays a script, as an older app would save it as no steps
+/// (ADR-0046, C6).
+///
+/// # Errors
+/// [`UpdateModeError::ScriptStays`] for a script made steps.
+fn allowed_change(was: &ModeDefinition, will_be: &ModeDefinition) -> Result<(), UpdateModeError> {
+    if (ModeKind::of(was), ModeKind::of(will_be)) == (ModeKind::Script, ModeKind::Steps) {
+        return Err(UpdateModeError::ScriptStays);
+    }
+    Ok(())
+}
+
 /// How many bots use the mode `id`, read in `tx`, once `actor` is found able
 /// to set the edited mode, whose commands `check` judged, on every one of
 /// them (S17). The first that refuses stops the edit, naming nothing: a bot
@@ -800,33 +788,6 @@ fn shows_the_same(stored: &StoredMode, edit: &ModeEdit) -> bool {
 ///
 /// # Errors
 /// [`UpdateModeError::InUseByOthers`], or [`UpdateModeError::Store`].
-/// The place of `definition`'s first `enter_minecart` step, the stopgap a
-/// script's `vehicle.mount("minecart")` replaces (ADR-0034; ADR-0036, D17).
-fn stopgap(definition: &ModeDefinition) -> Option<usize> {
-    definition
-        .steps()
-        .iter()
-        .position(|step| step.action == Action::EnterMinecart)
-}
-
-/// Whether an edit from `was` to `will_be` is one a mode may make: a
-/// scripted mode stays a script, as an older app would save it as no steps
-/// (ADR-0046, C6), and the stopgap stays out, as a mode that has it keeps
-/// it and none gains it (ADR-0036, D17).
-///
-/// # Errors
-/// [`UpdateModeError::ScriptStays`] for a script made steps, and
-/// [`UpdateModeError::Stopgap`] at the step that brings the stopgap in.
-fn allowed_change(was: &ModeDefinition, will_be: &ModeDefinition) -> Result<(), UpdateModeError> {
-    if (ModeKind::of(was), ModeKind::of(will_be)) == (ModeKind::Script, ModeKind::Steps) {
-        return Err(UpdateModeError::ScriptStays);
-    }
-    match (stopgap(was), stopgap(will_be)) {
-        (None, Some(step)) => Err(UpdateModeError::Stopgap { step }),
-        _ => Ok(()),
-    }
-}
-
 async fn checked_bots(
     tx: &mut dyn WriteTx,
     actor: &Actor,

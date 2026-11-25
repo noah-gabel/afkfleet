@@ -1,0 +1,6 @@
+# Paper's anonymous statistics, off: the test server sends nothing out (ADR-0049).
+enabled: false
+serverUuid: 00000000-0000-0000-0000-000000000000
+logFailedRequests: false
+logSentData: false
+logResponseStatusText: false

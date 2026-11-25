@@ -1,8 +1,8 @@
 // "Convert to script" as one story (Plan.md P15.27; ADR-0036, D17; ADR-0046), in Edge under the
-// release CSP: the Owner writes a step mode, which offers no minecart step on a new step, converts
-// it, reads what the script does differently, goes back to the steps and converts again, and saves
-// the script as the mode. The conversion is the app's Rust side's; the fake answers this story's
-// steps with that side's own answer (e2e/fake/converted.json, held equal by the desktop crate).
+// release CSP: the Owner writes a step mode, converts it, reads what the script does
+// differently, goes back to the steps and converts again, and saves the script as the mode. The
+// conversion is the app's Rust side's; the fake answers this story's steps with that side's own
+// answer (e2e/fake/converted.json, held equal by the desktop crate).
 
 import { OWNER } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
@@ -27,8 +27,6 @@ test("the Owner converts a step mode to a script and saves it", async ({ page, c
 
   const joining = "When it joins";
   await section(joining).getByRole("button", { name: "Add step" }).click();
-  // The stopgap isn't offered on a new step: it goes in the next release.
-  await expect(step(joining, 1).getByRole("option", { name: /minecart/ })).toHaveCount(0);
   await step(joining, 1).getByLabel("What it does").selectOption({ label: "Select a hotbar slot" });
   const online = "While it's online";
   await section(online).getByRole("button", { name: "Add step" }).click();

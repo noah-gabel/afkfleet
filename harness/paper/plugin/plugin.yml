@@ -1,0 +1,26 @@
+# afkfleet's test plugin for the Paper harness (Plan.md P16.1, ADR-0049): an
+# auction house, a sell menu, a small economy and a log line for every click.
+# Test-only: it runs in the harness image and is never shipped.
+name: afkfleet-harness
+version: "1"
+main: afkfleet.harness.HarnessPlugin
+api-version: "26.1"
+description: Menus for afkfleet's slow tests. Test-only.
+commands:
+  ah:
+    description: The auction house; /ah sell <price> lists the item in your hand.
+    usage: /ah [page] | /ah sell <price> | /ah expired
+  sell:
+    description: The sell menu.
+    usage: /sell
+  balance:
+    description: Your balance.
+    usage: /balance
+  pay:
+    description: Pays a player.
+    usage: /pay <player> <amount>
+  # The plugin answers it only for the console and RCON: a permission with
+  # `default: false` would hide it from them too.
+  harness:
+    description: The tests' own controls, from the console or RCON only.
+    usage: /harness help

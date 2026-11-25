@@ -1,0 +1,7 @@
+# The harness's own Paper settings; Paper adds every other one, at its
+# defaults, at its first start. The defaults are what the measurements measure
+# (ADR-0049): the packet limiter among them.
+_version: 31
+# No call to PaperMC's API at the start: the test server sends nothing out.
+update-checker:
+  enabled: false

@@ -57,7 +57,7 @@ use crate::ports::login_attempts::{
 };
 use crate::ports::mfa::{InsertMfaError, MfaReads, MfaWrites, UserMfa};
 use crate::ports::modes::{
-    ListedMode, ModeChange, ModeReads, ModeWrites, NewMode, StoredMode, WriteModeError,
+    ListedMode, ModeChange, ModeReads, ModeWrites, NewMode, RetiredMode, StoredMode, WriteModeError,
 };
 use crate::ports::page::Page;
 use crate::ports::recovery_codes::RecoveryCodeHash;
@@ -321,6 +321,10 @@ impl BotReads for Reads {
 
 #[async_trait]
 impl ModeReads for Reads {
+    async fn with_retired_action(&self) -> Result<Vec<RetiredMode>, StoreError> {
+        modes::with_retired_action(&self.pool).await
+    }
+
     async fn find(&self, id: ModeId) -> Result<Option<StoredMode>, StoreError> {
         modes::find(&self.pool, id).await
     }

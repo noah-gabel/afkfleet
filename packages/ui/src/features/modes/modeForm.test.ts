@@ -63,7 +63,6 @@ describe("a mode's values and its request (R158, R159)", () => {
     ["the first slot", asked({ type: "select_hotbar_slot", slot: 0 })],
     ["the last slot", asked({ type: "select_hotbar_slot", slot: 8 })],
     ["send_chat", asked({ type: "send_chat", message: "/warp farm" })],
-    ["enter_minecart", asked({ type: "enter_minecart" })],
     ["a chance", asked({ type: "jump" }, AT_START, 25)],
     ["a repeating step", asked({ type: "jump" }, EVERY)],
     ["a wait and its random part", asked({ type: "jump" }, { ...EVERY, jitter_ms: 75_000 })],
@@ -84,7 +83,6 @@ describe("a mode's values and its request (R158, R159)", () => {
       attack_facing_entity: true,
       select_hotbar_slot: true,
       send_chat: true,
-      enter_minecart: true,
     };
 
     expect([...ACTION_KINDS].sort()).toEqual(Object.keys(every).sort());

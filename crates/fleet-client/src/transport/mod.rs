@@ -613,33 +613,50 @@ mod tests {
     const SEC_WEBSOCKET_ACCEPT_TEST: reqwest::header::HeaderName =
         reqwest::header::SEC_WEBSOCKET_ACCEPT;
 
-    /// A WebSocket server pinging every 50 ms, twelve times, then closing:
-    /// the upgraded connection lives past five times the client's 100 ms
-    /// request timeout, so reqwest's whole-request deadline never cuts it.
-    #[tokio::test]
+    /// The upgraded connection outlives reqwest's whole-request deadline:
+    /// ten times the client's 100 ms request timeout pass on the client's
+    /// clock while it's open, and the server's ping and close still arrive.
+    ///
+    /// The client's clock is tokio's, paused, and stands still while the
+    /// server works: the server runs on a thread of its own, and a blocking
+    /// task the test holds keeps tokio from moving a paused clock on to the
+    /// next timer while the runtime waits on the socket. So the timeouts see
+    /// only the time the test advances, never how fast the machine runs: on
+    /// wall-clock time a runner that stalled the process for 0.3 s timed the
+    /// handshake out (main, 2026-11-23, an instrumented build).
+    #[tokio::test(start_paused = true)]
     async fn an_upgraded_connection_outlives_the_request_timeout() {
-        use futures_util::{SinkExt as _, StreamExt as _};
-        use tokio_tungstenite::tungstenite::{Bytes, Message};
+        use futures_util::StreamExt as _;
+        use std::sync::mpsc;
+        use tokio_tungstenite::tungstenite::{self, Bytes, Message};
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
-            let mut every = tokio::time::interval(Duration::from_millis(50));
-            for _ in 0..12 {
-                every.tick().await;
-                socket.send(Message::Ping(Bytes::new())).await.unwrap();
-            }
-            socket.close(None).await.unwrap();
-            // The client's pongs and its close: a socket dropped unread
+        let (go, wait) = mpsc::channel::<()>();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(SOCKET_WAIT)).unwrap();
+            stream.set_write_timeout(Some(SOCKET_WAIT)).unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+            wait.recv_timeout(SOCKET_WAIT).unwrap();
+            socket.send(Message::Ping(Bytes::new())).unwrap();
+            socket.close(None).unwrap();
+            // The client's pong and its close: a socket dropped unread
             // resets the connection on Windows.
-            while socket.next().await.is_some() {}
+            loop {
+                match socket.read() {
+                    Ok(_) => {}
+                    Err(tungstenite::Error::ConnectionClosed) => break,
+                    Err(error) => panic!("the server read {error:?}"),
+                }
+            }
         });
+        let (release, stay) = mpsc::channel::<()>();
+        let holder = tokio::task::spawn_blocking(move || stay.recv_timeout(SOCKET_WAIT));
         let key = tokio_tungstenite::tungstenite::handshake::client::generate_key();
-        let started = tokio::time::Instant::now();
+        let timeouts = short();
 
-        let answer = transport(short())
+        let answer = transport(timeouts)
             .upgrade(upgrade_to(address, &key))
             .await
             .unwrap();
@@ -648,28 +665,20 @@ mod tests {
         };
         crate::events::upgrade::checked(&headers, &key).unwrap();
         let mut socket = crate::events::upgrade::framed(socket).await;
-        let mut pings = 0;
-        let closed = tokio::time::timeout(SOCKET_WAIT, async {
-            while let Some(message) = socket.next().await {
-                match message.unwrap() {
-                    Message::Ping(_) => pings += 1,
-                    Message::Close(_) => return true,
-                    other => panic!("not a ping: {other:?}"),
-                }
-            }
-            false
-        })
-        .await
-        .unwrap();
+        let opened = tokio::time::Instant::now();
+        tokio::time::advance(timeouts.request * 10).await;
+        go.send(()).unwrap();
+        let mut seen = Vec::new();
+        while let Some(message) = socket.next().await {
+            seen.push(message.unwrap());
+        }
 
-        assert!(closed, "the server's close came");
-        assert_eq!(pings, 12);
-        assert!(started.elapsed() >= Duration::from_millis(500));
+        assert_eq!(seen, [Message::Ping(Bytes::new()), Message::Close(None)]);
+        assert!(opened.elapsed() >= timeouts.request * 10);
         drop(socket);
-        tokio::time::timeout(SOCKET_WAIT, server)
-            .await
-            .unwrap()
-            .unwrap();
+        drop(release);
+        holder.await.unwrap().unwrap_err();
+        server.join().unwrap();
     }
 
     /// An error whose source is `0`, like hyper's around an IO error.

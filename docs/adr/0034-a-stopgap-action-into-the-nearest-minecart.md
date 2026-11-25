@@ -1,6 +1,6 @@
 # 0034. A stopgap mode action into the nearest minecart, and a right-click every 200 ms
 
-- **Status:** Accepted
+- **Status:** Accepted. The action was removed in the release after 0.2.1, as "What removing the action will need" set out ([ADR-0046](0046-the-stopgaps-way-out-and-phase-15s-check.md), C5, "As built")
 - **Date:** 2026-11-13
 - **Related:** ADR-0010 (the mode model and its limits), ADR-0011 (`UseItem`, `HoldUse`), ADR-0019 (a mode on the wire), ADR-0020 (S20, S25: on-respawn steps, and a reader that doesn't know a case; R160: a step the app doesn't know), ADR-0026 (riding); `crates/fleet-mc/src/riding/enter.rs`, `crates/fleet-mc/tests/minecraft/riding.rs`; the runbook's [Updating](../runbook.md#updating); `docs/releasing.md`
 

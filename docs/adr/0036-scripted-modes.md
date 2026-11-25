@@ -1,6 +1,6 @@
 # 0036. Scripted modes: a virtual vanilla client in Rhai, and menus after it
 
-- **Status:** Accepted. The user approved the plan and answered its eight questions on 2026-11-16 ("The user's answers", at the end); the decisions they changed are marked. Reading chat is [ADR-0037](0037-scripts-read-system-chat.md)
+- **Status:** Accepted. The user approved the plan and answered its eight questions on 2026-11-16 ("The user's answers", at the end); the decisions they changed are marked. Reading chat is [ADR-0037](0037-scripts-read-system-chat.md). Amended 2026-11-25 with the user's additions for Phase 16 (M11 to M15), and with what group A measured and the two rules fixed from it (R1, R2), which replace M4's proposal and size M5
 - **Date:** 2026-11-16
 - **Related:** Plan.md Phases 15 and 16, §10; [the script reference](../scripting.md) (draft); [ADR-0037](0037-scripts-read-system-chat.md) (scripts read system chat); ADR-0008 (one host thread per bot), ADR-0010 (the mode model and its limits), ADR-0011 (`UseItem`, `HoldUse`), ADR-0013 (the mode runner), ADR-0017 (the app's CSP, no runtime styles), ADR-0019 (a mode on the wire), ADR-0020 (S20 to S27: respawn; S80: chat formats), ADR-0025, ADR-0026 (riding), ADR-0030 (fuzz targets), ADR-0032 (the load test), ADR-0034 (the stopgap this replaces); `spikes/scripting/`
 
@@ -423,6 +423,93 @@ A Paper server in the slow suite with a small test plugin, built in Docker: an a
 
 ### M10. New rows for the threat model
 Lore steers a script's clicks, so a server, or a player who can list an item, steers a bot's purchases: a price written to be misread by the number helper; a bait listing; a screen that changes between the scan and the click (M3's case); a title that imitates another menu. The script's author decides what to trust; the runtime guarantees only that a click lands on the item the script saw.
+
+## Amendment: the user's additions for Phase 16 (2026-11-25)
+The user added five things at Phase 16's start, for the groups after A to build. Each is recorded at its task in Plan.md; what's left open by them is decided here under ADR-0025.
+
+### M11. A slot's data components, as registry IDs and numbers (P16.4, P16.5, P16.12)
+**A slot also carries a small closed set of data components, never as text:**
+
+| | |
+|---|---|
+| `slot.potion` | The potion's kind as a registry ID, such as `"minecraft:turtle_master"`, `"minecraft:long_turtle_master"` or `"minecraft:strong_turtle_master"`, for a potion, a splash potion, a lingering potion and a tipped arrow; `()` for any other item and for a potion without a kind |
+| `slot.enchantments` | A map of each enchantment's ID to its level, such as `#{ "minecraft:sharpness": 5 }`: a tool's, a weapon's, an armour piece's |
+| `slot.stored_enchantments` | The same for an enchanted book's stored enchantments |
+
+- **Why:** a vanilla potion's kind is in no name and no lore: the client writes "Potion of the Turtle Master" from the kind itself. Without it a script can't tell a Turtle Master from a water bottle, and two listings of one kind of item differ only there.
+- **From azalea 0.16.0** (docs.rs): `components::PotionContents { potion: Option<Potion>, .. }` (its custom colour, custom name and custom effects are left out), `components::Enchantments { levels: HashMap<Enchantment, i32> }` and `components::StoredEnchantments { enchantments: HashMap<Enchantment, i32> }`. `Enchantment` is an ID in a registry the server sends, resolved to its identifier through the world's registries; an ID the registry doesn't know reads `"minecraft:unknown"`, as a world's name does (ADR-0042).
+- **Bounded,** as everything a server can grow: at most 16 enchantments a slot (vanilla has 42 in all, an item rarely more than 8), each level 0 to 255 (the most a command gives); a slot with more, or a level past that, keeps the first 16 by ID and leaves the rest out.
+- **The same item is still the whole item** (M3): the comparison before a click covers every component, these and all others.
+
+### M12. `bot.name` (P16.12)
+**The bot's own player name**, as its account has it: no text from the server. A script shared by several bots reads it to skip its own auction listings by their seller line (`slot.lore_has("Seller: " + bot.name)`).
+
+### M13. Two more examples, run live on the harness (P16.12, P16.17)
+- **A farm that sells:** it farms by holding its farm item's button, and every few minutes it opens the sell menu, sells its Turtle Master potions, drops one listed kind of junk (one item ID the mode names, never "everything else", so it never drops its tools), waits `random.between(300, 900)` ms before every click, then selects the farm's item again and goes back to farming: a held right button with a potion in hand would drink it. The wait is a timer per click: hooks still run to their end (D1).
+- **An auction lister:** it reads the Turtle Master listings' prices from their lore (`slot.lore_number("Price")`), skips its own listings (M12), takes the middle of the three cheapest, lists one potion at that price with `/ah sell {price}` (a declared message, D8), confirms on the confirm screen, and collects its expired listings. **The declared price range's minimum is the floor a bait listing can't push it below,** and the example says so in a comment: a price below it is refused (`bad_value`) and nothing is sent.
+- **The harness holds what both need** (P16.1): the auction plugin's `/ah sell <price>` from the hand with a confirm screen, pages with a next-page button, a seller line in each listing's lore, real potions among the listings with their potion component, expired listings to collect, a sell menu, and a second player who buys.
+
+### M14. What the bot sees, on demand (P16.20, a task of its own)
+**A bot's page shows, on demand, what the bot sees in the screen it has open:** each slot's item, count, name, lore and the components of M11, as plain text. An author needs it to write a script for a new server.
+- **Who may see it: View on the bot** (`ViewBot`), the level that already sees its chat history and live events; below it the bot is 404, as everywhere. A screen holds the server's text, as chat does, and nothing of the mode: a declared message's arguments never reach a screen.
+- **How:** `GET /api/v1/bots/{id}/screen`, authed, not audited (it only reads), with a rate-limit class of its own (each read asks the agent), its rows in the authorization matrix and the route-coverage test, and the 401, 404, 422 and 429 tests every endpoint has. The agent answers from P16.5's snapshot on its stream within a bound; a bot offline or without a screen answers so. Text is sanitized and bounded as M1 has it, components are IDs and numbers as M11 has them. The app's bot page gets a panel with a refresh button, plain text only.
+- **More than a small task,** so it's P16.20, in group E beside the wire and the app at level 2.
+
+### M15. A decimal where a declared message wants a whole number (P16.12; ADR-0040, E9)
+**Today a decimal number given for a declared message's whole-number value is refused as `bad_value`;** the user's reviewer had to write `.floor().to_int()` in a payout script. The reference says so now, with that workaround.
+
+**Decided: it counts down to the next whole number,** as a decimal does wherever the API takes a whole one (ADR-0040, E9: `world.block(bot.x, bot.y - 1, bot.z)`), and the range is judged on the result. **A decimal value with set places counts down at its last place too,** instead of rounding to the nearest: a payout never sends more than the script gave, which rounding up could. Built with group D, for every API level: a value refused before is sent, and a value with more places than declared is written down rather than up.
+
+## Amendment: what group A measured, and the two rules (P16.2, P16.3; 2026-11-25)
+
+### How it was measured
+fleet-mc's slow scenarios (`crates/fleet-mc/tests/minecraft/menus.rs`, [ADR-0049](0049-the-paper-harness.md), H6): one bot clicking with azalea 0.16.0's own clicks and prediction, each click carrying the state ID the server last gave its window; against the vanilla test server (26.1) and the Paper harness (26.1.2, build 74, Paper's defaults); on loopback, on this PC. A "tick" is the bot's game tick, counted from the click's; Paper's own ticks are its plugin's log. Each scenario ran four times with the same results, the last with the assertions that now hold them in `just test-slow`.
+
+| What | Vanilla 26.1 | Paper 26.1.2 |
+|---|---|---|
+| A click the server takes as predicted, with its state ID (in the bot's inventory, in a chest, a shift-click) | **Nothing at all** within 20 ticks | **Nothing at all** |
+| A click whose state ID is one behind | Applied to the server's own screen, then the window's whole content with a newer state ID, in the same tick or the next | The same, in the same tick, and the offhand's slot (window 0, slot 45) after every whole content |
+| A right-click on a chest | Its screen and its content, 1 tick later | The same, and the offhand's slot |
+| A close the bot sends | Nothing | Nothing |
+| azalea's own state ID on a chest | The bot's inventory's (3 where the chest was at 1), so the server reads the click as stale and sends the whole content | The same (10 where the chest was at 1) |
+| A plugin's button, its click cancelled (next page, a listing, cancel, confirm) | | Each slot the click predicted put back with a slot packet, then the cursor, in the same tick; a page redrawn in place comes as one slot packet a changed slot, each with the next state ID (48 for a page) |
+| A screen the plugin opens on its next tick | | Within the same tick of the bot's on loopback (server ticks 288, then 289), after the click's own correction |
+| A purchase | | The item into window 0 and into the screen's copy of the bot's slots, the corrections, the cursor, then the close on the next server tick |
+| A statistics request sent right after the click | Its reply after the click's correction, if there is one, and alone after a click taken as predicted | The same; a screen the plugin opens on its next tick comes after the reply |
+| A number-key click azalea predicts no change for (a pane into an empty hotbar slot) | | The cursor alone |
+| Clicks each tick for 8 s, shuttling a stack in the bot's inventory | 1 to 100 (2,000 a second): no kick, no resync | 1 to 22 (440 a second): every click logged by the server, no resync |
+| The first rate the server kicks at | None up to 100 a tick | **25 a tick** (500 a second, and the bot's own 40 or so): kicked after 3,350 clicks, "Kicked for exceeding packet rate limit": Paper's limiter for all packets, 500 a second over 7 s |
+
+- **Paper's other limits don't count clicks:** its `spam-limiter.incoming-packet-threshold` bounds right-clicks (`UseItem`, `UseItemOn`) alone (Paper 26.1.2's own code, read with `javap`).
+- **Which requests keep the order of clicks:** the server handles a statistics request (`ClientCommand`, `REQUEST_STATS`) on its main thread, as it handles clicks, but answers a ping request (`PingRequest`) at once on the network thread, ahead of any click still waiting for the next tick.
+
+**What that changes:**
+- **M4's proposal is wrong.** It took a click as answered by an update of its window; a click the server takes as predicted gets none, on either server.
+- **A stale click isn't refused.** The server applies it to the screen it has and only then sends the whole content: the guard before sending (M3) is the only protection, as planned.
+- **azalea's state ID can't be used for a click on a container.** It keeps one for every window and sets it from any window's slot packet, never from a whole content, so a chest's clicks go out with the bot's inventory's. fleet-mc keeps each window's own (R1, P16.8).
+- **azalea's prediction has gaps:** a number-key click that moves a pane into an empty hotbar slot is predicted as no change. P16.9 tests its prediction for every click kind.
+
+### R1. When a click counts as answered (P16.3; replaces M4's proposal)
+- **Every click goes out with a statistics request right behind it,** in the same game tick: `ClientCommand` with `REQUEST_STATS`, what the vanilla client's statistics screen sends. The server handles both on its main thread in the order it reads them, so its reply comes after everything the click brought and before anything a plugin does on a later tick.
+- **The click is answered by that reply.** Its fate is what came for its window between the click and the reply:
+
+  | Fate | What came |
+  |---|---|
+  | `ok` | Nothing: the server did what azalea predicted |
+  | `rejected` | The window's whole content, a slot packet for a slot the click predicted, or the cursor: the server put things back or did otherwise. Every cancelled plugin button ends here, as Paper puts its slot and the cursor back |
+  | `replaced` | The window's close, or another window |
+  | `unanswered` | No reply within 5 s: the screen takes no further click until it's opened anew |
+
+- **A screen takes one click at a time** (M4, as decided): the next click on it waits for the last one's reply. On loopback the reply came in the click's tick or the next; on a real server it's one round trip.
+- **A click carries the state ID the server last gave its window,** from that window's whole content and slot packets, which fleet-mc keeps itself; M3's guard compares with it (P16.8, P16.9).
+- **What a plugin does on a later tick,** such as opening its confirm screen, comes after the reply as a new screen (`on_menu_open`), never as the click's answer.
+- **No listing is bought twice** for the reasons M3 and M4 gave: a click goes out only onto the screen, state and whole item the script saw, and a screen takes the next click only once the last one's fate is known.
+- **The cost:** one small packet a click, and a reply that holds the statistics changed since the last one (all of them at the first).
+
+### R2. The click limit's class (P16.3, P16.7; M5)
+- **`Limited::Click`, a class of its own: one click a game tick (50 ms) a bot, no burst.** That's at most 20 clicks a second, 40 packets with R1's requests, beside the bot's own 40 or so: a sixth of what Paper's limiter takes, where 25 clicks a tick were needed for a kick, and vanilla has no limit. A screen gets at most one click a round trip anyway (R1).
+- **No server dropped a click below its kick,** so the limit is there for the packet limiter and to stay near what a person does, not against lost clicks.
+- **The user's own client** ([ADR-0049](0049-the-paper-harness.md), H5) is optional: if a person's fastest clicking comes out under 20 a second (`just paper-clicks`), the class is lowered to it before group B builds it (P16.7).
 
 ## Consequences
 - **Two phases, thirteen groups,** each a pull request, each after the last one's merge.

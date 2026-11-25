@@ -26,7 +26,9 @@ use fleet_core::id::{ModeId, UserId};
 use fleet_core::mode::{ModeDefinition, ModeName, ModePreset};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::audit::NewAuditEntry;
-use fleet_server::ports::modes::{ListedMode, ModeChange, NewMode, StoredMode, WriteModeError};
+use fleet_server::ports::modes::{
+    ListedMode, ModeChange, NewMode, RetiredMode, StoredMode, WriteModeError,
+};
 use fleet_server::ports::page::{Page, PageLimit};
 use fleet_server::ports::store::{Store, StoreError};
 use sqlx::SqlitePool;
@@ -354,6 +356,58 @@ async fn a_stored_scripted_mode_of_an_unknown_level_is_corrupt(
     );
 }
 
+/// The release after 0.2.1 removed the stopgap `enter_minecart` (ADR-0034;
+/// ADR-0046, C5). fleet-core can't read a mode that still holds it, so the
+/// server finds each one in the stored JSON itself, to name them at its
+/// start: at any place among the steps and on any schedule, but never a
+/// scripted mode whose text names it, nor a step mode without it.
+#[sqlx::test(migrations = false)]
+async fn the_modes_that_still_hold_enter_minecart_are_found_in_their_stored_json_by_name(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let pool = db.write_pool();
+    let owner = add_user(pool, 1, "owner", Role::Owner).await;
+    let at_start = r#"{"steps":[{"action":{"type":"enter_minecart"},"schedule":{"type":"at_start"},"probability":100}]}"#;
+    let later = r#"{"steps":[{"action":{"type":"jump"},"schedule":{"type":"at_start"},"probability":100},{"action":{"type":"enter_minecart"},"schedule":{"type":"every","interval_ms":60000,"jitter_ms":0},"probability":50}]}"#;
+    let scripted = r#"{"script":{"api":1,"source":"// was enter_minecart\nfn on_join(first) { vehicle.mount(\"minecart\"); }","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}}"#;
+    let zeta = add_stored(pool, 2, owner, "Zeta cart", at_start).await;
+    add_stored(pool, 3, owner, "Swing", VALID).await;
+    let back_in = add_stored(pool, 4, owner, "Back in", later).await;
+    add_stored(pool, 5, owner, "Mounted", scripted).await;
+
+    let found = db.modes().with_retired_action().await.unwrap();
+
+    assert_eq!(
+        found,
+        vec![
+            RetiredMode {
+                id: back_in,
+                name: "Back in".parse().unwrap(),
+            },
+            RetiredMode {
+                id: zeta,
+                name: "Zeta cart".parse().unwrap(),
+            },
+        ]
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn without_a_mode_that_holds_enter_minecart_none_is_found(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user(db.write_pool(), 1, "owner", Role::Owner).await;
+    add_stored(db.write_pool(), 2, owner, "Swing", VALID).await;
+
+    let found = db.modes().with_retired_action().await.unwrap();
+
+    assert_eq!(found, vec![]);
+}
+
 #[sqlx::test(migrations = false)]
 async fn a_stored_mode_that_isnt_valid_is_corrupt_and_the_error_never_holds_its_json(
     _pool: SqlitePoolOptions,
@@ -671,6 +725,29 @@ async fn add_mode(pool: &SqlitePool, n: u8, owner: UserId, name: &str, visibilit
         name,
         visibility,
         VALID,
+        SEEDED,
+        SEEDED
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    id
+}
+
+/// Mode `n` of `owner`, named `name`, private, stored as `json` whatever it
+/// holds.
+async fn add_stored(pool: &SqlitePool, n: u8, owner: UserId, name: &str, json: &str) -> ModeId {
+    let created = seeded() + chrono::Duration::minutes(i64::from(n));
+    let id = ModeId::new_v7(created, [n; 10]).unwrap();
+    let text = id.to_string();
+    let owner = owner.to_string();
+    sqlx::query!(
+        "INSERT INTO modes (id, owner_user_id, name, visibility, definition_json, version, created_at, updated_at)
+         VALUES (?, ?, ?, 'private', ?, 1, ?, ?)",
+        text,
+        owner,
+        name,
+        json,
         SEEDED,
         SEEDED
     )

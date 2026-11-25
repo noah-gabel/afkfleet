@@ -39,7 +39,7 @@ use fleet_core::mc::SessionError;
 use fleet_core::mode::GameAction;
 use tracing::debug;
 
-use crate::{riding, script};
+use crate::script;
 
 /// A look direction, in degrees.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -75,7 +75,6 @@ pub(crate) fn has_finite_angles(action: &GameAction) -> bool {
         | GameAction::HoldUse { .. }
         | GameAction::AttackFacingEntity
         | GameAction::SelectHotbarSlot { .. }
-        | GameAction::EnterMinecart
         // A position holds only numbers.
         | GameAction::LookAtPosition(_)
         | GameAction::Press(_)
@@ -211,9 +210,6 @@ pub(crate) fn perform(client: &Client, action: GameAction) -> Result<(), Session
             Ok(())
         }
         GameAction::AttackFacingEntity => attack(client),
-        // Only marks the bot; the click comes with a game tick that has a
-        // minecart within reach (ADR-0034).
-        GameAction::EnterMinecart => riding::enter_minecart(&mut client.ecs.write(), client.entity),
         // A scripted mode's inputs (ADR-0036, D9 to D12).
         GameAction::Press(_)
         | GameAction::Tap(_)
@@ -383,7 +379,6 @@ mod tests {
     #[case::hold_use(GameAction::HoldUse { on: true })]
     #[case::attack(GameAction::AttackFacingEntity)]
     #[case::hotbar(GameAction::SelectHotbarSlot { slot: HotbarSlot::LAST })]
-    #[case::enter_minecart(GameAction::EnterMinecart)]
     fn finite_and_angle_free_actions_pass(#[case] action: GameAction) {
         assert!(has_finite_angles(&action));
     }

@@ -64,3 +64,5 @@ Each architecture decision record (ADR) holds one decision with its context, its
 - [0045. The script editor and a bot's script in the app: CodeMirror in a shadow root, one description, the app's own check, and the chat's ↑ and ↓](adr/0045-the-script-editor-and-a-bots-script-in-the-app.md)
 - [0046. The stopgap's way out and Phase 15's check: a step mode converted to a script, the reference generated, and the examples and the spoofs on a real server](adr/0046-the-stopgaps-way-out-and-phase-15s-check.md)
 - [0047. The release's indexes without annotations, and its push and merge rehearsed in CI](adr/0047-the-releases-indexes-without-annotations.md)
+- [0048. Two tests that failed only in the coverage build: the database's own last close, and a paused clock held over real sockets](adr/0048-two-tests-that-failed-only-in-the-coverage-build.md)
+- [0049. The Paper harness: Paper 26.1.2 and a test plugin, every input pinned, the plugin built offline](adr/0049-the-paper-harness.md)

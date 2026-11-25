@@ -70,7 +70,7 @@ use azalea::world::{WorldName, Worlds};
 use azalea::ecs as bevy_ecs;
 use tracing::debug;
 
-pub(crate) use self::enter::{enter_minecart, mount};
+pub(crate) use self::enter::mount;
 pub(crate) use self::passengers::Passengers;
 use self::pick::Seated;
 

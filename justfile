@@ -48,9 +48,10 @@ test crate="":
 # image is pulled and the agent's image built first, so neither eats into a timed
 # test; AFKFLEET_E2E_IMAGE_BUILT tells the compose e2e test that the image is
 # this source's (ADR-0014). `images` builds both production images for the stack's
-# smoke tests, which AFKFLEET_SMOKE_IMAGES_BUILT tells (ADR-0022, S19).
+# smoke tests, which AFKFLEET_SMOKE_IMAGES_BUILT tells (ADR-0022, S19), and `paper-image`
+# the Paper harness the menu tests start (ADR-0049).
 # Slow tests: containers and a real Minecraft server (needs Docker), one at a time.
-test-slow $AFKFLEET_E2E_IMAGE_BUILT="1" $AFKFLEET_SMOKE_IMAGES_BUILT="1": images
+test-slow $AFKFLEET_E2E_IMAGE_BUILT="1" $AFKFLEET_SMOKE_IMAGES_BUILT="1": images paper-image
     docker compose --file deploy/compose.dev.yaml pull minecraft
     docker compose --file deploy/compose.dev.yaml build agent
     cargo nextest run --workspace {{ linux_exclude }} --profile slow --no-tests=warn --features fleet-mc/fault-injection
@@ -181,6 +182,26 @@ stack-up:
 # Stop the local stack (the server and the agent) and delete the server's world.
 mc-down:
     docker compose --file deploy/compose.dev.yaml down --volumes
+
+# The Paper harness (Plan.md P16.1, ADR-0049): its Dockerfile's pins checked first, then
+# Paper 26.1.2 and the test plugin, every input pinned and the plugin built offline.
+# Build the Paper harness's image as afkfleet-paper:test (needs Docker; test-only).
+paper-image:
+    node scripts/harness-pins.mjs
+    docker build --file deploy/docker/paper.Dockerfile --tag afkfleet-paper:test harness/paper
+
+# For a person's own client: offline mode on 127.0.0.1:25567 alone (deploy/compose.paper.yaml).
+# Start the Paper harness for your own client and wait until it's healthy (needs Docker).
+paper-up: paper-image
+    docker compose --file deploy/compose.paper.yaml up --detach --wait --wait-timeout 300
+
+# Stop the Paper harness and delete its world.
+paper-down:
+    docker compose --file deploy/compose.paper.yaml down --volumes
+
+# Sum up the clicks the Paper harness logged: how many, the shortest gap, the most in a tick and a second.
+paper-clicks:
+    node scripts/paper-clicks.mjs
 
 # Both Dockerfiles build natively for this machine and share their chef and planner
 # stages, so the second build reuses those layers (ADR-0022, S13). Nothing is pushed.

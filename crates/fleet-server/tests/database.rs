@@ -520,6 +520,53 @@ async fn a_closed_open_migrated_database_leaves_no_wal_or_shm() {
     );
 }
 
+/// Two connections that come back to a database while it closes close at the
+/// same moment: sqlx 0.9.0 closes a connection returned to a closed pool in
+/// that connection's own return task (`return_to_pool`), so the two closes run
+/// side by side on their worker threads. SQLite deletes `-wal` and `-shm` only
+/// at a close that finds no other connection open, so neither of the two does,
+/// and nothing is left open to do it later (main's coverage job, 2026-11-10 and
+/// 2026-11-22). The test hands both back right before the close, while the
+/// return tasks wait for the test's one thread; every round must end without
+/// the files.
+#[tokio::test]
+async fn connections_handed_back_as_the_database_closes_leave_no_wal_or_shm() {
+    let dir = TempDir::new().unwrap();
+    let path = config_in(&dir).path;
+    open_in(&dir).await.close().await;
+
+    for round in 0..20 {
+        let db = open_migrated_in(&dir).await.unwrap();
+        let mut one = db.read_pool().acquire().await.unwrap();
+        let mut other = db.read_pool().acquire().await.unwrap();
+        assert!(reads_its_schema(&mut one).await);
+        assert!(reads_its_schema(&mut other).await);
+        drop(one);
+        drop(other);
+        db.close().await;
+
+        let after = on_disk(&path);
+        assert_eq!(
+            (after.1, after.2),
+            (false, false),
+            "round {round}: (a -wal left, a -shm left)"
+        );
+    }
+}
+
+/// Whether `connection` reads the schema's migrations table, which opens its
+/// read of the database and so the WAL.
+async fn reads_its_schema(connection: &mut sqlx::SqliteConnection) -> bool {
+    sqlx::query_scalar!(
+        r#"SELECT COUNT(*) AS "count!: i64" FROM sqlite_schema WHERE type = 'table' AND name = ?"#,
+        "_sqlx_migrations"
+    )
+    .fetch_one(connection)
+    .await
+    .unwrap()
+        == 1
+}
+
 #[tokio::test]
 async fn an_edited_migration_is_refused() {
     let dir = TempDir::new().unwrap();
