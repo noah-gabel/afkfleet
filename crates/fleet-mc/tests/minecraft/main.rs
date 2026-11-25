@@ -27,6 +27,8 @@ mod checks;
 #[cfg(feature = "fault-injection")]
 mod containment;
 mod harness;
+#[cfg(feature = "fault-injection")]
+mod menus;
 mod offline;
 mod online;
 mod pins;
