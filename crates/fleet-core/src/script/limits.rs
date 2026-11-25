@@ -82,6 +82,12 @@ pub const MIN_HOLD_FOR: Duration = Duration::from_millis(50);
 /// The longest `hold_for`: 10 minutes.
 pub const MAX_HOLD_FOR: Duration = Duration::from_mins(10);
 
+/// The shortest time between two of a bot's clicks, or anything else a
+/// screen answers: one game tick, no burst (ADR-0036, R2). At most 20 clicks
+/// a second, 40 packets with each click's barrier, a sixth of what Paper's
+/// packet limiter takes; vanilla has no limit.
+pub const CLICK_INTERVAL: Duration = Duration::from_millis(50);
+
 /// The longest line a script writes into its log, in characters.
 pub const LOG_LINE_CHARS: usize = 200;
 /// The most lines a script writes into its log in a minute.
