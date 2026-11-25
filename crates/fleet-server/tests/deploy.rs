@@ -280,7 +280,9 @@ fn just_images_passes_the_release_labels_from_the_environment() {
             line.trim_start()
                 .starts_with("docker build --file deploy/docker/")
         })
-        .filter(|line| !line.contains("shots"))
+        // The test-only images, never released: the screenshots' and the
+        // Paper harness's (ADR-0049).
+        .filter(|line| !line.contains("shots") && !line.contains("paper"))
         .collect();
     assert_eq!(builds.len(), 2, "{builds:?}");
     for build in builds {
