@@ -66,3 +66,4 @@ Each architecture decision record (ADR) holds one decision with its context, its
 - [0047. The release's indexes without annotations, and its push and merge rehearsed in CI](adr/0047-the-releases-indexes-without-annotations.md)
 - [0048. Two tests that failed only in the coverage build: the database's own last close, and a paused clock held over real sockets](adr/0048-two-tests-that-failed-only-in-the-coverage-build.md)
 - [0049. The Paper harness: Paper 26.1.2 and a test plugin, every input pinned, the plugin built offline](adr/0049-the-paper-harness.md)
+- [0050. Menus in fleet-core: a server's text, the screen's snapshot, the click guard, one click at a time, and the sign desk](adr/0050-menus-in-fleet-core.md)
