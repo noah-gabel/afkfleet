@@ -1,0 +1,4 @@
+#!/bin/sh
+# Runs one command on the harness's server through RCON, as the vanilla test
+# server's rcon-cli does (ADR-0049).
+exec java -cp /paper/plugins/afkfleet-harness.jar afkfleet.harness.Rcon "$@"

@@ -19,6 +19,7 @@ Where things are:
 - **Decisions:** `docs/adr/`
 - **Threat model:** `docs/threat-model.md`. Its "Verified by" cells cite tests as Rust paths (`module::test_name`); `scripts/threat-model-citations.mjs` checks that each exists (`just scripts-test`). Rename a cited test only together with the threat model.
 - **Operations:** `docs/runbook.md`
+- **The Paper harness:** `harness/paper/` (a test plugin in Java, test-only, built offline inside `deploy/docker/paper.Dockerfile`; ADR-0049)
 - **Project overview and status:** `README.md`: a short intro, the quickstart and the current state (see "A task", step 6)
 - **Developers' guide:** `docs/development.md`: setup, commands, configuration, the binaries' and the API's reference, and the checks only the user runs (kept current, see "A task", step 6). `docs/README.md` indexes every document under `docs/`.
 - **Topic rules:** `.claude/rules/` holds the rules for parts of the work: the full commands table (`commands.md`), dependencies (`dependencies.md`), Rust details (`rust.md`), fleet-server (`server.md`), tests (`testing.md`) and the frontend (`frontend.md`). Each loads when you open a file it covers; read the ones a task touches before you plan it. Older ADRs and Plan.md notes cite some of these rules as "CLAUDE.md's …".

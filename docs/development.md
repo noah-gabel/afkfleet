@@ -219,7 +219,11 @@ just dev-enroll # enroll a dev agent with dev-server, the bundle on stdin: $bund
 just dev-managed-agent # run that agent with deploy/dev/agent.managed.toml against dev-server
 just dev-bots alice # a console for dev-server's bot endpoints, the password and codes typed hidden
 just stack-up  # build the agent's image and run the server and the agent in Docker
-just test-slow # pull the server image, build both images, then the slow tests one at a time (needs Docker)
+just test-slow # pull the server image, build both images and the Paper harness, then the slow tests one at a time (needs Docker)
+just paper-image # the Paper harness's image, afkfleet-paper:test, its pins checked first (needs Docker; test-only)
+just paper-up  # the Paper harness for your own client on 127.0.0.1:25567 (needs Docker)
+just paper-clicks # how fast the clicks in its log came: counts and gaps, no names
+just paper-down # remove it with its world
 just images   # build afkfleet-server:dev and afkfleet-agent:dev for this machine (needs Docker)
 just test-stack # both images, then the stack's smoke tests and the SFTP account's test (needs Docker)
 just demo-agent # the Phase 5 demo: the Docker agent's five bots for an hour with one server restart
@@ -317,6 +321,8 @@ just icons     # after changing apps/desktop/src-tauri/icons/icon.svg: render ic
 
 The test server runs in offline mode, so it's for local development only. RCON is enabled with a random password and isn't published; run commands with `docker compose --file deploy/compose.dev.yaml exec minecraft rcon-cli <command>`.
 
+**The Paper harness** ([ADR-0049](adr/0049-the-paper-harness.md)) is a second test server, for the menus of Phase 16: Paper 26.1.2 (protocol 775, as 26.1) with afkfleet's test plugin, `harness/paper/` (Java, test-only, never shipped). `just paper-image` builds it from [`deploy/docker/paper.Dockerfile`](../deploy/docker/paper.Dockerfile): the JDK image pinned by digest, Paper's and Mojang's jars by SHA-256 (a wrong one fails the build), and the plugin compiled by the image's own `javac` with no network and no build tool; `scripts/harness-pins.mjs` checks those pins first, and in `just scripts-test`. Nothing to install: Docker builds it. The plugin has an auction house (`/ah`, `/ah sell <price>`, `/ah expired`), a sell menu (`/sell`), `/balance` and `/pay`, and the tests' controls from the console or RCON (`harness fill 50`, `harness list <seller> <price> <item>`, `harness buy <player> <id>`, `harness money <player> <amount>`, `harness open <player> ah|sell|expired`, `harness expire <id>`, `harness reset`; `harness` alone lists them). Every click, drag, open, close and kick is a `harness-…` line in the server's log with the server's tick. The slow tests start it themselves (`crates/fleet-mc/tests/minecraft/menus.rs`: what a server sends after a click, and how fast clicks may come, on Paper and on the vanilla server); `just paper-up` starts it for your own client, offline mode on 127.0.0.1:25567 alone, RCON with `docker compose --file deploy/compose.paper.yaml exec paper rcon <command>`.
+
 The slow tests also run on GitHub weekly and on demand (the `Slow tests` workflow); it isn't a required check.
 
 The compose e2e test runs the Docker stack under a project of its own, `afkfleet-e2e`, with [`deploy/compose.isolated.yaml`](../deploy/compose.isolated.yaml) on top, which unpublishes the server's port, so it can run beside `just mc-up`. It judges the agent by [`deploy/dev/stack-checks.json`](../deploy/dev/stack-checks.json): the retry windows, the warnings a server restart may cause, and the one error it may cause, a connection reset, allowed only during the restart. It needs the image `just test-slow` builds first; run on its own, it stops at once and says so. Its stack is removed when it ends, and a killed run's leftovers are removed by the next run, or by `docker compose -p afkfleet-e2e down -v`.
@@ -324,6 +330,14 @@ The compose e2e test runs the Docker stack under a project of its own, `afkfleet
 **The demo** (`just demo-agent`, or `just demo-agent 8` for a short check) runs the same stack as the project `afkfleet-demo` for an hour and restarts the server at half time. It then prints a summary: the agent's memory and CPU (peak, mean and 95th percentile, from `docker stats`, with the machine they were measured on), the warnings and errors by target, every state change, each bot's reconnect, and the shutdown report. It ends with PASS, or FAIL and every failed criterion: an error, a warning [`stack-checks.json`](../deploy/dev/stack-checks.json) doesn't expect, a bot not back by its deadline, an agent restart, or an unclean shutdown. The one error that file allows is a connection reset while the server restarts, at most one per session closed there: vanilla's shutdown sometimes resets a socket before its kick, and azalea logs that at ERROR. The raw logs and the summary are saved under `target/demo-agent/`; only `summary.txt` belongs in a pull request, since the server's log holds container IPs. Run it after a Minecraft-version bump (ADR-0003).
 
 ## The manual checks
+
+**How fast a person clicks** (optional; [ADR-0036](adr/0036-scripted-modes.md), R2, [ADR-0049](adr/0049-the-paper-harness.md), H5): the bots' click limit is one a game tick, 20 a second; if your own fastest clicking comes out slower, it's lowered to yours. Only you can run it, and nothing waits for it.
+1. `just paper-up` (needs Docker), then `docker compose --file deploy/compose.paper.yaml exec paper rcon "harness fill 50"` for a full auction house.
+2. In your own Minecraft client, version 26.1, 26.1.1 or 26.1.2: Multiplayer, Direct Connection, `127.0.0.1:25567`. The server is in offline mode, so any name joins; it reaches no other server and stays on this PC.
+3. Give yourself a stack: `docker compose --file deploy/compose.paper.yaml exec paper rcon "give <your name> minecraft:cobblestone 64"`.
+4. Click as fast as you can, about 10 s each: pick a stack up and put it down in your inventory (E); shift-click it back and forth with a chest open (`/ah` works too); in `/ah`, click Next page again and again.
+5. `just paper-clicks` prints how many clicks the server logged, the shortest gap between two, and the most in one server tick and in any one second, by kind; it never prints a name. Share those lines.
+6. `just paper-down` removes the server with its world.
 
 **The real-account check** shows that a real Minecraft token joins a local online-mode server and sends signed chat, and that the token never reaches a log. It needs your real credentials, so only you run it; the AI never does.
 1. Right before running, create `secrets/p1.8-account.txt` (gitignored) with the archived spike's `fetch-token`: `cd spikes/azalea`, then `cargo run -- fetch-token`, and sign in with the code it shows. The file holds no expiry, and a token lasts about a day. If the session server rejects it, fetch a new one.

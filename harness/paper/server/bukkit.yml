@@ -1,0 +1,5 @@
+# The harness's own settings; Paper adds every other one at its first start.
+# The tests connect several players from one address within seconds, which the
+# default throttle of 4 s would refuse (ADR-0049).
+settings:
+  connection-throttle: 0

@@ -1,0 +1,24 @@
+# The Paper harness for a person's own client (Plan.md P16.2, ADR-0049):
+# `just paper-up` builds the image and starts it, `just paper-clicks` sums up
+# the clicks its plugin logged, `just paper-down` removes it with its world.
+# The slow tests start the same image themselves, never through this file.
+#
+# TEST-ONLY. The server runs in offline mode, so anyone who can reach it can
+# join under any name: it's published only on 127.0.0.1, and its RCON port
+# never. Run a command with
+# `docker compose --file deploy/compose.paper.yaml exec paper rcon <command>`.
+name: afkfleet-paper
+
+services:
+  paper:
+    image: afkfleet-paper:test
+    build:
+      context: ../harness/paper
+      dockerfile: ../../deploy/docker/paper.Dockerfile
+    # Always the local build, never a registry's image of the same name.
+    pull_policy: build
+    ports:
+      # 25566 is the DoD checks' server's.
+      - "127.0.0.1:25567:25565"
+    # Paper saves the world at a stop.
+    stop_grace_period: 30s
