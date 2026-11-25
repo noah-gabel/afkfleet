@@ -1,6 +1,6 @@
 # 0036. Scripted modes: a virtual vanilla client in Rhai, and menus after it
 
-- **Status:** Accepted. The user approved the plan and answered its eight questions on 2026-11-16 ("The user's answers", at the end); the decisions they changed are marked. Reading chat is [ADR-0037](0037-scripts-read-system-chat.md). Amended 2026-11-25 with the user's additions for Phase 16 (M11 to M15), and with what group A measured and the two rules fixed from it (R1, R2), which replace M4's proposal and size M5
+- **Status:** Accepted. The user approved the plan and answered its eight questions on 2026-11-16 ("The user's answers", at the end); the decisions they changed are marked. Reading chat is [ADR-0037](0037-scripts-read-system-chat.md). Amended 2026-11-25 with the user's additions for Phase 16 (M11 to M15), and with what group A measured and the two rules fixed from it (R1, R2), which replace M4's proposal and size M5. Amended again at group B's start with three more of the user's additions (M16 to M18): sign input, their server's auction flow, slots by position
 - **Date:** 2026-11-16
 - **Related:** Plan.md Phases 15 and 16, §10; [the script reference](../scripting.md) (draft); [ADR-0037](0037-scripts-read-system-chat.md) (scripts read system chat); ADR-0008 (one host thread per bot), ADR-0010 (the mode model and its limits), ADR-0011 (`UseItem`, `HoldUse`), ADR-0013 (the mode runner), ADR-0017 (the app's CSP, no runtime styles), ADR-0019 (a mode on the wire), ADR-0020 (S20 to S27: respawn; S80: chat formats), ADR-0025, ADR-0026 (riding), ADR-0030 (fuzz targets), ADR-0032 (the load test), ADR-0034 (the stopgap this replaces); `spikes/scripting/`
 
@@ -206,7 +206,7 @@ The reference draft is [docs/scripting.md](../scripting.md). Its rules:
 | Dragging in a screen, double-click to collect | The same result with single clicks; two more packet shapes to get exactly right |
 | The recipe book | Servers limit it separately (Paper's `recipe-spam-limit`); crafting works by clicks |
 | Typing free chat, tab completion | No free text is ever built (D8) |
-| Signs, books, command blocks | Text entry. Later, through templates |
+| Signs, books, command blocks | Text entry. Later, through templates. *Signs are in Phase 16, through declared sign messages (M16, the user's addition of 2026-11-25)* |
 | The beacon's and the horse's screens, dialogs | No use named; each needs packets of its own |
 | The player list, advancements, the perspective, screenshots | Nothing of them reaches the server |
 | Placing blocks, fishing with bite detection, steering boats and horses, elytra | The user's list for later (Plan.md §10) |
@@ -510,6 +510,48 @@ fleet-mc's slow scenarios (`crates/fleet-mc/tests/minecraft/menus.rs`, [ADR-0049
 - **`Limited::Click`, a class of its own: one click a game tick (50 ms) a bot, no burst.** That's at most 20 clicks a second, 40 packets with R1's requests, beside the bot's own 40 or so: a sixth of what Paper's limiter takes, where 25 clicks a tick were needed for a kick, and vanilla has no limit. A screen gets at most one click a round trip anyway (R1).
 - **No server dropped a click below its kick,** so the limit is there for the packet limiter and to stay near what a person does, not against lost clicks.
 - **The user's own client** ([ADR-0049](0049-the-paper-harness.md), H5) is optional: if a person's fastest clicking comes out under 20 a second (`just paper-clicks`), the class is lowered to it before group B builds it (P16.7).
+
+## Amendment: the user's additions at group B's start (2026-11-25)
+The user added three more things when group B started, for it and the groups after it to build. Each is recorded at its tasks in Plan.md. What they leave open is decided here under ADR-0025, or where it's built, in that group's ADR.
+
+### M16. Sign input (P16.6, P16.10, P16.12, P16.15)
+**A script can answer a sign editor the server opens,** with a declared sign message and nothing else. D4 left signs out, "later, through templates": this is that, for signs alone. Books and command blocks stay out.
+
+- **Why:** the user's server's auction house takes a listing's price on a sign. After a confirm screen it opens a sign editor (`ClientboundOpenSignEditor`), reads the price from what comes back, and shows a final confirm button.
+- **What a script gets:**
+  - `on_sign_open()`: a hook for each sign editor the server opens. The editor's side and position are on the `sign` object; the hook takes no parameters, as `on_menu_open()` takes none.
+  - `sign.write(key, values)`: answers that editor with a declared sign message. That's up to four lines of fixed text and typed values, as the anvil's name is (M7), and never free text. Each line stays within what a server accepts.
+  - `sign.cancel()`: answers it with nothing written.
+- **The declared sign message is a template under P15.2's rules** (D8): fixed text with typed values in braces, at most eight values for the whole sign, each value used once. Each line's longest text is checked when the mode is saved, and the finished lines go through their own validation again before anything is sent.
+- **Only the editor the server opened last is answered, and only once.** An editor the script doesn't answer is never answered by anything else: fleet-mc never answers one by itself, though a vanilla client sends its lines whenever its editor closes.
+- **Where it's built:**
+  - fleet-core, in group B: the template, the editor's opening as an event with its position and side, the answer as a command, and the rule above as a pure decision.
+  - fleet-mc, in P16.10: the packet in and the update (`ServerboundSignUpdate`) out, on the host thread.
+  - fleet-script, in P16.12: the hook and the object.
+  - The wire and the server, in P16.15: a mode's declared sign messages, at level 2.
+
+### M17. The user's server's auction flow, in the harness and as an example (P16.11, P16.12, P16.17)
+**The flow:**
+1. `/ah <query>` searches.
+2. `/ah` opens a double chest whose last row holds the buttons.
+3. Create starts a listing.
+4. A click on an item in the bot's inventory selects it.
+5. A confirm screen.
+6. The price on a sign (M16).
+7. A final confirm.
+
+- **The harness's plugin gets this flow** beside `/ah sell <price>` (group C, P16.11).
+- **The auction lister (M13) gets a second variant on it,** an example file (P16.12) run live on the harness (P16.17), written the safe way:
+  - **A button is clicked by its slot,** and only if that slot holds the expected item with the expected name. So a listing renamed "Create" in the rows above is never clicked.
+  - **The potion is found by `slot.potion`,** wherever it is in the inventory.
+  - **Every unexpected screen closes the menu,** logs why and tries again later, and a watchdog timer covers the whole listing.
+
+### M18. Slots by position (P16.5, P16.12)
+**A container's slot can be named by its row and column, counted from the top left,** so a script can name "the middle of the bottom row" without counting.
+
+- **The user left the form open** ("a slot's row and column, or a helper that names a slot by row and column, your call"). Decided: **both**, because they serve different uses. `slot.row` and `slot.column` let a loop pick out a row, as "every listing above the buttons" does. `menu.at(row, column)`, with `menu.rows` and `menu.columns`, names one slot, as "the middle of the bottom row" does: `menu.at(menu.rows - 1, 4)`.
+- **Only a screen that is a grid has rows and columns:** the chests (`generic_9x1` to `generic_9x6`), the dispenser's and the crafter's 3 by 3, the shulker box and the hopper. A slot of any other screen has neither (`()`), and `menu.at` finds nothing there.
+- **The bot's own 36 slots are a grid of their own** in every screen: four rows of nine, the three rows of the main inventory first and the hotbar last, as a screen shows them below its own slots.
 
 ## Consequences
 - **Two phases, thirteen groups,** each a pull request, each after the last one's merge.

@@ -214,6 +214,47 @@ pub fn parse_amount(text: &str, mark: DecimalMark) -> Option<f64> {
         .map(|read| read.value)
 }
 
+/// Reads the first number in `text`, wherever it stands, as an amount
+/// ([`read_amount`]): what a script's `number(text)` and a slot's
+/// `lore_number(label)` read (ADR-0036, M6; P16.7).
+///
+/// **The first number or none, never a later one.** A number starts at the
+/// first ASCII digit that isn't part of something else:
+/// - not right after an ASCII letter or digit, the decimal mark or the
+///   thousands separator: `AfkBot1` is a name, and `.5` no number;
+/// - not after a dash inside a word, as in `Tier-2`;
+/// - a `-` right before it is its sign when nothing, or nothing of a word,
+///   comes before the `-`: `-250` and `Change:-250`.
+///
+/// If what starts there isn't an amount, the answer is `None`, so a number
+/// too long to read never lets a later one stand in for it.
+#[must_use]
+pub fn find_amount(text: &str, mark: DecimalMark) -> Option<f64> {
+    let in_word = |c: char| c.is_ascii_alphanumeric() || c == mark.mark() || c == mark.separator();
+    let read = |start: usize| {
+        let rest = text.get(start..)?;
+        read_amount(rest, mark).map(|read| read.value)
+    };
+    // The character before this one, and the one before that.
+    let mut before: (Option<char>, Option<char>) = (None, None);
+    for (at, c) in text.char_indices() {
+        if c.is_ascii_digit() {
+            match before {
+                (None, _) => return read(at),
+                // A minus is one byte: the number starts at it.
+                (Some('-'), earlier) if !earlier.is_some_and(|c| c.is_ascii_alphanumeric()) => {
+                    return read(at.saturating_sub(1));
+                }
+                (Some('-'), _) => {}
+                (Some(previous), _) if !in_word(previous) => return read(at),
+                (Some(_), _) => {}
+            }
+        }
+        before = (Some(c), before.0);
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,6 +406,49 @@ mod tests {
         assert_eq!(parse_amount(text, DecimalMark::Point), value);
     }
 
+    #[rstest]
+    #[case::alone("1500", Some(1500.0))]
+    #[case::after_a_label(": 12,500", Some(12_500.0))]
+    #[case::thousands("Price: 12.5k", Some(12_500.0))]
+    #[case::millions("Price: 3M", Some(3_000_000.0))]
+    #[case::billions("Pot: 1.25B coins", Some(1_250_000_000.0))]
+    #[case::decimals("Price: 1,234.56", Some(1234.56))]
+    #[case::a_currency_sign("Price: $1,500", Some(1500.0))]
+    #[case::a_digit_in_a_word_is_the_words("Seller: AfkBot1", None)]
+    #[case::a_word_with_a_digit_then_the_number("AfkBot1 sells for 500", Some(500.0))]
+    #[case::glued_to_a_letter("x2 Diamonds", None)]
+    #[case::the_first_of_two("Was 2,000, now 1,500", Some(2000.0))]
+    #[case::a_minus("Change: -250", Some(-250.0))]
+    #[case::a_minus_after_a_colon("Change:-250", Some(-250.0))]
+    #[case::a_dash_inside_a_word("Tier-2 for 500", Some(500.0))]
+    #[case::two_minuses("--5", Some(-5.0))]
+    #[case::not_glued_to_other_letters("\u{4ef7}\u{683c}500", Some(500.0))]
+    #[case::a_range("3-5 days", Some(3.0))]
+    #[case::then_a_sentences_point("It costs 500.", Some(500.0))]
+    #[case::no_digits("Price: ask", None)]
+    #[case::nothing("", None)]
+    #[case::starts_with_its_mark("Price: .5", None)]
+    #[case::starts_with_a_separator("Price: ,500", None)]
+    #[case::too_long_to_read_and_then_a_small_one("Price: 1000000000000000000 or 5", None)]
+    #[case::past_the_largest_then_a_small_one("Price: 2000000B or 5", None)]
+    #[case::a_full_width_digit("Price: \u{ff15}", None)]
+    fn the_first_number_in_a_text_is_read_or_none(#[case] text: &str, #[case] value: Option<f64>) {
+        assert_eq!(find_amount(text, DecimalMark::Point), value);
+    }
+
+    #[test]
+    fn the_first_number_follows_the_declared_mark() {
+        assert_eq!(
+            find_amount("Preis: 1.234,56 \u{20ac}", DecimalMark::Comma),
+            Some(1234.56)
+        );
+        assert_eq!(
+            find_amount("Preis: 12,5k", DecimalMark::Comma),
+            Some(12_500.0)
+        );
+        assert_eq!(find_amount("Preis: ,5", DecimalMark::Comma), None);
+    }
+
     #[test]
     fn each_mark_names_its_two_characters() {
         assert_eq!(
@@ -399,6 +483,37 @@ mod tests {
                 prop_assert!(read.len > 0);
                 prop_assert!(text[..read.len].is_ascii());
             }
+        }
+
+        /// Any text a server could send: the first number in it is a
+        /// number in range, or none.
+        #[test]
+        fn the_first_number_in_any_text_is_bounded(text in any::<String>()) {
+            for mark in [DecimalMark::Point, DecimalMark::Comma] {
+                if let Some(value) = find_amount(&text, mark) {
+                    prop_assert!(value.is_finite());
+                    prop_assert!(value.abs() <= MAX_AMOUNT);
+                    prop_assert!(text.chars().any(|c| c.is_ascii_digit()));
+                }
+            }
+        }
+
+        /// A number written after any words that hold no digit, apart from
+        /// them, and before any that start with a space, is read back as
+        /// itself.
+        #[test]
+        fn a_number_after_words_reads_back(
+            before in "([A-Za-z:$ ]{0,11}[:$ ])?",
+            number in -999_999_999_i64..999_999_999,
+            cents in 0_u8..100,
+            after in "( [A-Za-z0-9.,:]{0,8}){0,2}",
+        ) {
+            let text = format!("{before}{number}.{cents:02}{after}");
+            let written: f64 = format!("{number}.{cents:02}").parse().unwrap();
+
+            let read = find_amount(&text, DecimalMark::Point);
+
+            prop_assert_eq!(read.map(f64::to_bits), Some(written.to_bits()), "{}", text);
         }
 
         /// Any text of the amount's own characters: what's read is what a

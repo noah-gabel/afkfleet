@@ -3,7 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::placeholder::{self, Segment};
+use super::menu::SignLineError;
+use super::placeholder::{self, Parsed, Segment};
 use super::word::{WordList, WordListError, is_forbidden_in_declaration};
 use super::{Ident, IdentError};
 use crate::chat::{ChatMessage, ChatMessageError};
@@ -181,7 +182,8 @@ pub enum Given<'a> {
     Text(&'a str),
 }
 
-/// Why values don't make a message of a [`MessageTemplate`].
+/// Why values don't make a message of a [`MessageTemplate`], or a sign's
+/// lines of a [`SignTemplate`](super::menu::SignTemplate).
 ///
 /// `value` is a declared value's place, from 0. Neither a given name nor a
 /// given text is ever included.
@@ -220,6 +222,16 @@ pub enum RenderError {
     /// (ADR-0036, D8).
     #[error("the finished text isn't a message: {0}")]
     Message(ChatMessageError),
+    /// A sign's finished line isn't one a sign takes: the net behind a
+    /// sign's declaration, as [`RenderError::Message`] is a message's
+    /// (ADR-0036, M16).
+    #[error("line {line} of the sign: {reason}")]
+    SignLine {
+        /// The line's place, from 0.
+        line: usize,
+        /// Why it isn't a sign's line.
+        reason: SignLineError,
+    },
 }
 
 /// One value of a [`MessageTemplate`].
@@ -264,9 +276,10 @@ enum Checked {
     Word(WordList),
 }
 
-/// A part of a template's text.
+/// A part of a template's text: a declared message's, or a line of a
+/// declared sign's.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Part {
+pub(in crate::script) enum Part {
     /// This text, exactly.
     Literal(String),
     /// The value at this place in the list.
@@ -371,42 +384,97 @@ impl MessageTemplate {
     /// [`RenderError::WrongKind`], [`RenderError::OutOfRange`] or
     /// [`RenderError::NotAWord`]; then [`RenderError::Message`].
     pub fn render(&self, given: &[(&str, Given<'_>)]) -> Result<ChatMessage, RenderError> {
-        let declared = |name: &str| self.values.iter().any(|value| value.name.as_str() == name);
-        let twice =
-            |at: usize, name: &str| given.iter().take(at).any(|(earlier, _)| *earlier == name);
-        if given
-            .iter()
-            .enumerate()
-            .any(|(at, (name, _))| !declared(name) || twice(at, name))
-        {
-            return Err(RenderError::Undeclared);
-        }
-        let written = self
-            .values
-            .iter()
-            .enumerate()
-            .map(|(value, declared)| {
-                let given = given
-                    .iter()
-                    .find(|(name, _)| *name == declared.name.as_str())
-                    .map(|(_, given)| *given)
-                    .ok_or(RenderError::Missing { value })?;
-                declared.kind.write(value, given)
-            })
-            .collect::<Result<Vec<String>, _>>()?;
-        let mut text = String::new();
-        for part in &self.parts {
-            match part {
-                Part::Literal(literal) => text.push_str(literal),
-                // Every part's place is one of the values': `try_from`
-                // builds them together.
-                Part::Value(value) => {
-                    text.push_str(written.get(*value).map_or("", String::as_str));
-                }
+        let written = write_values(&self.values, given)?;
+        ChatMessage::try_from(assemble(&self.parts, &written)).map_err(RenderError::Message)
+    }
+}
+
+/// Writes each of `values` from what a script gave, in their order: a
+/// render's checks of what was given, the same for every template.
+///
+/// # Errors
+/// As [`MessageTemplate::render`] names them, but for the finished text.
+pub(in crate::script) fn write_values(
+    values: &[MessageValue],
+    given: &[(&str, Given<'_>)],
+) -> Result<Vec<String>, RenderError> {
+    let declared = |name: &str| values.iter().any(|value| value.name.as_str() == name);
+    let twice = |at: usize, name: &str| given.iter().take(at).any(|(earlier, _)| *earlier == name);
+    if given
+        .iter()
+        .enumerate()
+        .any(|(at, (name, _))| !declared(name) || twice(at, name))
+    {
+        return Err(RenderError::Undeclared);
+    }
+    values
+        .iter()
+        .enumerate()
+        .map(|(value, declared)| {
+            let given = given
+                .iter()
+                .find(|(name, _)| *name == declared.name.as_str())
+                .map(|(_, given)| *given)
+                .ok_or(RenderError::Missing { value })?;
+            declared.kind.write(value, given)
+        })
+        .collect()
+}
+
+/// The text `parts` make with each value as `written` writes it.
+pub(in crate::script) fn assemble(parts: &[Part], written: &[String]) -> String {
+    let mut text = String::new();
+    for part in parts {
+        match part {
+            Part::Literal(literal) => text.push_str(literal),
+            // Every part's place is one of the values': a template builds
+            // its parts and its values together.
+            Part::Value(value) => {
+                text.push_str(written.get(*value).map_or("", String::as_str));
             }
         }
-        ChatMessage::try_from(text).map_err(RenderError::Message)
     }
+    text
+}
+
+/// Why a text's names don't fit the values declared with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::script) enum Unresolved {
+    /// A name that isn't declared, with its `{`'s position.
+    Undeclared(usize),
+    /// A name used a second time, with its `{`'s position.
+    Repeated(usize),
+}
+
+/// Turns a parsed text into parts, each name the place of a value of
+/// `values`. `used` marks the values used so far, over every text of one
+/// declaration: a value is used once in all of them.
+pub(in crate::script) fn resolve(
+    parsed: Parsed,
+    values: &[MessageValue],
+    used: &mut [bool],
+) -> Result<Vec<Part>, Unresolved> {
+    let mut positions = parsed.positions.iter().copied();
+    let mut parts = Vec::with_capacity(parsed.segments.len());
+    for segment in parsed.segments {
+        match segment {
+            Segment::Literal(literal) => parts.push(Part::Literal(literal)),
+            Segment::Named(name) => {
+                // `parse` gives one position for each name.
+                let position = positions.next().unwrap_or_default();
+                let value = values
+                    .iter()
+                    .position(|value| value.name == name)
+                    .ok_or(Unresolved::Undeclared(position))?;
+                match used.get_mut(value) {
+                    Some(used) if !*used => *used = true,
+                    _ => return Err(Unresolved::Repeated(position)),
+                }
+                parts.push(Part::Value(value));
+            }
+        }
+    }
+    Ok(parts)
 }
 
 impl TryFrom<MessageDraft> for MessageTemplate {
@@ -446,26 +514,10 @@ impl TryFrom<MessageDraft> for MessageTemplate {
         }
         let values = check_values(draft.values)?;
         let mut used = vec![false; values.len()];
-        let mut positions = parsed.positions.iter().copied();
-        let mut parts = Vec::with_capacity(parsed.segments.len());
-        for segment in parsed.segments {
-            match segment {
-                Segment::Literal(literal) => parts.push(Part::Literal(literal)),
-                Segment::Named(name) => {
-                    // `parse` gives one position for each name.
-                    let position = positions.next().unwrap_or_default();
-                    let value = values
-                        .iter()
-                        .position(|value| value.name == name)
-                        .ok_or(TemplateError::Undeclared { position })?;
-                    match used.get_mut(value) {
-                        Some(used) if !*used => *used = true,
-                        _ => return Err(TemplateError::Repeated { position }),
-                    }
-                    parts.push(Part::Value(value));
-                }
-            }
-        }
+        let parts = resolve(parsed, &values, &mut used).map_err(|unresolved| match unresolved {
+            Unresolved::Undeclared(position) => TemplateError::Undeclared { position },
+            Unresolved::Repeated(position) => TemplateError::Repeated { position },
+        })?;
         if let Some(value) = used.iter().position(|used| !used) {
             return Err(TemplateError::Unused { value });
         }
@@ -483,7 +535,9 @@ impl TryFrom<MessageDraft> for MessageTemplate {
 }
 
 /// Checks a declaration's values, in order.
-fn check_values(drafts: Vec<ValueDraft>) -> Result<Vec<MessageValue>, TemplateError> {
+pub(in crate::script) fn check_values(
+    drafts: Vec<ValueDraft>,
+) -> Result<Vec<MessageValue>, TemplateError> {
     let count = drafts.len();
     if count > MessageTemplate::MAX_VALUES {
         return Err(TemplateError::TooManyValues { count });
@@ -502,7 +556,7 @@ fn check_values(drafts: Vec<ValueDraft>) -> Result<Vec<MessageValue>, TemplateEr
 }
 
 /// The longest the parts can become, in UTF-16 code units.
-fn longest(parts: &[Part], values: &[MessageValue]) -> usize {
+pub(in crate::script) fn longest(parts: &[Part], values: &[MessageValue]) -> usize {
     parts
         .iter()
         .map(|part| match part {

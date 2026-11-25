@@ -31,6 +31,8 @@
 //!   it reads, as typed values and never as text; [`candidate_line`] says
 //!   which received lines may be read at all, and [`ChatWatch`] which
 //!   patterns count right now (ADR-0037). [`amount`] reads the numbers.
+//! - [`menu`] is the bot's inventory, a server's screens and its sign editors,
+//!   as a script reads and acts on them (Phase 16; ADR-0036, M1 to M18).
 //! - [`ScriptState`] and [`ScriptLogLine`] are what an agent reports about a
 //!   bot's script, every text in them a [`ReportText`], cleaned as untrusted
 //!   text (Plan.md P15.20, P15.23).
@@ -44,6 +46,7 @@ mod input;
 mod leash;
 mod limiter;
 pub mod limits;
+pub mod menu;
 mod pattern;
 mod placeholder;
 mod report;

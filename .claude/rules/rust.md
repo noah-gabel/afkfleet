@@ -47,6 +47,12 @@ Under CLAUDE.md's "Only `fleet-mc` may depend on `azalea`":
 - **Everything a snapshot holds is a registry identifier or a number** (`script/facts.rs`): never a name, lore or other text a server chose. A server's own name of a world that is no identifier becomes `minecraft:unknown`.
 - **What a server can grow, has a bound:** the passengers index (512, swept), a pending world change and each let-go (one).
 
+## Menus, clicks and signs (ADR-0036, ADR-0050)
+- **fleet-core's `script::menu` decides; fleet-mc only feeds it and sends.** A `MenuAction` (a click, a button, a trade, an anvil's name) goes out only after `ClickGate::send` allowed it, on the host thread, at the moment of sending, with the screen as it is then; its barrier goes right behind it. Every opened screen, close, whole content, slot, cursor and barrier reply is fed to the gate, and `expire` runs every tick.
+- **A sign editor is answered only through `SignDesk::answer`,** never by fleet-mc itself. A screen opening, a death or a world change ends both the screen and the editor (`ClickGate::closed`, `SignDesk::ended`), and a sign editor's opening closes the screen.
+- **`ItemData` is an item's whole component patch in a canonical encoding:** the same components, the same bytes. Never compare items by a part of them.
+- **Text a server chose reaches a script only as `ServerText` or `Lore`,** cleaned and bounded there; components only as identifiers and numbers.
+
 ## Crate-local `clippy.toml` files
 **Crate-local `clippy.toml` files** (`fleet-core`, `fleet-mc`, …) must repeat every setting of the root `clippy.toml`: the test allowances and the `disallowed-methods` bans. Clippy reads only the nearest file and doesn't merge them. `just scripts-test` fails when one is missing (`scripts/clippy-config.mjs`, ADR-0011).
 

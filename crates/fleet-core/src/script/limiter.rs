@@ -5,6 +5,7 @@ use core::time::Duration;
 use chrono::{DateTime, Utc};
 
 use super::input::{Input, Key, MouseButton};
+use super::limits;
 use crate::mode::ModeDefinition;
 use crate::time;
 
@@ -45,6 +46,10 @@ pub enum Limited {
     Dismount,
     /// A declared message that isn't a command.
     PlainChat,
+    /// Anything a screen answers: a click, a screen's button, a trade, an
+    /// anvil's name, a sign's answer (ADR-0036, R2). Closing a screen isn't
+    /// limited, as a release isn't.
+    Click,
 }
 
 impl Limited {
@@ -61,7 +66,8 @@ impl Limited {
 
     /// The shortest time between two actions of this kind: today's
     /// shortest interval of the step that does the same (ADR-0010), so a
-    /// script never acts faster than a step mode could.
+    /// script never acts faster than a step mode could; and for a click,
+    /// which no step does, [`limits::CLICK_INTERVAL`] (ADR-0036, R2).
     #[must_use]
     pub const fn minimum(self) -> Duration {
         match self {
@@ -75,6 +81,7 @@ impl Limited {
             | Self::Hotbar
             | Self::Mount
             | Self::Dismount => ModeDefinition::MIN_INTERVAL,
+            Self::Click => limits::CLICK_INTERVAL,
         }
     }
 }
@@ -177,6 +184,7 @@ mod tests {
     #[case::mounting(Limited::Mount, 250)]
     #[case::dismounting(Limited::Dismount, 250)]
     #[case::plain_chat(Limited::PlainChat, 30_000)]
+    #[case::a_click(Limited::Click, 50)]
     fn each_kind_has_its_minimum(#[case] what: Limited, #[case] millis: u64) {
         assert_eq!(what.minimum(), ms(millis));
     }
@@ -219,6 +227,28 @@ mod tests {
         #[case] what: Limited,
     ) {
         assert_eq!(Limited::of_press(input, press), what);
+    }
+
+    /// R2: one click a game tick, no burst: the second click of a tick
+    /// waits, whatever else the bot does.
+    #[test]
+    fn a_click_comes_at_most_once_a_game_tick() {
+        let mut limiter = ActionLimiter::new();
+
+        assert_eq!(limiter.try_act(Limited::Click, at(0)), Ok(()));
+        assert_eq!(
+            limiter.try_act(Limited::Click, at(0)),
+            Err(TooSoon { wait: ms(50) })
+        );
+        assert_eq!(
+            limiter.try_act(Limited::Click, at(49)),
+            Err(TooSoon { wait: ms(1) })
+        );
+        assert_eq!(limiter.try_act(Limited::Hotbar, at(49)), Ok(()));
+        assert_eq!(limiter.try_act(Limited::Click, at(50)), Ok(()));
+        assert_eq!(limiter.try_act(Limited::Click, at(100)), Ok(()));
+        assert_eq!(Limited::Click.minimum(), limits::CLICK_INTERVAL);
+        assert_eq!(limits::CLICK_INTERVAL, limits::MIN_HOLD_FOR);
     }
 
     #[test]
