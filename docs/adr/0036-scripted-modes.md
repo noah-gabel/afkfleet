@@ -553,6 +553,19 @@ The user added three more things when group B started, for it and the groups aft
 - **Only a screen that is a grid has rows and columns:** the chests (`generic_9x1` to `generic_9x6`), the dispenser's and the crafter's 3 by 3, the shulker box and the hopper. A slot of any other screen has neither (`()`), and `menu.at` finds nothing there.
 - **The bot's own 36 slots are a grid of their own** in every screen: four rows of nine, the three rows of the main inventory first and the hotbar last, as a screen shows them below its own slots.
 
+## Amendment: the price step is an anvil (the user's correction, 2026-11-26)
+
+### M17, amended
+**On the user's server a listing's price isn't written on a sign:** the user named a sign by mistake at group B's start. The plugin opens an anvil titled "Preis eingeben", the price is typed into its name box, and a click on its result slot, which holds a green check-mark item, confirms it. The anvil shows "Enchantment Cost: 1", the plugin's display only: it needs no experience levels (the user checked in the game). So step 6 of M17's flow is the price in the anvil the plugin opens.
+
+- **The harness** (P16.11): Confirm Item opens the anvil: an item in its left input named with the text box's starting text, the confirm item in its result slot, a cost of 1 shown and no levels needed. The price is read from the anvil's rename text when the result slot is clicked; a text that isn't a whole number in range is refused and the anvil stays open. Then Confirm Listing, as before.
+- **Live with a bot at level 0,** as a fresh account is.
+- **The second lister** (P16.12) names the price with `menu.rename(key, values)` and a declared message, then clicks the result slot only while it holds the expected confirm item with the expected name. Its live case (P16.17) goes through the anvil, with the trap listing and the watchdog, and a price the plugin refuses.
+- **A step is judged by the screen that follows:** a plugin cancels the click on its own buttons, so a confirm that worked can come back corrected; the reference and the examples never judge by a fate alone.
+- **M16 stays:** other servers take a price on a sign; the sign editor, `harness sign` and their tests are kept.
+
+How group D built it, and what else it settled (`unclear`, slots as maps read by number, `menu.number` in M6's `number`'s place, the lore helpers on `menu`): [ADR-0052](0052-menus-in-scripts-and-the-time-of-day.md).
+
 ## Consequences
 - **Two phases, thirteen groups,** each a pull request, each after the last one's merge.
 - **A new crate and a new dependency** with two `deny.toml` exceptions, an API Rhai calls volatile, and an unmaintained crate inside the sandbox.
