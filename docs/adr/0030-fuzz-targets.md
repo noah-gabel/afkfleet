@@ -95,7 +95,16 @@ cargo-fuzz 0.13.2 (2026-06-09) and libfuzzer-sys 0.4.13 (2026-06-04) are still t
 
 **What it weakens.** The fuzz runs no longer catch a use of a stack after its function returned. Only `unsafe` code can do that, which the workspace forbids; its dependencies' `unsafe` code keeps every other check of the sanitizer.
 
-**What it showed about earlier runs.** `script_run` and `script_api` (P15.9) accept a hook that a limit stopped, so on CI's Linux runner their hooks most likely ended at their first operation without a failure. `menu_snapshot` asserts that its reader runs to its end, which is how this showed. From this run on they explore what they were meant to.
+**What it showed about earlier runs.** `script_run` and `script_api` (P15.9) accept a hook that a limit stopped, so on CI's Linux runner their hooks ended at their first operation without a failure. `menu_snapshot` asserts that its reader runs to its end, which is how this showed. The workflow's 60 s runs, before (group C's, PR #138) and after (PR #139's fix):
+
+| Target | Edges before | Edges after |
+| --- | --- | --- |
+| `script_run` | 6,072 | 10,325 |
+| `script_api` | 3,819 | 9,219 |
+| `script_compile` (runs no hook) | 5,709 | 5,776 |
+| `message_template` (runs no hook) | 2,721 | 2,776 |
+
+The two targets that run no hook gained what group D's code adds; the two that do gained thousands of edges, the hooks' own.
 
 **Alternatives considered.**
 - **Reading the stack pointer itself** (the `psm` crate, as `stacker` does): a new dependency with assembly in its build, for what only a sanitizer breaks.
