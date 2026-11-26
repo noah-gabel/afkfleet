@@ -12,10 +12,10 @@ use core::fmt;
 
 use fleet_core::chat::ChatMessage;
 use fleet_core::script::{
-    Captured, ChatMatch, Ident, LogKind, ProblemKind, ReportText, ScriptLogLine, ScriptPlace,
-    ScriptProblem, ScriptState,
+    Captured, ChatMatch, Ident, LogKind, ProblemKind, Refusal, ReportText, ScriptLogLine,
+    ScriptPlace, ScriptProblem, ScriptState,
 };
-use fleet_script::{CompileError, Refused, ScriptError, ScriptErrorKind, SourcePosition};
+use fleet_script::{Asked, CompileError, Refused, ScriptError, ScriptErrorKind, SourcePosition};
 
 use crate::chat::{ChatError, ChatFailure};
 
@@ -199,6 +199,21 @@ pub enum ScriptLog {
     Refused(Refused),
     /// `on_stop` failed. The script ended all the same.
     StopFailed(ScriptError),
+    /// Something the script did in a screen or a sign editor didn't go as
+    /// asked: the session didn't send it after all, or an action's fate
+    /// came back other than `ok` (ADR-0036, M4; Plan.md P16.13). Every one
+    /// is written: the click limit bounds them.
+    Menu {
+        /// What it was: a click and the like, a close or the inventory, a
+        /// sign's answer.
+        asked: Asked,
+        /// The slot a click clicked; `None` for anything else.
+        slot: Option<u16>,
+        /// Why it wasn't sent, or what came instead of what was predicted.
+        reason: Refusal,
+        /// Whether it went out: a fate is of something sent.
+        sent: bool,
+    },
 }
 
 impl ScriptLog {
@@ -252,6 +267,27 @@ impl ScriptLog {
                 ),
             ),
             Self::StopFailed(error) => (LogKind::StopFailed, format!("on_stop failed: {error}")),
+            // A kind of its own comes with the app's trade lines (Plan.md
+            // P16.16); until then these go as refusals.
+            Self::Menu {
+                asked,
+                slot,
+                reason,
+                sent,
+            } => {
+                let what = match (asked, slot) {
+                    (Asked::Click, Some(slot)) => format!("a click on slot {slot}"),
+                    (Asked::Click, None) => "a screen's button, trade or name".to_owned(),
+                    (Asked::Sign, _) => "the sign's answer".to_owned(),
+                    _ => "closing the screen or opening the inventory".to_owned(),
+                };
+                let text = if *sent {
+                    format!("{what} came back {reason}")
+                } else {
+                    format!("{what} wasn't sent: {reason}")
+                };
+                (LogKind::Refused, text)
+            }
         };
         ScriptLogLine {
             kind,

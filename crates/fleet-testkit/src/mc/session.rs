@@ -95,7 +95,8 @@ struct State {
     /// went down.
     held: Vec<Input>,
     /// A screen is open: from a `MenuOpened` the test emitted to its
-    /// `MenuClosed`. Nothing goes down meanwhile, as in fleet-mc (M8).
+    /// `MenuClosed`, or to a `MenuCommand::Close` the code under test sent.
+    /// Nothing goes down meanwhile, as in fleet-mc (M8).
     screen_open: bool,
     /// What [`SessionHandle::menu`] answers with instead of carrying a
     /// command out, until the test lets it again.
@@ -274,6 +275,11 @@ impl Shared {
         }
         if let Some(refusal) = state.refusing_menu {
             return Err(refusal);
+        }
+        // The bot's own close ends the screen, as fleet-mc's does: keys go
+        // down again.
+        if matches!(command, MenuCommand::Close(_)) {
+            state.screen_open = false;
         }
         state.log.push(Performed::Menu(command));
         Ok(())

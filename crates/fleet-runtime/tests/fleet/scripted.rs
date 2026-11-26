@@ -65,6 +65,7 @@ fn draft(source: &str) -> ScriptDraft {
         block_guard: Vec::new(),
         messages: Vec::new(),
         patterns: Vec::new(),
+        signs: Vec::new(),
     }
 }
 
@@ -1727,4 +1728,255 @@ async fn what_a_script_is_refused_is_logged_at_most_twenty_times_a_minute() {
         recorder.counter(SCRIPT_REFUSED, &[("reason", "no_command")]),
         120
     );
+}
+
+// --- Screens, clicks and signs (Plan.md P16.13; ADR-0052) ---
+
+mod menus {
+    use fleet_core::mc::{MenuCommand, MenuError, MenuView, Observation, SessionError};
+    use fleet_core::script::menu::{
+        ClickFate, ClickGate, ClickResult, Item, ItemData, MenuAction, MenuRefusal, Screen,
+        ScreenKind, StateId, WindowId,
+    };
+
+    use super::*;
+
+    fn level_2(source: &str) -> ScriptDraft {
+        ScriptDraft {
+            api: 2,
+            ..draft(source)
+        }
+    }
+
+    /// A chest of one row with a diamond in slot 0, opened in `gate`.
+    fn chest(gate: &mut ClickGate) -> Screen {
+        let diamond = Item::new(
+            Identifier::try_from("diamond").unwrap(),
+            core::num::NonZeroU32::new(1).unwrap(),
+            ItemData::new(Vec::new()),
+        );
+        Screen::new(
+            gate.opened(WindowId::new(1)),
+            StateId::new(1),
+            ScreenKind::Generic9x1,
+            "Chest",
+            [Some(diamond)],
+            None,
+        )
+    }
+
+    /// What the session shows with `screen` open.
+    fn showing(screen: &Screen) -> Observation {
+        Observation {
+            menu: MenuView {
+                screen: Some(screen.clone()),
+                ..MenuView::default()
+            },
+            ..seen()
+        }
+    }
+
+    /// The screen commands the session carried out, in order.
+    fn menu_commands(controller: &SessionController) -> Vec<MenuCommand> {
+        controller
+            .log()
+            .into_iter()
+            .filter_map(|performed| match performed {
+                Performed::Menu(command) => Some(command),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The script's log since the last call, as the app reads it.
+    fn texts(harness: &mut Harness) -> Vec<String> {
+        logged(harness)
+            .into_iter()
+            .map(|entry| entry.report().text.as_str().to_owned())
+            .collect()
+    }
+
+    /// The farm the user runs at level 1: the right button held from
+    /// `on_join`.
+    const FARM: &str = "fn on_join(first) { mouse.right.hold(); }";
+    const RIGHT: Input = Input::Mouse(MouseButton::Right);
+
+    #[tokio::test(start_paused = true)]
+    async fn a_level_1_farm_has_a_servers_screen_closed_and_its_button_pressed_again() {
+        let (_harness, controller) = online(draft(FARM)).await;
+        pass(secs(2)).await;
+        assert_eq!(controller.held(), [RIGHT]);
+        let mut gate = ClickGate::new();
+        let screen = chest(&mut gate);
+
+        controller.show(showing(&screen));
+        emit(&controller, SessionEvent::MenuOpened(screen.id()));
+        let let_go = controller.held();
+        pass(ms(10)).await;
+
+        assert_eq!(let_go, []);
+        assert_eq!(
+            menu_commands(&controller),
+            [MenuCommand::Close(screen.id())]
+        );
+        assert_eq!(controller.held(), [RIGHT]);
+        let after_the_close: Vec<Performed> = controller
+            .log()
+            .into_iter()
+            .skip_while(|performed| !matches!(performed, Performed::Menu(_)))
+            .filter(|performed| matches!(performed, Performed::Action(_)))
+            .collect();
+        assert_eq!(
+            after_the_close,
+            [Performed::Action(GameAction::Press(RIGHT))]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_click_goes_out_and_on_click_hears_its_fate_with_a_line_for_a_correction() {
+        let source = "fn on_menu_open() { menu.click(0); }\nfn on_click(result) { log.info(`${result.ok} ${result.reason} ${result.slot}`); }";
+        let (mut harness, controller) = online(level_2(source)).await;
+        let mut gate = ClickGate::new();
+        let screen = chest(&mut gate);
+        controller.show(showing(&screen));
+        emit(&controller, SessionEvent::MenuOpened(screen.id()));
+        pass(ms(10)).await;
+        let sent = menu_commands(&controller);
+        let _ = logged(&mut harness);
+
+        emit(
+            &controller,
+            SessionEvent::Clicked(ClickResult {
+                screen: screen.id(),
+                slot: Some(0),
+                fate: ClickFate::Rejected,
+            }),
+        );
+        pass(ms(10)).await;
+
+        assert!(matches!(
+            sent.as_slice(),
+            [MenuCommand::Act(MenuAction::Click(click))] if click.slot() == 0
+        ));
+        assert_eq!(
+            texts(&mut harness),
+            ["a click on slot 0 came back rejected", "false rejected 0"]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_click_the_session_doesnt_send_is_heard_in_on_click_and_written_into_the_log() {
+        let source = "fn on_menu_open() { menu.click(0); }\nfn on_click(result) { log.info(`${result.reason} ${menu.pending}`); menu.click(0); }";
+        let (mut harness, controller) = online(level_2(source)).await;
+        let mut gate = ClickGate::new();
+        let screen = chest(&mut gate);
+        controller.show(showing(&screen));
+        controller.refuse_menu(MenuError::Refused(MenuRefusal::ScreenChanged));
+        let _ = logged(&mut harness);
+
+        emit(&controller, SessionEvent::MenuOpened(screen.id()));
+        pass(ms(10)).await;
+
+        // The second click, from on_click, waits for its 50 ms; a hook's
+        // refusals are written before what it logged itself.
+        assert_eq!(
+            texts(&mut harness),
+            [
+                "a click on slot 0 wasn't sent: screen_changed",
+                "click refused (too_soon), 1 time",
+                "screen_changed false"
+            ]
+        );
+        assert_eq!(menu_commands(&controller), []);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_fate_that_never_comes_is_unanswered_once_and_a_late_one_is_dropped() {
+        let source = "fn on_menu_open() { menu.click(0); }\nfn on_click(result) { log.info(result.reason); }";
+        let (mut harness, controller) = online(level_2(source)).await;
+        let mut gate = ClickGate::new();
+        let screen = chest(&mut gate);
+        controller.show(showing(&screen));
+        // The session doesn't answer the send in time.
+        controller.refuse_menu(MenuError::Session(SessionError::TimedOut));
+        emit(&controller, SessionEvent::MenuOpened(screen.id()));
+        pass(ms(10)).await;
+        let _ = logged(&mut harness);
+
+        pass(secs(9)).await;
+        let before = texts(&mut harness);
+        pass(secs(1)).await;
+        let at_patience = texts(&mut harness);
+        emit(
+            &controller,
+            SessionEvent::Clicked(ClickResult {
+                screen: screen.id(),
+                slot: Some(0),
+                fate: ClickFate::Ok,
+            }),
+        );
+        pass(ms(10)).await;
+
+        assert_eq!(before, Vec::<String>::new());
+        assert_eq!(
+            at_patience,
+            ["a click on slot 0 came back unanswered", "unanswered"]
+        );
+        assert_eq!(texts(&mut harness), Vec::<String>::new());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_screens_updates_run_its_hook_at_most_once_a_game_tick() {
+        let source = "fn on_menu_update() { log.info(\"update\"); }";
+        let (mut harness, controller) = online(level_2(source)).await;
+        let mut gate = ClickGate::new();
+        let screen = chest(&mut gate);
+        controller.show(showing(&screen));
+        emit(&controller, SessionEvent::MenuOpened(screen.id()));
+        pass(ms(10)).await;
+        let _ = lines(&mut harness);
+
+        emit(&controller, SessionEvent::MenuUpdated(screen.id()));
+        pass(ms(1)).await;
+        let first = lines(&mut harness);
+        for _ in 0..5 {
+            emit(&controller, SessionEvent::MenuUpdated(screen.id()));
+            pass(ms(5)).await;
+        }
+        let within_the_tick = lines(&mut harness);
+        pass(ms(50)).await;
+
+        assert_eq!(first, ["update"]);
+        assert_eq!(within_the_tick, Vec::<String>::new());
+        assert_eq!(lines(&mut harness), ["update"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_refusal_in_the_hook_is_written_into_the_log_every_time() {
+        let source = "fn on_menu_open() { menu.click(0); menu.click(0); menu.click(99); }";
+        let (mut harness, controller) = online(level_2(source)).await;
+        let mut gate = ClickGate::new();
+        let screen = chest(&mut gate);
+        controller.show(showing(&screen));
+        let _ = logged(&mut harness);
+
+        emit(&controller, SessionEvent::MenuOpened(screen.id()));
+        pass(ms(10)).await;
+
+        assert_eq!(
+            texts(&mut harness),
+            [
+                "click refused (click_pending), 1 time",
+                "click refused (bad_value), 1 time"
+            ]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_bots_name_is_its_accounts() {
+        let (mut harness, _controller) =
+            online(level_2("fn on_join(first) { log.info(bot.name); }")).await;
+
+        assert_eq!(lines(&mut harness), ["AfkBot1"]);
+    }
 }

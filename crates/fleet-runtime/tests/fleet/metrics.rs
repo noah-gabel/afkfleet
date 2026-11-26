@@ -68,6 +68,11 @@ async fn a_new_fleet_describes_its_metrics_and_starts_every_series_at_zero() {
         "on_timer",
         "on_chat",
         "on_stop",
+        "on_menu_open",
+        "on_menu_update",
+        "on_menu_close",
+        "on_click",
+        "on_sign_open",
     ];
     for hook in hooks {
         expected.insert(series(SCRIPT_HOOKS, [("hook", hook)].into_iter()));

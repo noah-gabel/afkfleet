@@ -1020,6 +1020,22 @@ async fn a_screen_lets_go_of_everything_and_nothing_goes_down_until_it_closes() 
 }
 
 #[tokio::test(start_paused = true)]
+async fn the_bots_own_close_ends_the_screen_and_keys_go_down_again() {
+    let (session, _events, controller) = start_joined().await;
+    let screen = ClickGate::new().opened(WindowId::new(1));
+    let forward = Input::Key(Key::Forward);
+    assert_eq!(
+        controller.emit(SessionEvent::MenuOpened(screen)),
+        EmitOutcome::Queued
+    );
+
+    assert_eq!(session.menu(MenuCommand::Close(screen)).await, Ok(()));
+    assert_eq!(session.perform(GameAction::Press(forward)).await, Ok(()));
+
+    assert_eq!(controller.held(), [forward]);
+}
+
+#[tokio::test(start_paused = true)]
 async fn the_other_menu_events_are_delivered_as_emitted() {
     let (_session, mut events, controller) = start_joined().await;
     let mut gate = ClickGate::new();

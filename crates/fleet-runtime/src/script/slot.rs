@@ -443,6 +443,7 @@ mod tests {
             block_guard: Vec::new(),
             messages: Vec::new(),
             patterns: Vec::new(),
+            signs: Vec::new(),
         })
         .unwrap()
     }
@@ -482,11 +483,14 @@ mod tests {
     /// Runs `on_join` of the slot's script at `ms`.
     fn join(slot: &ScriptSlot, ms: u64) -> Option<Outcome> {
         let facts = facts();
+        let menu = fleet_core::mc::MenuView::default();
         let moment = Moment {
             facts: &facts,
             now: at(ms),
             presence: Presence::InWorld,
             leash: None,
+            menu: &menu,
+            name: "AfkBot1",
         };
         slot.turn(|instance, limiter| {
             instance

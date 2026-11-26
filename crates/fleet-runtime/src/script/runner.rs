@@ -1,5 +1,6 @@
 //! [`ScriptRunner`]: runs a bot's script in one session (Plan.md P15.16 to
-//! P15.18, P15.33; ADR-0036, D1, D5, D6, D9; ADR-0037, C4, C5, C7).
+//! P15.18, P15.33, P16.13; ADR-0036, D1, D5, D6, D9, M4, M8, R1; ADR-0037,
+//! C4, C5, C7; ADR-0052).
 
 use core::ops::ControlFlow;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -9,11 +10,11 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use fleet_core::chat::{ChatFormats, ChatMessage, IncomingChat};
 use fleet_core::id::BotId;
-use fleet_core::mc::{Guards, SessionError, SessionHandle};
+use fleet_core::mc::{Guards, MenuCommand, MenuError, MenuView, SessionError, SessionHandle};
 use fleet_core::mode::{GameAction, ModeDefinition};
 use fleet_core::script::{
-    ChatWatch, Hook, HookEvent, Ident, Input, Leash, Observed, Position, Script, SendId, Snapshot,
-    Stopwatch, candidate_line,
+    ChatWatch, ClickOutcome, Hook, HookEvent, Ident, Input, Leash, Observed, Position, Refusal,
+    Script, SendId, Snapshot, Stopwatch, candidate_line,
 };
 use fleet_core::time;
 use fleet_script::{Action, Asked, Moment, Outcome, Presence, PressKind, Ran, Refused, compile};
@@ -45,6 +46,17 @@ const BUSY: Duration = Duration::from_millis(250);
 /// than a chat queue holds.
 const OUTCOMES: usize = 64;
 
+/// The least time between two `on_menu_update` hooks: a game tick. An
+/// update that comes sooner runs when it's over, once, however many came
+/// (Plan.md P16.13).
+const UPDATE_EVERY: Duration = Duration::from_millis(50);
+
+/// How long the runner waits for an action's fate when the session took
+/// longer than its own timeout to answer the send: the session's gate gives
+/// every action sent its fate within 5 s, so a fate that hasn't come after
+/// this never will, and the script hears `unanswered` instead.
+const FATE_PATIENCE: Duration = Duration::from_secs(10);
+
 /// What a mode runner needs beside its own parts to run a script in its
 /// session (Plan.md P15.16).
 ///
@@ -74,6 +86,9 @@ pub struct ScriptParts {
     /// Cancelled to stop the mode in an orderly way while the session
     /// goes on living: `on_stop` runs, then everything is released.
     pub stop: CancellationToken,
+    /// The bot's own player name, from the credentials it connected with:
+    /// what `bot.name` reads (ADR-0036, M12).
+    pub name: String,
     /// Whether the session may still hold what a script pressed. The
     /// runner sets it when a script runs in the session and clears it
     /// once the script's last `ReleaseAll` went through; whoever owns the
@@ -113,6 +128,8 @@ enum Waited {
 /// What a hook is given of the game.
 struct Seen {
     facts: Snapshot,
+    /// The inventory, the screen and the sign editor.
+    menu: MenuView,
     /// Where the bot's leash is anchored, if it's placed.
     anchor: Option<Position>,
     /// Whether the session answered with the bot in its world.
@@ -172,6 +189,24 @@ pub(crate) struct ScriptRunner<'a, S> {
     not_before: Option<DateTime<Utc>>,
     /// Whether the last thing the session took was a `ReleaseAll`.
     released: bool,
+    /// The script's action that waits for its fate, if one went out.
+    awaiting: Option<Awaiting>,
+    /// What the script hears in `on_click` next: an action the session
+    /// didn't send after all.
+    queued: Option<ClickOutcome>,
+    /// When `on_menu_update` last ran.
+    updated: Option<DateTime<Utc>>,
+    /// Whether an update waits for its game tick to be over.
+    update_waits: bool,
+}
+
+/// An action that went out and waits for its fate.
+#[derive(Debug, Clone, Copy)]
+struct Awaiting {
+    /// The slot it clicked, if it clicked one.
+    slot: Option<u16>,
+    /// When it went out, or when the session stopped answering its send.
+    since: DateTime<Utc>,
 }
 
 /// What a [`ScriptRunner`] borrows of its mode runner.
@@ -221,6 +256,10 @@ impl<'a, S: SessionHandle> ScriptRunner<'a, S> {
             last: None,
             not_before: None,
             released: false,
+            awaiting: None,
+            queued: None,
+            updated: None,
+            update_waits: false,
         }
     }
 
@@ -303,6 +342,14 @@ impl<'a, S: SessionHandle> ScriptRunner<'a, S> {
             return ended;
         }
         loop {
+            // An action the session didn't send is heard before anything
+            // else: the script may act again only after it.
+            if let Some(outcome) = self.queued.take() {
+                if let ControlFlow::Break(ended) = self.clicked(outcome).await {
+                    return ended;
+                }
+                continue;
+            }
             let waited = self.wait(self.deadline(), true).await;
             let flow = match waited {
                 Waited::Ended(ended) => return ended,
@@ -320,10 +367,22 @@ impl<'a, S: SessionHandle> ScriptRunner<'a, S> {
         }
     }
 
-    /// When the runner must wake by itself next.
+    /// When the runner must wake by itself next: the script's own next
+    /// wake, an update's tick, or the end of a fate's patience.
     fn deadline(&self) -> Option<Instant> {
-        let wake = self.parts.slot.next_wake()?;
-        let wake = self.not_before.map_or(wake, |after| wake.max(after));
+        let script = self
+            .parts
+            .slot
+            .next_wake()
+            .map(|wake| self.not_before.map_or(wake, |after| wake.max(after)));
+        let update = self
+            .update_waits
+            .then(|| self.updated.map(|at| time::add(at, UPDATE_EVERY)))
+            .flatten();
+        let fate = self
+            .awaiting
+            .map(|awaiting| time::add(awaiting.since, FATE_PATIENCE));
+        let wake = [script, update, fate].into_iter().flatten().min()?;
         self.clock.deadline(wake)
     }
 
@@ -399,6 +458,7 @@ impl<'a, S: SessionHandle> ScriptRunner<'a, S> {
                 self.last = Some(observation.facts.clone());
                 Ok(Seen {
                     facts: observation.facts,
+                    menu: observation.menu,
                     anchor: observation.anchor,
                     placed: true,
                 })
@@ -431,6 +491,7 @@ impl<'a, S: SessionHandle> ScriptRunner<'a, S> {
     fn unplaced(&self) -> Seen {
         Seen {
             facts: self.last.clone().unwrap_or_else(Snapshot::nowhere),
+            menu: MenuView::default(),
             anchor: None,
             placed: false,
         }
@@ -495,7 +556,99 @@ impl<'a, S: SessionHandle> ScriptRunner<'a, S> {
                     .turn(|instance, _| instance.let_go(reason.inputs()));
                 ControlFlow::Continue(())
             }
+            Life::MenuOpened(_) => {
+                self.update_waits = false;
+                self.menu_hook(HookEvent::MenuOpen).await
+            }
+            Life::MenuUpdated(_) => {
+                let now = self.clock.now();
+                let soon = self
+                    .updated
+                    .is_some_and(|at| time::elapsed(at, now) < UPDATE_EVERY);
+                if soon {
+                    self.update_waits = true;
+                    return ControlFlow::Continue(());
+                }
+                self.update().await
+            }
+            Life::MenuClosed(_) => {
+                self.update_waits = false;
+                self.menu_hook(HookEvent::MenuClose).await
+            }
+            Life::Clicked(result) => {
+                if self.awaiting.is_none() {
+                    // A fate the runner stopped waiting for: the script was
+                    // told `unanswered` already.
+                    debug!(
+                        ?result,
+                        "a fate came after the script stopped waiting for it"
+                    );
+                    return ControlFlow::Continue(());
+                }
+                let outcome = ClickOutcome::from(result);
+                if let Err(reason) = outcome.answer {
+                    self.log(ScriptLog::Menu {
+                        asked: Asked::Click,
+                        slot: outcome.slot,
+                        reason,
+                        sent: true,
+                    });
+                }
+                self.clicked(outcome).await
+            }
+            Life::SignOpened(_) => self.menu_hook(HookEvent::SignOpen).await,
         }
+    }
+
+    /// Runs the hook of a screen's or a sign editor's event. A session too
+    /// busy to say what the bot sees skips it, as a match's hook is; the
+    /// next event, or the script's own timer, sees the screen as it is.
+    async fn menu_hook(&mut self, event: HookEvent) -> ControlFlow<Ended> {
+        if !self.runs() {
+            return ControlFlow::Continue(());
+        }
+        let seen = match self.see().await {
+            Ok(seen) => seen,
+            Err(Unseen::Closed) => return ControlFlow::Break(Ended::Session),
+            Err(Unseen::NotInWorld) => self.unplaced(),
+            Err(Unseen::Busy) => {
+                debug!(
+                    hook = event.hook().name(),
+                    "the session was too busy to say what the bot sees; the hook is skipped"
+                );
+                return ControlFlow::Continue(());
+            }
+        };
+        let presence = self.presence(seen.placed);
+        let ran = self.turn(&Call::Event(&event), &seen, presence).await;
+        self.after(ran, false).await
+    }
+
+    /// `on_menu_update`, now: at most one a game tick.
+    async fn update(&mut self) -> ControlFlow<Ended> {
+        self.update_waits = false;
+        self.updated = Some(self.clock.now());
+        self.menu_hook(HookEvent::MenuUpdate).await
+    }
+
+    /// The script hears what became of its action: `on_click`. It's
+    /// delivered even when the session can't say what the bot sees, so the
+    /// script may act again.
+    async fn clicked(&mut self, outcome: ClickOutcome) -> ControlFlow<Ended> {
+        self.awaiting = None;
+        if !self.runs() {
+            return ControlFlow::Continue(());
+        }
+        let seen = match self.see().await {
+            Ok(seen) => seen,
+            Err(Unseen::Closed) => return ControlFlow::Break(Ended::Session),
+            Err(Unseen::NotInWorld | Unseen::Busy) => self.unplaced(),
+        };
+        let presence = self.presence(seen.placed);
+        let ran = self
+            .turn(&Call::Event(&HookEvent::Click(outcome)), &seen, presence)
+            .await;
+        self.after(ran, false).await
     }
 
     /// A chat message came from the session: if it's a line of the
@@ -552,6 +705,29 @@ impl<'a, S: SessionHandle> ScriptRunner<'a, S> {
     async fn due(&mut self) -> ControlFlow<Ended> {
         let now = self.clock.now();
         self.expire(now);
+        if let Some(awaiting) = self.awaiting
+            && time::elapsed(awaiting.since, now) >= FATE_PATIENCE
+        {
+            self.log(ScriptLog::Menu {
+                asked: Asked::Click,
+                slot: awaiting.slot,
+                reason: Refusal::Unanswered,
+                sent: true,
+            });
+            return self
+                .clicked(ClickOutcome {
+                    slot: awaiting.slot,
+                    answer: Err(Refusal::Unanswered),
+                })
+                .await;
+        }
+        if self.update_waits
+            && self
+                .updated
+                .is_none_or(|at| time::elapsed(at, now) >= UPDATE_EVERY)
+        {
+            return self.update().await;
+        }
         let due = self
             .parts
             .slot
@@ -642,6 +818,8 @@ impl<'a, S: SessionHandle> ScriptRunner<'a, S> {
             leash: seen
                 .anchor
                 .map(|anchor| Leash::new(self.script.leash(), anchor)),
+            menu: &seen.menu,
+            name: &self.parts.name,
         };
         // How long after the time it asked for a wake's hook begins.
         let (hook, late) = match call {
@@ -704,12 +882,21 @@ impl<'a, S: SessionHandle> ScriptRunner<'a, S> {
     }
 
     /// Counts what a call was refused; what it was refused of its chat
-    /// goes into the script's log too (ADR-0037, C7).
+    /// goes into the script's log too, at most 20 lines a minute (ADR-0037,
+    /// C7), and every refusal in a screen or a sign editor, which the click
+    /// limit bounds (Plan.md P16.13).
     fn refused(&mut self, refused: &[Refused]) {
         for entry in refused {
             metrics::script_refused(entry.reason, entry.times);
-            if matches!(entry.asked, Asked::Send | Asked::Expect) {
-                self.note(ScriptLog::Refused(*entry));
+            match entry.asked {
+                Asked::Send | Asked::Expect => self.note(ScriptLog::Refused(*entry)),
+                Asked::Click | Asked::Screen | Asked::Sign => self.log(ScriptLog::Refused(*entry)),
+                Asked::Press
+                | Asked::Look
+                | Asked::Hotbar
+                | Asked::Vehicle
+                | Asked::Timer
+                | Asked::Log => {}
             }
         }
     }
@@ -774,8 +961,93 @@ impl<'a, S: SessionHandle> ScriptRunner<'a, S> {
                         }
                     }
                 }
+                Action::Menu(command) => self.menu(command).await?,
                 input => self.act(&input).await?,
             }
+        }
+        ControlFlow::Continue(())
+    }
+
+    /// Does what a hook asked in a screen or a sign editor. The session
+    /// decides it again at the moment of sending (ADR-0050); what it doesn't
+    /// send is written into the log, and an action that wasn't sent is
+    /// heard in `on_click` before anything else, so the script may act
+    /// again.
+    async fn menu(&mut self, command: MenuCommand) -> ControlFlow<Ended> {
+        let (asked, slot) = match &command {
+            MenuCommand::Act(action) => (Asked::Click, action.slot()),
+            MenuCommand::Close(_) | MenuCommand::OpenInventory => (Asked::Screen, None),
+            MenuCommand::AnswerSign { .. } => (Asked::Sign, None),
+        };
+        let action = asked == Asked::Click;
+        // The command holds a sign's text, which is the script's own: only
+        // at `debug`, like chat.
+        debug!(
+            ?command,
+            "the script does something in a screen or a sign editor"
+        );
+        // Bounded by the session's own timeout.
+        let error = match self.session.menu(command).await {
+            Ok(()) => {
+                if action {
+                    self.awaiting = Some(Awaiting {
+                        slot,
+                        since: self.clock.now(),
+                    });
+                }
+                return ControlFlow::Continue(());
+            }
+            Err(MenuError::Session(SessionError::Closed)) => {
+                return ControlFlow::Break(Ended::Session);
+            }
+            Err(error) => error,
+        };
+        let reason = match error {
+            MenuError::Refused(refusal) => Refusal::from(refusal),
+            MenuError::Sign(refusal) => Refusal::from(refusal),
+            MenuError::Session(SessionError::TimedOut) => {
+                // It may still go out: an action waits for its fate, which
+                // the session's gate gives it, or the runner's patience.
+                let level = self
+                    .failures
+                    .level(FailureKind::Session(SessionError::TimedOut));
+                warn_or_debug!(
+                    level,
+                    "the session didn't answer an action of the bot's script in time"
+                );
+                if action {
+                    self.awaiting = Some(Awaiting {
+                        slot,
+                        since: self.clock.now(),
+                    });
+                } else {
+                    self.log(ScriptLog::Menu {
+                        asked,
+                        slot,
+                        reason: Refusal::Unanswered,
+                        sent: true,
+                    });
+                }
+                return ControlFlow::Continue(());
+            }
+            MenuError::Session(SessionError::NotInWorld) => Refusal::NotInWorld,
+            // A session too busy to take it: as an action that came too
+            // soon.
+            MenuError::Session(
+                SessionError::QueueFull | SessionError::ChatUnavailable | SessionError::Closed,
+            ) => Refusal::TooSoon,
+        };
+        self.log(ScriptLog::Menu {
+            asked,
+            slot,
+            reason,
+            sent: false,
+        });
+        if action {
+            self.queued = Some(ClickOutcome {
+                slot,
+                answer: Err(reason),
+            });
         }
         ControlFlow::Continue(())
     }
@@ -840,6 +1112,9 @@ impl<'a, S: SessionHandle> ScriptRunner<'a, S> {
     async fn finish(&mut self, ended: Ended) -> Next {
         match ended {
             Ended::Session => {
+                // A fate still to come never will.
+                self.awaiting = None;
+                self.queued = None;
                 // A session that ended holds nothing, and a new one starts
                 // with nothing held. The state stays for the next join.
                 self.parts.slot.turn(|instance, _| instance.disconnected());
@@ -946,7 +1221,9 @@ fn game_action(action: &Action) -> Option<(GameAction, Option<Input>)> {
         // kind (ADR-0042, G1).
         Action::Mount(_) => (GameAction::Mount, None),
         Action::Dismount => (GameAction::Dismount, None),
-        Action::Send { .. } | Action::Expect { .. } | Action::Log(_) => return None,
+        Action::Send { .. } | Action::Expect { .. } | Action::Log(_) | Action::Menu(_) => {
+            return None;
+        }
     })
 }
 
