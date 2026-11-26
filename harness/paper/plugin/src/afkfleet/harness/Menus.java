@@ -23,13 +23,17 @@ import org.bukkit.Material;
 import org.bukkit.block.sign.Side;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.PrepareAnvilEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
+import org.bukkit.inventory.InventoryView;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.MenuType;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.PotionMeta;
+import org.bukkit.inventory.view.AnvilView;
 
 /**
  * The harness's menus, each a chest screen the plugin owns, as a server's auction and sell
@@ -43,9 +47,17 @@ import org.bukkit.inventory.meta.PotionMeta;
  *       shows only the listings whose item, name or potion has the query in it.
  *   <li><b>The user's server's flow</b> (Plan.md P16.11, ADR-0036 M17): Create opens <b>Create
  *       Listing</b> (27 slots, cancel at 22), where a click on an item in the player's own inventory
- *       selects it; <b>Confirm Item</b> (confirm 11, the item 13, cancel 15); then a sign editor
- *       the plugin opens, whose first line is the price; then the final <b>Confirm Listing</b>.
- *       Each screen opens on the tick after its click.
+ *       selects it; <b>Confirm Item</b> (confirm 11, the item 13, cancel 15); then an anvil the
+ *       plugin opens, <b>Preis eingeben</b>, whose text box is the price (the user's correction of
+ *       2026-11-26: a sign stood here before); then the final <b>Confirm Listing</b>. Each screen
+ *       opens on the tick after its click.
+ *   <li><b>Preis eingeben</b>, the price's anvil: paper named {@value #PRICE_START} in the left
+ *       input, whose name is the text box's starting text; a lime dye named
+ *       {@value #PRICE_CONFIRM} in the result slot (2), which confirms; an enchantment cost of 1
+ *       shown, which needs no levels, as on the user's server. A click on the result reads the
+ *       anvil's rename text: a whole number from 1 to {@value #MAX_PRICE} opens Confirm Listing,
+ *       anything else is refused and the anvil stays open. Nothing of the anvil's goes back into
+ *       the player's inventory when it closes.
  *   <li><b>Confirm Purchase</b> and <b>Confirm Listing</b> (27 slots): confirm (11), the item
  *       (13), cancel (15).
  *   <li><b>Expired Listings</b> (54 slots): the player's expired items in 0 to 44, back (49); a
@@ -105,11 +117,20 @@ final class Menus {
         int slot;
     }
 
-    /** A listing waiting for its price on the sign the plugin opened. */
-    record Draft(ItemStack item, int slot, BlockPosition sign) {}
+    /** The price anvil's title, as on the user's server. */
+    static final String PRICE_TITLE = "Preis eingeben";
+    /** The name of the price anvil's left input: the text box's starting text. */
+    static final String PRICE_START = "Preis";
+    /** The name of the price anvil's confirm item, in its result slot. */
+    static final String PRICE_CONFIRM = "Bestätigen";
+    /** The highest price the anvil takes. */
+    static final long MAX_PRICE = 1_000_000_000L;
 
-    /** Each player's listing waiting for its price. */
-    private final Map<UUID, Draft> drafts = new HashMap<>();
+    /** A listing waiting for its price on the anvil the plugin opened: the view tells it apart. */
+    record PriceAnvil(AnvilView view, ItemStack item, int slot) {}
+
+    /** Each player's listing waiting for its price on an anvil. */
+    private final Map<UUID, PriceAnvil> anvils = new HashMap<>();
 
     static final class SellScreen extends Screen {}
 
@@ -148,6 +169,43 @@ final class Menus {
         screen.slot = slot;
         drawConfirm(screen.inventory, item);
         player.openInventory(screen.inventory);
+    }
+
+    /**
+     * Opens the price's anvil for a listing of {@code item}, which is in slot {@code slot} of the
+     * player's inventory: anywhere, with no anvil block near.
+     */
+    private void openPriceAnvil(Player player, ItemStack item, int slot) {
+        AnvilView view = MenuType.ANVIL.builder()
+                .title(Component.text(PRICE_TITLE))
+                .checkReachable(false)
+                .build(player);
+        anvils.put(player.getUniqueId(), new PriceAnvil(view, item, slot));
+        player.openInventory(view);
+        view.getTopInventory().setItem(0, named(Material.PAPER, PRICE_START));
+        view.getTopInventory().setItem(2, priceConfirm());
+        view.setRepairCost(1);
+        plugin.log("harness-anvil-open player=" + player.getName() + " level=" + player.getLevel());
+    }
+
+    /** The price anvil's confirm item. */
+    private static ItemStack priceConfirm() {
+        return button(Material.LIME_DYE, PRICE_CONFIRM, NamedTextColor.GREEN);
+    }
+
+    /** An item named {@code name}, nothing else. */
+    private static ItemStack named(Material material, String name) {
+        ItemStack item = new ItemStack(material);
+        ItemMeta meta = item.getItemMeta();
+        meta.displayName(Component.text(name).decoration(TextDecoration.ITALIC, false));
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    /** The price anvil of {@code view}'s player, if {@code view} is it. */
+    private PriceAnvil priceAnvil(InventoryView view, UUID player) {
+        PriceAnvil anvil = anvils.get(player);
+        return anvil != null && anvil.view() == view ? anvil : null;
     }
 
     /** Opens a sign editor for {@code player} at a place below their feet; nothing is built there. */
@@ -336,6 +394,17 @@ final class Menus {
     }
 
     void onClick(InventoryClickEvent event) {
+        if (event.getWhoClicked() instanceof Player clicker) {
+            PriceAnvil anvil = priceAnvil(event.getView(), clicker.getUniqueId());
+            if (anvil != null) {
+                // Nothing moves in it: every click is the plugin's, the result's a confirm.
+                event.setCancelled(true);
+                if (event.getRawSlot() == 2) {
+                    clickPrice(clicker, anvil);
+                }
+                return;
+            }
+        }
         InventoryHolder holder = event.getView().getTopInventory().getHolder();
         if (!(holder instanceof Screen) || !(event.getWhoClicked() instanceof Player player)) {
             return;
@@ -383,6 +452,10 @@ final class Menus {
     }
 
     void onDrag(InventoryDragEvent event) {
+        if (priceAnvil(event.getView(), event.getWhoClicked().getUniqueId()) != null) {
+            event.setCancelled(true);
+            return;
+        }
         InventoryHolder holder = event.getView().getTopInventory().getHolder();
         if (!(holder instanceof Screen)) {
             return;
@@ -396,6 +469,13 @@ final class Menus {
     }
 
     void onClose(InventoryCloseEvent event) {
+        PriceAnvil anvil = priceAnvil(event.getView(), event.getPlayer().getUniqueId());
+        if (anvil != null) {
+            // The anvil's paper is the plugin's: it never goes into the player's inventory.
+            anvil.view().getTopInventory().clear();
+            anvils.remove(event.getPlayer().getUniqueId());
+            return;
+        }
         if (event.getView().getTopInventory().getHolder() instanceof SellScreen
                 && event.getPlayer() instanceof Player player) {
             Inventory top = event.getView().getTopInventory();
@@ -440,19 +520,57 @@ final class Menus {
 
     private void clickConfirmItem(Player player, ConfirmItem screen, int slot) {
         if (slot == 11) {
-            Bukkit.getScheduler().runTask(plugin, () -> {
-                player.closeInventory();
-                BlockPosition sign = openSign(player);
-                drafts.put(player.getUniqueId(), new Draft(screen.item, screen.slot, sign));
-            });
+            Bukkit.getScheduler().runTask(plugin, () -> openPriceAnvil(player, screen.item, screen.slot));
         } else if (slot == 15) {
             Bukkit.getScheduler().runTask(plugin, () -> player.closeInventory());
         }
     }
 
     /**
-     * A sign's lines came back. Every sign the plugin opens is virtual, so each comes here; the
-     * one of a listing waiting for its price gives it with its first line.
+     * The price anvil's result was clicked: its rename text is the price. A whole number from 1
+     * to {@value #MAX_PRICE} opens Confirm Listing on the next tick; anything else is refused, and
+     * the anvil stays open.
+     */
+    private void clickPrice(Player player, PriceAnvil anvil) {
+        String text = anvil.view().getRenameText();
+        String typed = text == null ? "" : text.trim();
+        plugin.log("harness-anvil player=" + player.getName() + " text=" + typed + " level=" + player.getLevel());
+        Optional<Long> price = wholePrice(typed);
+        if (price.isEmpty()) {
+            player.sendMessage(Component.text("That's not a price.", NamedTextColor.RED));
+            return;
+        }
+        anvils.remove(player.getUniqueId());
+        Bukkit.getScheduler().runTask(plugin,
+                () -> openConfirmListing(player, BigDecimal.valueOf(price.get()), anvil.item(), anvil.slot()));
+    }
+
+    /** {@code text} as a whole price from 1 to {@value #MAX_PRICE}, or none. */
+    static Optional<Long> wholePrice(String text) {
+        if (text.isEmpty() || text.length() > 10 || !text.chars().allMatch(c -> c >= '0' && c <= '9')) {
+            return Optional.empty();
+        }
+        long price = Long.parseLong(text);
+        return price >= 1 && price <= MAX_PRICE ? Optional.of(price) : Optional.empty();
+    }
+
+    /**
+     * The anvil's result is the plugin's confirm item whatever is typed, at the cost the user's
+     * server shows; the server would compute a renamed paper there.
+     */
+    void onPrepareAnvil(PrepareAnvilEvent event) {
+        if (priceAnvil(event.getView(), event.getView().getPlayer().getUniqueId()) == null) {
+            return;
+        }
+        event.setResult(priceConfirm());
+        event.getView().setRepairCost(1);
+    }
+
+    /**
+     * A sign's lines came back. Every sign the plugin opens is virtual ({@code harness sign}), so
+     * each comes here and is only logged: no flow of the harness takes a price on a sign since the
+     * user's correction of 2026-11-26, but other servers do, and the bot's sign editor is tested
+     * here.
      */
     void onSign(UncheckedSignChangeEvent event) {
         event.setCancelled(true);
@@ -461,20 +579,6 @@ final class Menus {
                 .map(line -> PlainTextComponentSerializer.plainText().serialize(line))
                 .toList();
         plugin.log("harness-sign player=" + player.getName() + " lines=" + lines);
-        Draft draft = drafts.get(player.getUniqueId());
-        BlockPosition at = event.getEditedBlockPosition();
-        if (draft == null || at.blockX() != draft.sign().blockX() || at.blockY() != draft.sign().blockY()
-                || at.blockZ() != draft.sign().blockZ()) {
-            return;
-        }
-        drafts.remove(player.getUniqueId());
-        Optional<BigDecimal> price = lines.isEmpty() ? Optional.empty() : Market.parsePrice(lines.get(0).trim());
-        if (price.isEmpty()) {
-            player.sendMessage(Component.text("That's not a price.", NamedTextColor.RED));
-            return;
-        }
-        Bukkit.getScheduler().runTask(plugin,
-                () -> openConfirmListing(player, price.get(), draft.item(), draft.slot()));
     }
 
     private void clickConfirmPurchase(Player player, ConfirmPurchase screen, int slot) {
