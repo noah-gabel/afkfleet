@@ -786,14 +786,13 @@ async fn plugin_buttons(bench: &Bench) {
         })))
         .await;
     bench.report("plugin: number key 2 on a listing", &sent, &answered);
-    for &slot in &sent.changed {
-        place(&answered, "a predicted slot put back", |heard| {
-            slot_of(heard, sent.window, slot)
-        });
-    }
-    place(&answered, "the cursor put back", |heard| {
-        *heard == Heard::Cursor
-    });
+    // azalea predicts no change for it, and with the cursor kept right
+    // since fleet-mc's menus (ADR-0051, C4) the click's claim is what the
+    // cancelled click left: nothing comes back. Group A heard the cursor
+    // here only because azalea had dropped the plugin's earlier
+    // `SetCursorItem`, so the click claimed a stale cursor.
+    assert_eq!(sent.changed, Vec::<u16>::new(), "azalea predicts no change");
+    assert_eq!(answered, [], "nothing to put back");
     plugin_purchase(bench).await;
 }
 

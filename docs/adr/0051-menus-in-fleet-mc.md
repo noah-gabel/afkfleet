@@ -39,6 +39,8 @@ fleet-mc's reader runs in `Update`, after azalea's handlers ran in `PreUpdate`, 
 - **`SetPlayerInventory`:** into window 0, and into the open screen's copy of the bot's slots;
 - **a hotbar slot of window 0:** also into the open screen's copy, since a vanilla client's screens show the bot's own slots, not a copy.
 
+**One of group A's measurements changes with it.** A number key on a plugin's cancelled listing, which azalea predicts as no change, was answered with "the cursor alone" (ADR-0036's amendment). That came only from azalea dropping the plugin's earlier `SetCursorItem`: the click claimed a stale cursor, and Paper put it right. With the cursor kept right, the click's claim matches and nothing comes back; `menus::slow_what_follows_a_click_on_paper` now asserts that.
+
 Its system is ordered before azalea's `path_found_listener`, the only azalea system of `Update` that reads the inventory. fleet-mc never uses the pathfinder, but the ambiguity check (`no_schedule_runs_systems_in_an_undeclared_order`) holds every system to a declared place.
 
 ### C5. Reading an item and a screen
