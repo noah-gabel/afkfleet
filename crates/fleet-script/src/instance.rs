@@ -261,6 +261,10 @@ impl Running {
 
     /// How much of the stack the running hook takes right now: how far a
     /// local of this function is from where the hook started.
+    ///
+    /// The address sanitizer's fake stack frames put such a local on the
+    /// heap, where this measures nothing; the fuzz runner turns them off
+    /// (`scripts/fuzz.mjs`, ADR-0030's amendment).
     fn stack_used(&self) -> usize {
         let here = 0_u8;
         self.stack_top

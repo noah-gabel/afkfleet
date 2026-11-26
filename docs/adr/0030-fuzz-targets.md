@@ -85,3 +85,19 @@ cargo-fuzz 0.13.2 (2026-06-09) and libfuzzer-sys 0.4.13 (2026-06-04) are still t
 - **Fuzzing in a Linux container on the development PC:** it works everywhere Docker does, but its build would live in Docker's own disk, which doesn't shrink again; the native build is a folder under the repository that can simply be deleted.
 - **The fuzz job on every pull request:** some twenty minutes of build for a run fleet-fuzz's tests already approximate.
 - **Adding NCSA to the license allowlist:** broader than the one crate needs.
+
+## Amendment (2026-11-26): no fake stack frames
+**What happened.** Group D's first Fuzz workflow run (PR #139) failed in `menu_snapshot`, on the empty input libFuzzer tries first: the reader script was stopped by fleet-script's stack guard (`Limit(Stack)`), though it nests nothing. The guard measures a hook's stack by how far a local of its own is from where the hook started (ADR-0040). With AddressSanitizer's detection of a stack used after its function returned, every local whose address is taken lives in a fake stack frame on the heap, so that distance is noise far past the 1 MiB budget, and the guard ends every hook at its first operation. Linux's sanitizer runtime has had that detection on by default since LLVM 15; rustc builds the code for it either way.
+
+**Shown on the development PC** with the same target: `ASAN_OPTIONS=detect_stack_use_after_return=1` gives CI's failure word for word, and `=0` runs 1,752 inputs clean in 20 s.
+
+**Decision.** `scripts/fuzz.mjs` runs every target with `detect_stack_use_after_return=0`, placed before any options already in `ASAN_OPTIONS`, so a deliberate setting still wins (`scripts/fuzz.test.mjs`). The guard stays as it is: production builds have no sanitizer, and a stack that ran out would end the agent.
+
+**What it weakens.** The fuzz runs no longer catch a use of a stack after its function returned. Only `unsafe` code can do that, which the workspace forbids; its dependencies' `unsafe` code keeps every other check of the sanitizer.
+
+**What it showed about earlier runs.** `script_run` and `script_api` (P15.9) accept a hook that a limit stopped, so on CI's Linux runner their hooks most likely ended at their first operation without a failure. `menu_snapshot` asserts that its reader runs to its end, which is how this showed. From this run on they explore what they were meant to.
+
+**Alternatives considered.**
+- **Reading the stack pointer itself** (the `psm` crate, as `stacker` does): a new dependency with assembly in its build, for what only a sanitizer breaks.
+- **The guard off under `cfg(fuzzing)`:** the fuzzed code would differ from what runs, and the guard would be fuzzed nowhere.
+- **The option for the script targets alone:** a list to keep in step, and a new script target that missed it would fail the same way.

@@ -62,6 +62,7 @@ Groups B and C built the menu model in fleet-core and fed it from azalea in flee
 - **`menu_snapshot`:** a screen, its trades and an inventory from any bytes, including text of thousands of characters, 24 lore lines and 24 enchantments of any level. What's kept stays in its bounds, and a level-2 script reads every slot, trade and field to its end.
 - **`number_helpers`:** the first number is finite or none and the same each time, and a lore's number is its label's line's.
 - **`click_guard`:** any sequence of screens, corrections, a hook's view, clicks, replies and waits. A click goes out only onto the screen, state, cursor and items the hook saw, never while another waits, and every click gets exactly one fate.
+- **The fuzz runner turns AddressSanitizer's fake stack frames off:** `menu_snapshot`'s first run on CI's Linux runner showed that in them fleet-script's stack guard ends every hook at its first operation ([ADR-0030](0030-fuzz-targets.md)'s amendment of 2026-11-26).
 - **The operation budget on real pages:** a full page of 45 listings costs the auction scan 1,939 operations, the lister 2,538 and the anvil lister 2,765, of a hook's 10,000. ADR-0036 measured 1,437 for a scan on a smaller synthetic page; the budgets stand.
 
 ### G10. The harness's price step is an anvil (the user's correction, 2026-11-26)
