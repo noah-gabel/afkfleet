@@ -20,13 +20,17 @@
 use azalea::PhysicsState;
 use azalea::ecs::query::With;
 use azalea::ecs::system::Query;
+use azalea::ecs::entity::Entity;
+use azalea::ecs::query::Has;
+use azalea::ecs::system::Commands;
 use azalea::entity::{HasClientLoaded, Jumping, LocalEntity, Position};
 use fleet_core::mc::LetGo;
-use fleet_core::script::{Leash, LeashTick};
+use fleet_core::script::{Key, Leash, LeashTick};
 use tracing::debug;
 
 use super::held::Held;
-use super::{Arriving, Guarded, Placement, Reports};
+use super::{Arriving, GettingOut, Guarded, Placement, Reports};
+use crate::riding::Riding;
 
 /// The bot's feet as fleet-core holds a position; `None` for one that
 /// isn't made of numbers, which nothing can be judged by.
@@ -86,6 +90,26 @@ pub(super) fn leash(mut bots: Query<Leashed, With<LocalEntity>>) {
             debug!("the bot is at the end of its leash; its movement keys are up");
             reports.0.let_go(LetGo::Leash);
         }
+    }
+}
+
+/// Keeps the sneak key down for a bot that is getting out of its seat,
+/// each game tick until the server lets it off or the time is up. A screen
+/// that opens ends it (`menu::let_go_now`).
+pub(super) fn getting_out(
+    mut commands: Commands,
+    mut bots: Query<
+        (Entity, &mut GettingOut, &mut Held, Has<Riding>),
+        With<LocalEntity>,
+    >,
+) {
+    for (bot, mut getting_out, mut held, riding) in &mut bots {
+        if !riding || getting_out.ticks_left == 0 {
+            commands.entity(bot).remove::<GettingOut>();
+            continue;
+        }
+        getting_out.ticks_left -= 1;
+        held.tap(Key::Sneak);
     }
 }
 

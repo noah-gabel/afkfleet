@@ -82,6 +82,21 @@ use crate::riding::{self, Riding};
 #[derive(Component, Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct Guarded(pub(crate) Guards);
 
+/// On a seated bot that is getting out: the sneak key stays down until the
+/// server lets the bot off, for at most a second. A key tapped for one game
+/// tick was lost when the client caught up on ticks and both its inputs
+/// reached the server between two of its ticks.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GettingOut {
+    /// How many more game ticks the key stays down.
+    pub(crate) ticks_left: u8,
+}
+
+impl GettingOut {
+    /// A second of game ticks.
+    pub(crate) const MOST_TICKS: u8 = 20;
+}
+
 /// Whether the server has placed the bot in its world.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum Arriving {
@@ -146,6 +161,7 @@ impl Plugin for ScriptPlugin {
                     (
                         tick::place,
                         tick::leash,
+                        tick::getting_out,
                         tick::apply_keys,
                         mouse::guard_mining.before(MiningSystems),
                         mouse::hold_right.before(handle_start_use_item_queued),
@@ -297,10 +313,16 @@ pub(crate) fn act(world: &mut World, bot: Entity, action: GameAction) -> Result<
         }
         GameAction::LookAtPosition(at) => look_at(world, bot, at),
         GameAction::Mount => riding::mount(world, bot),
-        // As a player gets out: the sneak key, for a tick.
+        // As a player gets out: the sneak key, until the server has let
+        // the bot off ([`tick::getting_out`]).
         GameAction::Dismount => {
+            if world.get::<Held>(bot).is_none() {
+                return Err(SessionError::NotInWorld);
+            }
             if world.get::<Riding>(bot).is_some() {
-                held(world, Held::tap, Key::Sneak)?;
+                world.entity_mut(bot).insert(GettingOut {
+                    ticks_left: GettingOut::MOST_TICKS,
+                });
             }
             Ok(())
         }

@@ -1311,24 +1311,64 @@ fn looking_at_a_point_turns_the_bot_to_it_from_its_eyes() {
     assert!((looked_down.x_rot() - 90.0).abs() < 0.2, "{looked_down:?}");
 }
 
+const SNEAKING: (WalkDirection, bool, bool, bool) = (WalkDirection::None, false, true, false);
+
+impl Scene {
+    fn seated(&mut self) {
+        let bot = self.bot;
+        self.app.world_mut().entity_mut(bot).insert(Riding {
+            vehicle: MinecraftEntityId(7),
+        });
+    }
+}
+
 #[test]
-fn getting_out_is_a_tap_of_the_sneak_key_and_nothing_for_a_bot_on_foot() {
+fn getting_out_holds_the_sneak_key_until_the_server_lets_the_bot_off() {
+    let mut scene = Scene::placed();
+    scene.seated();
+
+    assert_eq!(scene.act(GameAction::Dismount), Ok(()));
+    let mut held = Vec::new();
+    for _ in 0..3 {
+        scene.tick();
+        held.push(scene.keys());
+    }
+    // The server took the bot off its seat.
+    let bot = scene.bot;
+    scene.app.world_mut().entity_mut(bot).remove::<Riding>();
+    scene.tick();
+
+    // Two inputs a tick apart can reach the server in one batch when the
+    // client catches up on ticks, and a one-tick tap was lost then
+    // (slow_mouse_scenario, 2026-11-26).
+    assert_eq!(held, [SNEAKING; 3]);
+    assert_eq!(scene.keys(), STILL);
+}
+
+#[test]
+fn getting_out_holds_the_sneak_key_for_at_most_a_second() {
+    let mut scene = Scene::placed();
+    scene.seated();
+
+    assert_eq!(scene.act(GameAction::Dismount), Ok(()));
+    let mut held = Vec::new();
+    for _ in 0..20 {
+        scene.tick();
+        held.push(scene.keys());
+    }
+    scene.tick();
+
+    assert_eq!(held, [SNEAKING; 20]);
+    assert_eq!(scene.keys(), STILL, "a server that keeps the bot seated");
+}
+
+#[test]
+fn getting_out_does_nothing_for_a_bot_on_foot() {
     let mut scene = Scene::placed();
 
     assert_eq!(scene.act(GameAction::Dismount), Ok(()));
     scene.tick();
-    let on_foot = scene.keys();
-    let bot = scene.bot;
-    scene.app.world_mut().entity_mut(bot).insert(Riding {
-        vehicle: MinecraftEntityId(7),
-    });
-    assert_eq!(scene.act(GameAction::Dismount), Ok(()));
-    scene.tick();
-    let seated = scene.keys();
-    scene.tick();
 
-    assert_eq!(on_foot, STILL);
-    assert_eq!(seated, (WalkDirection::None, false, true, false));
     assert_eq!(scene.keys(), STILL);
 }
 
