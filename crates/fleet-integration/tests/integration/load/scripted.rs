@@ -271,6 +271,7 @@ pub(super) fn seen() -> Observation {
     Observation {
         facts: Snapshot::new(bot, entities, blocks),
         anchor: Some(place),
+        menu: fleet_core::mc::MenuView::default(),
     }
 }
 
@@ -350,6 +351,13 @@ impl SessionHandle for TimedSession {
 
     fn respawn(&self) -> impl Future<Output = Result<(), SessionError>> + Send {
         self.session.respawn()
+    }
+
+    fn menu(
+        &self,
+        command: fleet_core::mc::MenuCommand,
+    ) -> impl Future<Output = Result<(), fleet_core::mc::MenuError>> + Send {
+        self.session.menu(command)
     }
 
     fn disconnect(&self) -> impl Future<Output = ()> + Send {

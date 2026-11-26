@@ -24,7 +24,10 @@ mod render;
 mod respawn;
 
 pub use bridge::McEvents;
-pub(crate) use bridge::{BridgeControl, EventCounters, EventSink, Phase, WorldPacket, bridge};
+pub(crate) use bridge::{
+    BridgeControl, EventCounters, EventSink, MenuReport, Phase, WorldPacket, bridge,
+};
 pub(crate) use liveness::{LivenessStamps, PacketLivenessPlugin};
 pub(crate) use map::Terminal;
+pub(crate) use render::render_within;
 pub(crate) use respawn::RespawnWatchPlugin;

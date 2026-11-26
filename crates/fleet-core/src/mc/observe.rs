@@ -3,6 +3,7 @@
 //! script, and [`LetGo`], why a session let go of inputs by itself
 //! (Plan.md P15.10 to P15.13; ADR-0036, D9 to D12).
 
+use super::MenuView;
 use crate::script::{
     BlockGuard, Input, Key, LeashRadius, MouseButton, Position, Snapshot, ToolGuard,
 };
@@ -19,6 +20,9 @@ pub struct Observation {
     /// [`Leash::TELEPORT_RESET`](crate::script::Leash::TELEPORT_RESET)
     /// blocks. `None` until the server has placed the bot in its world.
     pub anchor: Option<Position>,
+    /// The bot's inventory, the screen it has open and the sign editor
+    /// waiting for an answer (ADR-0036, M2, M16; P16.8).
+    pub menu: MenuView,
 }
 
 /// The three settings of a scripted mode that a session applies below the

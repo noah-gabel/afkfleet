@@ -72,6 +72,7 @@ use fleet_core::mode::GameAction;
 use fleet_core::script::{Input, Key, Leash, MouseButton, Position};
 use tracing::debug;
 
+pub(crate) use self::facts::{block, floor, identifier, uses_left};
 pub(crate) use self::held::Held;
 use crate::actions;
 use crate::events::BridgeControl;
@@ -228,6 +229,9 @@ fn read_packets(
 /// # Errors
 /// [`SessionError::NotInWorld`] if the bot has left its world.
 pub(crate) fn perform(client: &Client, action: GameAction) -> Result<(), SessionError> {
+    if held_back(&client.ecs.read(), client.entity, action) {
+        return Ok(());
+    }
     match action {
         // The two that write an attack, which takes the bot's connection.
         // No guard on the World is held meanwhile: azalea's locks aren't
@@ -251,6 +255,27 @@ pub(crate) fn perform(client: &Client, action: GameAction) -> Result<(), Session
     }
 }
 
+/// Whether a screen is open and `action` would put a key or a button
+/// down: then it does nothing, as a vanilla client's keys do nothing while
+/// a screen is open (ADR-0036, M8). The runtime refuses such an action
+/// with `screen_open` before it gets here; this keeps the rule whatever
+/// calls.
+fn held_back(world: &World, bot: Entity, action: GameAction) -> bool {
+    let down = matches!(
+        action,
+        GameAction::Press(_)
+            | GameAction::Tap(_)
+            | GameAction::HoldUntilUsed
+            | GameAction::Mount
+            | GameAction::Dismount
+    );
+    if down && crate::menu::screen_open(world, bot) {
+        debug!(?action, "a screen is open; nothing goes down");
+        return true;
+    }
+    false
+}
+
 /// Whether the bot's crosshair is on an entity within reach.
 fn looks_at_an_entity(client: &Client) -> bool {
     client
@@ -265,6 +290,9 @@ fn looks_at_an_entity(client: &Client) -> bool {
 /// [`SessionError::NotInWorld`] if the bot's entity is gone, or lacks what
 /// the action needs.
 pub(crate) fn act(world: &mut World, bot: Entity, action: GameAction) -> Result<(), SessionError> {
+    if held_back(world, bot, action) {
+        return Ok(());
+    }
     // Every input is the bot's own; a bot azalea no longer has holds
     // nothing.
     let held = |world: &mut World, change: fn(&mut Held, Key), key: Key| {

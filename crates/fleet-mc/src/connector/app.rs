@@ -22,6 +22,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::events::{LivenessStamps, PacketLivenessPlugin, RespawnWatchPlugin};
+use crate::menu::MenuPlugin;
 use crate::riding::RidingPlugin;
 use crate::script::ScriptPlugin;
 use crate::signing::SigningPlugin;
@@ -52,6 +53,8 @@ pub(super) fn build_app(
     // A scripted mode's inputs, its leash and its guards (ADR-0036); the
     // same bridge hears of its placements as of its respawns.
     let script = ScriptPlugin(respawns.0.clone());
+    // Its screens, clicks and sign editors (ADR-0036, ADR-0050, ADR-0051).
+    let menus = MenuPlugin(respawns.0.clone());
     let mut app = App::new();
     app.add_plugins((
         DefaultPlugins,
@@ -66,6 +69,7 @@ pub(super) fn build_app(
         // What azalea lacks for a bot in a minecart (ADR-0026).
         RidingPlugin,
         script,
+        menus,
     ));
     give_events_to_the_bot(&mut app, events);
     extra(&mut app);

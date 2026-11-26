@@ -9,7 +9,8 @@ use std::time::Instant;
 
 use fleet_core::chat::ChatMessage;
 use fleet_core::mc::{
-    Guards, Liveness, Observation, SessionError, SessionEvent, SessionEvents, SessionHandle,
+    Guards, Liveness, MenuCommand, MenuError, Observation, SessionError, SessionEvent,
+    SessionEvents, SessionHandle,
 };
 use fleet_core::mode::GameAction;
 use fleet_core::script::{Input, MouseButton};
@@ -28,6 +29,9 @@ pub enum Performed {
     Observed,
     /// [`SessionHandle::set_guards`] set these.
     Guards(Guards),
+    /// [`SessionHandle::menu`] carried this out. A command the test made
+    /// it refuse isn't logged: nothing was sent.
+    Menu(MenuCommand),
     /// [`SessionHandle::disconnect`] tore the session down. It's logged once,
     /// however often it's called.
     Disconnect,
@@ -90,6 +94,12 @@ struct State {
     /// The keys and buttons a scripted mode holds down, in the order they
     /// went down.
     held: Vec<Input>,
+    /// A screen is open: from a `MenuOpened` the test emitted to its
+    /// `MenuClosed`. Nothing goes down meanwhile, as in fleet-mc (M8).
+    screen_open: bool,
+    /// What [`SessionHandle::menu`] answers with instead of carrying a
+    /// command out, until the test lets it again.
+    refusing_menu: Option<MenuError>,
 }
 
 /// Where a session is in its life.
@@ -157,6 +167,9 @@ impl State {
     /// down, a release lets it go, and a tap holds nothing.
     fn hold(&mut self, action: GameAction) {
         let right = Input::Mouse(MouseButton::Right);
+        if self.screen_open && matches!(action, GameAction::Press(_) | GameAction::HoldUntilUsed) {
+            return;
+        }
         match action {
             GameAction::Press(input) if input.can_be_held() => self.put_down(input),
             GameAction::HoldUntilUsed => self.put_down(right),
@@ -249,6 +262,21 @@ impl Shared {
         let seen = state.shown.clone().ok_or(SessionError::NotInWorld)?;
         state.log.push(Performed::Observed);
         Ok(seen)
+    }
+
+    /// Runs one [`SessionHandle::menu`] call: checks that the session can
+    /// take it, answers with the refusal the test set, or logs it.
+    fn menu(&self, command: MenuCommand) -> Result<(), MenuError> {
+        let mut state = self.lock();
+        state.ready()?;
+        if let Some(error) = state.failing_actions {
+            return Err(error.into());
+        }
+        if let Some(refusal) = state.refusing_menu {
+            return Err(refusal);
+        }
+        state.log.push(Performed::Menu(command));
+        Ok(())
     }
 
     /// Tears the session down and returns how long the teardown still takes.
@@ -344,6 +372,11 @@ impl SessionHandle for FakeSession {
     fn respawn(&self) -> impl Future<Output = Result<(), SessionError>> + Send {
         let shared = Arc::clone(&self.shared);
         async move { shared.run(Performed::Respawn) }
+    }
+
+    fn menu(&self, command: MenuCommand) -> impl Future<Output = Result<(), MenuError>> + Send {
+        let shared = Arc::clone(&self.shared);
+        async move { shared.menu(command) }
     }
 
     fn disconnect(&self) -> impl Future<Output = ()> + Send {
@@ -445,7 +478,18 @@ impl SessionController {
                                 let gone = reason.inputs();
                                 state.held.retain(|held| !gone.contains(held));
                             }
-                            SessionEvent::Chat(_) | SessionEvent::Respawned => {}
+                            // A screen lets go of everything, and nothing
+                            // goes down while it's open (ADR-0036, M8).
+                            SessionEvent::MenuOpened(_) => {
+                                state.held.clear();
+                                state.screen_open = true;
+                            }
+                            SessionEvent::MenuClosed(_) => state.screen_open = false,
+                            SessionEvent::Chat(_)
+                            | SessionEvent::Respawned
+                            | SessionEvent::MenuUpdated(_)
+                            | SessionEvent::Clicked(_)
+                            | SessionEvent::SignOpened(_) => {}
                         }
                         state.queue.push_back(event);
                         EmitOutcome::Queued
@@ -501,8 +545,9 @@ impl SessionController {
         state.frozen_packet = Some(state.frozen_packet.unwrap_or_else(now));
     }
 
-    /// Makes [`SessionHandle::perform`], [`SessionHandle::set_guards`] and
-    /// [`SessionHandle::observe`] fail with `error` until
+    /// Makes [`SessionHandle::perform`], [`SessionHandle::set_guards`],
+    /// [`SessionHandle::observe`] and [`SessionHandle::menu`] fail with
+    /// `error` until
     /// [`succeed_actions`](Self::succeed_actions), as a session whose job
     /// queue is full or that doesn't answer. Chat and respawns still work.
     pub fn fail_actions(&self, error: SessionError) {
@@ -550,6 +595,19 @@ impl SessionController {
     /// Lets [`SessionHandle::respawn`] succeed again.
     pub fn succeed_respawn(&self) {
         self.shared.lock().failing_respawn = None;
+    }
+
+    /// Makes [`SessionHandle::menu`] answer every command with `error`
+    /// until [`accept_menu`](Self::accept_menu), as fleet-mc does when the
+    /// gate, the guard or the sign desk says no. A session that can't take
+    /// the call at all still fails with its [`SessionError`] first.
+    pub fn refuse_menu(&self, error: MenuError) {
+        self.shared.lock().refusing_menu = Some(error);
+    }
+
+    /// Lets [`SessionHandle::menu`] carry commands out again.
+    pub fn accept_menu(&self) {
+        self.shared.lock().refusing_menu = None;
     }
 
     /// Holds back the confirmation of every respawn asked for from now on,

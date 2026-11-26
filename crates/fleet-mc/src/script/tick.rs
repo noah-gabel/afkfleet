@@ -18,11 +18,11 @@
 //! over, so the key goes up at the next one.
 
 use azalea::PhysicsState;
-use azalea::ecs::query::With;
-use azalea::ecs::system::Query;
 use azalea::ecs::entity::Entity;
 use azalea::ecs::query::Has;
+use azalea::ecs::query::With;
 use azalea::ecs::system::Commands;
+use azalea::ecs::system::Query;
 use azalea::entity::{HasClientLoaded, Jumping, LocalEntity, Position};
 use fleet_core::mc::LetGo;
 use fleet_core::script::{Key, Leash, LeashTick};
@@ -98,10 +98,7 @@ pub(super) fn leash(mut bots: Query<Leashed, With<LocalEntity>>) {
 /// that opens ends it (`menu::let_go_now`).
 pub(super) fn getting_out(
     mut commands: Commands,
-    mut bots: Query<
-        (Entity, &mut GettingOut, &mut Held, Has<Riding>),
-        With<LocalEntity>,
-    >,
+    mut bots: Query<(Entity, &mut GettingOut, &mut Held, Has<Riding>), With<LocalEntity>>,
 ) {
     for (bot, mut getting_out, mut held, riding) in &mut bots {
         if !riding || getting_out.ticks_left == 0 {

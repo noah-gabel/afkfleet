@@ -10,10 +10,11 @@ use core::time::Duration;
 use fleet_core::chat::{ChatMessage, IncomingChat};
 use fleet_core::disconnect::{ConnectFailure, DisconnectReason};
 use fleet_core::mc::{
-    ConnectParams, Guards, LetGo, MinecraftConnector, Observation, SessionCredentials,
-    SessionError, SessionEvent, SessionEvents, SessionHandle,
+    ConnectParams, Guards, LetGo, MenuCommand, MenuError, MenuView, MinecraftConnector,
+    Observation, SessionCredentials, SessionError, SessionEvent, SessionEvents, SessionHandle,
 };
 use fleet_core::mode::{GameAction, HotbarSlot};
+use fleet_core::script::menu::{ClickFate, ClickGate, ClickResult, MenuRefusal, WindowId};
 use fleet_core::script::{
     BlockGuard, BlockPosition, Blocks, BotFacts, Identifier, Input, Key, LeashRadius, MouseButton,
     Position, Snapshot, ToolGuard,
@@ -667,6 +668,7 @@ fn observation(x: f64) -> Observation {
     Observation {
         facts: Snapshot::new(bot, Vec::new(), blocks),
         anchor: Some(Position::try_new(0.5, 64.0, 0.5).unwrap()),
+        menu: MenuView::default(),
     }
 }
 
@@ -926,4 +928,117 @@ async fn failing_performs_fail_perform_alone_until_they_succeed_again() {
     assert_eq!(guards, Ok(()));
     assert_eq!(seen, Ok(observation(7.5)));
     assert_eq!(again, Ok(()));
+}
+
+// --- Scripted modes: screens and signs (Plan.md P16.8 to P16.10) ---
+
+#[tokio::test(start_paused = true)]
+async fn a_menu_command_carried_out_is_logged() {
+    let (session, _events, controller) = start_joined().await;
+    let screen = ClickGate::new().opened(WindowId::new(1));
+
+    assert_eq!(session.menu(MenuCommand::OpenInventory).await, Ok(()));
+    assert_eq!(session.menu(MenuCommand::Close(screen)).await, Ok(()));
+
+    assert_eq!(
+        controller.log(),
+        [
+            Performed::Menu(MenuCommand::OpenInventory),
+            Performed::Menu(MenuCommand::Close(screen)),
+        ]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_refused_menu_command_answers_with_its_reason_and_isnt_logged() {
+    let (session, _events, controller) = start_joined().await;
+    controller.refuse_menu(MenuError::Refused(MenuRefusal::ClickPending));
+
+    let refused = session.menu(MenuCommand::OpenInventory).await;
+    controller.accept_menu();
+    let accepted = session.menu(MenuCommand::OpenInventory).await;
+
+    assert_eq!(refused, Err(MenuError::Refused(MenuRefusal::ClickPending)));
+    assert_eq!(accepted, Ok(()));
+    assert_eq!(
+        controller.log(),
+        [Performed::Menu(MenuCommand::OpenInventory)]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_menu_command_fails_as_any_call_before_the_join_and_after_the_end() {
+    let (session, _events, controller) = start().await;
+    let before = session.menu(MenuCommand::OpenInventory).await;
+    assert_eq!(controller.emit(SessionEvent::Joined), EmitOutcome::Queued);
+    controller.fail_actions(SessionError::QueueFull);
+    let busy = session.menu(MenuCommand::OpenInventory).await;
+    controller.succeed_actions();
+    session.disconnect().await;
+    let after = session.menu(MenuCommand::OpenInventory).await;
+
+    assert_eq!(before, Err(MenuError::Session(SessionError::NotInWorld)));
+    assert_eq!(busy, Err(MenuError::Session(SessionError::QueueFull)));
+    assert_eq!(after, Err(MenuError::Session(SessionError::Closed)));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_screen_lets_go_of_everything_and_nothing_goes_down_until_it_closes() {
+    let (session, mut events, controller) = start_joined().await;
+    let screen = ClickGate::new().opened(WindowId::new(1));
+    let forward = Input::Key(Key::Forward);
+    let left = Input::Mouse(MouseButton::Left);
+    for input in [forward, left] {
+        assert_eq!(session.perform(GameAction::Press(input)).await, Ok(()));
+    }
+
+    assert_eq!(
+        controller.emit(SessionEvent::MenuOpened(screen)),
+        EmitOutcome::Queued
+    );
+    let let_go = controller.held();
+    assert_eq!(session.perform(GameAction::Press(forward)).await, Ok(()));
+    assert_eq!(session.perform(GameAction::HoldUntilUsed).await, Ok(()));
+    let while_open = controller.held();
+    assert_eq!(
+        controller.emit(SessionEvent::MenuClosed(screen)),
+        EmitOutcome::Queued
+    );
+    assert_eq!(session.perform(GameAction::Press(forward)).await, Ok(()));
+
+    assert_eq!(let_go, []);
+    assert_eq!(while_open, []);
+    assert_eq!(controller.held(), [forward]);
+    assert_eq!(
+        next(&mut events).await,
+        Some(SessionEvent::MenuOpened(screen))
+    );
+    assert_eq!(
+        next(&mut events).await,
+        Some(SessionEvent::MenuClosed(screen))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_other_menu_events_are_delivered_as_emitted() {
+    let (_session, mut events, controller) = start_joined().await;
+    let mut gate = ClickGate::new();
+    let screen = gate.opened(WindowId::new(3));
+    let clicked = ClickResult {
+        screen,
+        slot: Some(0),
+        fate: ClickFate::Rejected,
+    };
+    let emitted = [
+        SessionEvent::MenuUpdated(screen),
+        SessionEvent::Clicked(clicked),
+    ];
+
+    for event in emitted.clone() {
+        assert_eq!(controller.emit(event), EmitOutcome::Queued);
+    }
+
+    for event in emitted {
+        assert_eq!(next(&mut events).await, Some(event));
+    }
 }

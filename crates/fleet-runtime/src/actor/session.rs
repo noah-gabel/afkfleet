@@ -90,6 +90,16 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
                 debug!(?reason, "the session let go of inputs by itself");
                 self.tell_script(Life::LetGo(reason));
             }
+            // Read here, so a click's fate counts as read; a script hears of
+            // screens, clicks and signs from Phase 16's group D on
+            // (P16.13). Nothing of the server's text is in them.
+            Some(
+                event @ (SessionEvent::MenuOpened(_)
+                | SessionEvent::MenuUpdated(_)
+                | SessionEvent::MenuClosed(_)
+                | SessionEvent::Clicked(_)
+                | SessionEvent::SignOpened(_)),
+            ) => debug!(?event, "a screen, a click or a sign editor"),
             Some(SessionEvent::Disconnected(reason)) => {
                 self.ended(reason.clone(), BotEvent::Disconnected(reason))
                     .await;

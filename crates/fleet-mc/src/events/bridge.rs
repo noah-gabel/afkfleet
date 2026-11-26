@@ -13,6 +13,7 @@ use fleet_core::chat::{ChatSender, IncomingChat};
 use fleet_core::disconnect::DisconnectReason;
 use fleet_core::id::BotId;
 use fleet_core::mc::{LetGo, SessionEvent, SessionEvents};
+use fleet_core::script::menu::{ClickResult, ScreenId, SignEditor};
 use tokio::sync::Notify;
 use tracing::{debug, warn};
 
@@ -124,6 +125,10 @@ struct State {
     /// A packet put the bot into another world, and the bot isn't placed
     /// there yet (ADR-0036, D6).
     world_awaited: bool,
+    /// The last screen whose `MenuOpened` the consumer read.
+    opening_read: Option<ScreenId>,
+    /// How many `Clicked` are queued and unread.
+    fates_unread: usize,
 }
 
 /// A packet that puts the bot into a world.
@@ -133,6 +138,22 @@ pub(crate) enum WorldPacket {
     Login,
     /// A respawn: a death's, or a change of dimension.
     Respawn,
+}
+
+/// What the session's screens, clicks and sign editors report (ADR-0036,
+/// M2, M16, R1; ADR-0051): each becomes its [`SessionEvent`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MenuReport {
+    /// A screen opened.
+    Opened(ScreenId),
+    /// The open screen's content changed.
+    Updated(ScreenId),
+    /// The screen closed.
+    Closed(ScreenId),
+    /// An action's fate.
+    Clicked(ClickResult),
+    /// The server opened a sign editor.
+    SignOpened(SignEditor),
 }
 
 /// Where the session is, as far as its events go.
@@ -344,6 +365,61 @@ impl State {
         self.queue_once(SessionEvent::LetGo(reason))
     }
 
+    /// A screen, a click or a sign editor reported `report` (ADR-0051).
+    ///
+    /// Whatever a server sends, at most a close, an opening and an update
+    /// of the screens, a fate and a sign editor are unread at once:
+    /// - a screen that opens drops what's unread of the screens before it,
+    ///   all but the close of the one whose opening was read;
+    /// - an update is pending once a screen;
+    /// - a screen that closes before its opening was read takes the
+    ///   opening and its update along, and reports nothing;
+    /// - a fate is always queued, and the host thread sends no action
+    ///   while one is unread ([`BridgeControl::fate_unread`]);
+    /// - a sign editor replaces one unread.
+    fn menu(&mut self, report: MenuReport) -> Delivery {
+        if matches!(self.phase, Phase::Ended | Phase::Closed) {
+            return Delivery::SessionEnded;
+        }
+        if self.phase != Phase::Joined {
+            return Delivery::Ignored;
+        }
+        match report {
+            MenuReport::Opened(screen) => {
+                let read = self.opening_read;
+                self.queue.retain(|event| match event {
+                    SessionEvent::MenuOpened(_) | SessionEvent::MenuUpdated(_) => false,
+                    SessionEvent::MenuClosed(closed) => read == Some(*closed),
+                    _ => true,
+                });
+                self.queue.push_back(SessionEvent::MenuOpened(screen));
+                Delivery::Queued
+            }
+            MenuReport::Updated(screen) => self.queue_once(SessionEvent::MenuUpdated(screen)),
+            MenuReport::Closed(screen) => {
+                let opening = SessionEvent::MenuOpened(screen);
+                if self.queue.contains(&opening) {
+                    let update = SessionEvent::MenuUpdated(screen);
+                    self.queue
+                        .retain(|event| *event != opening && *event != update);
+                    return Delivery::Ignored;
+                }
+                self.queue_once(SessionEvent::MenuClosed(screen))
+            }
+            MenuReport::Clicked(result) => {
+                self.fates_unread = self.fates_unread.saturating_add(1);
+                self.queue.push_back(SessionEvent::Clicked(result));
+                Delivery::Queued
+            }
+            MenuReport::SignOpened(editor) => {
+                self.queue
+                    .retain(|event| !matches!(event, SessionEvent::SignOpened(_)));
+                self.queue.push_back(SessionEvent::SignOpened(editor));
+                Delivery::Queued
+            }
+        }
+    }
+
     /// Queues `event` unless one equal to it is queued and unread: a
     /// second world change, or a second let-go for one reason, tells its
     /// reader nothing the first doesn't, and a server that sends a bot
@@ -362,6 +438,8 @@ impl State {
         self.death = Death::None;
         self.revived = false;
         self.world_awaited = false;
+        self.opening_read = None;
+        self.fates_unread = 0;
         self.queue.clear();
     }
 
@@ -376,6 +454,14 @@ impl State {
                     self.death = Death::Taken { requested: false };
                 }
                 Next::Event(SessionEvent::Died)
+            }
+            Some(SessionEvent::MenuOpened(screen)) => {
+                self.opening_read = Some(screen);
+                Next::Event(SessionEvent::MenuOpened(screen))
+            }
+            Some(SessionEvent::Clicked(result)) => {
+                self.fates_unread = self.fates_unread.saturating_sub(1);
+                Next::Event(SessionEvent::Clicked(result))
             }
             Some(event) => Next::Event(event),
             None if self.phase == Phase::Ended => Next::End,
@@ -597,6 +683,18 @@ impl BridgeControl {
     /// each reason until it's read (ADR-0036, D10, D11).
     pub(crate) fn let_go(&self, reason: LetGo) -> Delivery {
         self.shared.respawn_signal(|state| state.let_go(reason))
+    }
+
+    /// A screen, a click or a sign editor reported `report`: its event
+    /// follows, under the rules that keep them bounded (ADR-0051).
+    pub(crate) fn menu(&self, report: MenuReport) -> Delivery {
+        self.shared.respawn_signal(|state| state.menu(report))
+    }
+
+    /// Whether an action's fate is queued and not yet read: no action
+    /// goes out until it is (ADR-0051).
+    pub(crate) fn fate_unread(&self) -> bool {
+        self.shared.lock().fates_unread > 0
     }
 
     /// Tears the bridge down: queued events are dropped, and
@@ -1610,5 +1708,209 @@ mod tests {
             .unwrap();
         assert_eq!(first, Some(SessionEvent::LetGo(LetGo::ToolGuard)));
         assert_eq!(second, Some(SessionEvent::WorldChanged));
+    }
+
+    // --- Screens, clicks and sign editors (ADR-0051) ---
+
+    use fleet_core::script::BlockPosition;
+    use fleet_core::script::menu::{ClickFate, ClickGate, SignDesk, SignSide, WindowId};
+
+    /// Two screens the session opened, in order.
+    fn screens() -> (ScreenId, ScreenId) {
+        let mut gate = ClickGate::new();
+        (gate.opened(WindowId::new(1)), gate.opened(WindowId::new(2)))
+    }
+
+    fn fate(screen: ScreenId) -> ClickResult {
+        ClickResult {
+            screen,
+            slot: Some(0),
+            fate: ClickFate::Ok,
+        }
+    }
+
+    fn editors() -> (SignEditor, SignEditor) {
+        let mut desk = SignDesk::new();
+        let at = BlockPosition { x: 1, y: 64, z: 2 };
+        (
+            desk.opened(at, SignSide::Front),
+            desk.opened(at, SignSide::Back),
+        )
+    }
+
+    #[test]
+    fn a_screens_events_are_delivered_in_order() {
+        let (sink, events) = joined();
+        let control = sink.control();
+        let (screen, _) = screens();
+        assert_eq!(control.menu(MenuReport::Opened(screen)), Delivery::Queued);
+        let opened = queued(&events);
+
+        for report in [
+            MenuReport::Updated(screen),
+            MenuReport::Clicked(fate(screen)),
+            MenuReport::Closed(screen),
+        ] {
+            assert_eq!(control.menu(report), Delivery::Queued, "{report:?}");
+        }
+
+        assert_eq!(opened, [SessionEvent::MenuOpened(screen)]);
+        assert_eq!(
+            queued(&events),
+            [
+                SessionEvent::MenuUpdated(screen),
+                SessionEvent::Clicked(fate(screen)),
+                SessionEvent::MenuClosed(screen),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_update_is_pending_once_a_screen_until_it_is_read() {
+        let (sink, events) = joined();
+        let control = sink.control();
+        let (screen, _) = screens();
+        control.menu(MenuReport::Opened(screen));
+
+        assert_eq!(control.menu(MenuReport::Updated(screen)), Delivery::Queued);
+        assert_eq!(
+            control.menu(MenuReport::Updated(screen)),
+            Delivery::AlreadyPending
+        );
+        let first = queued(&events);
+        assert_eq!(control.menu(MenuReport::Updated(screen)), Delivery::Queued);
+
+        assert_eq!(
+            first,
+            [
+                SessionEvent::MenuOpened(screen),
+                SessionEvent::MenuUpdated(screen)
+            ]
+        );
+        assert_eq!(queued(&events), [SessionEvent::MenuUpdated(screen)]);
+    }
+
+    #[test]
+    fn a_new_screen_drops_what_is_unread_of_the_screens_before_it() {
+        let (sink, events) = joined();
+        let control = sink.control();
+        let (old, new) = screens();
+        control.menu(MenuReport::Opened(old));
+        control.menu(MenuReport::Updated(old));
+
+        assert_eq!(control.menu(MenuReport::Opened(new)), Delivery::Queued);
+
+        assert_eq!(queued(&events), [SessionEvent::MenuOpened(new)]);
+    }
+
+    #[test]
+    fn the_close_of_a_screen_whose_opening_was_read_outlives_the_next_screen() {
+        let (sink, events) = joined();
+        let control = sink.control();
+        let (old, new) = screens();
+        control.menu(MenuReport::Opened(old));
+        assert_eq!(queued(&events), [SessionEvent::MenuOpened(old)]);
+        control.menu(MenuReport::Updated(old));
+        control.menu(MenuReport::Closed(old));
+
+        control.menu(MenuReport::Opened(new));
+
+        assert_eq!(
+            queued(&events),
+            [SessionEvent::MenuClosed(old), SessionEvent::MenuOpened(new)]
+        );
+    }
+
+    #[test]
+    fn a_screen_that_closes_before_its_opening_was_read_takes_it_along() {
+        let (sink, events) = joined();
+        let control = sink.control();
+        let (screen, _) = screens();
+        control.menu(MenuReport::Opened(screen));
+        control.menu(MenuReport::Updated(screen));
+
+        assert_eq!(control.menu(MenuReport::Closed(screen)), Delivery::Ignored);
+
+        assert_eq!(queued(&events), []);
+    }
+
+    #[test]
+    fn a_fate_is_unread_until_the_events_deliver_it_and_is_never_dropped() {
+        let (sink, events) = joined();
+        let control = sink.control();
+        let (old, new) = screens();
+        control.menu(MenuReport::Opened(old));
+        assert_eq!(queued(&events), [SessionEvent::MenuOpened(old)]);
+        control.menu(MenuReport::Clicked(fate(old)));
+
+        let before = control.fate_unread();
+        control.menu(MenuReport::Opened(new));
+        let delivered = queued(&events);
+
+        assert!(before);
+        assert!(!control.fate_unread());
+        assert_eq!(
+            delivered,
+            [
+                SessionEvent::Clicked(fate(old)),
+                SessionEvent::MenuOpened(new)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_new_sign_editor_replaces_one_unread() {
+        let (sink, events) = joined();
+        let control = sink.control();
+        let (first, second) = editors();
+
+        control.menu(MenuReport::SignOpened(first));
+        assert_eq!(
+            control.menu(MenuReport::SignOpened(second)),
+            Delivery::Queued
+        );
+
+        assert_eq!(queued(&events), [SessionEvent::SignOpened(second)]);
+    }
+
+    #[test]
+    fn a_flood_of_screens_never_fills_the_queue() {
+        let (sink, events) = joined();
+        let control = sink.control();
+        let mut gate = ClickGate::new();
+        let mut desk = SignDesk::new();
+        let at = BlockPosition { x: 0, y: 0, z: 0 };
+
+        for n in 0..10_000 {
+            let screen = gate.opened(WindowId::new(n % 100 + 1));
+            control.menu(MenuReport::Opened(screen));
+            control.menu(MenuReport::Updated(screen));
+            control.menu(MenuReport::SignOpened(desk.opened(at, SignSide::Front)));
+            if n % 2 == 0 {
+                control.menu(MenuReport::Closed(screen));
+            }
+        }
+
+        let left = queued(&events);
+        assert!(!left.is_empty() && left.len() <= 3, "{left:?}");
+    }
+
+    #[test]
+    fn nothing_of_a_screen_is_reported_before_the_join_or_after_the_end() {
+        let (sink, events, ..) = start(8);
+        let control = sink.control();
+        let (screen, _) = screens();
+
+        let before = control.menu(MenuReport::Opened(screen));
+        apply(&sink, Mapped::Spawn);
+        sink.terminate(kicked());
+        let after = control.menu(MenuReport::Opened(screen));
+
+        assert_eq!(before, Delivery::Ignored);
+        assert_eq!(after, Delivery::SessionEnded);
+        assert!(
+            !queued(&events).contains(&SessionEvent::MenuOpened(screen)),
+            "no screen reported"
+        );
     }
 }

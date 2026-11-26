@@ -9,7 +9,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use azalea::Client;
 use fleet_core::chat::ChatMessage;
 use fleet_core::id::BotId;
-use fleet_core::mc::{Guards, Liveness, Observation, SessionError, SessionHandle};
+use fleet_core::mc::{
+    Guards, Liveness, MenuCommand, MenuError, Observation, SessionError, SessionHandle,
+};
 use fleet_core::mode::GameAction;
 use tokio::sync::{oneshot, watch};
 use tokio::time;
@@ -269,6 +271,17 @@ impl SessionHandle for McSession {
 
     fn set_guards(&self, guards: Guards) -> impl Future<Output = Result<(), SessionError>> + Send {
         self.call(move |client| script::set_guards(client, guards))
+    }
+
+    /// Decided on the host thread, against the screen and the sign
+    /// editor as they are at the moment of sending (ADR-0050, ADR-0051).
+    fn menu(&self, command: MenuCommand) -> impl Future<Output = Result<(), MenuError>> + Send {
+        let session = self.clone();
+        async move {
+            session
+                .call(move |client| Ok(crate::menu::command(client, command)))
+                .await?
+        }
     }
 
     fn respawn(&self) -> impl Future<Output = Result<(), SessionError>> + Send {
