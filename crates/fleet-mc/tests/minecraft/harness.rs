@@ -181,6 +181,23 @@ impl Server {
         String::from_utf8_lossy(&out).into_owned()
     }
 
+    /// Freezes the server's container, or thaws it (`docker pause` and
+    /// `unpause`): a server that answers nothing, whatever the bot sends,
+    /// for a fate that must come late or never.
+    #[cfg(feature = "fault-injection")]
+    pub(crate) fn frozen(&self, frozen: bool) {
+        let verb = if frozen { "pause" } else { "unpause" };
+        let done = std::process::Command::new("docker")
+            .args([verb, self.container.id()])
+            .output()
+            .expect("docker didn't run");
+        assert!(
+            done.status.success(),
+            "docker {verb} failed: {}",
+            String::from_utf8_lossy(&done.stderr)
+        );
+    }
+
     /// The server's address, as a session connects to it.
     pub(crate) fn address(&self) -> ServerAddress {
         format!("127.0.0.1:{}", self.port).parse().unwrap()

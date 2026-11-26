@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.util.Arrays;
 import java.util.Optional;
 
+import io.papermc.paper.event.packet.UncheckedSignChangeEvent;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
@@ -33,7 +34,7 @@ import org.bukkit.plugin.java.JavaPlugin;
  * <p>Every line it logs starts with {@code harness-}: {@code harness-click}, {@code harness-drag},
  * {@code harness-open}, {@code harness-close}, {@code harness-kick}, {@code harness-bought},
  * {@code harness-refused}, {@code harness-listed}, {@code harness-expired}, {@code
- * harness-collected} and {@code harness-sold}.
+ * harness-collected}, {@code harness-sold}, {@code harness-sign-open} and {@code harness-sign}.
  */
 public final class HarnessPlugin extends JavaPlugin implements Listener {
     private final Market market = new Market();
@@ -61,7 +62,7 @@ public final class HarnessPlugin extends JavaPlugin implements Listener {
         return '"' + plain(view.title()) + '"';
     }
 
-    private void log(String what) {
+    void log(String what) {
         getLogger().info(what + " tick=" + Bukkit.getCurrentTick() + " nanos=" + System.nanoTime());
     }
 
@@ -113,6 +114,11 @@ public final class HarnessPlugin extends JavaPlugin implements Listener {
     @EventHandler
     public void onClose(InventoryCloseEvent event) {
         menus.onClose(event);
+    }
+
+    @EventHandler
+    public void onSign(UncheckedSignChangeEvent event) {
+        menus.onSign(event);
     }
 
     /** Buys listing `id` for `buyer`, the confirm button's and `harness buy`'s one way. */
@@ -179,8 +185,8 @@ public final class HarnessPlugin extends JavaPlugin implements Listener {
             try {
                 menus.openAuction(player, Math.max(0, Integer.parseInt(args[0]) - 1));
             } catch (NumberFormatException notAPage) {
-                player.sendMessage(Component.text("Usage: /ah [page] | /ah sell <price> | /ah expired",
-                        NamedTextColor.RED));
+                // Anything else is a search, as on the user's server.
+                menus.openAuction(player, 0, String.join(" ", args));
             }
         }
     }
@@ -203,8 +209,8 @@ public final class HarnessPlugin extends JavaPlugin implements Listener {
      * The tests' controls, from the console or RCON only: {@code money <player> <amount>}, {@code
      * balance <player>}, {@code list <seller> <price> <item>} (the item in the game's own syntax,
      * components included), {@code listings}, {@code expire <id>}, {@code expiry <seconds>}, {@code
-     * buy <online player> <id>}, {@code price <key> <amount>}, {@code open <player> ah|sell|expired}
-     * and {@code reset}.
+     * buy <online player> <id>}, {@code price <key> <amount>}, {@code open <player> ah|sell|expired},
+     * {@code sign <player>} (a sign editor nobody asked for) and {@code reset}.
      */
     private boolean harness(CommandSender sender, String[] args) {
         if (!(sender instanceof ConsoleCommandSender) && !(sender instanceof RemoteConsoleCommandSender)) {
@@ -290,11 +296,20 @@ public final class HarnessPlugin extends JavaPlugin implements Listener {
                         sender.sendMessage("opened");
                     }
                 }
+                case "sign" -> {
+                    Player player = Bukkit.getPlayerExact(args[1]);
+                    if (player == null) {
+                        sender.sendMessage("not online");
+                    } else {
+                        menus.openSign(player);
+                        sender.sendMessage("sign opened");
+                    }
+                }
                 case "reset" -> {
                     market.reset();
                     sender.sendMessage("reset");
                 }
-                default -> sender.sendMessage("harness money|balance|list|listings|expire|expiry|buy|price|open|reset");
+                default -> sender.sendMessage("harness money|balance|list|listings|expire|expiry|buy|price|open|sign|reset");
             }
         } catch (RuntimeException wrong) {
             sender.sendMessage("error " + wrong.getClass().getSimpleName() + ": " + wrong.getMessage());

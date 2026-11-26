@@ -2,15 +2,25 @@ package afkfleet.harness;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
+
+import io.papermc.paper.event.packet.UncheckedSignChangeEvent;
+import io.papermc.paper.math.BlockPosition;
+import io.papermc.paper.math.Position;
 
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.block.sign.Side;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
@@ -19,6 +29,7 @@ import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.PotionMeta;
 
 /**
  * The harness's menus, each a chest screen the plugin owns, as a server's auction and sell
@@ -26,9 +37,15 @@ import org.bukkit.inventory.meta.ItemMeta;
  *
  * <ul>
  *   <li><b>Auction House</b> (54 slots): listings in slots 0 to 44, each the item with its price,
- *       seller and time left added to its lore; previous page (45), the page (48), expired
- *       listings (49), refresh (50) and next page (53). A page turns and a refresh redraw the
- *       same screen; a listing opens Confirm Purchase on the next tick.
+ *       seller and time left added to its lore; previous page (45), Create (47), the page (48),
+ *       expired listings (49), refresh (50) and next page (53). A page turns and a refresh redraw
+ *       the same screen; a listing opens Confirm Purchase on the next tick. {@code /ah <query>}
+ *       shows only the listings whose item, name or potion has the query in it.
+ *   <li><b>The user's server's flow</b> (Plan.md P16.11, ADR-0036 M17): Create opens <b>Create
+ *       Listing</b> (27 slots, cancel at 22), where a click on an item in the player's own inventory
+ *       selects it; <b>Confirm Item</b> (confirm 11, the item 13, cancel 15); then a sign editor
+ *       the plugin opens, whose first line is the price; then the final <b>Confirm Listing</b>.
+ *       Each screen opens on the tick after its click.
  *   <li><b>Confirm Purchase</b> and <b>Confirm Listing</b> (27 slots): confirm (11), the item
  *       (13), cancel (15).
  *   <li><b>Expired Listings</b> (54 slots): the player's expired items in 0 to 44, back (49); a
@@ -63,6 +80,8 @@ final class Menus {
 
     static final class AuctionScreen extends Screen {
         int page;
+        /** What a search asked for; {@code null} for every listing. */
+        String query;
         /** The listing in each slot as drawn. */
         final Map<Integer, Integer> listingAt = new java.util.HashMap<>();
     }
@@ -79,16 +98,66 @@ final class Menus {
 
     static final class ExpiredScreen extends Screen {}
 
+    static final class CreateListing extends Screen {}
+
+    static final class ConfirmItem extends Screen {
+        ItemStack item;
+        int slot;
+    }
+
+    /** A listing waiting for its price on the sign the plugin opened. */
+    record Draft(ItemStack item, int slot, BlockPosition sign) {}
+
+    /** Each player's listing waiting for its price. */
+    private final Map<UUID, Draft> drafts = new HashMap<>();
+
     static final class SellScreen extends Screen {}
 
     // --- Opening -------------------------------------------------------------------------------
 
     void openAuction(Player player, int page) {
+        openAuction(player, page, null);
+    }
+
+    /** The auction house, only with the listings that match {@code query} when it's set. */
+    void openAuction(Player player, int page, String query) {
         AuctionScreen screen = new AuctionScreen();
         screen.inventory = Bukkit.createInventory(screen, 54, Component.text("Auction House"));
         screen.page = page;
+        screen.query = query;
         drawAuction(screen);
         player.openInventory(screen.inventory);
+    }
+
+    private void openCreate(Player player) {
+        CreateListing screen = new CreateListing();
+        screen.inventory = Bukkit.createInventory(screen, 27, Component.text("Create Listing"));
+        for (int slot = 0; slot < 27; slot++) {
+            screen.inventory.setItem(slot, filler());
+        }
+        screen.inventory.setItem(13, button(Material.PAPER, "Select an item", NamedTextColor.YELLOW,
+                "Click an item in your inventory"));
+        screen.inventory.setItem(22, button(Material.RED_STAINED_GLASS_PANE, "Cancel", NamedTextColor.RED));
+        player.openInventory(screen.inventory);
+    }
+
+    private void openConfirmItem(Player player, ItemStack item, int slot) {
+        ConfirmItem screen = new ConfirmItem();
+        screen.inventory = Bukkit.createInventory(screen, 27, Component.text("Confirm Item"));
+        screen.item = item;
+        screen.slot = slot;
+        drawConfirm(screen.inventory, item);
+        player.openInventory(screen.inventory);
+    }
+
+    /** Opens a sign editor for {@code player} at a place below their feet; nothing is built there. */
+    BlockPosition openSign(Player player) {
+        Location at = player.getLocation();
+        BlockPosition sign = Position.block(at.getBlockX(), at.getBlockY() - 3, at.getBlockZ());
+        player.openVirtualSign(sign, Side.FRONT);
+        plugin.log("harness-sign-open player=" + player.getName() + " at=" + sign.blockX() + ","
+                + sign.blockY() + "," + sign.blockZ());
+        return sign;
     }
 
     void openExpired(Player player) {
@@ -109,19 +178,24 @@ final class Menus {
         player.openInventory(screen.inventory);
     }
 
-    /** `/ah sell <price>`: the item in the player's hand, to be confirmed. */
+    /** {@code /ah sell <price>}: the item in the player's hand, to be confirmed. */
     void openConfirmListing(Player player, BigDecimal price) {
         ItemStack hand = player.getInventory().getItemInMainHand();
         if (hand.getType().isAir()) {
             player.sendMessage(Component.text("Hold the item you want to sell.", NamedTextColor.RED));
             return;
         }
+        openConfirmListing(player, price, hand.clone(), player.getInventory().getHeldItemSlot());
+    }
+
+    /** The final confirm of a listing of {@code item}, which is in slot {@code slot} of the inventory. */
+    private void openConfirmListing(Player player, BigDecimal price, ItemStack item, int slot) {
         ConfirmListing screen = new ConfirmListing();
         screen.inventory = Bukkit.createInventory(screen, 27, Component.text("Confirm Listing"));
         screen.price = price;
-        screen.inHand = hand.clone();
-        screen.handSlot = player.getInventory().getHeldItemSlot();
-        drawConfirm(screen.inventory, withLore(hand, List.of(
+        screen.inHand = item;
+        screen.handSlot = slot;
+        drawConfirm(screen.inventory, withLore(item, List.of(
                 Component.text("Price: " + Market.money(price), NamedTextColor.GOLD))));
         player.openInventory(screen.inventory);
     }
@@ -140,7 +214,9 @@ final class Menus {
         Inventory inventory = screen.inventory;
         inventory.clear();
         screen.listingAt.clear();
-        List<Market.Listing> listings = market.listings();
+        List<Market.Listing> listings = market.listings().stream()
+                .filter(listing -> screen.query == null || matches(listing.item(), screen.query))
+                .toList();
         int pages = Math.max(1, (listings.size() + PAGE - 1) / PAGE);
         screen.page = Math.max(0, Math.min(screen.page, pages - 1));
         int first = screen.page * PAGE;
@@ -155,6 +231,8 @@ final class Menus {
         if (screen.page > 0) {
             inventory.setItem(45, button(Material.ARROW, "Previous page", NamedTextColor.YELLOW));
         }
+        inventory.setItem(47, button(Material.EMERALD, "Create", NamedTextColor.GREEN,
+                "Start a new listing"));
         inventory.setItem(48, button(Material.PAPER, "Page " + (screen.page + 1) + " of " + pages,
                 NamedTextColor.WHITE));
         Player viewer = viewer(inventory);
@@ -165,6 +243,17 @@ final class Menus {
         if (screen.page < pages - 1) {
             inventory.setItem(53, button(Material.ARROW, "Next page", NamedTextColor.YELLOW));
         }
+    }
+
+    /** Whether {@code item}'s kind, its name or its potion has {@code query} in it, in any case. */
+    private static boolean matches(ItemStack item, String query) {
+        String wanted = query.toLowerCase(Locale.ROOT);
+        StringBuilder text = new StringBuilder(item.getType().getKey().toString());
+        text.append(' ').append(PlainTextComponentSerializer.plainText().serialize(item.effectiveName()));
+        if (item.getItemMeta() instanceof PotionMeta potion && potion.hasBasePotionType()) {
+            text.append(' ').append(potion.getBasePotionType().getKey());
+        }
+        return text.toString().toLowerCase(Locale.ROOT).contains(wanted);
     }
 
     private void drawExpired(ExpiredScreen screen, Player player) {
@@ -241,7 +330,7 @@ final class Menus {
 
     // --- Clicks --------------------------------------------------------------------------------
 
-    /** Whether `holder` is one of the harness's screens. */
+    /** Whether {@code holder} is one of the harness's screens. */
     static boolean ours(InventoryHolder holder) {
         return holder instanceof Screen;
     }
@@ -264,6 +353,17 @@ final class Menus {
             return;
         }
         event.setCancelled(true);
+        if (holder instanceof CreateListing && !top && raw >= 0) {
+            // The player's own inventory: the item clicked is the one to list.
+            ItemStack clicked = event.getCurrentItem();
+            if (clicked == null || clicked.getType().isAir()) {
+                return;
+            }
+            ItemStack item = clicked.clone();
+            int slot = event.getSlot();
+            Bukkit.getScheduler().runTask(plugin, () -> openConfirmItem(player, item, slot));
+            return;
+        }
         if (!top) {
             return;
         }
@@ -272,6 +372,12 @@ final class Menus {
             case ConfirmPurchase screen -> clickConfirmPurchase(player, screen, raw);
             case ConfirmListing screen -> clickConfirmListing(player, screen, raw);
             case ExpiredScreen screen -> clickExpired(player, screen, raw);
+            case CreateListing screen -> {
+                if (raw == 22) {
+                    Bukkit.getScheduler().runTask(plugin, () -> player.closeInventory());
+                }
+            }
+            case ConfirmItem screen -> clickConfirmItem(player, screen, raw);
             default -> {}
         }
     }
@@ -326,9 +432,49 @@ final class Menus {
                 drawAuction(screen);
             }
             case 50 -> drawAuction(screen);
+            case 47 -> Bukkit.getScheduler().runTask(plugin, () -> openCreate(player));
             case 49 -> Bukkit.getScheduler().runTask(plugin, () -> openExpired(player));
             default -> {}
         }
+    }
+
+    private void clickConfirmItem(Player player, ConfirmItem screen, int slot) {
+        if (slot == 11) {
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                player.closeInventory();
+                BlockPosition sign = openSign(player);
+                drafts.put(player.getUniqueId(), new Draft(screen.item, screen.slot, sign));
+            });
+        } else if (slot == 15) {
+            Bukkit.getScheduler().runTask(plugin, () -> player.closeInventory());
+        }
+    }
+
+    /**
+     * A sign's lines came back. Every sign the plugin opens is virtual, so each comes here; the
+     * one of a listing waiting for its price gives it with its first line.
+     */
+    void onSign(UncheckedSignChangeEvent event) {
+        event.setCancelled(true);
+        Player player = event.getPlayer();
+        List<String> lines = event.lines().stream()
+                .map(line -> PlainTextComponentSerializer.plainText().serialize(line))
+                .toList();
+        plugin.log("harness-sign player=" + player.getName() + " lines=" + lines);
+        Draft draft = drafts.get(player.getUniqueId());
+        BlockPosition at = event.getEditedBlockPosition();
+        if (draft == null || at.blockX() != draft.sign().blockX() || at.blockY() != draft.sign().blockY()
+                || at.blockZ() != draft.sign().blockZ()) {
+            return;
+        }
+        drafts.remove(player.getUniqueId());
+        Optional<BigDecimal> price = lines.isEmpty() ? Optional.empty() : Market.parsePrice(lines.get(0).trim());
+        if (price.isEmpty()) {
+            player.sendMessage(Component.text("That's not a price.", NamedTextColor.RED));
+            return;
+        }
+        Bukkit.getScheduler().runTask(plugin,
+                () -> openConfirmListing(player, price.get(), draft.item(), draft.slot()));
     }
 
     private void clickConfirmPurchase(Player player, ConfirmPurchase screen, int slot) {
