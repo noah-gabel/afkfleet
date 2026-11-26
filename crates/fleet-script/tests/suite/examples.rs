@@ -1,5 +1,6 @@
-//! The four examples, compiled and run against the fake world as written
-//! (P15.8, P15.31; ADR-0036, D4).
+//! The examples, compiled and run against the fake world as written
+//! (P15.8, P15.31, P16.12; ADR-0036, D4). The menu examples' runs are
+//! `menu_examples`.
 
 use core::time::Duration;
 use std::sync::Arc;
@@ -45,7 +46,12 @@ fn every_example_is_a_scripted_mode_that_compiles() {
             "afk_farm",
             "minecart_farm",
             "cobblestone_generator",
-            "balance"
+            "balance",
+            "sell_macro",
+            "auction_scan",
+            "farm_that_sells",
+            "auction_lister",
+            "auction_lister_anvil"
         ]
     );
     for example in &EXAMPLES {

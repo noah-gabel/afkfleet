@@ -11,7 +11,7 @@
 //! all read the description the engine is tested against, never a list of
 //! the UI's own. It never crosses the HTTP API or an IPC call.
 
-use fleet_core::script::{Script, ScriptError};
+use fleet_core::script::{Script, ScriptApiLevel, ScriptError};
 use fleet_script::{EXAMPLES, MemberKind};
 use serde::Serialize;
 use ts_rs::TS;
@@ -77,11 +77,22 @@ impl From<MemberKind> for ScriptApiMemberKind {
     fn from(kind: MemberKind) -> Self {
         match kind {
             MemberKind::Method => Self::Method,
-            MemberKind::Property => Self::Property,
+            // A map's field reads as a property does.
+            MemberKind::Property | MemberKind::Field => Self::Property,
             MemberKind::Hook => Self::Hook,
         }
     }
 }
+
+/// The newest API level the editor offers: level 1 until the server
+/// stamps the level a script needs, with the wire at level 2 (Plan.md
+/// P16.15). Until then a mode is saved at level 1, so the editor offers
+/// nothing a save would refuse (ADR-0052).
+const OFFERED: ScriptApiLevel = ScriptApiLevel::V1;
+
+/// How many of the reasons, in fleet-core's order, a level-1 script can
+/// meet: the first ten (Phase 15's).
+const LEVEL_1_REASONS: usize = 10;
 
 /// One of the reference's examples: a complete scripted mode to start from.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -96,7 +107,9 @@ pub struct ScriptExample {
 }
 
 impl ScriptApi {
-    /// fleet-script's description, its reasons and its examples.
+    /// fleet-script's description, its reasons and its examples, as far as
+    /// [`OFFERED`] goes: an object, a member, a reason and an example of a
+    /// newer level are left out.
     ///
     /// # Errors
     /// [`ScriptError`] if an example breaks one of fleet-core's rules for a
@@ -105,12 +118,14 @@ impl ScriptApi {
     pub fn describe() -> Result<Self, ScriptError> {
         let objects = fleet_script::API
             .iter()
+            .filter(|object| object.level <= OFFERED)
             .map(|object| ScriptApiObject {
                 name: object.name.to_owned(),
                 summary: object.summary.to_owned(),
                 members: object
                     .members
                     .iter()
+                    .filter(|member| member.level <= OFFERED)
                     .map(|member| ScriptApiMember {
                         name: member.name.to_owned(),
                         kind: member.kind.into(),
@@ -123,6 +138,7 @@ impl ScriptApi {
             .collect();
         let examples = EXAMPLES
             .iter()
+            .filter(|example| example.draft().api <= OFFERED.get())
             .map(|example| {
                 let script = Script::try_from(example.draft())?;
                 Ok(ScriptExample {
@@ -136,6 +152,7 @@ impl ScriptApi {
             objects,
             reasons: fleet_script::reasons()
                 .into_iter()
+                .take(LEVEL_1_REASONS)
                 .map(str::to_owned)
                 .collect(),
             examples,
@@ -148,11 +165,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn it_holds_every_object_and_member_of_fleet_scripts_description_in_its_order() {
+    fn it_holds_every_level_1_object_and_member_of_fleet_scripts_description_in_its_order() {
         let api = ScriptApi::describe().unwrap();
+        let offered: Vec<&fleet_script::Object> = fleet_script::API
+            .iter()
+            .filter(|object| object.level == ScriptApiLevel::V1)
+            .collect();
 
-        assert_eq!(api.objects.len(), fleet_script::API.len());
-        for (shown, object) in api.objects.iter().zip(fleet_script::API) {
+        assert_eq!(api.objects.len(), offered.len());
+        for (shown, object) in api.objects.iter().zip(offered) {
             assert_eq!(shown.name, object.name);
             assert_eq!(shown.summary, object.summary);
             let members: Vec<(&str, &str, &str, Option<&str>)> = shown
@@ -170,6 +191,7 @@ mod tests {
             let described: Vec<(&str, &str, &str, Option<&str>)> = object
                 .members
                 .iter()
+                .filter(|member| member.level == ScriptApiLevel::V1)
                 .map(|member| (member.name, member.signature, member.summary, member.object))
                 .collect();
             assert_eq!(members, described, "{}", object.name);
@@ -190,13 +212,45 @@ mod tests {
             ScriptApiMemberKind::from(MemberKind::Hook),
             ScriptApiMemberKind::Hook
         );
+        assert_eq!(
+            ScriptApiMemberKind::from(MemberKind::Field),
+            ScriptApiMemberKind::Property
+        );
+    }
+
+    #[test]
+    fn level_2_stays_out_of_the_editor_until_the_server_stamps_the_level() {
+        let api = ScriptApi::describe().unwrap();
+        let names: Vec<&str> = api
+            .objects
+            .iter()
+            .map(|object| object.name.as_str())
+            .collect();
+
+        for newer in ["inventory", "menu", "sign", "clock", "slot", "time"] {
+            assert!(!names.contains(&newer), "{newer}");
+        }
+        let hooks = api
+            .objects
+            .iter()
+            .find(|object| object.name == "hooks")
+            .unwrap();
+        assert!(hooks.members.iter().all(|hook| hook.name != "on_menu_open"));
+        let bot = api
+            .objects
+            .iter()
+            .find(|object| object.name == "bot")
+            .unwrap();
+        assert!(bot.members.iter().all(|member| member.name != "name"));
+        assert_eq!(api.reasons.len(), 10);
+        assert_eq!(api.reasons.last().map(String::as_str), Some("no_command"));
     }
 
     #[test]
     fn it_holds_the_reasons_and_every_example_as_an_editor_reads_its_mode() {
         let api = ScriptApi::describe().unwrap();
 
-        assert_eq!(api.reasons, fleet_script::reasons());
+        assert_eq!(api.reasons, fleet_script::reasons()[..LEVEL_1_REASONS]);
         let ids: Vec<&str> = api
             .examples
             .iter()
@@ -211,7 +265,11 @@ mod tests {
                 "balance"
             ]
         );
-        for (shown, example) in api.examples.iter().zip(EXAMPLES) {
+        for (shown, example) in api
+            .examples
+            .iter()
+            .zip(EXAMPLES.iter().filter(|example| example.draft().api == 1))
+        {
             assert_eq!(shown.title, example.title);
             assert_eq!(shown.script.source.as_str(), example.source);
             assert!(

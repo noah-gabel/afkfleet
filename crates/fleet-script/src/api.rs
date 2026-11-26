@@ -1,6 +1,7 @@
 //! The game objects a script acts and reads through: `keys`, `mouse`,
 //! `look`, `hotbar`, `vehicle`, `chat`, `timer`, `random`, `log`, `bot` and
-//! `world` (P15.8, P15.31; ADR-0036, D4).
+//! `world` (P15.8, P15.31; ADR-0036, D4), and from API level 2 `inventory`,
+//! `menu`, `sign` and `clock` (P16.12, P16.21; ADR-0052).
 //!
 //! **Their functions are one module, built once and shared by every
 //! engine.** A function holds no state: it gets a small handle that points
@@ -29,7 +30,7 @@ use std::sync::LazyLock;
 use fleet_core::mode::HotbarSlot;
 use fleet_core::script::{
     BlockPosition, EntityFact, HeldItem, Identifier, Input, Key, LookingAt, MouseButton, Position,
-    Refusal, Snapshot, TimerName,
+    Refusal, ScriptApiLevel, Snapshot, TimerName,
 };
 use rhai::{
     Dynamic, EvalAltResult, FLOAT, FuncRegistration, INT, Map, Module, Position as At, Shared,
@@ -41,11 +42,25 @@ use crate::turn::{Answer, HoldLength, SharedTurn, Value, lock};
 pub(crate) mod describe;
 pub(crate) mod reference;
 
-/// The game objects' names, in the reference's order. With `state`, these
-/// are the names a script can't give a variable.
+/// API level 1's game objects, in the reference's order. With `state`,
+/// these are the names no script can give a variable.
 pub(crate) const OBJECTS: [&str; 11] = [
     "keys", "mouse", "look", "hotbar", "vehicle", "chat", "timer", "random", "log", "bot", "world",
 ];
+
+/// API level 2's game objects (ADR-0036, D13). A level-1 script may still
+/// use these names for its own.
+pub(crate) const OBJECTS_2: [&str; 4] = ["inventory", "menu", "sign", "clock"];
+
+/// The game objects of a script at `level`.
+pub(crate) fn objects(level: ScriptApiLevel) -> impl Iterator<Item = &'static str> {
+    let newer: &[&str] = if level >= ScriptApiLevel::V2 {
+        &OBJECTS_2
+    } else {
+        &[]
+    };
+    OBJECTS.into_iter().chain(newer.iter().copied())
+}
 
 /// What a function of the API returns to Rhai.
 type Returns<T> = Result<T, Box<EvalAltResult>>;
@@ -102,6 +117,10 @@ pub(crate) fn object(name: &str, turn: &SharedTurn) -> Option<Dynamic> {
         "log" => Dynamic::from(Log(turn)),
         "bot" => Dynamic::from(Bot(turn)),
         "world" => Dynamic::from(World(turn)),
+        "inventory" => Dynamic::from(menu::Inventory(turn)),
+        "menu" => Dynamic::from(menu::Menu(turn)),
+        "sign" => Dynamic::from(menu::Sign(turn)),
+        "clock" => Dynamic::from(clock::Clock(turn)),
         _ => return None,
     })
 }
@@ -272,7 +291,7 @@ fn fact<T>(turn: &SharedTurn, otherwise: T, read: impl FnOnce(&Snapshot) -> T) -
 macro_rules! method {
     ($module:expr, $registered:expr, $object:literal, $name:literal, $function:expr) => {{
         $registered.push(($object, $name));
-        FuncRegistration::new($name)
+        ::rhai::FuncRegistration::new($name)
             .in_global_namespace()
             // Callable on what the resolver hands out, which is constant.
             .with_purity(true)
@@ -286,7 +305,7 @@ macro_rules! method {
 macro_rules! property {
     ($module:expr, $registered:expr, $object:literal, $name:literal, $function:expr) => {{
         $registered.push(($object, $name));
-        FuncRegistration::new_getter($name)
+        ::rhai::FuncRegistration::new_getter($name)
             .in_global_namespace()
             .with_purity(true)
             .with_volatility(true)
@@ -297,6 +316,9 @@ macro_rules! property {
 /// Each object's members as registered: the object's name and the
 /// member's.
 type Registered = Vec<(&'static str, &'static str)>;
+
+mod clock;
+mod menu;
 
 /// The API's functions, and each object's members as registered.
 fn build() -> (Module, Registered) {
@@ -329,6 +351,8 @@ fn build() -> (Module, Registered) {
     register_log(m, r);
     register_bot(m, r);
     register_world(m, r);
+    menu::register(m, r);
+    clock::register(m, r);
     (module, registered)
 }
 
@@ -649,6 +673,13 @@ fn register_bot(m: &mut Module, r: &mut Registered) {
         Dynamic::UNIT,
         |facts| facts.bot().held.as_ref().map_or(Dynamic::UNIT, item)
     ));
+    property!(m, r, "bot", "name", |bot: &mut Bot| -> Returns<String> {
+        let turn = lock(&bot.0);
+        if turn.level() < ScriptApiLevel::V2 {
+            return Err(misuse(Misuse::NeedsLevel2).into());
+        }
+        Ok(turn.name().to_owned())
+    });
     property!(m, r, "bot", "looking_at", |bot: &mut Bot| fact(
         &bot.0,
         Dynamic::UNIT,
@@ -740,7 +771,7 @@ mod tests {
                 object
                     .members
                     .iter()
-                    .filter(|member| member.kind != MemberKind::Hook)
+                    .filter(|member| !matches!(member.kind, MemberKind::Hook | MemberKind::Field))
                     .map(|member| (object.name, member.name))
             })
             .collect();
@@ -750,7 +781,7 @@ mod tests {
 
     #[test]
     fn every_game_object_has_a_handle_and_a_description() {
-        for name in OBJECTS {
+        for name in OBJECTS.into_iter().chain(OBJECTS_2) {
             assert!(API.iter().any(|object| object.name == name), "{name}");
         }
         assert!(API.iter().any(|object| object.name == "input"));

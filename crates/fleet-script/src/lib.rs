@@ -44,6 +44,7 @@
 mod action;
 mod api;
 mod budget;
+mod clock;
 mod compile;
 mod convert;
 mod engine;

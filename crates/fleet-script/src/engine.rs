@@ -21,7 +21,7 @@
 
 use std::sync::LazyLock;
 
-use fleet_core::script::limits;
+use fleet_core::script::{ScriptApiLevel, limits};
 use rhai::packages::{
     ArithmeticPackage, BasicArrayPackage, BasicIteratorPackage, BasicMapPackage, BasicMathPackage,
     BasicStringPackage, LogicPackage, MoreStringPackage, Package,
@@ -33,11 +33,13 @@ use crate::api;
 /// The name of the state object.
 pub(crate) const STATE: &str = "state";
 
-/// The names a script can't give a variable or a parameter: the game
-/// objects and the state. A variable resolver answers for them, so one of
-/// the script's own would silently lose.
-pub(crate) fn is_reserved(name: &str) -> bool {
-    name == STATE || api::OBJECTS.contains(&name)
+/// The names a script at API level `level` can't give a variable or a
+/// parameter: the state and the game objects of its level. A variable
+/// resolver answers for them, so one of the script's own would silently
+/// lose. A newer level's objects stay a script's own names at an older one,
+/// so every script saved before them compiles as it did (ADR-0036, D13).
+pub(crate) fn is_reserved(name: &str, level: ScriptApiLevel) -> bool {
+    name == STATE || api::objects(level).any(|object| object == name)
 }
 
 /// The most variables alive at once in one function. Not in ADR-0036's
@@ -106,11 +108,11 @@ pub(crate) type Resolver =
     deprecated,
     reason = "Rhai marks on_var and on_def_var as volatile, not as deprecated; ADR-0036 D4, ADR-0040"
 )]
-fn bind(engine: &mut Engine, resolver: Option<Box<Resolver>>) {
-    engine.on_def_var(|_, definition, _| Ok(!is_reserved(definition.name())));
+fn bind(engine: &mut Engine, level: ScriptApiLevel, resolver: Option<Box<Resolver>>) {
+    engine.on_def_var(move |_, definition, _| Ok(!is_reserved(definition.name(), level)));
     if let Some(resolver) = resolver {
         engine.on_var(move |name, _, _: EvalContext<'_, '_, '_, '_, '_, '_>| {
-            if is_reserved(name) {
+            if is_reserved(name, level) {
                 resolver(name)
             } else {
                 Ok(None)
@@ -126,23 +128,25 @@ fn bind(engine: &mut Engine, resolver: Option<Box<Resolver>>) {
 /// its line. The optimizer is off because it would copy a placeholder into
 /// the program wherever it can prove a name constant, and the script would
 /// then act on the placeholder instead of its own bot (ADR-0040).
-pub(crate) fn compiler() -> Engine {
+pub(crate) fn compiler(level: ScriptApiLevel) -> Engine {
     let mut engine = sandbox();
     engine.set_strict_variables(true);
     engine.set_optimization_level(OptimizationLevel::None);
-    bind(&mut engine, None);
+    bind(&mut engine, level, None);
     engine
 }
 
-/// The engine one instance runs its hooks with: `resolver` answers for the
-/// game objects and the state, and `progress` sees every operation's
-/// number and may stop the hook with a token.
+/// The engine one instance of a script at API level `level` runs its hooks
+/// with: `resolver` answers for the game objects of that level and the
+/// state, and `progress` sees every operation's number and may stop the
+/// hook with a token.
 pub(crate) fn runner(
+    level: ScriptApiLevel,
     resolver: Box<Resolver>,
     progress: impl Fn(u64) -> Option<Dynamic> + Send + Sync + 'static,
 ) -> Engine {
     let mut engine = sandbox();
-    bind(&mut engine, Some(resolver));
+    bind(&mut engine, level, Some(resolver));
     engine.on_progress(progress);
     engine
 }
@@ -355,7 +359,7 @@ mod tests {
 
     #[test]
     fn the_compiler_knows_only_the_names_it_is_given() {
-        let engine = compiler();
+        let engine = compiler(ScriptApiLevel::V1);
         let mut scope = Scope::new();
         scope.push_constant("keys", 1_i64);
 
@@ -389,11 +393,11 @@ mod tests {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
-        let ast = compiler().compile(source).ok()?;
+        let ast = compiler(ScriptApiLevel::V1).compile(source).ok()?;
         let lowest = Arc::new(AtomicUsize::new(usize::MAX));
         let seen = Arc::clone(&lowest);
         // Where the stack is at every operation: the address of a local.
-        let engine = runner(Box::new(|_| Ok(None)), move |_| {
+        let engine = runner(ScriptApiLevel::V1, Box::new(|_| Ok(None)), move |_| {
             let here = 0_u8;
             seen.fetch_min((&raw const here).addr(), Ordering::Relaxed);
             None
@@ -508,14 +512,18 @@ mod tests {
     }
 
     #[test]
-    fn every_game_object_and_the_state_is_reserved() {
-        for name in [
-            "keys", "mouse", "look", "hotbar", "vehicle", "chat", "timer", "random", "log", "bot",
-            "world", "state",
-        ] {
-            assert!(is_reserved(name), "{name}");
+    fn every_game_object_of_a_level_and_the_state_is_reserved_there() {
+        for level in [ScriptApiLevel::V1, ScriptApiLevel::V2] {
+            assert!(is_reserved(STATE, level));
+            for name in api::OBJECTS {
+                assert!(is_reserved(name, level), "{name}");
+            }
+            assert!(!is_reserved("key", level));
+            assert!(!is_reserved("State", level));
         }
-        assert!(!is_reserved("key"));
-        assert!(!is_reserved("State"));
+        for name in api::OBJECTS_2 {
+            assert!(is_reserved(name, ScriptApiLevel::V2), "{name}");
+            assert!(!is_reserved(name, ScriptApiLevel::V1), "{name}");
+        }
     }
 }

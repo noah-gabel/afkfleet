@@ -3,7 +3,7 @@
 
 use std::sync::LazyLock;
 
-use fleet_core::script::{Hook, Script};
+use fleet_core::script::{Hook, Script, ScriptApiLevel};
 use fleet_core::text;
 use rhai::{AST, Dynamic, Engine, LexError, ParseError, ParseErrorType, Position, Scope};
 
@@ -12,8 +12,19 @@ use crate::engine::{self, STATE};
 use crate::error::{CompileError, CompileErrorKind, SourcePosition};
 use crate::scan::{Scanned, scan};
 
-/// The engine every script is compiled with.
-static COMPILER: LazyLock<Engine> = LazyLock::new(engine::compiler);
+/// The engine a level-1 script is compiled with.
+static COMPILER_1: LazyLock<Engine> = LazyLock::new(|| engine::compiler(ScriptApiLevel::V1));
+/// The engine a level-2 script is compiled with.
+static COMPILER_2: LazyLock<Engine> = LazyLock::new(|| engine::compiler(ScriptApiLevel::V2));
+
+/// The engine a script at `level` is compiled with.
+fn compiler(level: ScriptApiLevel) -> &'static Engine {
+    if level >= ScriptApiLevel::V2 {
+        &COMPILER_2
+    } else {
+        &COMPILER_1
+    }
+}
 
 /// What stands for a game object while a script is compiled: a value of a
 /// type of its own, so nothing a script does with it has a meaning.
@@ -66,7 +77,11 @@ impl Program {
 /// - it's Rhai as the sandbox has it: no `import`, no `eval`, no
 ///   anonymous function, within the limits for functions and nesting;
 ///   a text, an array or a map written out is within its limit too;
-/// - every name it uses is a variable of its own or a game object;
+/// - every name it uses is a variable of its own or a game object of the
+///   script's API level, and every hook it defines is of that level too
+///   (ADR-0036, D13): a newer level's name is the script's own to use, and
+///   used as an object or defined as a hook it's refused with the level it
+///   needs;
 /// - no variable, parameter, loop variable or caught error is named like
 ///   a game object or `state`;
 /// - a function whose name starts with `on_` is a hook, with that hook's
@@ -86,12 +101,13 @@ impl Program {
 /// caught error's name, and the functions in the order they're written.
 pub fn compile(script: &Script) -> Result<Program, CompileError> {
     let source = script.source().as_str();
+    let level = script.api();
     let mut scope = Scope::new();
-    for name in api::OBJECTS.into_iter().chain([STATE]) {
+    for name in api::objects(level).chain([STATE]) {
         scope.push_constant_dynamic(name, Dynamic::from(Placeholder));
     }
     let scanned = scan(source);
-    let ast = COMPILER
+    let ast = compiler(level)
         .compile_with_scope(&scope, source)
         .map_err(|error| before_raw_string(parse_error(&error), scanned.raw_string))?;
     if let Some(at) = scanned.raw_string {
@@ -112,7 +128,7 @@ pub fn compile(script: &Script) -> Result<Program, CompileError> {
     if let Some(binding) = scanned
         .bindings
         .iter()
-        .find(|binding| engine::is_reserved(&binding.name))
+        .find(|binding| engine::is_reserved(&binding.name, level))
     {
         return Err(CompileError {
             kind: CompileErrorKind::ReservedName {
@@ -121,7 +137,7 @@ pub fn compile(script: &Script) -> Result<Program, CompileError> {
             at: Some(binding.at),
         });
     }
-    let hooks = functions(&ast, &scanned)?;
+    let hooks = functions(&ast, &scanned, level)?;
     Ok(Program {
         ast,
         script: script.clone(),
@@ -130,7 +146,11 @@ pub fn compile(script: &Script) -> Result<Program, CompileError> {
 }
 
 /// Checks every function of the program and says which hooks it defines.
-fn functions(ast: &AST, scanned: &Scanned) -> Result<[bool; Hook::ALL.len()], CompileError> {
+fn functions(
+    ast: &AST,
+    scanned: &Scanned,
+    level: ScriptApiLevel,
+) -> Result<[bool; Hook::ALL.len()], CompileError> {
     // In the order they're written, so the first problem in the text is
     // the one reported; Rhai lists them in no order.
     let mut functions: Vec<_> = ast
@@ -152,7 +172,7 @@ fn functions(ast: &AST, scanned: &Scanned) -> Result<[bool; Hook::ALL.len()], Co
         if let Some(name) = function
             .params
             .iter()
-            .find(|parameter| engine::is_reserved(parameter))
+            .find(|parameter| engine::is_reserved(parameter, level))
         {
             return Err(CompileError {
                 kind: CompileErrorKind::ReservedName {
@@ -174,6 +194,15 @@ fn functions(ast: &AST, scanned: &Scanned) -> Result<[bool; Hook::ALL.len()], Co
                 at,
             });
         };
+        if hook.level() > level {
+            return Err(CompileError {
+                kind: CompileErrorKind::NeedsLevel {
+                    name: hook.name().to_owned(),
+                    level: hook.level().get(),
+                },
+                at,
+            });
+        }
         if function.params.len() != hook.parameters().len() {
             return Err(CompileError {
                 kind: CompileErrorKind::HookParameters {
@@ -223,6 +252,13 @@ pub(crate) fn message(text: &str, max_chars: usize) -> String {
 /// Rhai's parse error as ours.
 fn parse_error(error: &ParseError) -> CompileError {
     let kind = match error.err_type() {
+        // A newer level's object, in a script of an older one.
+        ParseErrorType::VariableUndefined(name) if api::OBJECTS_2.contains(&name.as_str()) => {
+            CompileErrorKind::NeedsLevel {
+                name: name.clone(),
+                level: ScriptApiLevel::V2.get(),
+            }
+        }
         ParseErrorType::VariableUndefined(name) => CompileErrorKind::UndefinedVariable {
             name: message(name, CompileError::MAX_MESSAGE_CHARS),
         },
@@ -267,6 +303,7 @@ mod tests {
             block_guard: Vec::new(),
             messages: Vec::new(),
             patterns: Vec::new(),
+            signs: Vec::new(),
         })
         .unwrap()
     }

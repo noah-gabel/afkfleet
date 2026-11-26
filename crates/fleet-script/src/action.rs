@@ -3,6 +3,7 @@
 use core::time::Duration;
 
 use fleet_core::chat::ChatMessage;
+use fleet_core::mc::MenuCommand;
 use fleet_core::mode::HotbarSlot;
 use fleet_core::script::{Ident, Identifier, Input, Position, Refusal, SendId};
 
@@ -39,11 +40,17 @@ pub enum Asked {
     Timer,
     /// A line for the log.
     Log,
+    /// A click, a screen's button, a trade or an anvil's name (Phase 16).
+    Click,
+    /// Opening the inventory or closing a screen.
+    Screen,
+    /// Answering a sign editor.
+    Sign,
 }
 
 impl Asked {
     /// Every kind, in a fixed order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 11] = [
         Self::Press,
         Self::Look,
         Self::Hotbar,
@@ -52,6 +59,9 @@ impl Asked {
         Self::Expect,
         Self::Timer,
         Self::Log,
+        Self::Click,
+        Self::Screen,
+        Self::Sign,
     ];
 
     /// The kind as a short name: for a metric's label and the script's
@@ -67,6 +77,9 @@ impl Asked {
             Self::Expect => "expect",
             Self::Timer => "timer",
             Self::Log => "log",
+            Self::Click => "click",
+            Self::Screen => "screen",
+            Self::Sign => "sign",
         }
     }
 }
@@ -169,6 +182,11 @@ pub enum Action {
         /// How long the window stays open.
         window: Duration,
     },
+    /// Something done in a screen or a sign editor (Phase 16): a click, a
+    /// screen's button, a trade or an anvil's name, a close, the inventory
+    /// opened, a sign answered. The session decides it again at the moment
+    /// of sending, and an action's fate comes back as `on_click`.
+    Menu(MenuCommand),
     /// A line for the script's log: one line, at most
     /// [`LOG_LINE_CHARS`](fleet_core::script::limits::LOG_LINE_CHARS)
     /// characters, nothing in it that could reorder or hide a line.

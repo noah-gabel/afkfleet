@@ -89,6 +89,17 @@ pub enum CompileErrorKind {
         "a raw string (`#\"…\"#`) isn't part of the language here; write the text in quotes or backticks"
     )]
     RawString,
+    /// A game object or a hook of a newer API level than the mode's: a
+    /// level-1 script naming `menu`, say (ADR-0036, D13). At level 1 the
+    /// names of level 2 are a script's own to use, so only one used as
+    /// the object or the hook is this.
+    #[error("`{name}` needs script API level {level}; this mode's is lower")]
+    NeedsLevel {
+        /// The name.
+        name: String,
+        /// The level it came with.
+        level: u8,
+    },
 }
 
 /// A script that can't be saved: what's wrong, and where (ADR-0036, D14).
@@ -179,6 +190,16 @@ pub enum Misuse {
     TapOnly,
     /// `hold_until_used` on anything but the right button.
     RightButtonOnly,
+    /// `sign.write` with a key the mode doesn't declare.
+    UnknownSign,
+    /// `clock.local` with a name that is no time zone of the IANA
+    /// database compiled in (Plan.md P16.21).
+    UnknownTimeZone,
+    /// A decimal mark that is neither `"."` nor `","`.
+    UnknownDecimalMark,
+    /// A member of API level 2 (`bot.name`, `number`) in a level-1 script
+    /// (ADR-0036, D13).
+    NeedsLevel2,
 }
 
 impl fmt::Display for Misuse {
@@ -191,6 +212,10 @@ impl fmt::Display for Misuse {
             }
             Self::TapOnly => "this key can only be tapped",
             Self::RightButtonOnly => "only the right button is held until the item is used",
+            Self::UnknownSign => "the mode declares no sign with this key",
+            Self::UnknownTimeZone => "there is no time zone of this name",
+            Self::UnknownDecimalMark => r#"a decimal mark is "." or ",""#,
+            Self::NeedsLevel2 => "this needs script API level 2; this mode's is 1",
         })
     }
 }

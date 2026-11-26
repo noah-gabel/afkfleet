@@ -5,7 +5,7 @@
 //! this; a test holds it equal to what the engine registers, so neither
 //! can name something a script doesn't have.
 
-use fleet_core::script::{Hook, Refusal};
+use fleet_core::script::{Hook, Refusal, ScriptApiLevel};
 
 /// What a member of an object is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -16,6 +16,9 @@ pub enum MemberKind {
     Property,
     /// A function a script defines and the runtime calls.
     Hook,
+    /// A field of a map the API hands a script (a slot's `count`): plain
+    /// data, read as a map's.
+    Field,
 }
 
 /// A member of an object.
@@ -33,6 +36,19 @@ pub struct Member {
     /// `keys`' keys and `mouse`'s buttons is an `input`, so the editor knows
     /// what follows `keys.forward.` (Plan.md P15.25).
     pub object: Option<&'static str>,
+    /// The API level it came with: a script below it can't use it
+    /// (ADR-0036, D13).
+    pub level: ScriptApiLevel,
+}
+
+impl Member {
+    /// The member, as API level 2's.
+    const fn v2(self) -> Self {
+        Self {
+            level: ScriptApiLevel::V2,
+            ..self
+        }
+    }
 }
 
 /// An object of the API, or a group of names that belong together.
@@ -45,6 +61,10 @@ pub struct Object {
     pub summary: &'static str,
     /// Its members.
     pub members: &'static [Member],
+    /// The API level it came with: a script below it doesn't have it
+    /// (ADR-0036, D13). An object of level 1 may still hold a member of
+    /// level 2 (`bot.name`).
+    pub level: ScriptApiLevel,
 }
 
 const fn method(name: &'static str, signature: &'static str, summary: &'static str) -> Member {
@@ -54,6 +74,7 @@ const fn method(name: &'static str, signature: &'static str, summary: &'static s
         signature,
         summary,
         object: None,
+        level: ScriptApiLevel::V1,
     }
 }
 
@@ -64,6 +85,19 @@ const fn property(name: &'static str, summary: &'static str) -> Member {
         signature: name,
         summary,
         object: None,
+        level: ScriptApiLevel::V1,
+    }
+}
+
+/// A field of a map the API hands a script, at API level 2.
+const fn field(name: &'static str, summary: &'static str) -> Member {
+    Member {
+        name,
+        kind: MemberKind::Field,
+        signature: name,
+        summary,
+        object: None,
+        level: ScriptApiLevel::V2,
     }
 }
 
@@ -75,6 +109,7 @@ const fn input(name: &'static str, summary: &'static str) -> Member {
         signature: name,
         summary,
         object: Some("input"),
+        level: ScriptApiLevel::V1,
     }
 }
 
@@ -85,6 +120,7 @@ const fn hook(hook: Hook, signature: &'static str, summary: &'static str) -> Mem
         signature,
         summary,
         object: None,
+        level: hook.level(),
     }
 }
 
@@ -110,6 +146,7 @@ pub const API: &[Object] = &[
             ),
             method("release_all", "release_all()", "Lets go of every key."),
         ],
+        level: ScriptApiLevel::V1,
     },
     Object {
         name: "mouse",
@@ -118,6 +155,7 @@ pub const API: &[Object] = &[
             input("left", "Attack; held on a block, mine."),
             input("right", "Use."),
         ],
+        level: ScriptApiLevel::V1,
     },
     Object {
         name: "input",
@@ -138,6 +176,7 @@ pub const API: &[Object] = &[
             method("release", "release()", "Let go. Never refused."),
             property("held", "Whether it's down now."),
         ],
+        level: ScriptApiLevel::V1,
     },
     Object {
         name: "look",
@@ -166,6 +205,7 @@ pub const API: &[Object] = &[
             property("yaw", "Where the bot looks, left and right."),
             property("pitch", "Where the bot looks, up and down."),
         ],
+        level: ScriptApiLevel::V1,
     },
     Object {
         name: "hotbar",
@@ -174,6 +214,7 @@ pub const API: &[Object] = &[
             method("select", "select(n)", "Select slot 1 to 9."),
             property("selected", "The selected slot, 1 to 9."),
         ],
+        level: ScriptApiLevel::V1,
     },
     Object {
         name: "vehicle",
@@ -186,6 +227,7 @@ pub const API: &[Object] = &[
             ),
             method("dismount", "dismount()", "Get out."),
         ],
+        level: ScriptApiLevel::V1,
     },
     Object {
         name: "chat",
@@ -202,6 +244,7 @@ pub const API: &[Object] = &[
                 "After a declared command in the same hook: read the reply pattern key for ms milliseconds (250 to 30,000).",
             ),
         ],
+        level: ScriptApiLevel::V1,
     },
     Object {
         name: "timer",
@@ -219,6 +262,7 @@ pub const API: &[Object] = &[
             ),
             method("cancel", "cancel(name)", "Remove that timer."),
         ],
+        level: ScriptApiLevel::V1,
     },
     Object {
         name: "random",
@@ -231,6 +275,7 @@ pub const API: &[Object] = &[
             ),
             method("chance", "chance(percent)", "true that often, in percent."),
         ],
+        level: ScriptApiLevel::V1,
     },
     Object {
         name: "log",
@@ -240,11 +285,17 @@ pub const API: &[Object] = &[
             "info(text)",
             "Write a line: up to 200 characters, 20 lines a minute.",
         )],
+        level: ScriptApiLevel::V1,
     },
     Object {
         name: "bot",
         summary: "What the script knows about its own bot. Read-only.",
         members: &[
+            property(
+                "name",
+                "The bot's own player name, as its account has it. API level 2.",
+            )
+            .v2(),
             property("health", "Health, 0 to 20."),
             property("food", "Food, 0 to 20."),
             property("x", "Where its feet are: east (positive) and west."),
@@ -264,6 +315,7 @@ pub const API: &[Object] = &[
                 "What its crosshair is on within reach, or (): kind, id, x, y, z.",
             ),
         ],
+        level: ScriptApiLevel::V1,
     },
     Object {
         name: "world",
@@ -285,6 +337,274 @@ pub const API: &[Object] = &[
                 "The block's ID there, or () further than 4 blocks from the bot.",
             ),
         ],
+        level: ScriptApiLevel::V1,
+    },
+    Object {
+        name: "inventory",
+        summary: "The bot's own slots: its armour, its 36 slots and its offhand, numbered as its inventory screen numbers them.",
+        members: &[
+            property(
+                "slots",
+                "Every slot's number: the armour 5 to 8, the main inventory 9 to 35, the hotbar 36 to 44, the offhand 45.",
+            )
+            .v2(),
+            method("slot", "slot(n)", "Slot n, or ().").v2(),
+            method(
+                "lore_has",
+                "lore_has(slot, text)",
+                "Whether a lore line of the bot's slot holds text, as on menu.",
+            )
+            .v2(),
+            method(
+                "lore_number",
+                "lore_number(slot, label)",
+                "The first number after label in the bot's slot's lore, as on menu.",
+            )
+            .v2(),
+            method(
+                "find",
+                "find(id)",
+                "The first slot that holds the item id, or ().",
+            )
+            .v2(),
+            method(
+                "count",
+                "count(id)",
+                "How many of the item id the bot carries.",
+            )
+            .v2(),
+            method(
+                "hotbar",
+                "hotbar(n)",
+                "The hotbar slot of number key n, 1 to 9, or ().",
+            )
+            .v2(),
+            method(
+                "open",
+                "open()",
+                "E: opens the inventory screen; only with no screen open. Nothing goes to the server.",
+            )
+            .v2(),
+        ],
+        level: ScriptApiLevel::V2,
+    },
+    Object {
+        name: "menu",
+        summary: "The screen that's open: a server's, or the bot's own inventory.",
+        members: &[
+            property("open", "Whether a screen is open.").v2(),
+            property(
+                "screen",
+                "Which screen it is: a number new at every opening, or () with none.",
+            )
+            .v2(),
+            property(
+                "kind",
+                "Its kind: generic_9x3, anvil, merchant, inventory, …; () with none.",
+            )
+            .v2(),
+            property("title", "Its title, as plain text.").v2(),
+            property("rows", "A grid's rows; () for a screen that isn't one.").v2(),
+            property("columns", "A grid's columns; () for a screen that isn't one.").v2(),
+            property(
+                "slots",
+                "The numbers of the screen's own slots, from 0: for n in menu.slots { let slot = menu.slot(n); … }.",
+            )
+            .v2(),
+            property(
+                "player",
+                "The numbers of the bot's 36 slots in this screen: four rows of nine, the hotbar last.",
+            )
+            .v2(),
+            method(
+                "slot",
+                "slot(n)",
+                "Slot n of the screen, its own or the bot's, or ().",
+            )
+            .v2(),
+            method(
+                "at",
+                "at(row, column)",
+                "A grid's slot by its row and column, from 0 at the top left, or ().",
+            )
+            .v2(),
+            method(
+                "find",
+                "find(id)",
+                "The first of the screen's own slots that holds the item id, or ().",
+            )
+            .v2(),
+            property("cursor", "The item on the cursor, or ().").v2(),
+            property("trades", "How many trades a merchant offers; 0 for any other screen.").v2(),
+            method(
+                "trade",
+                "trade(n)",
+                "Trade n, from 0: a map of cost_id, cost_count, second_id, second_count, result_id, result_count, result_name, result_potion, result_enchantments, result_stored_enchantments, out_of_stock; or ().",
+            )
+            .v2(),
+            property(
+                "pending",
+                "Whether an action of the script's still waits for its fate.",
+            )
+            .v2(),
+            method(
+                "lore_has",
+                "lore_has(slot, text)",
+                "Whether a lore line of the slot (its number, or a slot read on this screen) holds text. An empty text is in none.",
+            )
+            .v2(),
+            method(
+                "lore_number",
+                "lore_number(slot, label)",
+                "The first number after label on the slot's first lore line that starts with it, or (); lore_number(slot, label, \",\") for a comma as the decimal mark.",
+            )
+            .v2(),
+            method(
+                "number",
+                "number(text)",
+                "The first number in text as servers write amounts (1,250.5, 2k, 1.5M, 3B), or (); number(text, \",\") for a comma as the decimal mark.",
+            )
+            .v2(),
+            method(
+                "click",
+                "click(slot)",
+                "A left click on a slot: its number, or a slot a hook read. Its fate comes in on_click.",
+            )
+            .v2(),
+            method("right_click", "right_click(slot)", "A right click on a slot.").v2(),
+            method(
+                "shift_click",
+                "shift_click(slot)",
+                "Shift and a left click: moves the stack to the other part of the screen.",
+            )
+            .v2(),
+            method(
+                "swap",
+                "swap(slot, n)",
+                "Number key n over a slot: swaps it with hotbar slot n, 1 to 9.",
+            )
+            .v2(),
+            method("drop", "drop(slot)", "Q over a slot: drops one item.").v2(),
+            method(
+                "drop_stack",
+                "drop_stack(slot)",
+                "Ctrl+Q over a slot: drops the stack.",
+            )
+            .v2(),
+            method(
+                "button",
+                "button(n)",
+                "A screen's own button: an enchanting table's 0 to 2, a stonecutter's or a loom's.",
+            )
+            .v2(),
+            method(
+                "select_trade",
+                "select_trade(n)",
+                "Selects a merchant's trade n, from 0.",
+            )
+            .v2(),
+            method(
+                "rename",
+                "rename(key, values)",
+                "Sets the anvil's name to a declared message: rename(key) without values.",
+            )
+            .v2(),
+            method(
+                "close",
+                "close()",
+                "Esc: closes the screen. Never limited, never refused while one is open.",
+            )
+            .v2(),
+        ],
+        level: ScriptApiLevel::V2,
+    },
+    Object {
+        name: "sign",
+        summary: "The sign editor the server opened, while it waits for its answer.",
+        members: &[
+            property("open", "Whether a sign editor waits for its answer.").v2(),
+            property("x", "The sign's block: x.").v2(),
+            property("y", "The sign's block: y.").v2(),
+            property("z", "The sign's block: z.").v2(),
+            property("side", "\"front\" or \"back\".").v2(),
+            method(
+                "write",
+                "write(key, values)",
+                "Answers with a declared sign: write(key) without values. Once an editor.",
+            )
+            .v2(),
+            method(
+                "cancel",
+                "cancel()",
+                "Answers with nothing written. Once an editor.",
+            )
+            .v2(),
+        ],
+        level: ScriptApiLevel::V2,
+    },
+    Object {
+        name: "clock",
+        summary: "The time of day of the hook's moment.",
+        members: &[method(
+            "local",
+            "local(zone)",
+            "The time in an IANA time zone such as \"Europe/Berlin\", summer time included: a time map.",
+        )
+        .v2()],
+        level: ScriptApiLevel::V2,
+    },
+    Object {
+        name: "slot",
+        summary: "A slot as a script reads it: a map of plain data, from menu.slot(n) or inventory.slot(n).",
+        members: &[
+            field("index", "Its number in the screen, or in the inventory."),
+            field("row", "Its row in a grid, from 0 at the top; () outside one."),
+            field("column", "Its column in a grid, from 0 at the left; () outside one."),
+            field(
+                "screen",
+                "The screen it was read on (menu.screen); () for the inventory's own.",
+            ),
+            field("empty", "Whether it holds nothing."),
+            field("id", "The item's registry ID; () when empty."),
+            field("count", "How many; 0 when empty."),
+            field("name", "The name the client shows: the custom name, or the item's."),
+            field(
+                "lore",
+                "The lore's lines, plain text: the first ones, while a value holds them. menu.lore_has and lore_number read them all.",
+            ),
+            field("durability", "The uses left; () for an item that doesn't wear."),
+            field(
+                "potion",
+                "A potion's, a splash or lingering potion's or a tipped arrow's kind, such as \"minecraft:turtle_master\"; ().",
+            ),
+            field(
+                "enchantments",
+                "A map of each enchantment's ID to its level.",
+            ),
+            field(
+                "stored_enchantments",
+                "An enchanted book's, the same way.",
+            ),
+        ],
+        level: ScriptApiLevel::V2,
+    },
+    Object {
+        name: "time",
+        summary: "A time of day, as clock.local answers it: a map of whole numbers.",
+        members: &[
+            field("year", "The year."),
+            field("month", "1 to 12."),
+            field("day", "The day of the month, 1 to 31."),
+            field("hour", "0 to 23."),
+            field("minute", "0 to 59."),
+            field("second", "0 to 59."),
+            field("weekday", "1 for Monday to 7 for Sunday."),
+            field(
+                "offset",
+                "Minutes ahead of UTC: 60 in Berlin's winter, 120 in its summer.",
+            ),
+        ],
+        level: ScriptApiLevel::V2,
     },
     Object {
         name: "hooks",
@@ -321,7 +641,33 @@ pub const API: &[Object] = &[
                 "fn on_stop()",
                 "The script stops in an orderly way.",
             ),
+            hook(
+                Hook::MenuOpen,
+                "fn on_menu_open()",
+                "A screen opened: a server's, or the inventory. Everything held was let go.",
+            ),
+            hook(
+                Hook::MenuUpdate,
+                "fn on_menu_update()",
+                "The open screen's content changed: at most once a game tick.",
+            ),
+            hook(
+                Hook::MenuClose,
+                "fn on_menu_close()",
+                "The screen closed.",
+            ),
+            hook(
+                Hook::Click,
+                "fn on_click(result)",
+                "What became of a click, a button, a trade or a name: ok, reason and slot.",
+            ),
+            hook(
+                Hook::SignOpen,
+                "fn on_sign_open()",
+                "The server opened a sign editor.",
+            ),
         ],
+        level: ScriptApiLevel::V1,
     },
 ];
 
@@ -349,6 +695,33 @@ pub const fn reason_meaning(reason: Refusal) -> &'static str {
         Refusal::TooMany => "No room for another timer.",
         Refusal::NoCommand => {
             "chat.expect without a declared command sent before it in the same hook."
+        }
+        Refusal::ScreenOpen => {
+            "A screen is open: keys, buttons, looks, the hotbar and vehicles wait, and the inventory doesn't open."
+        }
+        Refusal::NoMenu => "No screen is open.",
+        Refusal::ScreenChanged => {
+            "Another screen is open than the one the hook saw, or than the one the slot was read on."
+        }
+        Refusal::ContentChanged => "The screen's content changed since the hook saw it.",
+        Refusal::SlotChanged => {
+            "A slot the click touches holds something else than the hook or the slot saw."
+        }
+        Refusal::ClickPending => "An earlier action's fate hasn't come yet.",
+        Refusal::Unanswered => {
+            "No answer came within 5 s: the server may or may not have done it. The screen takes no click until it's opened again."
+        }
+        Refusal::NoSign => "No sign editor waits for an answer.",
+        Refusal::SignChanged => "Another sign editor is open than the one the hook saw.",
+        Refusal::SignAnswered => "The sign editor was answered already.",
+        Refusal::Rejected => {
+            "The server corrected the screen: it put things back or did otherwise. A plugin's button answers so though it acted; judge by the screen that follows."
+        }
+        Refusal::Unclear => {
+            "The server corrected the screen after a click on a result slot (a trade, an anvil's, a craft's), a button, a trade or a name: it may have done it, once or more. Judge by the screen."
+        }
+        Refusal::Replaced => {
+            "The screen closed, or another opened, before the answer: the server may have done it."
         }
     }
 }
@@ -412,7 +785,9 @@ mod tests {
                             member.name
                         );
                     }
-                    MemberKind::Property => assert_eq!(member.signature, member.name),
+                    MemberKind::Property | MemberKind::Field => {
+                        assert_eq!(member.signature, member.name);
+                    }
                     MemberKind::Hook => assert!(member.signature.starts_with("fn on_")),
                 }
                 assert_ne!(member.summary.len(), 0);
@@ -489,8 +864,73 @@ mod tests {
                 "block_guard",
                 "bad_value",
                 "too_many",
-                "no_command"
+                "no_command",
+                "screen_open",
+                "no_menu",
+                "screen_changed",
+                "content_changed",
+                "slot_changed",
+                "click_pending",
+                "unanswered",
+                "no_sign",
+                "sign_changed",
+                "sign_answered",
+                "rejected",
+                "unclear",
+                "replaced"
             ]
         );
+    }
+
+    #[test]
+    fn level_2s_objects_are_level_2_and_level_1s_hold_only_bot_name_of_it() {
+        for object in API {
+            let newer = matches!(
+                object.name,
+                "inventory" | "menu" | "sign" | "clock" | "slot" | "time"
+            );
+            assert_eq!(
+                object.level,
+                if newer {
+                    ScriptApiLevel::V2
+                } else {
+                    ScriptApiLevel::V1
+                },
+                "{}",
+                object.name
+            );
+            for member in object.members {
+                assert!(
+                    member.level >= object.level,
+                    "{}.{}",
+                    object.name,
+                    member.name
+                );
+                if object.level == ScriptApiLevel::V1 && member.level == ScriptApiLevel::V2 {
+                    assert!(
+                        (object.name, member.name) == ("bot", "name") || object.name == "hooks",
+                        "{}.{}",
+                        object.name,
+                        member.name
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn only_a_maps_description_has_fields() {
+        for object in API {
+            for member in object.members {
+                if member.kind == MemberKind::Field {
+                    assert!(
+                        matches!(object.name, "slot" | "time"),
+                        "{}.{}",
+                        object.name,
+                        member.name
+                    );
+                }
+            }
+        }
     }
 }

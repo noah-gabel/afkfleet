@@ -5,6 +5,7 @@ use core::time::Duration;
 use std::sync::Arc;
 
 use chrono::{DateTime, TimeZone, Utc};
+use fleet_core::mc::MenuView;
 use fleet_core::mode::HotbarSlot;
 use fleet_core::script::{
     ActionLimiter, BlockPosition, Blocks, BotFacts, CaptureDraft, CaptureKind, DecimalMark,
@@ -26,6 +27,7 @@ pub(crate) fn draft(source: &str) -> ScriptDraft {
         block_guard: Vec::new(),
         messages: Vec::new(),
         patterns: Vec::new(),
+        signs: Vec::new(),
     }
 }
 
@@ -185,6 +187,10 @@ pub(crate) struct World {
     pub(crate) performed: Vec<Action>,
     pub(crate) sent: Vec<String>,
     pub(crate) log: Vec<String>,
+    /// The bot's inventory, its screen and its sign editor (API level 2).
+    pub(crate) menu: MenuView,
+    /// The bot's player name.
+    pub(crate) name: String,
 }
 
 impl World {
@@ -213,6 +219,8 @@ impl World {
             performed: Vec::new(),
             sent: Vec::new(),
             log: Vec::new(),
+            menu: MenuView::default(),
+            name: "AfkBot1".to_owned(),
         }
     }
 
@@ -239,7 +247,14 @@ impl World {
             HookEvent::Join { .. } | HookEvent::Respawn | HookEvent::WorldChange => {
                 self.presence = Presence::InWorld;
             }
-            HookEvent::Timer(_) | HookEvent::Chat(_) | HookEvent::Stop => {}
+            HookEvent::Timer(_)
+            | HookEvent::Chat(_)
+            | HookEvent::Stop
+            | HookEvent::MenuOpen
+            | HookEvent::MenuUpdate
+            | HookEvent::MenuClose
+            | HookEvent::Click(_)
+            | HookEvent::SignOpen => {}
         }
         let facts = self.snapshot();
         let moment = Moment {
@@ -247,6 +262,8 @@ impl World {
             now: self.now,
             presence: self.presence,
             leash: self.leash,
+            menu: &self.menu,
+            name: &self.name,
         };
         let ran = instance.handle(event, &moment, &mut self.limiter);
         self.perform(&ran.actions);
@@ -261,6 +278,8 @@ impl World {
             now: self.now,
             presence: self.presence,
             leash: self.leash,
+            menu: &self.menu,
+            name: &self.name,
         };
         let ran = instance.wake(&moment, &mut self.limiter);
         self.perform(&ran.actions);
@@ -328,7 +347,8 @@ impl World {
                 | Action::Press { .. }
                 | Action::Release(_)
                 | Action::LookAtPosition(_)
-                | Action::Expect { .. } => {}
+                | Action::Expect { .. }
+                | Action::Menu(_) => {}
             }
         }
         self.performed.extend(actions.iter().cloned());

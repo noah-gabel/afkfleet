@@ -1,6 +1,7 @@
 //! [`Turn`]: what a running hook sees and what it leaves behind, and the
-//! rules every action of a script passes (ADR-0036, D4, D7 to D11;
-//! ADR-0037, C4).
+//! rules every action of a script passes (ADR-0036, D4, D7 to D11, M8;
+//! ADR-0037, C4). What a hook does in a screen and a sign editor is
+//! [`menu`]'s.
 //!
 //! No Rhai type is named here. The API's functions ([`crate::api`]) turn a
 //! script's values into this module's calls and its answers into the
@@ -11,11 +12,12 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use chrono::{DateTime, Utc};
 use fleet_core::chat::ChatMessage;
+use fleet_core::mc::MenuView;
 use fleet_core::mode::HotbarSlot;
 use fleet_core::script::{
     ActionLimiter, ChatWatch, Given, HoldTracker, Ident, Identifier, Input, Key, Leash, Limited,
-    LookingAt, MouseButton, Position, Press, Refusal, SendId, Snapshot, TimerName, When, limits,
-    may_mine,
+    LookingAt, MouseButton, Position, Press, Refusal, ScriptApiLevel, SendId, Snapshot, TimerName,
+    When, limits, may_mine,
 };
 use fleet_core::{text, time};
 use rand::rngs::StdRng;
@@ -26,6 +28,10 @@ use crate::compile::Program;
 use crate::error::Misuse;
 use crate::instance::{Moment, Presence};
 use crate::timers::{TimerError, Timers};
+
+mod menu;
+
+pub(crate) use menu::{ItemView, Target, kept_lore, number_key};
 
 /// The one kind of vehicle a bot gets into: fleet-mc keeps a bot's seat
 /// only in a minecart (ADR-0026).
@@ -55,6 +61,23 @@ pub(crate) enum HoldLength {
     Time(Option<Duration>),
     /// Until the held item is used up once.
     UntilUsed,
+}
+
+/// The values a script gave, as fleet-core takes them; `None` for values
+/// that are no map, or a value that is neither a number nor a text.
+pub(crate) fn given(values: Option<&[(String, Value)]>) -> Option<Vec<(&str, Given<'_>)>> {
+    values?
+        .iter()
+        .map(|(name, value)| {
+            let given = match value {
+                Value::Integer(number) => Given::Integer(*number),
+                Value::Decimal(number) => Given::Decimal(*number),
+                Value::Text(text) => Given::Text(text),
+                Value::Other => return None,
+            };
+            Some((name.as_str(), given))
+        })
+        .collect()
 }
 
 /// A value a script gave for a declared message.
@@ -108,6 +131,8 @@ pub(crate) struct Turn {
     log: LogRate,
     /// The next send's number.
     next_send: u64,
+    /// What outlives the hook about screens and the right button.
+    lasting: Lasting,
 
     // The running hook's own, set by `begin`.
     facts: Option<Snapshot>,
@@ -125,6 +150,35 @@ pub(crate) struct Turn {
     sent_at_stop: bool,
     /// What the hook was refused, for whoever runs the script.
     refused: Vec<Refused>,
+    /// The bot's inventory, its screen and its sign editor, as the hook
+    /// sees them.
+    menu: Option<MenuView>,
+    /// The bot's own player name.
+    name: String,
+    /// What the running hook did to its screen and its sign editor.
+    hook: HookScreen,
+}
+
+/// What a script's turn keeps between hooks beside its holds and timers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Lasting {
+    /// Whether an action the script sent onto a screen waits for its fate
+    /// (`on_click`).
+    awaiting: bool,
+    /// Whether the right button is held until the item is used up once.
+    until_used: bool,
+}
+
+/// What the running hook did to the screen and the sign editor it was
+/// given.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct HookScreen {
+    /// It closed the screen.
+    closed: bool,
+    /// It opened the inventory.
+    opened: bool,
+    /// It answered the sign editor.
+    sign_answered: bool,
 }
 
 impl Turn {
@@ -137,6 +191,7 @@ impl Turn {
             rng: StdRng::seed_from_u64(seed),
             log: LogRate::default(),
             next_send: 0,
+            lasting: Lasting::default(),
             facts: None,
             now: DateTime::<Utc>::MIN_UTC,
             presence: Presence::NotInWorld,
@@ -147,12 +202,18 @@ impl Turn {
             stopping: false,
             sent_at_stop: false,
             refused: Vec::new(),
+            menu: None,
+            name: String::new(),
+            hook: HookScreen::default(),
         }
     }
 
     /// Starts a hook at `moment` with the bot's `limiter`.
     pub(crate) fn begin(&mut self, moment: &Moment<'_>, limiter: ActionLimiter, stopping: bool) {
         self.facts = Some(moment.facts.clone());
+        self.menu = Some(moment.menu.clone());
+        moment.name.clone_into(&mut self.name);
+        self.hook = HookScreen::default();
         self.now = moment.now;
         self.presence = moment.presence;
         self.leash = moment.leash;
@@ -168,6 +229,7 @@ impl Turn {
     /// was refused.
     pub(crate) fn end(&mut self) -> (Vec<Action>, ActionLimiter, Vec<Refused>) {
         self.facts = None;
+        self.menu = None;
         self.command = None;
         self.stopping = false;
         (
@@ -189,6 +251,30 @@ impl Turn {
     /// The facts of the running hook.
     pub(crate) const fn facts(&self) -> Option<&Snapshot> {
         self.facts.as_ref()
+    }
+
+    /// The API level the script was validated at.
+    pub(crate) fn level(&self) -> ScriptApiLevel {
+        self.program.script().api()
+    }
+
+    /// The bot's own player name.
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The running hook's moment.
+    pub(crate) const fn now(&self) -> DateTime<Utc> {
+        self.now
+    }
+
+    /// Whether a key, a button, a look, the hotbar or a vehicle may act:
+    /// not while a screen is open (ADR-0036, M8).
+    fn free_hands(&self) -> Answer {
+        if self.screen_open() {
+            return Err(Refusal::ScreenOpen);
+        }
+        Ok(())
     }
 
     /// Whether the bot can act at all right now.
@@ -263,6 +349,7 @@ impl Turn {
     /// [`tap`](Self::tap), before its refusal is noted.
     fn try_tap(&mut self, input: Input) -> Answer {
         self.can_act()?;
+        self.free_hands()?;
         if self.leashed(input) {
             return Err(Refusal::Leashed);
         }
@@ -305,6 +392,7 @@ impl Turn {
             HoldLength::UntilUsed => (None, PressKind::HoldUntilUsed),
         };
         self.can_act()?;
+        self.free_hands()?;
         // Down already, a hold presses nothing again: it only sets how
         // long the input stays down.
         if !self.holds.is_held(input) {
@@ -316,6 +404,9 @@ impl Turn {
             }
             self.limit(Limited::of_press(input, Press::Hold))?;
             self.actions.push(Action::Press { input, kind });
+        }
+        if input == Input::Mouse(MouseButton::Right) {
+            self.lasting.until_used = kind == PressKind::HoldUntilUsed;
         }
         // The checks above rule out both of the tracker's errors.
         let pressed = match time {
@@ -330,6 +421,9 @@ impl Turn {
     /// down below is the session's to know.
     pub(crate) fn release(&mut self, input: Input) {
         self.holds.release(input);
+        if input == Input::Mouse(MouseButton::Right) {
+            self.lasting.until_used = false;
+        }
         self.actions.push(Action::Release(input));
     }
 
@@ -359,6 +453,7 @@ impl Turn {
             return Err(Refusal::BadValue);
         }
         self.can_act()?;
+        self.free_hands()?;
         self.limit(Limited::LookAt)?;
         self.actions.push(Action::LookAt { yaw, pitch });
         Ok(())
@@ -376,6 +471,7 @@ impl Turn {
             return Err(Refusal::BadValue);
         };
         self.can_act()?;
+        self.free_hands()?;
         self.limit(Limited::LookTurn)?;
         self.actions.push(Action::LookTurn { yaw, pitch });
         Ok(())
@@ -391,6 +487,7 @@ impl Turn {
     fn try_look_at_position(&mut self, point: Option<Position>) -> Answer {
         let point = point.ok_or(Refusal::BadValue)?;
         self.can_act()?;
+        self.free_hands()?;
         self.limit(Limited::LookAt)?;
         self.actions.push(Action::LookAtPosition(point));
         Ok(())
@@ -406,6 +503,7 @@ impl Turn {
     fn try_select(&mut self, slot: Option<HotbarSlot>) -> Answer {
         let slot = slot.ok_or(Refusal::BadValue)?;
         self.can_act()?;
+        self.free_hands()?;
         self.limit(Limited::Hotbar)?;
         self.actions.push(Action::SelectHotbar(slot));
         Ok(())
@@ -424,6 +522,7 @@ impl Turn {
             .filter(|kind| kind.as_str() == MOUNTABLE)
             .ok_or(Refusal::BadValue)?;
         self.can_act()?;
+        self.free_hands()?;
         self.limit(Limited::Mount)?;
         self.actions.push(Action::Mount(kind));
         Ok(())
@@ -438,6 +537,7 @@ impl Turn {
     /// [`dismount`](Self::dismount), before its refusal is noted.
     fn try_dismount(&mut self) -> Answer {
         self.can_act()?;
+        self.free_hands()?;
         self.limit(Limited::Dismount)?;
         self.actions.push(Action::Dismount);
         Ok(())
@@ -467,21 +567,7 @@ impl Turn {
         let template = key
             .and_then(|key| program.script().message(key))
             .ok_or(Misuse::UnknownMessage)?;
-        let given: Option<Vec<(&str, Given<'_>)>> = values.and_then(|values| {
-            values
-                .iter()
-                .map(|(name, value)| {
-                    let given = match value {
-                        Value::Integer(number) => Given::Integer(*number),
-                        Value::Decimal(number) => Given::Decimal(*number),
-                        Value::Text(text) => Given::Text(text),
-                        Value::Other => return None,
-                    };
-                    Some((name.as_str(), given))
-                })
-                .collect()
-        });
-        let Some(given) = given else {
+        let Some(given) = given(values) else {
             return Ok(Err(Refusal::BadValue));
         };
         // `on_stop` may send one message, whatever else the bot can do.
@@ -610,6 +696,38 @@ impl Turn {
     /// at 100 or above, never for something that is no number.
     pub(crate) fn random_chance(&mut self, percent: f64) -> bool {
         self.rng.random_range(0.0..100.0) < percent
+    }
+
+    /// Holds again, as the script held them, the inputs a screen made the
+    /// session let go of: `holds` with when each was to be let go by
+    /// itself, and whether the right button was held until used. What the
+    /// limiter, the leash or a guard refuses now stays up, and is noted
+    /// (ADR-0052: a level-1 script has no hook that would hear of it).
+    pub(crate) fn press_again(
+        &mut self,
+        holds: &[(Input, Option<DateTime<Utc>>)],
+        until_used: bool,
+    ) {
+        for (input, until) in holds {
+            let length = match until {
+                None if *input == Input::Mouse(MouseButton::Right) && until_used => {
+                    HoldLength::UntilUsed
+                }
+                None => HoldLength::Open,
+                // What was left of a `hold_for`; past its end, nothing.
+                Some(until) => match until.signed_duration_since(self.now).to_std() {
+                    Ok(left) if left >= limits::MIN_HOLD_FOR => HoldLength::Time(Some(left)),
+                    Ok(_) | Err(_) => continue,
+                },
+            };
+            // Every input here was held, so it can be held that way.
+            let _ = self.hold(*input, length);
+        }
+    }
+
+    /// Whether the right button was held until the item is used up once.
+    pub(crate) const fn held_until_used(&self) -> bool {
+        self.lasting.until_used
     }
 
     /// Writes a line into the log, one line of at most
