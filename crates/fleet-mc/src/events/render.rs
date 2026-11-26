@@ -39,7 +39,24 @@ pub(crate) struct Rendered {
 /// Renders `text` as the vanilla client shows it, without formatting, within
 /// the budget.
 pub(crate) fn render(text: &FormattedText) -> Rendered {
-    let mut renderer = Renderer::default();
+    render_with(text, Renderer::default())
+}
+
+/// [`render`] within a smaller budget: at most `max_chars` characters and
+/// four steps for each, for text of which only a short part is kept, such
+/// as an item's name or a line of its lore (ADR-0051).
+pub(crate) fn render_within(text: &FormattedText, max_chars: usize) -> Rendered {
+    render_with(
+        text,
+        Renderer {
+            max_chars: max_chars.min(MAX_CHARS),
+            max_steps: max_chars.saturating_mul(4).min(MAX_STEPS),
+            ..Renderer::default()
+        },
+    )
+}
+
+fn render_with(text: &FormattedText, mut renderer: Renderer) -> Rendered {
     let mut stack = vec![Frame::Component(text)];
     while let Some(frame) = stack.pop() {
         let flow = match frame {
@@ -109,13 +126,27 @@ impl<'a> Template<'a> {
     }
 }
 
-/// The output and the budget spent so far.
-#[derive(Default)]
+/// The output, the budget spent so far and the budget.
 struct Renderer {
     out: String,
     chars: usize,
     steps: usize,
     stopped: bool,
+    max_chars: usize,
+    max_steps: usize,
+}
+
+impl Default for Renderer {
+    fn default() -> Self {
+        Self {
+            out: String::new(),
+            chars: 0,
+            steps: 0,
+            stopped: false,
+            max_chars: MAX_CHARS,
+            max_steps: MAX_STEPS,
+        }
+    }
 }
 
 impl Renderer {
@@ -128,7 +159,7 @@ impl Renderer {
 
     /// Spends a step, or stops if the budget is spent.
     fn step(&mut self) -> ControlFlow<()> {
-        if self.steps >= MAX_STEPS {
+        if self.steps >= self.max_steps {
             self.stopped = true;
             return ControlFlow::Break(());
         }
@@ -139,7 +170,7 @@ impl Renderer {
     /// Writes one character, which costs a step.
     fn write_char(&mut self, c: char) -> ControlFlow<()> {
         self.step()?;
-        if self.chars >= MAX_CHARS {
+        if self.chars >= self.max_chars {
             self.stopped = true;
             return ControlFlow::Break(());
         }
@@ -317,6 +348,9 @@ mod tests {
                 stopped: false
             }
         );
+        let short = render_within(&FormattedText::from("w".repeat(200)), 128);
+        assert_eq!(short.text, "w".repeat(128));
+        assert!(short.stopped);
         let long = render_plain(&"z".repeat(MAX_CHARS + 1));
         assert!(long.stopped);
         assert_eq!(long.text, "z".repeat(MAX_CHARS));

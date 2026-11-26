@@ -36,6 +36,8 @@ mod real_account;
 #[cfg(feature = "fault-injection")]
 mod riding;
 #[cfg(feature = "fault-injection")]
+mod screens;
+#[cfg(feature = "fault-injection")]
 mod scripted;
 mod teardown;
 mod threads;

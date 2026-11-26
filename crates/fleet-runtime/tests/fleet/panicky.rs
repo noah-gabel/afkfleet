@@ -392,6 +392,13 @@ impl SessionHandle for PanickySession {
         self.session.respawn()
     }
 
+    fn menu(
+        &self,
+        command: fleet_core::mc::MenuCommand,
+    ) -> impl Future<Output = Result<(), fleet_core::mc::MenuError>> + Send {
+        self.session.menu(command)
+    }
+
     fn disconnect(&self) -> impl Future<Output = ()> + Send {
         let session = self.session.clone();
         let bot = self.bot;

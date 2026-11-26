@@ -8,8 +8,8 @@ api-version: "26.1"
 description: Menus for afkfleet's slow tests. Test-only.
 commands:
   ah:
-    description: The auction house; /ah sell <price> lists the item in your hand.
-    usage: /ah [page] | /ah sell <price> | /ah expired
+    description: The auction house; /ah sell <price> lists the item in your hand, /ah <query> searches.
+    usage: /ah [page | query] | /ah sell <price> | /ah expired
   sell:
     description: The sell menu.
     usage: /sell

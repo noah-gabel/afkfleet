@@ -72,6 +72,7 @@ use fleet_core::mode::GameAction;
 use fleet_core::script::{Input, Key, Leash, MouseButton, Position};
 use tracing::debug;
 
+pub(crate) use self::facts::{block, floor, identifier, uses_left};
 pub(crate) use self::held::Held;
 use crate::actions;
 use crate::events::BridgeControl;
@@ -81,6 +82,21 @@ use crate::riding::{self, Riding};
 /// mode set, or a new session's defaults.
 #[derive(Component, Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct Guarded(pub(crate) Guards);
+
+/// On a seated bot that is getting out: the sneak key stays down until the
+/// server lets the bot off, for at most a second. A key tapped for one game
+/// tick was lost when the client caught up on ticks and both its inputs
+/// reached the server between two of its ticks.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GettingOut {
+    /// How many more game ticks the key stays down.
+    pub(crate) ticks_left: u8,
+}
+
+impl GettingOut {
+    /// A second of game ticks.
+    pub(crate) const MOST_TICKS: u8 = 20;
+}
 
 /// Whether the server has placed the bot in its world.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -146,6 +162,7 @@ impl Plugin for ScriptPlugin {
                     (
                         tick::place,
                         tick::leash,
+                        tick::getting_out,
                         tick::apply_keys,
                         mouse::guard_mining.before(MiningSystems),
                         mouse::hold_right.before(handle_start_use_item_queued),
@@ -212,6 +229,9 @@ fn read_packets(
 /// # Errors
 /// [`SessionError::NotInWorld`] if the bot has left its world.
 pub(crate) fn perform(client: &Client, action: GameAction) -> Result<(), SessionError> {
+    if held_back(&client.ecs.read(), client.entity, action) {
+        return Ok(());
+    }
     match action {
         // The two that write an attack, which takes the bot's connection.
         // No guard on the World is held meanwhile: azalea's locks aren't
@@ -235,6 +255,27 @@ pub(crate) fn perform(client: &Client, action: GameAction) -> Result<(), Session
     }
 }
 
+/// Whether a screen is open and `action` would put a key or a button
+/// down: then it does nothing, as a vanilla client's keys do nothing while
+/// a screen is open (ADR-0036, M8). The runtime refuses such an action
+/// with `screen_open` before it gets here; this keeps the rule whatever
+/// calls.
+fn held_back(world: &World, bot: Entity, action: GameAction) -> bool {
+    let down = matches!(
+        action,
+        GameAction::Press(_)
+            | GameAction::Tap(_)
+            | GameAction::HoldUntilUsed
+            | GameAction::Mount
+            | GameAction::Dismount
+    );
+    if down && crate::menu::screen_open(world, bot) {
+        debug!(?action, "a screen is open; nothing goes down");
+        return true;
+    }
+    false
+}
+
 /// Whether the bot's crosshair is on an entity within reach.
 fn looks_at_an_entity(client: &Client) -> bool {
     client
@@ -249,6 +290,9 @@ fn looks_at_an_entity(client: &Client) -> bool {
 /// [`SessionError::NotInWorld`] if the bot's entity is gone, or lacks what
 /// the action needs.
 pub(crate) fn act(world: &mut World, bot: Entity, action: GameAction) -> Result<(), SessionError> {
+    if held_back(world, bot, action) {
+        return Ok(());
+    }
     // Every input is the bot's own; a bot azalea no longer has holds
     // nothing.
     let held = |world: &mut World, change: fn(&mut Held, Key), key: Key| {
@@ -297,10 +341,16 @@ pub(crate) fn act(world: &mut World, bot: Entity, action: GameAction) -> Result<
         }
         GameAction::LookAtPosition(at) => look_at(world, bot, at),
         GameAction::Mount => riding::mount(world, bot),
-        // As a player gets out: the sneak key, for a tick.
+        // As a player gets out: the sneak key, until the server has let
+        // the bot off ([`tick::getting_out`]).
         GameAction::Dismount => {
+            if world.get::<Held>(bot).is_none() {
+                return Err(SessionError::NotInWorld);
+            }
             if world.get::<Riding>(bot).is_some() {
-                held(world, Held::tap, Key::Sneak)?;
+                world.entity_mut(bot).insert(GettingOut {
+                    ticks_left: GettingOut::MOST_TICKS,
+                });
             }
             Ok(())
         }

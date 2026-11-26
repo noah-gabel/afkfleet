@@ -52,6 +52,12 @@ Under CLAUDE.md's "Only `fleet-mc` may depend on `azalea`":
 - **A sign editor is answered only through `SignDesk::answer`,** never by fleet-mc itself. A screen opening, a death or a world change ends both the screen and the editor (`ClickGate::closed`, `SignDesk::ended`), and a sign editor's opening closes the screen.
 - **`ItemData` is an item's whole component patch in a canonical encoding:** the same components, the same bytes. Never compare items by a part of them.
 - **Text a server chose reaches a script only as `ServerText` or `Lore`,** cleaned and bounded there; components only as identifiers and numbers.
+- **fleet-mc's `menu` module (ADR-0051):**
+  - A window's state ID comes only from the content and slot packets a vanilla client applies to that window; never read azalea's `Inventory.state_id`.
+  - What azalea 0.16.0 leaves out of its `Inventory` (the cursor, `SetPlayerInventory`, window 0's hotbar in the open screen) is put right in `menu::read_packets`, before any system that reads the inventory.
+  - fleet-mc sends its own click, close and sign packets. A click uses azalea's `simulate_click` with the gaps `menu/send.rs` puts right. An azalea bump re-reads azalea's click handler and prediction, and the slow `screens` scenarios hold the result.
+  - No action goes out while a fate is unread. A new menu event joins `MenuReport` in the bridge with a bound of its own, never a queue that grows with what a server sends.
+  - An item's text is rendered with `render_within`, a small multiple of what fleet-core keeps.
 
 ## Crate-local `clippy.toml` files
 **Crate-local `clippy.toml` files** (`fleet-core`, `fleet-mc`, …) must repeat every setting of the root `clippy.toml`: the test allowances and the `disallowed-methods` bans. Clippy reads only the nearest file and doesn't merge them. `just scripts-test` fails when one is missing (`scripts/clippy-config.mjs`, ADR-0011).

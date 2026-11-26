@@ -43,7 +43,7 @@ use crate::riding::{Passengers, Riding};
 const UNKNOWN: &str = "minecraft:unknown";
 
 /// `name` as an identifier, or [`UNKNOWN`] if it isn't one.
-pub(super) fn identifier(name: &str) -> Identifier {
+pub(crate) fn identifier(name: &str) -> Identifier {
     Identifier::try_from(name)
         .or_else(|_| Identifier::try_from(UNKNOWN))
         // `UNKNOWN` is one; this keeps the function total without a panic.
@@ -70,7 +70,7 @@ pub(crate) fn held_item(inventory: &Inventory) -> Option<HeldItem> {
 
 /// How many uses `stack` has left; `None` for an item that doesn't wear.
 #[must_use]
-fn uses_left(stack: &ItemStackData) -> Option<u32> {
+pub(crate) fn uses_left(stack: &ItemStackData) -> Option<u32> {
     if stack.get_component::<components::Unbreakable>().is_some() {
         return None;
     }
@@ -82,7 +82,7 @@ fn uses_left(stack: &ItemStackData) -> Option<u32> {
 }
 
 /// The block `at` in fleet-core's coordinates.
-pub(super) const fn block(at: BlockPos) -> BlockPosition {
+pub(crate) const fn block(at: BlockPos) -> BlockPosition {
     BlockPosition {
         x: at.x,
         y: at.y,
@@ -171,15 +171,17 @@ pub(crate) fn observe(world: &mut World, bot: Entity) -> Result<Observation, Ses
         selected: HotbarSlot::try_from(inventory.selected_hotbar_slot).unwrap_or(HotbarSlot::FIRST),
         looking_at,
     };
+    let anchor = placement.anchor;
     Ok(Observation {
         facts: Snapshot::new(facts, entities, blocks),
-        anchor: placement.anchor,
+        anchor,
+        menu: crate::menu::view(world, bot),
     })
 }
 
 /// The block a coordinate is in. A position holds only numbers, and one
 /// past the largest block is the largest block.
-fn floor(coordinate: f64) -> i32 {
+pub(crate) fn floor(coordinate: f64) -> i32 {
     let block = coordinate.floor();
     if block >= f64::from(i32::MAX) {
         i32::MAX

@@ -174,6 +174,11 @@ fn kind(event: &SessionEvent) -> String {
         SessionEvent::Respawned => "Respawned".to_owned(),
         SessionEvent::WorldChanged => "WorldChanged".to_owned(),
         SessionEvent::LetGo(reason) => format!("LetGo({reason:?})"),
+        SessionEvent::MenuOpened(_) => "MenuOpened".to_owned(),
+        SessionEvent::MenuUpdated(_) => "MenuUpdated".to_owned(),
+        SessionEvent::MenuClosed(_) => "MenuClosed".to_owned(),
+        SessionEvent::Clicked(result) => format!("Clicked({})", result.fate),
+        SessionEvent::SignOpened(_) => "SignOpened".to_owned(),
         SessionEvent::Disconnected(reason) => format!("Disconnected({:?})", reason.classify()),
         SessionEvent::ConnectionFailed(failure) => format!("ConnectionFailed({failure:?})"),
     }

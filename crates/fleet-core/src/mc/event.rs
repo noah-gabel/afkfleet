@@ -6,6 +6,7 @@ use core::future::Future;
 use super::LetGo;
 use crate::chat::IncomingChat;
 use crate::disconnect::{ConnectFailure, DisconnectReason};
+use crate::script::menu::{ClickResult, ScreenId, SignEditor};
 
 /// Something that happened in a Minecraft session.
 ///
@@ -34,6 +35,24 @@ pub enum SessionEvent {
     /// The session let go of inputs by itself, below whoever pressed them
     /// (ADR-0036, D10, D11).
     LetGo(LetGo),
+    /// A screen opened: one the server opened, or the bot's own inventory
+    /// (ADR-0036, M2). A new screen is a new screen, whatever its title.
+    /// Every key and mouse button is let go, and none goes down while it's
+    /// open (M8).
+    MenuOpened(ScreenId),
+    /// The open screen's content changed: its slots, its cursor or a
+    /// merchant's trades.
+    MenuUpdated(ScreenId),
+    /// The screen closed: the server or the bot closed it, a sign editor
+    /// took its place, or the bot died or changed worlds.
+    MenuClosed(ScreenId),
+    /// What became of an action sent onto a screen, decided at its
+    /// barrier's reply or after its wait (ADR-0036, R1).
+    Clicked(ClickResult),
+    /// The server opened a sign editor (ADR-0036, M16). It's answered only
+    /// through [`SessionHandle::menu`](super::SessionHandle::menu), and
+    /// never by the session itself.
+    SignOpened(SignEditor),
     /// The session ended: a kick, a closed connection, a rejected session or
     /// a crash.
     Disconnected(DisconnectReason),
@@ -52,6 +71,13 @@ pub enum SessionEvent {
 /// - `WorldChanged` and each reason of `LetGo` are pending at most once:
 ///   a second one before the first was read adds nothing, so a server
 ///   that sends a bot back and forth can't fill the queue.
+/// - The menu events are bounded the same way, whatever a server sends
+///   (ADR-0051): `MenuUpdated` is pending at most once a screen; a screen
+///   that opens drops what's unread of the screens before it, all but the
+///   close of one whose opening was read; a screen that closes before its
+///   `MenuOpened` was read takes that event with it; and a `SignOpened`
+///   replaces one unread. `Clicked` is always delivered, and pending at
+///   most once: no action goes out while a fate is unread.
 /// - `Died` comes once per death, though azalea can report it twice
 ///   (ADR-0008 §4), and the next `Died` only after `Respawned`.
 /// - `Respawned` comes at most once per `Died`, and only after

@@ -2,7 +2,7 @@
 
 use core::future::Future;
 
-use super::{Guards, Liveness, Observation};
+use super::{Guards, Liveness, MenuCommand, MenuError, Observation};
 use crate::chat::ChatMessage;
 use crate::mode::GameAction;
 
@@ -76,6 +76,24 @@ pub trait SessionHandle: Clone + Send + Sync + 'static {
     /// # Errors
     /// As for [`perform`](Self::perform).
     fn set_guards(&self, guards: Guards) -> impl Future<Output = Result<(), SessionError>> + Send;
+
+    /// Does something in a screen or a sign editor for a scripted mode
+    /// (ADR-0036, M3, M7, M8, M16, R1; ADR-0050, ADR-0051).
+    ///
+    /// It's decided on the session's host thread at the moment of sending,
+    /// by fleet-core's `ClickGate` and `SignDesk`, against the screen and
+    /// the editor as they are then. `Ok` means it went out (or, for
+    /// [`MenuCommand::OpenInventory`], that the inventory is open); an
+    /// action's fate comes later as
+    /// [`SessionEvent::Clicked`](super::SessionEvent::Clicked). No action
+    /// goes out while an earlier one's fate is still to come or unread
+    /// ([`MenuRefusal::ClickPending`](crate::script::menu::MenuRefusal::ClickPending)).
+    ///
+    /// # Errors
+    /// [`MenuError::Session`] as for [`perform`](Self::perform);
+    /// [`MenuError::Refused`] with the gate's or the guard's reason; and
+    /// [`MenuError::Sign`] with the desk's. Nothing is sent then.
+    fn menu(&self, command: MenuCommand) -> impl Future<Output = Result<(), MenuError>> + Send;
 
     /// Asks the server to respawn the bot after it died. `Ok` means it was
     /// asked, not that the bot lives: [`SessionEvent::Respawned`] confirms

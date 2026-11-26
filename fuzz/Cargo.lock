@@ -1918,6 +1918,7 @@ dependencies = [
  "azalea",
  "azalea-chat",
  "azalea-language",
+ "chrono",
  "fleet-core",
  "reqwest",
  "secrecy",

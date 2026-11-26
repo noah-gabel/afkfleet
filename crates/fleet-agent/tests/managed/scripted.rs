@@ -52,6 +52,7 @@ fn placed() -> Observation {
     Observation {
         facts: Snapshot::new(bot, Vec::new(), blocks),
         anchor: Some(place),
+        menu: fleet_core::mc::MenuView::default(),
     }
 }
 

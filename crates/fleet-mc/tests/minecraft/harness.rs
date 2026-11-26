@@ -32,8 +32,11 @@ pub(crate) const TAG: &str =
 pub(crate) const VERSION: &str = "26.1";
 
 /// The Paper harness's image, as `just paper-image` builds it; never pulled.
+/// Only the scenarios behind `fault-injection` start it.
+#[cfg(feature = "fault-injection")]
 pub(crate) const PAPER_IMAGE: &str = "afkfleet-paper";
 /// Its tag.
+#[cfg(feature = "fault-injection")]
 pub(crate) const PAPER_TAG: &str = "test";
 
 /// The game port inside the container.
@@ -128,6 +131,7 @@ impl Server {
     /// Starts the Paper harness (ADR-0049) and waits until it's done
     /// loading. Its image must have been built: `just test-slow` builds it
     /// first (`just paper-image`), and nothing pulls one of that name.
+    #[cfg(feature = "fault-injection")]
     pub(crate) async fn start_paper() -> Self {
         let built = std::process::Command::new("docker")
             .args(["image", "inspect", "--format", "{{.Id}}"])
@@ -169,11 +173,29 @@ impl Server {
     }
 
     /// Everything the server has written to its console so far.
+    #[cfg(feature = "fault-injection")]
     pub(crate) async fn log(&self) -> String {
         let out = within("the server's log", self.container.stdout_to_vec())
             .await
             .expect("no log");
         String::from_utf8_lossy(&out).into_owned()
+    }
+
+    /// Freezes the server's container, or thaws it (`docker pause` and
+    /// `unpause`): a server that answers nothing, whatever the bot sends,
+    /// for a fate that must come late or never.
+    #[cfg(feature = "fault-injection")]
+    pub(crate) fn frozen(&self, frozen: bool) {
+        let verb = if frozen { "pause" } else { "unpause" };
+        let done = std::process::Command::new("docker")
+            .args([verb, self.container.id()])
+            .output()
+            .expect("docker didn't run");
+        assert!(
+            done.status.success(),
+            "docker {verb} failed: {}",
+            String::from_utf8_lossy(&done.stderr)
+        );
     }
 
     /// The server's address, as a session connects to it.

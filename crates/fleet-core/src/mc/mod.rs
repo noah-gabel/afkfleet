@@ -9,7 +9,10 @@
 //!   sends chat, respawns, reads the session's [`Liveness`] and tears the
 //!   session down. Its calls fail with a [`SessionError`]. For a scripted
 //!   mode it also takes an [`Observation`] of the game and applies the
-//!   mode's [`Guards`]; what it lets go of by itself is a [`LetGo`].
+//!   mode's [`Guards`]; what it lets go of by itself is a [`LetGo`]. Its
+//!   [`MenuCommand`]s act in a screen or a sign editor, each decided on the
+//!   host thread at the moment of sending ([`MenuError`]), and an
+//!   observation's [`MenuView`] shows the inventory and the screen.
 //! - [`SessionCredentials`] carry the Minecraft access token as a secret. A
 //!   [`SessionCredentialProvider`] hands them out for each connection
 //!   attempt.
@@ -40,6 +43,11 @@
 //!             SessionEvent::Respawned
 //!             | SessionEvent::WorldChanged
 //!             | SessionEvent::LetGo(_)
+//!             | SessionEvent::MenuOpened(_)
+//!             | SessionEvent::MenuUpdated(_)
+//!             | SessionEvent::MenuClosed(_)
+//!             | SessionEvent::Clicked(_)
+//!             | SessionEvent::SignOpened(_)
 //!             | SessionEvent::Chat(_) => {}
 //!             SessionEvent::Disconnected(_) | SessionEvent::ConnectionFailed(_) => break,
 //!         }
@@ -59,6 +67,7 @@ mod connector;
 mod credentials;
 mod event;
 mod liveness;
+mod menu;
 mod observe;
 mod session;
 
@@ -68,5 +77,6 @@ pub use credentials::{
 };
 pub use event::{SessionEvent, SessionEvents};
 pub use liveness::Liveness;
+pub use menu::{MenuCommand, MenuError, MenuView};
 pub use observe::{Guards, LetGo, Observation};
 pub use session::{SessionError, SessionHandle};

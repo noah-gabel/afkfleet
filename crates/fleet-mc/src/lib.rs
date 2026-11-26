@@ -48,6 +48,7 @@ mod config;
 mod connector;
 mod events;
 mod host;
+mod menu;
 mod riding;
 mod script;
 mod signing;
