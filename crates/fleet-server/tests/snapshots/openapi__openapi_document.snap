@@ -2648,7 +2648,12 @@ expression: document
           "on_respawn",
           "on_timer",
           "on_chat",
-          "on_stop"
+          "on_stop",
+          "on_menu_open",
+          "on_menu_update",
+          "on_menu_close",
+          "on_click",
+          "on_sign_open"
         ],
         "type": "string"
       },

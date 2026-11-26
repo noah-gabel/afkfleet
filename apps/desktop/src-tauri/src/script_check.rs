@@ -147,12 +147,20 @@ mod tests {
     #[test]
     fn every_example_of_the_reference_has_no_problem() {
         for example in fleet_script::EXAMPLES {
-            assert_eq!(
-                check(example.source),
-                ScriptCheck { problem: None },
-                "{}",
-                example.id
-            );
+            let problem = check(example.source).problem;
+            if example.level == ScriptApiLevel::V1 {
+                assert_eq!(problem, None, "{}", example.id);
+            } else {
+                // Saved at level 1 until the server stamps a script's level
+                // (Plan.md P16.15): the check names the level it needs, and
+                // the app offers no such example yet.
+                let shown = format!("{problem:?}");
+                assert!(
+                    shown.contains("needs script API level 2"),
+                    "{}: {shown}",
+                    example.id
+                );
+            }
         }
     }
 

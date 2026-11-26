@@ -330,7 +330,14 @@ pub(crate) fn chat_formats() -> impl Strategy<Value = ChatFormats> {
 pub(crate) fn script_state() -> impl Strategy<Value = ScriptState> {
     let problem = (
         select(ProblemKind::ALL.to_vec()),
-        prop::option::of(select(Hook::ALL.to_vec())),
+        // Level 1's hooks: the wire carries level 2's from P16.15 on, and
+        // reports them as no hook until then.
+        prop::option::of(select(
+            Hook::ALL
+                .into_iter()
+                .filter(|hook| hook.level() == fleet_core::script::ScriptApiLevel::V1)
+                .collect::<Vec<_>>(),
+        )),
         prop::option::of((1..=u32::MAX, 1..=u32::MAX)),
         "[ -~]{0,200}",
     )

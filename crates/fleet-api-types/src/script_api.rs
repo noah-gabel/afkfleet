@@ -108,7 +108,8 @@ pub struct ScriptExample {
 
 impl ScriptApi {
     /// fleet-script's description, its reasons and its examples, as far as
-    /// [`OFFERED`] goes: an object, a member, a reason and an example of a
+    /// level 1 goes until the server stamps a script's level (P16.15): an
+    /// object, a member, a reason and an example of a
     /// newer level are left out.
     ///
     /// # Errors
