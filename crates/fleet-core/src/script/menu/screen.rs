@@ -74,6 +74,14 @@ impl ScreenId {
     pub const fn window(self) -> WindowId {
         self.window
     }
+
+    /// Which opening of the session it is, counted from 1: what tells two
+    /// screens in one window apart, and what a script reads as
+    /// `menu.screen` (ADR-0052).
+    #[must_use]
+    pub const fn opening(self) -> u64 {
+        self.opening
+    }
 }
 
 /// What a screen is: one of the screens a vanilla client knows, or the
@@ -255,6 +263,38 @@ impl ScreenKind {
             Self::Generic9x4 => 36,
             Self::Generic9x5 => 45,
             Self::Generic9x6 => 54,
+        }
+    }
+
+    /// The slot of the screen's own that holds what it makes, where taking
+    /// it is a transaction the server decides: a trade, an anvil's or a
+    /// grindstone's result, a craft. A furnace's output is a slot like any
+    /// other: taking it consumes nothing. The crafter's result isn't in
+    /// azalea's layout (ADR-0052).
+    #[must_use]
+    pub const fn result_slot(self) -> Option<u16> {
+        match self {
+            Self::Inventory | Self::Crafting => Some(0),
+            Self::Stonecutter => Some(1),
+            Self::Anvil | Self::Grindstone | Self::Merchant | Self::CartographyTable => Some(2),
+            Self::Loom | Self::Smithing => Some(3),
+            Self::Generic9x1
+            | Self::Generic9x2
+            | Self::Generic9x3
+            | Self::Generic9x4
+            | Self::Generic9x5
+            | Self::Generic9x6
+            | Self::Generic3x3
+            | Self::Crafter3x3
+            | Self::Beacon
+            | Self::BlastFurnace
+            | Self::BrewingStand
+            | Self::Enchantment
+            | Self::Furnace
+            | Self::Hopper
+            | Self::Lectern
+            | Self::ShulkerBox
+            | Self::Smoker => None,
         }
     }
 

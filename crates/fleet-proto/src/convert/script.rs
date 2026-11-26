@@ -57,6 +57,7 @@ pub(crate) fn script_from_wire(script: wire::Script) -> Result<Script, ConvertEr
             .enumerate()
             .map(|(index, pattern)| pattern_from_wire(pattern).map_err(|e| e.at(index)))
             .collect::<Result<_, _>>()?,
+        signs: Vec::new(),
     };
     let checked = Script::try_from(draft.clone())
         .map_err(|e| ConvertError::new("ModeDefinition.script", e.into()))?;
@@ -254,7 +255,13 @@ fn problem_to_wire(problem: &ScriptProblem) -> wire::ScriptProblem {
         ProblemKind::State => wire::ScriptProblemKind::State,
     };
     let hook = match problem.hook {
-        None => wire::ScriptHook::Unspecified,
+        // API level 2's hooks get their own values with the wire at level 2
+        // (Plan.md P16.15). Until then no level-2 script reaches a server,
+        // so none of them is ever reported there.
+        None
+        | Some(
+            Hook::MenuOpen | Hook::MenuUpdate | Hook::MenuClose | Hook::Click | Hook::SignOpen,
+        ) => wire::ScriptHook::Unspecified,
         Some(Hook::Join) => wire::ScriptHook::Join,
         Some(Hook::WorldChange) => wire::ScriptHook::WorldChange,
         Some(Hook::Death) => wire::ScriptHook::Death,

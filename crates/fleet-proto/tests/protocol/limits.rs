@@ -178,6 +178,7 @@ fn full_script(len: usize) -> ScriptDraft {
             .collect(),
         messages,
         patterns,
+        signs: Vec::new(),
     }
 }
 

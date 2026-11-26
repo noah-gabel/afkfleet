@@ -25,6 +25,7 @@ fn scripted(n: u8, source: &str) -> BotSpec {
         block_guard: Vec::new(),
         messages: Vec::new(),
         patterns: Vec::new(),
+        signs: Vec::new(),
     })
     .unwrap();
     BotSpec {

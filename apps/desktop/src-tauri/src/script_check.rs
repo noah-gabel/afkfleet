@@ -121,13 +121,16 @@ mod tests {
 
     fn compiled(source: &str) -> Result<(), FieldError> {
         let script = fleet_core::script::Script::try_from(ScriptDraft {
-            api: ScriptApiLevel::NEWEST.get(),
+            // The level the server saves a mode at until it stamps a
+            // script's own (Plan.md P16.15).
+            api: ScriptApiLevel::V1.get(),
             source: source.to_owned(),
             leash: 8,
             tool_guard: 2,
             block_guard: Vec::new(),
             messages: Vec::new(),
             patterns: Vec::new(),
+            signs: Vec::new(),
         })
         .unwrap();
         fleet_script::compile(&script)

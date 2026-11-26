@@ -350,6 +350,7 @@ fn standalone_script(
         block_guard: raw.block_guard.clone(),
         messages: raw.messages.clone(),
         patterns: raw.patterns.clone(),
+        signs: Vec::new(),
     };
     let script = Script::try_from(draft)
         .map_err(|error| problems.push(key.clone(), ProblemKind::Script(error)))

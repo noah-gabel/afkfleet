@@ -249,6 +249,7 @@ pub(crate) fn script() -> impl Strategy<Value = Script> {
                     block_guard: blocks.into_iter().map(str::to_owned).collect(),
                     messages,
                     patterns,
+                    signs: Vec::new(),
                 })
                 .unwrap()
             },

@@ -36,6 +36,7 @@ fn draft() -> ScriptDraft {
             }],
         }],
         patterns: Vec::new(),
+        signs: Vec::new(),
     }
 }
 

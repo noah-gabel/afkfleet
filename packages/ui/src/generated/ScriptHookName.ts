@@ -3,4 +3,4 @@
 /**
  * A script's hook.
  */
-export type ScriptHookName = "on_join" | "on_world_change" | "on_death" | "on_respawn" | "on_timer" | "on_chat" | "on_stop";
+export type ScriptHookName = "on_join" | "on_world_change" | "on_death" | "on_respawn" | "on_timer" | "on_chat" | "on_stop" | "on_menu_open" | "on_menu_update" | "on_menu_close" | "on_click" | "on_sign_open";
