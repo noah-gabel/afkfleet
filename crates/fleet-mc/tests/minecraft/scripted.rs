@@ -130,6 +130,16 @@ impl Scene {
             *event == SessionEvent::Joined
         })
         .await;
+        // The pad far away, which every scenario teleports to before a
+        // place of its own. It's built again until the server says so: its
+        // chunk loads only once the bot has joined.
+        server
+            .eventually(
+                "the pad far away",
+                &format!("fill 39 {BELOW} -42 41 {BELOW} -39 minecraft:stone"),
+                |output| output.starts_with("Successfully filled"),
+            )
+            .await;
         Self {
             server,
             session,
@@ -206,7 +216,19 @@ impl Scene {
 
     /// Teleports the bot and waits until the bot itself is there and its
     /// leash is anchored there: a teleport of more than 8 blocks.
+    ///
+    /// The place must have a block under it. Without one the bot falls
+    /// as soon as it lands, and whether a snapshot still catches it there
+    /// is a race (`slow_mouse_scenario` lost it once on main, PR #137).
     pub(crate) async fn put_at(&self, at: Vec3, yaw: f32) {
+        let under = format!("{} {} {}", at.x.floor(), at.y.floor() - 1.0, at.z.floor());
+        assert!(
+            self.server
+                .rcon(&format!("execute unless block {under} minecraft:air"))
+                .await
+                .contains("Test passed"),
+            "nothing to stand on at {at:?}: build a platform there first"
+        );
         self.server
             .rcon(&format!("tp {NAME} {} {} {} {yaw} 0", at.x, at.y, at.z))
             .await;
@@ -372,10 +394,9 @@ async fn slow_walking_scenario() {
     let mut scene = Scene::start(0).await;
     scene
         .rcon(&[
-            // The strip, a pad to stand on far away, and a small pad with
-            // an edge well inside a leash.
+            // The strip, and a small pad with an edge well inside a leash
+            // (the pad far away is the scene's).
             format!("fill -1 {BELOW} -2 1 {BELOW} 24 minecraft:stone"),
-            format!("fill 39 {BELOW} -42 41 {BELOW} -39 minecraft:stone"),
             format!("fill 9 {BELOW} 0 11 {BELOW} 3 minecraft:stone"),
             "scoreboard objectives add jumps minecraft.custom:minecraft.jump".to_owned(),
             "scoreboard objectives add sneaking minecraft.custom:minecraft.sneak_time".to_owned(),
