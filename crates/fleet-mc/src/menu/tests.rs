@@ -526,7 +526,7 @@ fn an_items_data_is_the_same_whatever_order_its_components_came_in() {
     assert_ne!(data(&one), data(&different));
     assert_eq!(
         data(&ItemStack::new(ItemKind::Emerald, 1)),
-        Default::default()
+        fleet_core::script::menu::ItemData::default()
     );
 }
 

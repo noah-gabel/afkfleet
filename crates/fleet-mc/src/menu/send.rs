@@ -40,7 +40,6 @@ use azalea::protocol::packets::game::{
 };
 use azalea::{BlockPos, Client};
 use fleet_core::mc::{MenuCommand, MenuError, SessionError};
-use fleet_core::mode::GameAction;
 use fleet_core::script::menu::{
     ClickKind, MenuAction, MenuRefusal, Screen, ScreenId, ScreenKind, SignAnswer, SignEditor,
     SignSide, StateId,
