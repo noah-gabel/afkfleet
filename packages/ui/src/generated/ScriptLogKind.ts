@@ -4,4 +4,4 @@
  * What a line of a bot's script's log is about: `line` is the script's
  * own, every other kind the runtime's about its chat or its end.
  */
-export type ScriptLogKind = "line" | "sent" | "not_sent" | "window_opened" | "window_expired" | "window_dropped" | "matched" | "refused" | "stop_failed";
+export type ScriptLogKind = "line" | "sent" | "not_sent" | "window_opened" | "window_expired" | "window_dropped" | "matched" | "refused" | "stop_failed" | "click";

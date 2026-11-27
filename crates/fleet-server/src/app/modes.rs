@@ -109,20 +109,25 @@ impl ModeRoute {
 #[derive(Clone)]
 pub struct Compiler(Arc<CompileCheck>);
 
-/// A check of a script as a program.
-type CompileCheck = dyn Fn(&Script) -> Result<(), CompileError> + Send + Sync;
+/// A check of a script as a program: the script at the API level it
+/// needs, or why it isn't one.
+type CompileCheck = dyn Fn(&Script) -> Result<Script, CompileError> + Send + Sync;
 
 impl Compiler {
-    /// fleet-script's compiler: the engine an agent runs, with its limits.
+    /// fleet-script's compiler: the engine an agent runs, with its limits,
+    /// at the lowest API level that runs the script, which it stamps the
+    /// script with (Plan.md P16.15; ADR-0052, G1).
     #[must_use]
     pub fn fleet_script() -> Self {
-        Self(Arc::new(|script| fleet_script::compile(script).map(|_| ())))
+        Self(Arc::new(|script| {
+            fleet_script::compile_lowest(script).map(|leveled| leveled.program.script().clone())
+        }))
     }
 
     /// `check` instead, for a test.
     #[must_use]
     pub fn new(
-        check: impl Fn(&Script) -> Result<(), CompileError> + Send + Sync + 'static,
+        check: impl Fn(&Script) -> Result<Script, CompileError> + Send + Sync + 'static,
     ) -> Self {
         Self(Arc::new(check))
     }
@@ -196,6 +201,10 @@ pub struct ModeEdit {
     pub visibility: ModeVisibility,
     /// The steps.
     pub definition: ModeDefinition,
+    /// Whether its script left `signs` out, as an app of the last release
+    /// does: such an edit of a mode that declares signs is refused
+    /// (Plan.md P16.15).
+    pub signs_left_out: bool,
 }
 
 /// What an edit did; either way the mode is answered as it now is.
@@ -228,6 +237,11 @@ pub enum UpdateModeError {
     /// scripted mode it reads as one without steps (ADR-0046, C6).
     #[error("a scripted mode stays a script")]
     ScriptStays,
+    /// The edit left `signs` out of a mode that declares signs, as an app
+    /// of the last release does: that app doesn't show them, and saving
+    /// would lose them (Plan.md P16.15).
+    #[error("an edit without signs of a mode that declares them")]
+    SignsUnseen,
     /// The edit makes the mode need a script API level that the agent of a
     /// bot that uses it doesn't run, by its live stream (ADR-0036, D13).
     #[error("a bot that uses the mode is on an agent that doesn't run it")]
@@ -412,10 +426,14 @@ impl ModeService {
     }
 
     /// Checks `definition`'s script, if it has one, as a program, in
-    /// `spawn_blocking`; never runs a hook.
-    async fn checked(&self, definition: &ModeDefinition) -> Result<(), ScriptCheckError> {
+    /// `spawn_blocking`, never running a hook: the definition with its
+    /// script at the API level the compiler says it needs (Plan.md P16.15).
+    async fn checked(
+        &self,
+        definition: ModeDefinition,
+    ) -> Result<ModeDefinition, ScriptCheckError> {
         let Some(script) = definition.script() else {
-            return Ok(());
+            return Ok(definition);
         };
         let script = script.clone();
         let compiler = self.compiler.clone();
@@ -425,7 +443,18 @@ impl ModeService {
         tokio::task::spawn_blocking(move || (compiler.0)(&script))
             .await
             .map_err(ScriptCheckError::CompilerFailed)?
+            .map(ModeDefinition::scripted)
             .map_err(ScriptCheckError::NotAProgram)
+    }
+
+    /// `edit` with its script checked as [`ModeService::checked`] checks
+    /// one.
+    async fn checked_edit(&self, edit: ModeEdit) -> Result<ModeEdit, UpdateModeError> {
+        let definition = self
+            .checked(edit.definition)
+            .await
+            .map_err(UpdateModeError::Script)?;
+        Ok(ModeEdit { definition, ..edit })
     }
 
     /// The same, telling the live events sockets through `live_hints` when a
@@ -479,9 +508,7 @@ impl ModeService {
         if !route.takes(check) {
             return Err(UpdateModeError::WrongRoute { route });
         }
-        self.checked(&edit.definition)
-            .await
-            .map_err(UpdateModeError::Script)?;
+        let edit = self.checked_edit(edit).await?;
         let now = self.clock.now();
         let mut tx = self.store.write().await?;
         let Some(acting) = recheck(tx.as_mut(), by).await? else {
@@ -510,7 +537,7 @@ impl ModeService {
                 UpdateModeError::Denied(error)
             })?;
         }
-        allowed_change(&stored.mode.definition, &edit.definition).inspect_err(|error| {
+        allowed_change(&stored.mode.definition, &edit).inspect_err(|error| {
             debug!(user_id = %by.actor.id, mode_id = %id, %error, "a mode edit was refused");
         })?;
         if shows_the_same(&stored.mode, &edit) {
@@ -605,7 +632,8 @@ impl ModeService {
         if !route.takes(check) {
             return Err(CreateModeError::WrongRoute { route });
         }
-        self.checked(&definition)
+        let definition = self
+            .checked(definition)
             .await
             .map_err(CreateModeError::Script)?;
         let now = self.clock.now();
@@ -768,15 +796,24 @@ fn shows_the_same(stored: &StoredMode, edit: &ModeEdit) -> bool {
         && edit.definition.same_as_shown(&stored.definition)
 }
 
-/// Whether an edit from `was` to `will_be` is one a mode may make: a
+/// Whether `edit` of a mode that was `was` is one a mode may make: a
 /// scripted mode stays a script, as an older app would save it as no steps
-/// (ADR-0046, C6).
+/// (ADR-0046, C6), and keeps its signs unless the edit says so, as an older
+/// app would save it without them (Plan.md P16.15).
 ///
 /// # Errors
-/// [`UpdateModeError::ScriptStays`] for a script made steps.
-fn allowed_change(was: &ModeDefinition, will_be: &ModeDefinition) -> Result<(), UpdateModeError> {
-    if (ModeKind::of(was), ModeKind::of(will_be)) == (ModeKind::Script, ModeKind::Steps) {
+/// [`UpdateModeError::ScriptStays`] for a script made steps, and
+/// [`UpdateModeError::SignsUnseen`] for one whose signs an older app
+/// would lose.
+fn allowed_change(was: &ModeDefinition, edit: &ModeEdit) -> Result<(), UpdateModeError> {
+    if (ModeKind::of(was), ModeKind::of(&edit.definition)) == (ModeKind::Script, ModeKind::Steps) {
         return Err(UpdateModeError::ScriptStays);
+    }
+    let declares_signs = was
+        .script()
+        .is_some_and(|script| !script.signs().is_empty());
+    if declares_signs && edit.signs_left_out {
+        return Err(UpdateModeError::SignsUnseen);
     }
     Ok(())
 }

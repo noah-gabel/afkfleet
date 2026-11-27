@@ -23,7 +23,8 @@
       "block_guard": [],
       "messages": [],
       "patterns": [],
-      "any_time_chat": false
+      "any_time_chat": false,
+      "signs": []
     },
     "notes": [{ "step": 1, "kind": "swing_skips_entities" }]
   }

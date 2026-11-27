@@ -90,6 +90,12 @@ pub const MODE_SCRIPT_HAS_NO_STEPS: &str = "must be empty for a scripted mode";
 /// and saving it there would lose its script (ADR-0046, C6).
 pub const MODE_SCRIPT_STAYS: &str = "can't replace a scripted mode's script: an app older than the server shows the mode without it; update the app";
 
+/// The field message of an edit, without `signs`, of a scripted mode that
+/// declares signs: an app older than the server doesn't show them, and
+/// would lose them (Plan.md P16.15).
+pub const MODE_SIGNS_UNSEEN: &str =
+    "can't save this mode's signs: an app older than the server doesn't show them; update the app";
+
 /// The field message of a built-in mode's name (S13, R4).
 pub const MODE_NAME_RESERVED: &str = "is a built-in mode's name";
 

@@ -680,7 +680,7 @@
       "method": "checkScript",
       "inputs": [{ "source": "fn on_join(first) {\n    keys.jump.tap();\n}\n" }],
       "args": { "request": { "source": "fn on_join(first) {\n    keys.jump.tap();\n}\n" } },
-      "expect": { "ok": {} }
+      "expect": { "ok": { "level": 1, "needs": [] } }
     },
     {
       "command": "convert_to_script",

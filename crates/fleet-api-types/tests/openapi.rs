@@ -70,10 +70,10 @@ use fleet_api_types::modes::{
 };
 use fleet_api_types::script::{
     ModeCapture, ModeCaptureKind, ModeCaptureRequest, ModeDecimalMark, ModeMessage,
-    ModeMessageRequest, ModePattern, ModePatternRequest, ModeScript, ModeScriptRequest, ModeValue,
-    ModeValueKind, ModeValueRequest, PatternWhen, SCRIPT_KEY_MAX_CHARS, SCRIPT_REPORT_MAX_CHARS,
-    SCRIPT_SOURCE_MAX_BYTES, SCRIPT_TEXT_MAX_CHARS, ScriptHookName, ScriptLogKind, ScriptLogLine,
-    ScriptProblem, ScriptProblemKind, ScriptStateKind, ScriptStatus,
+    ModeMessageRequest, ModePattern, ModePatternRequest, ModeScript, ModeScriptRequest, ModeSign,
+    ModeSignRequest, ModeValue, ModeValueKind, ModeValueRequest, PatternWhen, SCRIPT_KEY_MAX_CHARS,
+    SCRIPT_REPORT_MAX_CHARS, SCRIPT_SOURCE_MAX_BYTES, SCRIPT_TEXT_MAX_CHARS, ScriptHookName,
+    ScriptLogKind, ScriptLogLine, ScriptProblem, ScriptProblemKind, ScriptStateKind, ScriptStatus,
 };
 use fleet_api_types::server_settings::{
     CHAT_FORMAT_MAX_CHARS, CHAT_PREVIEW_LINE_MAX_CHARS, CONFLICT_TEXT_MAX_CHARS,
@@ -260,10 +260,11 @@ fn event_declarations(config: &Config) -> [(&'static str, String); 4] {
 
 /// ts-rs's declaration of every scripted mode's and script's type
 /// (Plan.md P15.21, P15.23).
-fn script_declarations(config: &Config) -> [(&'static str, String); 21] {
+fn script_declarations(config: &Config) -> [(&'static str, String); 23] {
     [
         ("ModeScriptRequest", ModeScriptRequest::decl(config)),
         ("ModeMessageRequest", ModeMessageRequest::decl(config)),
+        ("ModeSignRequest", ModeSignRequest::decl(config)),
         ("ModeValueRequest", ModeValueRequest::decl(config)),
         ("ModeValueKind", ModeValueKind::decl(config)),
         ("ModePatternRequest", ModePatternRequest::decl(config)),
@@ -273,6 +274,7 @@ fn script_declarations(config: &Config) -> [(&'static str, String); 21] {
         ("PatternWhen", PatternWhen::decl(config)),
         ("ModeScript", ModeScript::decl(config)),
         ("ModeMessage", ModeMessage::decl(config)),
+        ("ModeSign", ModeSign::decl(config)),
         ("ModeValue", ModeValue::decl(config)),
         ("ModePattern", ModePattern::decl(config)),
         ("ModeCapture", ModeCapture::decl(config)),
@@ -643,6 +645,7 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::script_request_source("ModeScriptRequest", "source", SCRIPT_SOURCE_MAX_BYTES)]
 #[case::message_request_key("ModeMessageRequest", "key", SCRIPT_KEY_MAX_CHARS)]
 #[case::message_request_text("ModeMessageRequest", "text", SCRIPT_TEXT_MAX_CHARS)]
+#[case::sign_request_key("ModeSignRequest", "key", SCRIPT_KEY_MAX_CHARS)]
 #[case::value_request_name("ModeValueRequest", "name", SCRIPT_KEY_MAX_CHARS)]
 #[case::pattern_request_key("ModePatternRequest", "key", SCRIPT_KEY_MAX_CHARS)]
 #[case::pattern_request_text("ModePatternRequest", "text", SCRIPT_TEXT_MAX_CHARS)]
@@ -650,6 +653,7 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::script_source("ModeScript", "source", SCRIPT_SOURCE_MAX_BYTES)]
 #[case::message_key("ModeMessage", "key", SCRIPT_KEY_MAX_CHARS)]
 #[case::message_text("ModeMessage", "text", SCRIPT_TEXT_MAX_CHARS)]
+#[case::sign_key("ModeSign", "key", SCRIPT_KEY_MAX_CHARS)]
 #[case::value_name("ModeValue", "name", SCRIPT_KEY_MAX_CHARS)]
 #[case::pattern_key("ModePattern", "key", SCRIPT_KEY_MAX_CHARS)]
 #[case::pattern_text("ModePattern", "text", SCRIPT_TEXT_MAX_CHARS)]
@@ -670,10 +674,11 @@ fn a_text_field_is_capped_at_its_constant(
 }
 
 /// Every text field whose cap the cases above check.
-const CHECKED_TEXTS: [(&str, &str); 144] = [
+const CHECKED_TEXTS: [(&str, &str); 146] = [
     ("ModeScriptRequest", "source"),
     ("ModeMessageRequest", "key"),
     ("ModeMessageRequest", "text"),
+    ("ModeSignRequest", "key"),
     ("ModeValueRequest", "name"),
     ("ModePatternRequest", "key"),
     ("ModePatternRequest", "text"),
@@ -681,6 +686,7 @@ const CHECKED_TEXTS: [(&str, &str); 144] = [
     ("ModeScript", "source"),
     ("ModeMessage", "key"),
     ("ModeMessage", "text"),
+    ("ModeSign", "key"),
     ("ModeValue", "name"),
     ("ModePattern", "key"),
     ("ModePattern", "text"),
@@ -863,6 +869,7 @@ fn a_request_schema_refuses_unknown_fields_and_responses_dont() {
         "ModePatternRequest",
         "ModeScheduleRequest",
         "ModeScriptRequest",
+        "ModeSignRequest",
         "ModeStepRequest",
         "ModeValueRequest",
         "PasswordChangeRequest",

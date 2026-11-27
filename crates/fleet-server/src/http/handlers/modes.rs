@@ -51,8 +51,8 @@ use axum::http::StatusCode;
 use core::num::NonZeroU32;
 
 use fleet_api_types::modes::{
-    CreateModeRequest, MODE_NAME_TAKEN, MODE_SCRIPT_HAS_NO_STEPS, MODE_SCRIPT_STAYS, ModePage,
-    ModeResponse, ModeSteps, UpdateModeRequest,
+    CreateModeRequest, MODE_NAME_TAKEN, MODE_SCRIPT_HAS_NO_STEPS, MODE_SCRIPT_STAYS,
+    MODE_SIGNS_UNSEEN, ModePage, ModeResponse, ModeSteps, UpdateModeRequest,
 };
 use fleet_api_types::script::{self, ModeScriptRequest};
 use fleet_api_types::{ErrorResponse, FieldError, PageQuery};
@@ -335,6 +335,10 @@ async fn editing(
         name,
         visibility,
         definition,
+        signs_left_out: request
+            .script
+            .as_ref()
+            .is_some_and(|script| script.signs.is_none()),
     };
     let edited = state
         .modes
@@ -354,6 +358,9 @@ async fn editing(
             UpdateModeError::Script(error) => not_a_program(error),
             UpdateModeError::ScriptStays => {
                 ApiError::Validation(vec![FieldError::new("steps", MODE_SCRIPT_STAYS)])
+            }
+            UpdateModeError::SignsUnseen => {
+                ApiError::Validation(vec![FieldError::new("script.signs", MODE_SIGNS_UNSEEN)])
             }
             other @ (UpdateModeError::WrongRoute { .. }
             | UpdateModeError::VersionExhausted

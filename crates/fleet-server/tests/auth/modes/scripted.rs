@@ -23,7 +23,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 use super::{CANARY, MODES, metadata, named, swinging, swinging_body};
 use crate::support::{Options, Person, Seen, Setup, redacted, setup_entry, setup_with};
-use fleet_api_types::modes::MODE_SCRIPT_STAYS;
+use fleet_api_types::modes::{MODE_SCRIPT_STAYS, MODE_SIGNS_UNSEEN};
 
 /// A script that sends `home` when the bot joins.
 const SOURCE: &str = "fn on_join(first) {\n    chat.send(\"home\");\n}\n";
@@ -76,7 +76,7 @@ impl Watched {
                 .lock()
                 .unwrap()
                 .push(std::thread::current().id());
-            fleet_script::compile(script).map(|_| ())
+            fleet_script::compile_lowest(script).map(|leveled| leveled.program.script().clone())
         })
     }
 
@@ -842,4 +842,182 @@ async fn a_declared_command_off_the_allowlist_is_pointed_to_the_twin(
         .await;
     let controlled = setup.set_mode(bot, mode, &member).await;
     assert_eq!(controlled.status, 403, "{}", controlled.text);
+}
+
+// --- The level a script needs, and its signs (Plan.md P16.15; ADR-0052, G1) -------------
+
+/// A script that opens the auction house's menu: level 2.
+const MENUS: &str = "fn on_menu_open() {\n    menu.close();\n}\n";
+
+/// A scripted body with `source` and a sign whose first line is its price
+/// alone: as this app sends it, `signs` always there.
+fn signed_body(name: &str, source: &str) -> Value {
+    let mut body = scripted_body(name, "private", source);
+    body["script"]["signs"] = json!([
+        { "key": "price", "lines": ["{price}", "", "afk"], "values": [
+            { "name": "price", "type": "integer", "min": 1, "max": 1_000_000 }
+        ] }
+    ]);
+    body
+}
+
+/// The script a stored mode holds.
+async fn stored_script(setup: &Setup, id: ModeId) -> Script {
+    setup
+        .db
+        .modes()
+        .find(id)
+        .await
+        .unwrap()
+        .unwrap()
+        .definition
+        .script()
+        .unwrap()
+        .clone()
+}
+
+/// The server compiles a script at the lowest level that runs it and
+/// stamps that one: a farm stays at level 1, so an agent of the last
+/// release still runs it; a script that uses menus or declares a sign is
+/// level 2 (Plan.md P16.15).
+#[sqlx::test(migrations = false)]
+async fn a_script_is_stamped_at_save_with_the_lowest_level_that_runs_it(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = scripted_setup(options, Compiler::fleet_script()).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+
+    let farm = setup
+        .post(
+            MODES,
+            Some(&admin.token),
+            Some(scripted_body("Holder", "private", SOURCE)),
+        )
+        .await;
+    let menus = setup
+        .post(
+            MODES,
+            Some(&admin.token),
+            Some(scripted_body("Menus", "private", MENUS)),
+        )
+        .await;
+    let signed = setup
+        .post(
+            MODES,
+            Some(&admin.token),
+            Some(signed_body("Signed", SOURCE)),
+        )
+        .await;
+
+    for (seen, level) in [(&farm, 1), (&menus, 2), (&signed, 2)] {
+        assert_eq!(seen.status, 201, "{}", seen.text);
+        assert_eq!(seen.body["script"]["api"], level, "{}", seen.text);
+        let id: ModeId = seen.body["id"].as_str().unwrap().parse().unwrap();
+        assert_eq!(stored_script(&setup, id).await.api().get(), level);
+    }
+    assert_eq!(
+        signed.body["script"]["signs"],
+        json!([{ "key": "price", "lines": ["{price}", "", "afk"], "values": [
+            { "name": "price", "type": "integer", "min": 1, "max": 1_000_000 }
+        ] }])
+    );
+    assert_eq!(farm.body["script"]["signs"], json!([]));
+}
+
+/// An app of the last release (0.2.1) doesn't know a mode's signs: it
+/// reads a level-2 mode without them and saves it without `signs`. That
+/// save is refused at `script.signs`, so the signs are never lost, and
+/// nothing is written (Plan.md P16.15). Its save of a mode without signs
+/// goes through as before, and this app's `[]` takes them away.
+#[sqlx::test(migrations = false)]
+async fn an_older_apps_save_without_signs_of_a_mode_that_declares_them_is_refused(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = scripted_setup(options, Compiler::fleet_script()).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+    let created = setup
+        .post(
+            MODES,
+            Some(&admin.token),
+            Some(signed_body("Signed", SOURCE)),
+        )
+        .await;
+    assert_eq!(created.status, 201, "{}", created.text);
+    let id: ModeId = created.body["id"].as_str().unwrap().parse().unwrap();
+    let plain = setup.scripted_mode(&admin, "Plain", "private").await;
+    let before = setup.db.modes().find(id).await.unwrap();
+    // The last release's request shape: its script has no `signs`.
+    let older = scripted_edit(1, "Signed", "private", "fn on_join(first) {\n}\n");
+    assert!(older["script"].get("signs").is_none());
+
+    let refused = setup.put_mode(&admin, id, older.clone()).await;
+    let after_refusal = setup.db.modes().find(id).await.unwrap();
+    let older_plain = setup
+        .put_mode(
+            &admin,
+            plain,
+            scripted_edit(1, "Plain", "private", "fn on_join(first) {\n}\n"),
+        )
+        .await;
+    let mut cleared = older;
+    cleared["script"]["signs"] = json!([]);
+    let this_app = setup.put_mode(&admin, id, cleared).await;
+
+    assert_eq!(refused.status, 422, "{}", refused.text);
+    let fields = refused.body["error"]["fields"].as_array().unwrap();
+    assert_eq!(
+        (
+            fields.len(),
+            fields[0]["path"].clone(),
+            fields[0]["message"].clone()
+        ),
+        (1, json!("script.signs"), json!(MODE_SIGNS_UNSEEN)),
+        "{}",
+        refused.text
+    );
+    assert_eq!(after_refusal, before);
+    assert_eq!(older_plain.status, 200, "{}", older_plain.text);
+    assert_eq!(this_app.status, 200, "{}", this_app.text);
+    assert_eq!(this_app.body["script"]["signs"], json!([]));
+    assert_eq!(this_app.body["script"]["api"], 1);
+    let updates = setup.entries_of(&AuditAction::MODE_UPDATE).await;
+    assert_eq!(updates.len(), 2, "the two saves that went through");
+}
+
+/// A level-2 mode never goes to a bot whose agent runs level 1, as the
+/// last release's does: 409 `agent_too_old`. A level-1 script still does.
+#[sqlx::test(migrations = false)]
+async fn a_level_2_mode_is_409_for_a_bot_on_an_agent_of_the_last_release_and_a_level_1_goes(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = scripted_setup(options, Compiler::fleet_script()).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+    let farm = setup.scripted_mode(&admin, "Holder", "private").await;
+    let menus = setup
+        .post(
+            MODES,
+            Some(&admin.token),
+            Some(scripted_body("Menus", "private", MENUS)),
+        )
+        .await;
+    let menus: ModeId = menus.body["id"].as_str().unwrap().parse().unwrap();
+    let (_, bot) = setup.bot_of(admin.id, 1).await;
+    setup.assigned(bot, 1, None).await;
+    let _stream = setup.holding_at(1, 1, &[bot]);
+
+    let refused = setup.set_mode(bot, menus, &admin).await;
+    let kept = setup.mode_of(bot).await;
+    let taken = setup.set_mode(bot, farm, &admin).await;
+
+    assert_eq!(
+        (refused.status, refused.code()),
+        (409, "agent_too_old"),
+        "{}",
+        refused.text
+    );
+    assert_eq!(kept, ModePreset::Afk.id());
+    assert_eq!(taken.status, 200, "{}", taken.text);
 }

@@ -6,6 +6,7 @@ export const SCRIPT_API: ScriptApi = {
   "objects": [
     {
       "name": "keys",
+      "kind": "game",
       "summary": "The keys of a vanilla keyboard.",
       "members": [
         {
@@ -13,81 +14,94 @@ export const SCRIPT_API: ScriptApi = {
           "kind": "property",
           "signature": "forward",
           "summary": "W: walk forward.",
-          "object": "input"
+          "object": "input",
+          "level": 1
         },
         {
           "name": "back",
           "kind": "property",
           "signature": "back",
           "summary": "S: walk back.",
-          "object": "input"
+          "object": "input",
+          "level": 1
         },
         {
           "name": "left",
           "kind": "property",
           "signature": "left",
           "summary": "A: strafe left.",
-          "object": "input"
+          "object": "input",
+          "level": 1
         },
         {
           "name": "right",
           "kind": "property",
           "signature": "right",
           "summary": "D: strafe right.",
-          "object": "input"
+          "object": "input",
+          "level": 1
         },
         {
           "name": "jump",
           "kind": "property",
           "signature": "jump",
           "summary": "Space.",
-          "object": "input"
+          "object": "input",
+          "level": 1
         },
         {
           "name": "sneak",
           "kind": "property",
           "signature": "sneak",
           "summary": "Shift.",
-          "object": "input"
+          "object": "input",
+          "level": 1
         },
         {
           "name": "sprint",
           "kind": "property",
           "signature": "sprint",
           "summary": "Ctrl.",
-          "object": "input"
+          "object": "input",
+          "level": 1
         },
         {
           "name": "drop",
           "kind": "property",
           "signature": "drop",
           "summary": "Q: drops one of the held item. Tap only.",
-          "object": "input"
+          "object": "input",
+          "level": 1
         },
         {
           "name": "drop_stack",
           "kind": "property",
           "signature": "drop_stack",
           "summary": "Ctrl+Q: drops the held stack. Tap only.",
-          "object": "input"
+          "object": "input",
+          "level": 1
         },
         {
           "name": "swap_offhand",
           "kind": "property",
           "signature": "swap_offhand",
           "summary": "F: swaps the held item with the offhand's. Tap only.",
-          "object": "input"
+          "object": "input",
+          "level": 1
         },
         {
           "name": "release_all",
           "kind": "method",
           "signature": "release_all()",
-          "summary": "Lets go of every key."
+          "summary": "Lets go of every key.",
+          "level": 1
         }
-      ]
+      ],
+      "level": 1
     },
     {
       "name": "mouse",
+      "kind": "game",
       "summary": "The two mouse buttons.",
       "members": [
         {
@@ -95,340 +109,960 @@ export const SCRIPT_API: ScriptApi = {
           "kind": "property",
           "signature": "left",
           "summary": "Attack; held on a block, mine.",
-          "object": "input"
+          "object": "input",
+          "level": 1
         },
         {
           "name": "right",
           "kind": "property",
           "signature": "right",
           "summary": "Use.",
-          "object": "input"
+          "object": "input",
+          "level": 1
         }
-      ]
+      ],
+      "level": 1
     },
     {
       "name": "input",
+      "kind": "value",
       "summary": "A key or a mouse button: keys.forward, mouse.left.",
       "members": [
         {
           "name": "tap",
           "kind": "method",
           "signature": "tap()",
-          "summary": "Press and let go."
+          "summary": "Press and let go.",
+          "level": 1
         },
         {
           "name": "hold",
           "kind": "method",
           "signature": "hold()",
-          "summary": "Press and keep down until release()."
+          "summary": "Press and keep down until release().",
+          "level": 1
         },
         {
           "name": "hold_for",
           "kind": "method",
           "signature": "hold_for(ms)",
-          "summary": "Press, and let go by itself after ms milliseconds (50 to 600,000)."
+          "summary": "Press, and let go by itself after ms milliseconds (50 to 600,000).",
+          "level": 1
         },
         {
           "name": "hold_until_used",
           "kind": "method",
           "signature": "hold_until_used()",
-          "summary": "The right button only: hold until the item is used up once."
+          "summary": "The right button only: hold until the item is used up once.",
+          "level": 1
         },
         {
           "name": "release",
           "kind": "method",
           "signature": "release()",
-          "summary": "Let go. Never refused."
+          "summary": "Let go. Never refused.",
+          "level": 1
         },
         {
           "name": "held",
           "kind": "property",
           "signature": "held",
-          "summary": "Whether it's down now."
+          "summary": "Whether it's down now.",
+          "level": 1
         }
-      ]
+      ],
+      "level": 1
     },
     {
       "name": "look",
+      "kind": "game",
       "summary": "Where the bot looks: the mouse's movement.",
       "members": [
         {
           "name": "at",
           "kind": "method",
           "signature": "at(yaw, pitch)",
-          "summary": "Look in a direction, in degrees: yaw -180 to 180, pitch -90 (up) to 90 (down)."
+          "summary": "Look in a direction, in degrees: yaw -180 to 180, pitch -90 (up) to 90 (down).",
+          "level": 1
         },
         {
           "name": "turn",
           "kind": "method",
           "signature": "turn(yaw, pitch)",
-          "summary": "Turn by that much from where the bot looks now."
+          "summary": "Turn by that much from where the bot looks now.",
+          "level": 1
         },
         {
           "name": "at_position",
           "kind": "method",
           "signature": "at_position(x, y, z)",
-          "summary": "Look at a point in the world."
+          "summary": "Look at a point in the world.",
+          "level": 1
         },
         {
           "name": "at_entity",
           "kind": "method",
           "signature": "at_entity(entity)",
-          "summary": "Look at an entity world returned."
+          "summary": "Look at an entity world returned.",
+          "level": 1
         },
         {
           "name": "yaw",
           "kind": "property",
           "signature": "yaw",
-          "summary": "Where the bot looks, left and right."
+          "summary": "Where the bot looks, left and right.",
+          "level": 1
         },
         {
           "name": "pitch",
           "kind": "property",
           "signature": "pitch",
-          "summary": "Where the bot looks, up and down."
+          "summary": "Where the bot looks, up and down.",
+          "level": 1
         }
-      ]
+      ],
+      "level": 1
     },
     {
       "name": "hotbar",
+      "kind": "game",
       "summary": "The hotbar: the number keys.",
       "members": [
         {
           "name": "select",
           "kind": "method",
           "signature": "select(n)",
-          "summary": "Select slot 1 to 9."
+          "summary": "Select slot 1 to 9.",
+          "level": 1
         },
         {
           "name": "selected",
           "kind": "property",
           "signature": "selected",
-          "summary": "The selected slot, 1 to 9."
+          "summary": "The selected slot, 1 to 9.",
+          "level": 1
         }
-      ]
+      ],
+      "level": 1
     },
     {
       "name": "vehicle",
+      "kind": "game",
       "summary": "Getting into a vehicle and out of it.",
       "members": [
         {
           "name": "mount",
           "kind": "method",
           "signature": "mount(kind)",
-          "summary": "Get into the nearest free vehicle of that kind within reach: \"minecart\"."
+          "summary": "Get into the nearest free vehicle of that kind within reach: \"minecart\".",
+          "level": 1
         },
         {
           "name": "dismount",
           "kind": "method",
           "signature": "dismount()",
-          "summary": "Get out."
+          "summary": "Get out.",
+          "level": 1
         }
-      ]
+      ],
+      "level": 1
     },
     {
       "name": "chat",
+      "kind": "game",
       "summary": "The mode's declared messages and chat patterns.",
       "members": [
         {
           "name": "send",
           "kind": "method",
           "signature": "send(key, values)",
-          "summary": "Send the declared message key; values is a map of its values, left out for none."
+          "summary": "Send the declared message key; values is a map of its values, left out for none.",
+          "level": 1
         },
         {
           "name": "expect",
           "kind": "method",
           "signature": "expect(key, ms)",
-          "summary": "After a declared command in the same hook: read the reply pattern key for ms milliseconds (250 to 30,000)."
+          "summary": "After a declared command in the same hook: read the reply pattern key for ms milliseconds (250 to 30,000).",
+          "level": 1
         }
-      ]
+      ],
+      "level": 1
     },
     {
       "name": "timer",
+      "kind": "game",
       "summary": "Named timers that call on_timer(name).",
       "members": [
         {
           "name": "after",
           "kind": "method",
           "signature": "after(ms, name)",
-          "summary": "Call on_timer(name) once, ms milliseconds from now (250 to 86,400,000)."
+          "summary": "Call on_timer(name) once, ms milliseconds from now (250 to 86,400,000).",
+          "level": 1
         },
         {
           "name": "every",
           "kind": "method",
           "signature": "every(ms, name)",
-          "summary": "Call on_timer(name) every ms milliseconds, first after ms."
+          "summary": "Call on_timer(name) every ms milliseconds, first after ms.",
+          "level": 1
         },
         {
           "name": "cancel",
           "kind": "method",
           "signature": "cancel(name)",
-          "summary": "Remove that timer."
+          "summary": "Remove that timer.",
+          "level": 1
         }
-      ]
+      ],
+      "level": 1
     },
     {
       "name": "random",
+      "kind": "game",
       "summary": "Random numbers.",
       "members": [
         {
           "name": "between",
           "kind": "method",
           "signature": "between(low, high)",
-          "summary": "A whole number from low to high, both included."
+          "summary": "A whole number from low to high, both included.",
+          "level": 1
         },
         {
           "name": "chance",
           "kind": "method",
           "signature": "chance(percent)",
-          "summary": "true that often, in percent."
+          "summary": "true that often, in percent.",
+          "level": 1
         }
-      ]
+      ],
+      "level": 1
     },
     {
       "name": "log",
+      "kind": "game",
       "summary": "The script's log, shown on the bot's page.",
       "members": [
         {
           "name": "info",
           "kind": "method",
           "signature": "info(text)",
-          "summary": "Write a line: up to 200 characters, 20 lines a minute."
+          "summary": "Write a line: up to 200 characters, 20 lines a minute.",
+          "level": 1
         }
-      ]
+      ],
+      "level": 1
     },
     {
       "name": "bot",
+      "kind": "game",
       "summary": "What the script knows about its own bot. Read-only.",
       "members": [
+        {
+          "name": "name",
+          "kind": "property",
+          "signature": "name",
+          "summary": "The bot's own player name, as its account has it. API level 2.",
+          "level": 2
+        },
         {
           "name": "health",
           "kind": "property",
           "signature": "health",
-          "summary": "Health, 0 to 20."
+          "summary": "Health, 0 to 20.",
+          "level": 1
         },
         {
           "name": "food",
           "kind": "property",
           "signature": "food",
-          "summary": "Food, 0 to 20."
+          "summary": "Food, 0 to 20.",
+          "level": 1
         },
         {
           "name": "x",
           "kind": "property",
           "signature": "x",
-          "summary": "Where its feet are: east (positive) and west."
+          "summary": "Where its feet are: east (positive) and west.",
+          "level": 1
         },
         {
           "name": "y",
           "kind": "property",
           "signature": "y",
-          "summary": "Where its feet are: up (positive) and down."
+          "summary": "Where its feet are: up (positive) and down.",
+          "level": 1
         },
         {
           "name": "z",
           "kind": "property",
           "signature": "z",
-          "summary": "Where its feet are: south (positive) and north."
+          "summary": "Where its feet are: south (positive) and north.",
+          "level": 1
         },
         {
           "name": "dimension",
           "kind": "property",
           "signature": "dimension",
-          "summary": "The world it's in, such as \"minecraft:overworld\"."
+          "summary": "The world it's in, such as \"minecraft:overworld\".",
+          "level": 1
         },
         {
           "name": "riding",
           "kind": "property",
           "signature": "riding",
-          "summary": "Whether it sits in a vehicle."
+          "summary": "Whether it sits in a vehicle.",
+          "level": 1
         },
         {
           "name": "held",
           "kind": "property",
           "signature": "held",
-          "summary": "The item in its hand, or () for an empty hand: id, count, durability."
+          "summary": "The item in its hand, or () for an empty hand: id, count, durability.",
+          "level": 1
         },
         {
           "name": "looking_at",
           "kind": "property",
           "signature": "looking_at",
-          "summary": "What its crosshair is on within reach, or (): kind, id, x, y, z."
+          "summary": "What its crosshair is on within reach, or (): kind, id, x, y, z.",
+          "level": 1
         }
-      ]
+      ],
+      "level": 1
     },
     {
       "name": "world",
+      "kind": "game",
       "summary": "What's near the bot. Read-only.",
       "members": [
         {
           "name": "nearest",
           "kind": "method",
           "signature": "nearest(kind)",
-          "summary": "The nearest entity of that kind within 16 blocks, or (): kind, x, y, z, distance, occupied."
+          "summary": "The nearest entity of that kind within 16 blocks, or (): kind, x, y, z, distance, occupied.",
+          "level": 1
         },
         {
           "name": "nearest_free",
           "kind": "method",
           "signature": "nearest_free(kind)",
-          "summary": "The same, skipping vehicles someone sits in."
+          "summary": "The same, skipping vehicles someone sits in.",
+          "level": 1
         },
         {
           "name": "block",
           "kind": "method",
           "signature": "block(x, y, z)",
-          "summary": "The block's ID there, or () further than 4 blocks from the bot."
+          "summary": "The block's ID there, or () further than 4 blocks from the bot.",
+          "level": 1
         }
-      ]
+      ],
+      "level": 1
+    },
+    {
+      "name": "inventory",
+      "kind": "game",
+      "summary": "The bot's own slots: its armour, its 36 slots and its offhand, numbered as its inventory screen numbers them.",
+      "members": [
+        {
+          "name": "slots",
+          "kind": "property",
+          "signature": "slots",
+          "summary": "Every slot's number: the armour 5 to 8, the main inventory 9 to 35, the hotbar 36 to 44, the offhand 45.",
+          "level": 2
+        },
+        {
+          "name": "slot",
+          "kind": "method",
+          "signature": "slot(n)",
+          "summary": "Slot n, or ().",
+          "answers": "slot",
+          "level": 2
+        },
+        {
+          "name": "lore_has",
+          "kind": "method",
+          "signature": "lore_has(slot, text)",
+          "summary": "Whether a lore line of the bot's slot holds text, as on menu.",
+          "level": 2
+        },
+        {
+          "name": "lore_number",
+          "kind": "method",
+          "signature": "lore_number(slot, label)",
+          "summary": "The first number after label in the bot's slot's lore, as on menu.",
+          "level": 2
+        },
+        {
+          "name": "find",
+          "kind": "method",
+          "signature": "find(id)",
+          "summary": "The first slot that holds the item id, or ().",
+          "answers": "slot",
+          "level": 2
+        },
+        {
+          "name": "count",
+          "kind": "method",
+          "signature": "count(id)",
+          "summary": "How many of the item id the bot carries.",
+          "level": 2
+        },
+        {
+          "name": "hotbar",
+          "kind": "method",
+          "signature": "hotbar(n)",
+          "summary": "The hotbar slot of number key n, 1 to 9, or ().",
+          "answers": "slot",
+          "level": 2
+        },
+        {
+          "name": "open",
+          "kind": "method",
+          "signature": "open()",
+          "summary": "E: opens the inventory screen; only with no screen open. Nothing goes to the server.",
+          "level": 2
+        }
+      ],
+      "level": 2
+    },
+    {
+      "name": "menu",
+      "kind": "game",
+      "summary": "The screen that's open: a server's, or the bot's own inventory.",
+      "members": [
+        {
+          "name": "open",
+          "kind": "property",
+          "signature": "open",
+          "summary": "Whether a screen is open.",
+          "level": 2
+        },
+        {
+          "name": "screen",
+          "kind": "property",
+          "signature": "screen",
+          "summary": "Which screen it is: a number new at every opening, or () with none.",
+          "level": 2
+        },
+        {
+          "name": "kind",
+          "kind": "property",
+          "signature": "kind",
+          "summary": "Its kind: generic_9x3, anvil, merchant, inventory, …; () with none.",
+          "level": 2
+        },
+        {
+          "name": "title",
+          "kind": "property",
+          "signature": "title",
+          "summary": "Its title, as plain text.",
+          "level": 2
+        },
+        {
+          "name": "rows",
+          "kind": "property",
+          "signature": "rows",
+          "summary": "A grid's rows; () for a screen that isn't one.",
+          "level": 2
+        },
+        {
+          "name": "columns",
+          "kind": "property",
+          "signature": "columns",
+          "summary": "A grid's columns; () for a screen that isn't one.",
+          "level": 2
+        },
+        {
+          "name": "slots",
+          "kind": "property",
+          "signature": "slots",
+          "summary": "The numbers of the screen's own slots, from 0: for n in menu.slots { let slot = menu.slot(n); … }.",
+          "level": 2
+        },
+        {
+          "name": "player",
+          "kind": "property",
+          "signature": "player",
+          "summary": "The numbers of the bot's 36 slots in this screen: four rows of nine, the hotbar last.",
+          "level": 2
+        },
+        {
+          "name": "slot",
+          "kind": "method",
+          "signature": "slot(n)",
+          "summary": "Slot n of the screen, its own or the bot's, or ().",
+          "answers": "slot",
+          "level": 2
+        },
+        {
+          "name": "at",
+          "kind": "method",
+          "signature": "at(row, column)",
+          "summary": "A grid's slot by its row and column, from 0 at the top left, or ().",
+          "answers": "slot",
+          "level": 2
+        },
+        {
+          "name": "find",
+          "kind": "method",
+          "signature": "find(id)",
+          "summary": "The first of the screen's own slots that holds the item id, or ().",
+          "answers": "slot",
+          "level": 2
+        },
+        {
+          "name": "cursor",
+          "kind": "property",
+          "signature": "cursor",
+          "summary": "The item on the cursor, or ().",
+          "level": 2
+        },
+        {
+          "name": "trades",
+          "kind": "property",
+          "signature": "trades",
+          "summary": "How many trades a merchant offers; 0 for any other screen.",
+          "level": 2
+        },
+        {
+          "name": "trade",
+          "kind": "method",
+          "signature": "trade(n)",
+          "summary": "Trade n, from 0: a map of cost_id, cost_count, second_id, second_count, result_id, result_count, result_name, result_potion, result_enchantments, result_stored_enchantments, out_of_stock; or ().",
+          "level": 2
+        },
+        {
+          "name": "pending",
+          "kind": "property",
+          "signature": "pending",
+          "summary": "Whether an action of the script's still waits for its fate.",
+          "level": 2
+        },
+        {
+          "name": "lore_has",
+          "kind": "method",
+          "signature": "lore_has(slot, text)",
+          "summary": "Whether a lore line of the slot (its number, or a slot read on this screen) holds text. An empty text is in none.",
+          "level": 2
+        },
+        {
+          "name": "lore_number",
+          "kind": "method",
+          "signature": "lore_number(slot, label)",
+          "summary": "The first number after label on the slot's first lore line that starts with it, or (); lore_number(slot, label, \",\") for a comma as the decimal mark.",
+          "level": 2
+        },
+        {
+          "name": "number",
+          "kind": "method",
+          "signature": "number(text)",
+          "summary": "The first number in text as servers write amounts (1,250.5, 2k, 1.5M, 3B), or (); number(text, \",\") for a comma as the decimal mark.",
+          "level": 2
+        },
+        {
+          "name": "click",
+          "kind": "method",
+          "signature": "click(slot)",
+          "summary": "A left click on a slot: its number, or a slot a hook read. Its fate comes in on_click.",
+          "level": 2
+        },
+        {
+          "name": "right_click",
+          "kind": "method",
+          "signature": "right_click(slot)",
+          "summary": "A right click on a slot.",
+          "level": 2
+        },
+        {
+          "name": "shift_click",
+          "kind": "method",
+          "signature": "shift_click(slot)",
+          "summary": "Shift and a left click: moves the stack to the other part of the screen.",
+          "level": 2
+        },
+        {
+          "name": "swap",
+          "kind": "method",
+          "signature": "swap(slot, n)",
+          "summary": "Number key n over a slot: swaps it with hotbar slot n, 1 to 9.",
+          "level": 2
+        },
+        {
+          "name": "drop",
+          "kind": "method",
+          "signature": "drop(slot)",
+          "summary": "Q over a slot: drops one item.",
+          "level": 2
+        },
+        {
+          "name": "drop_stack",
+          "kind": "method",
+          "signature": "drop_stack(slot)",
+          "summary": "Ctrl+Q over a slot: drops the stack.",
+          "level": 2
+        },
+        {
+          "name": "button",
+          "kind": "method",
+          "signature": "button(n)",
+          "summary": "A screen's own button: an enchanting table's 0 to 2, a stonecutter's or a loom's.",
+          "level": 2
+        },
+        {
+          "name": "select_trade",
+          "kind": "method",
+          "signature": "select_trade(n)",
+          "summary": "Selects a merchant's trade n, from 0.",
+          "level": 2
+        },
+        {
+          "name": "rename",
+          "kind": "method",
+          "signature": "rename(key, values)",
+          "summary": "Sets the anvil's name to a declared message: rename(key) without values.",
+          "level": 2
+        },
+        {
+          "name": "close",
+          "kind": "method",
+          "signature": "close()",
+          "summary": "Esc: closes the screen. Never limited, never refused while one is open.",
+          "level": 2
+        }
+      ],
+      "level": 2
+    },
+    {
+      "name": "sign",
+      "kind": "game",
+      "summary": "The sign editor the server opened, while it waits for its answer.",
+      "members": [
+        {
+          "name": "open",
+          "kind": "property",
+          "signature": "open",
+          "summary": "Whether a sign editor waits for its answer.",
+          "level": 2
+        },
+        {
+          "name": "x",
+          "kind": "property",
+          "signature": "x",
+          "summary": "The sign's block: x.",
+          "level": 2
+        },
+        {
+          "name": "y",
+          "kind": "property",
+          "signature": "y",
+          "summary": "The sign's block: y.",
+          "level": 2
+        },
+        {
+          "name": "z",
+          "kind": "property",
+          "signature": "z",
+          "summary": "The sign's block: z.",
+          "level": 2
+        },
+        {
+          "name": "side",
+          "kind": "property",
+          "signature": "side",
+          "summary": "\"front\" or \"back\".",
+          "level": 2
+        },
+        {
+          "name": "write",
+          "kind": "method",
+          "signature": "write(key, values)",
+          "summary": "Answers with a declared sign: write(key) without values. Once an editor.",
+          "level": 2
+        },
+        {
+          "name": "cancel",
+          "kind": "method",
+          "signature": "cancel()",
+          "summary": "Answers with nothing written. Once an editor.",
+          "level": 2
+        }
+      ],
+      "level": 2
+    },
+    {
+      "name": "clock",
+      "kind": "game",
+      "summary": "The time of day of the hook's moment.",
+      "members": [
+        {
+          "name": "local",
+          "kind": "method",
+          "signature": "local(zone)",
+          "summary": "The time in an IANA time zone such as \"Europe/Berlin\", summer time included: a time map.",
+          "answers": "time",
+          "level": 2
+        }
+      ],
+      "level": 2
+    },
+    {
+      "name": "slot",
+      "kind": "value",
+      "summary": "A slot as a script reads it: a map of plain data, from menu.slot(n) or inventory.slot(n).",
+      "members": [
+        {
+          "name": "index",
+          "kind": "property",
+          "signature": "index",
+          "summary": "Its number in the screen, or in the inventory.",
+          "level": 2
+        },
+        {
+          "name": "row",
+          "kind": "property",
+          "signature": "row",
+          "summary": "Its row in a grid, from 0 at the top; () outside one.",
+          "level": 2
+        },
+        {
+          "name": "column",
+          "kind": "property",
+          "signature": "column",
+          "summary": "Its column in a grid, from 0 at the left; () outside one.",
+          "level": 2
+        },
+        {
+          "name": "screen",
+          "kind": "property",
+          "signature": "screen",
+          "summary": "The screen it was read on (menu.screen); () for the inventory's own.",
+          "level": 2
+        },
+        {
+          "name": "empty",
+          "kind": "property",
+          "signature": "empty",
+          "summary": "Whether it holds nothing.",
+          "level": 2
+        },
+        {
+          "name": "id",
+          "kind": "property",
+          "signature": "id",
+          "summary": "The item's registry ID; () when empty.",
+          "level": 2
+        },
+        {
+          "name": "count",
+          "kind": "property",
+          "signature": "count",
+          "summary": "How many; 0 when empty.",
+          "level": 2
+        },
+        {
+          "name": "name",
+          "kind": "property",
+          "signature": "name",
+          "summary": "The name the client shows: the custom name, or the item's.",
+          "level": 2
+        },
+        {
+          "name": "lore",
+          "kind": "property",
+          "signature": "lore",
+          "summary": "The lore's lines, plain text: the first ones, while a value holds them. menu.lore_has and lore_number read them all.",
+          "level": 2
+        },
+        {
+          "name": "durability",
+          "kind": "property",
+          "signature": "durability",
+          "summary": "The uses left; () for an item that doesn't wear.",
+          "level": 2
+        },
+        {
+          "name": "potion",
+          "kind": "property",
+          "signature": "potion",
+          "summary": "A potion's, a splash or lingering potion's or a tipped arrow's kind, such as \"minecraft:turtle_master\"; ().",
+          "level": 2
+        },
+        {
+          "name": "enchantments",
+          "kind": "property",
+          "signature": "enchantments",
+          "summary": "A map of each enchantment's ID to its level.",
+          "level": 2
+        },
+        {
+          "name": "stored_enchantments",
+          "kind": "property",
+          "signature": "stored_enchantments",
+          "summary": "An enchanted book's, the same way.",
+          "level": 2
+        }
+      ],
+      "level": 2
+    },
+    {
+      "name": "time",
+      "kind": "value",
+      "summary": "A time of day, as clock.local answers it: a map of whole numbers.",
+      "members": [
+        {
+          "name": "year",
+          "kind": "property",
+          "signature": "year",
+          "summary": "The year.",
+          "level": 2
+        },
+        {
+          "name": "month",
+          "kind": "property",
+          "signature": "month",
+          "summary": "1 to 12.",
+          "level": 2
+        },
+        {
+          "name": "day",
+          "kind": "property",
+          "signature": "day",
+          "summary": "The day of the month, 1 to 31.",
+          "level": 2
+        },
+        {
+          "name": "hour",
+          "kind": "property",
+          "signature": "hour",
+          "summary": "0 to 23.",
+          "level": 2
+        },
+        {
+          "name": "minute",
+          "kind": "property",
+          "signature": "minute",
+          "summary": "0 to 59.",
+          "level": 2
+        },
+        {
+          "name": "second",
+          "kind": "property",
+          "signature": "second",
+          "summary": "0 to 59.",
+          "level": 2
+        },
+        {
+          "name": "weekday",
+          "kind": "property",
+          "signature": "weekday",
+          "summary": "1 for Monday to 7 for Sunday.",
+          "level": 2
+        },
+        {
+          "name": "offset",
+          "kind": "property",
+          "signature": "offset",
+          "summary": "Minutes ahead of UTC: 60 in Berlin's winter, 120 in its summer.",
+          "level": 2
+        }
+      ],
+      "level": 2
     },
     {
       "name": "hooks",
+      "kind": "hooks",
       "summary": "The functions a script defines for the runtime to call.",
       "members": [
         {
           "name": "on_join",
           "kind": "hook",
           "signature": "fn on_join(first)",
-          "summary": "The bot is in the world after connecting; first is false after a reconnect."
+          "summary": "The bot is in the world after connecting; first is false after a reconnect.",
+          "level": 1
         },
         {
           "name": "on_world_change",
           "kind": "hook",
           "signature": "fn on_world_change()",
-          "summary": "The server moved the bot to another world without a disconnect."
+          "summary": "The server moved the bot to another world without a disconnect.",
+          "level": 1
         },
         {
           "name": "on_death",
           "kind": "hook",
           "signature": "fn on_death()",
-          "summary": "The bot died."
+          "summary": "The bot died.",
+          "level": 1
         },
         {
           "name": "on_respawn",
           "kind": "hook",
           "signature": "fn on_respawn()",
-          "summary": "The bot lives again after a death."
+          "summary": "The bot lives again after a death.",
+          "level": 1
         },
         {
           "name": "on_timer",
           "kind": "hook",
           "signature": "fn on_timer(name)",
-          "summary": "A timer the script set is due."
+          "summary": "A timer the script set is due.",
+          "level": 1
         },
         {
           "name": "on_chat",
           "kind": "hook",
           "signature": "fn on_chat(key, values)",
-          "summary": "The server printed a line that fits one of the mode's declared patterns."
+          "summary": "The server printed a line that fits one of the mode's declared patterns.",
+          "level": 1
         },
         {
           "name": "on_stop",
           "kind": "hook",
           "signature": "fn on_stop()",
-          "summary": "The script stops in an orderly way."
+          "summary": "The script stops in an orderly way.",
+          "level": 1
+        },
+        {
+          "name": "on_menu_open",
+          "kind": "hook",
+          "signature": "fn on_menu_open()",
+          "summary": "A screen opened: a server's, or the inventory. Everything held was let go.",
+          "level": 2
+        },
+        {
+          "name": "on_menu_update",
+          "kind": "hook",
+          "signature": "fn on_menu_update()",
+          "summary": "The open screen's content changed: at most once a game tick.",
+          "level": 2
+        },
+        {
+          "name": "on_menu_close",
+          "kind": "hook",
+          "signature": "fn on_menu_close()",
+          "summary": "The screen closed.",
+          "level": 2
+        },
+        {
+          "name": "on_click",
+          "kind": "hook",
+          "signature": "fn on_click(result)",
+          "summary": "What became of a click, a button, a trade or a name: ok, reason and slot.",
+          "level": 2
+        },
+        {
+          "name": "on_sign_open",
+          "kind": "hook",
+          "signature": "fn on_sign_open()",
+          "summary": "The server opened a sign editor.",
+          "level": 2
         }
-      ]
+      ],
+      "level": 1
     }
   ],
   "reasons": [
@@ -441,7 +1075,20 @@ export const SCRIPT_API: ScriptApi = {
     "block_guard",
     "bad_value",
     "too_many",
-    "no_command"
+    "no_command",
+    "screen_open",
+    "no_menu",
+    "screen_changed",
+    "content_changed",
+    "slot_changed",
+    "click_pending",
+    "unanswered",
+    "no_sign",
+    "sign_changed",
+    "sign_answered",
+    "rejected",
+    "unclear",
+    "replaced"
   ],
   "examples": [
     {
@@ -455,7 +1102,8 @@ export const SCRIPT_API: ScriptApi = {
         "block_guard": [],
         "messages": [],
         "patterns": [],
-        "any_time_chat": false
+        "any_time_chat": false,
+        "signs": []
       }
     },
     {
@@ -469,7 +1117,8 @@ export const SCRIPT_API: ScriptApi = {
         "block_guard": [],
         "messages": [],
         "patterns": [],
-        "any_time_chat": false
+        "any_time_chat": false,
+        "signs": []
       }
     },
     {
@@ -485,7 +1134,8 @@ export const SCRIPT_API: ScriptApi = {
         ],
         "messages": [],
         "patterns": [],
-        "any_time_chat": false
+        "any_time_chat": false,
+        "signs": []
       }
     },
     {
@@ -535,7 +1185,150 @@ export const SCRIPT_API: ScriptApi = {
             ]
           }
         ],
-        "any_time_chat": false
+        "any_time_chat": false,
+        "signs": []
+      }
+    },
+    {
+      "id": "sell_macro",
+      "title": "A sell macro",
+      "script": {
+        "api": 2,
+        "source": "// Every minute, while it carries Turtle Master potions: opens the server's\n// sell menu, moves every potion into it with a shift-click, presses Sell and\n// closes it. Each step waits 300 to 900 ms, and each is judged by what the\n// screen shows next, never by a click's fate alone: a plugin's button answers\n// \"rejected\" though it did its work.\nfn on_join(first) {\n    timer.every(60000, \"sell\");\n}\n\nfn on_timer(name) {\n    if name == \"sell\" {\n        if !menu.open && carries_potions() {\n            chat.send(\"sell_menu\");\n        }\n    } else if name == \"step\" {\n        step();\n    }\n}\n\nfn on_menu_open() {\n    if menu.title == \"Sell Items\" {\n        state.pressed = false;\n        later();\n    }\n}\n\nfn on_click(result) {\n    later();\n}\n\nfn later() {\n    timer.after(random.between(300, 900), \"step\");\n}\n\n// One step in the sell menu: a potion in, then Sell, then the close.\nfn step() {\n    if !menu.open || menu.title != \"Sell Items\" {\n        return;\n    }\n    for n in menu.player {\n        let slot = menu.slot(n);\n        if turtle_master(slot) {\n            act(menu.shift_click(slot));\n            return;\n        }\n    }\n    let sell = menu.slot(49);\n    if !state.pressed && sell.id == \"minecraft:emerald\" && sell.name == \"Sell\" {\n        state.pressed = true;\n        act(menu.click(sell));\n        return;\n    }\n    menu.close();\n}\n\n// A click the hook was refused for is tried again at the next step.\nfn act(result) {\n    if !result.ok {\n        later();\n    }\n}\n\nfn turtle_master(slot) {\n    slot.potion == \"minecraft:turtle_master\"\n        || slot.potion == \"minecraft:long_turtle_master\"\n        || slot.potion == \"minecraft:strong_turtle_master\"\n}\n\nfn carries_potions() {\n    for n in inventory.slots {\n        if turtle_master(inventory.slot(n)) {\n            return true;\n        }\n    }\n    false\n}\n",
+        "leash": 8,
+        "tool_guard": 2,
+        "block_guard": [],
+        "messages": [
+          {
+            "key": "sell_menu",
+            "text": "/sell",
+            "values": [],
+            "arguments_hidden": false
+          }
+        ],
+        "patterns": [],
+        "any_time_chat": false,
+        "signs": []
+      }
+    },
+    {
+      "id": "auction_scan",
+      "title": "An auction scan",
+      "script": {
+        "api": 2,
+        "source": "// Every 30 seconds: opens the auction house and buys the cheapest diamond\n// listed for 1,500 or less, on its Confirm Purchase screen. A purchase is\n// judged by what follows it, never by a click's fate: the plugin answers\n// every button \"rejected\" though it acted, so the diamonds in the inventory\n// say what was bought. Each Confirm Purchase screen is confirmed at most\n// once, and only for the listing picked, so no listing is bought twice.\nfn on_join(first) {\n    if first {\n        state.bought = 0;\n    }\n    state.wanted = ();\n    state.confirmed = false;\n    state.before = 0;\n    timer.every(30000, \"scan\");\n}\n\nfn on_timer(name) {\n    if name == \"scan\" {\n        if !menu.open {\n            chat.send(\"auction\");\n        }\n    } else if name == \"pick\" {\n        pick();\n    } else if name == \"confirm\" {\n        confirm();\n    }\n}\n\nfn on_menu_open() {\n    if menu.title == \"Auction House\" {\n        later(\"pick\");\n    } else if menu.title == \"Confirm Purchase\" {\n        state.confirmed = false;\n        later(\"confirm\");\n    } else {\n        menu.close();\n    }\n}\n\nfn on_menu_close() {\n    // The purchase's screen closed after its confirm: what the inventory\n    // holds now says whether it bought.\n    if state.wanted != () && state.confirmed {\n        let now = inventory.count(\"minecraft:diamond\");\n        if now > state.before {\n            state.bought += 1;\n            log.info(`Bought ${now - state.before} diamonds for ${state.wanted.price}.`);\n        } else {\n            log.info(\"The purchase didn't go through.\");\n        }\n        state.wanted = ();\n        state.confirmed = false;\n    }\n}\n\nfn later(name) {\n    timer.after(random.between(300, 900), name);\n}\n\n// On the auction house: the cheapest diamond within the budget.\nfn pick() {\n    if !menu.open || menu.title != \"Auction House\" {\n        return;\n    }\n    let best = ();\n    let price = 0.0;\n    for n in menu.slots {\n        let slot = menu.slot(n);\n        if slot.id != \"minecraft:diamond\" || slot.row > 4 {\n            continue;\n        }\n        let asked = menu.lore_number(slot, \"Price\");\n        if asked == () || asked > 1500 {\n            continue;\n        }\n        if best == () || asked < price {\n            best = slot;\n            price = asked;\n        }\n    }\n    if best == () {\n        menu.close();\n        return;\n    }\n    state.wanted = #{ price: price, seller: seller_of(best) };\n    if !menu.click(best).ok {\n        state.wanted = ();\n        menu.close();\n    }\n}\n\n// On Confirm Purchase: confirms only the listing picked, once.\nfn confirm() {\n    if !menu.open || menu.title != \"Confirm Purchase\" || state.wanted == () || state.confirmed {\n        return;\n    }\n    let button = menu.slot(11);\n    let same = menu.slot(13).id == \"minecraft:diamond\"\n        && menu.lore_number(13, \"Price\") == state.wanted.price\n        && menu.lore_has(13, state.wanted.seller);\n    if !same || button.id != \"minecraft:lime_stained_glass_pane\" || button.name != \"Confirm\" {\n        log.info(\"Not the listing picked; nothing bought.\");\n        state.wanted = ();\n        menu.close();\n        return;\n    }\n    state.before = inventory.count(\"minecraft:diamond\");\n    state.confirmed = menu.click(button).ok;\n}\n\n// A listing's seller line, as its lore holds it.\nfn seller_of(slot) {\n    for line in slot.lore {\n        if line.starts_with(\"Seller: \") {\n            return line;\n        }\n    }\n    \"Seller: \"\n}\n",
+        "leash": 8,
+        "tool_guard": 2,
+        "block_guard": [],
+        "messages": [
+          {
+            "key": "auction",
+            "text": "/ah",
+            "values": [],
+            "arguments_hidden": false
+          }
+        ],
+        "patterns": [],
+        "any_time_chat": false,
+        "signs": []
+      }
+    },
+    {
+      "id": "farm_that_sells",
+      "title": "A farm that sells",
+      "script": {
+        "api": 2,
+        "source": "// A farm that sells: it farms by holding the right button with its farm's\n// item in hotbar slot 1. Every 5 minutes it opens the sell menu, sells its\n// Turtle Master potions and drops its one kind of junk, never anything else,\n// so it never drops a tool. It waits 300 to 900 ms before every click, then\n// selects the farm's item again and farms on: a right button held with a\n// potion in hand would drink it.\nfn junk() {\n    \"minecraft:rotten_flesh\"\n}\n\nfn on_join(first) {\n    farm();\n    timer.every(300000, \"sell\");\n}\n\nfn farm() {\n    hotbar.select(1);\n    mouse.right.hold();\n}\n\nfn on_timer(name) {\n    if name == \"sell\" {\n        if !menu.open {\n            mouse.right.release();\n            chat.send(\"sell_menu\");\n        }\n    } else if name == \"step\" {\n        step();\n    }\n}\n\nfn on_menu_open() {\n    if menu.title != \"Sell Items\" {\n        log.info(`Closed a screen it didn't open: ${menu.title}`);\n        menu.close();\n        return;\n    }\n    state.pressed = false;\n    later();\n}\n\nfn on_click(result) {\n    later();\n}\n\nfn on_menu_close() {\n    farm();\n}\n\nfn later() {\n    timer.after(random.between(300, 900), \"step\");\n}\n\n// One step in the sell menu: a potion in, the junk out, then Sell, then the\n// close.\nfn step() {\n    if !menu.open || menu.title != \"Sell Items\" {\n        return;\n    }\n    for n in menu.player {\n        let slot = menu.slot(n);\n        if turtle_master(slot) {\n            act(menu.shift_click(slot));\n            return;\n        }\n        if slot.id == junk() {\n            act(menu.drop_stack(slot));\n            return;\n        }\n    }\n    let sell = menu.slot(49);\n    if !state.pressed && sell.id == \"minecraft:emerald\" && sell.name == \"Sell\" {\n        state.pressed = true;\n        act(menu.click(sell));\n        return;\n    }\n    menu.close();\n}\n\n// A click the hook was refused for is tried again at the next step.\nfn act(result) {\n    if !result.ok {\n        later();\n    }\n}\n\nfn turtle_master(slot) {\n    slot.potion == \"minecraft:turtle_master\"\n        || slot.potion == \"minecraft:long_turtle_master\"\n        || slot.potion == \"minecraft:strong_turtle_master\"\n}\n",
+        "leash": 8,
+        "tool_guard": 2,
+        "block_guard": [],
+        "messages": [
+          {
+            "key": "sell_menu",
+            "text": "/sell",
+            "values": [],
+            "arguments_hidden": false
+          }
+        ],
+        "patterns": [],
+        "any_time_chat": false,
+        "signs": []
+      }
+    },
+    {
+      "id": "auction_lister",
+      "title": "An auction lister",
+      "script": {
+        "api": 2,
+        "source": "// An auction lister: every 10 minutes, with a Turtle Master potion in its\n// hotbar, it reads the potions' prices on the auction house's first page,\n// skips its own listings, and lists one potion at the middle of the three\n// cheapest with \"/ah sell {price}\", confirming it on its screen once. Then it\n// collects its expired listings.\n//\n// The declared price's range starts at 100: that's the floor a bait listing\n// can't push the price below. A price under it is refused (bad_value), and\n// nothing is sent.\nfn on_join(first) {\n    state.task = \"\";\n    state.done = ();\n    timer.every(600000, \"list\");\n}\n\nfn on_timer(name) {\n    if name == \"list\" {\n        if state.task == \"\" && !menu.open && potion_key() != () {\n            state.task = \"prices\";\n            chat.send(\"auction\");\n        }\n    } else if name == \"step\" {\n        step();\n    }\n}\n\nfn on_menu_open() {\n    later();\n}\n\nfn on_click(result) {\n    later();\n}\n\nfn on_menu_update() {\n    later();\n}\n\nfn on_menu_close() {\n    if state.task == \"listing\" {\n        // The confirm's screen closed: on to the expired listings.\n        state.task = \"expired\";\n        chat.send(\"expired\");\n    } else if state.task == \"expired\" {\n        state.task = \"\";\n    }\n}\n\nfn later() {\n    timer.after(random.between(300, 900), \"step\");\n}\n\nfn step() {\n    if !menu.open || state.done == menu.screen {\n        return;\n    }\n    let title = menu.title;\n    if title == \"Auction House\" && state.task == \"prices\" {\n        list();\n    } else if title == \"Confirm Listing\" && state.task == \"listing\" {\n        let button = menu.slot(11);\n        if button.id == \"minecraft:lime_stained_glass_pane\" && button.name == \"Confirm\"\n            && turtle_master(menu.slot(13))\n        {\n            // Once a screen: the plugin lists and closes it.\n            state.done = menu.screen;\n            menu.click(button);\n        } else {\n            menu.close();\n        }\n    } else if title == \"Expired Listings\" && state.task == \"expired\" {\n        for n in menu.slots {\n            let slot = menu.slot(n);\n            if slot.row < 5 && !slot.empty {\n                menu.click(slot);\n                return;\n            }\n        }\n        menu.close();\n    } else {\n        log.info(`Closed a screen it didn't expect: ${title}`);\n        state.task = \"\";\n        menu.close();\n    }\n}\n\n// Reads the price, closes the auction house and lists one potion.\nfn list() {\n    let price = middle_price();\n    let key = potion_key();\n    menu.close();\n    if price == () || key == () {\n        log.info(\"Fewer than three potions listed by others; nothing listed.\");\n        state.task = \"\";\n        return;\n    }\n    hotbar.select(key);\n    state.task = \"listing\";\n    if !chat.send(\"sell\", #{ price: price }).ok {\n        log.info(`Not listed at ${price}: below the floor.`);\n        state.task = \"\";\n    }\n}\n\n// The middle of the three cheapest Turtle Master potions others list.\nfn middle_price() {\n    let prices = [];\n    for n in menu.slots {\n        let slot = menu.slot(n);\n        if slot.row < 5 && turtle_master(slot) && !menu.lore_has(slot, \"Seller: \" + bot.name) {\n            let price = menu.lore_number(slot, \"Price\");\n            if price != () {\n                prices.push(price);\n            }\n        }\n    }\n    if prices.len() < 3 {\n        return ();\n    }\n    prices.sort();\n    prices[1].floor()\n}\n\n// The number key of a hotbar slot that holds a Turtle Master potion.\nfn potion_key() {\n    for key in 1..10 {\n        if turtle_master(inventory.hotbar(key)) {\n            return key;\n        }\n    }\n    ()\n}\n\nfn turtle_master(slot) {\n    slot.potion == \"minecraft:turtle_master\"\n        || slot.potion == \"minecraft:long_turtle_master\"\n        || slot.potion == \"minecraft:strong_turtle_master\"\n}\n",
+        "leash": 8,
+        "tool_guard": 2,
+        "block_guard": [],
+        "messages": [
+          {
+            "key": "auction",
+            "text": "/ah",
+            "values": [],
+            "arguments_hidden": false
+          },
+          {
+            "key": "sell",
+            "text": "/ah sell {price}",
+            "values": [
+              {
+                "name": "price",
+                "type": "integer",
+                "min": 100,
+                "max": 1000000
+              }
+            ],
+            "arguments_hidden": false
+          },
+          {
+            "key": "expired",
+            "text": "/ah expired",
+            "values": [],
+            "arguments_hidden": false
+          }
+        ],
+        "patterns": [],
+        "any_time_chat": false,
+        "signs": []
+      }
+    },
+    {
+      "id": "auction_lister_anvil",
+      "title": "An auction lister with the price in an anvil",
+      "script": {
+        "api": 2,
+        "source": "// An auction lister for a server whose auction house takes the price in an\n// anvil, written the safe way:\n// - every button is clicked by its slot, and only while that slot holds the\n//   item and the name expected, so a listing renamed \"Create\" above the\n//   buttons is never clicked;\n// - the potion is found by its kind, wherever it is in the inventory;\n// - every step is judged by the screen that follows it, never by a click's\n//   fate alone: the plugin answers its buttons \"rejected\" or \"unclear\"\n//   though they did their work;\n// - an unexpected screen closes the menu and logs why, and a watchdog ends\n//   a listing that takes longer than a minute.\n//\n// The flow: /ah, Create (the last row's third slot), the potion, Confirm\n// Item, the price in the anvil \"Preis eingeben\", then Confirm Listing. The\n// declared price's range starts at 100, the floor a bait listing can't push\n// the price below.\nfn on_join(first) {\n    state.listing = false;\n    timer.every(600000, \"list\");\n}\n\nfn on_timer(name) {\n    if name == \"list\" {\n        start();\n    } else if name == \"watchdog\" {\n        stop(\"it took longer than a minute\");\n    } else if name == \"price_taken\" {\n        if state.listing && menu.open && menu.title == \"Preis eingeben\" {\n            stop(\"the price was refused\");\n        }\n    } else if name == \"step\" {\n        step();\n    }\n}\n\nfn start() {\n    if state.listing || menu.open || !carries_potion() {\n        return;\n    }\n    state.listing = true;\n    state.price = ();\n    state.done = ();\n    state.named = ();\n    state.final = false;\n    timer.after(60000, \"watchdog\");\n    chat.send(\"auction\");\n}\n\nfn stop(why) {\n    log.info(`Listing stopped: ${why}.`);\n    state.listing = false;\n    timer.cancel(\"watchdog\");\n    if menu.open {\n        menu.close();\n    }\n}\n\nfn on_menu_open() {\n    if state.listing {\n        later();\n    }\n}\n\nfn on_click(result) {\n    if state.listing {\n        later();\n    }\n}\n\nfn on_menu_close() {\n    if state.listing && state.final {\n        log.info(`Listed a potion for ${state.price}.`);\n        state.listing = false;\n        timer.cancel(\"watchdog\");\n    }\n}\n\nfn later() {\n    timer.after(random.between(300, 900), \"step\");\n}\n\n// One step, by the screen that's open now.\nfn step() {\n    // Between two screens, or this screen's step is done: the next screen\n    // says whether it worked.\n    if !state.listing || !menu.open || state.done == menu.screen {\n        return;\n    }\n    let title = menu.title;\n    if title == \"Auction House\" {\n        create();\n    } else if title == \"Create Listing\" {\n        select_potion();\n    } else if title == \"Confirm Item\" {\n        confirm_item();\n    } else if title == \"Preis eingeben\" {\n        enter_price();\n    } else if title == \"Confirm Listing\" {\n        confirm_listing();\n    } else {\n        stop(`an unexpected screen, ${title}`);\n    }\n}\n\n// Clicks `slot` as this screen's step; one the hook was refused is tried\n// again at the next step.\nfn press(slot) {\n    if menu.click(slot).ok {\n        state.done = menu.screen;\n    } else {\n        later();\n    }\n}\n\n// Whether `slot` holds `id` named `name`.\nfn holds(slot, id, name) {\n    slot.id == id && slot.name == name\n}\n\nfn create() {\n    if state.price == () {\n        state.price = middle_price();\n        if state.price == () {\n            stop(\"fewer than three potions listed by others\");\n            return;\n        }\n    }\n    let button = menu.at(menu.rows - 1, 2);\n    if !holds(button, \"minecraft:emerald\", \"Create\") {\n        stop(\"no Create button where it belongs\");\n        return;\n    }\n    press(button);\n}\n\nfn select_potion() {\n    for n in menu.player {\n        let slot = menu.slot(n);\n        if turtle_master(slot) {\n            press(slot);\n            return;\n        }\n    }\n    stop(\"no Turtle Master potion in the inventory\");\n}\n\nfn confirm_item() {\n    let button = menu.slot(11);\n    if !turtle_master(menu.slot(13))\n        || !holds(button, \"minecraft:lime_stained_glass_pane\", \"Confirm\")\n    {\n        stop(\"Confirm Item shows something else\");\n        return;\n    }\n    press(button);\n}\n\n// The anvil: first the price as its name, then its confirm.\nfn enter_price() {\n    if state.named != menu.screen {\n        if menu.rename(\"price\", #{ price: state.price }).ok {\n            state.named = menu.screen;\n        } else {\n            stop(`the price ${state.price} is below the floor`);\n        }\n        return;\n    }\n    let button = menu.slot(2);\n    if !holds(button, \"minecraft:lime_dye\", \"Bestätigen\") {\n        stop(\"the anvil holds no confirm\");\n        return;\n    }\n    press(button);\n    timer.after(3000, \"price_taken\");\n}\n\nfn confirm_listing() {\n    let button = menu.slot(11);\n    if menu.lore_number(13, \"Price\") != state.price\n        || !holds(button, \"minecraft:lime_stained_glass_pane\", \"Confirm\")\n    {\n        stop(\"Confirm Listing shows another price\");\n        return;\n    }\n    state.final = true;\n    press(button);\n}\n\n// The middle of the three cheapest Turtle Master potions others list.\nfn middle_price() {\n    let prices = [];\n    for n in menu.slots {\n        let slot = menu.slot(n);\n        if slot.row < menu.rows - 1 && turtle_master(slot)\n            && !menu.lore_has(slot, \"Seller: \" + bot.name)\n        {\n            let price = menu.lore_number(slot, \"Price\");\n            if price != () {\n                prices.push(price);\n            }\n        }\n    }\n    if prices.len() < 3 {\n        return ();\n    }\n    prices.sort();\n    prices[1].floor()\n}\n\nfn carries_potion() {\n    for n in inventory.slots {\n        if turtle_master(inventory.slot(n)) {\n            return true;\n        }\n    }\n    false\n}\n\nfn turtle_master(slot) {\n    slot.potion == \"minecraft:turtle_master\"\n        || slot.potion == \"minecraft:long_turtle_master\"\n        || slot.potion == \"minecraft:strong_turtle_master\"\n}\n",
+        "leash": 8,
+        "tool_guard": 2,
+        "block_guard": [],
+        "messages": [
+          {
+            "key": "auction",
+            "text": "/ah",
+            "values": [],
+            "arguments_hidden": false
+          },
+          {
+            "key": "price",
+            "text": "{price}",
+            "values": [
+              {
+                "name": "price",
+                "type": "integer",
+                "min": 100,
+                "max": 1000000
+              }
+            ],
+            "arguments_hidden": false
+          }
+        ],
+        "patterns": [],
+        "any_time_chat": false,
+        "signs": []
       }
     }
   ]

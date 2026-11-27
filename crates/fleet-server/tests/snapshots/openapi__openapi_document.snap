@@ -2288,6 +2288,13 @@ expression: document
             },
             "type": "array"
           },
+          "signs": {
+            "description": "The signs the script may write (API level 2).",
+            "items": {
+              "$ref": "#/components/schemas/ModeSign"
+            },
+            "type": "array"
+          },
           "source": {
             "maxLength": 16384,
             "type": "string"
@@ -2306,7 +2313,8 @@ expression: document
           "block_guard",
           "messages",
           "patterns",
-          "any_time_chat"
+          "any_time_chat",
+          "signs"
         ],
         "type": "object"
       },
@@ -2340,6 +2348,13 @@ expression: document
             },
             "type": "array"
           },
+          "signs": {
+            "description": "The signs the script may write, at most 16: API level 2 (ADR-0036,\nM16). This app always sends it, `[]` for none. An app of the last\nrelease leaves it out, and an edit without it of a mode that\ndeclares signs is refused: that app doesn't show them, and would\nlose them (Plan.md P16.15).",
+            "items": {
+              "$ref": "#/components/schemas/ModeSignRequest"
+            },
+            "type": "array"
+          },
           "source": {
             "maxLength": 16384,
             "type": "string"
@@ -2357,6 +2372,65 @@ expression: document
           "block_guard",
           "messages",
           "patterns"
+        ],
+        "type": "object"
+      },
+      "ModeSign": {
+        "description": "A declared sign as its viewer sees it: a sign's line is never a command,\nso every viewer sees it whole.",
+        "properties": {
+          "key": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "maxLength": 1024,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "values": {
+            "description": "Its values.",
+            "items": {
+              "$ref": "#/components/schemas/ModeValue"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "lines",
+          "values"
+        ],
+        "type": "object"
+      },
+      "ModeSignRequest": {
+        "additionalProperties": false,
+        "description": "A sign a scripted mode declares, in a request (ADR-0036, M16).",
+        "properties": {
+          "key": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "maxLength": 1024,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "values": {
+            "description": "The values the lines hold, at most 8 for the whole sign.",
+            "items": {
+              "$ref": "#/components/schemas/ModeValueRequest"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "lines",
+          "values"
         ],
         "type": "object"
       },
@@ -2668,7 +2742,8 @@ expression: document
           "window_dropped",
           "matched",
           "refused",
-          "stop_failed"
+          "stop_failed",
+          "click"
         ],
         "type": "string"
       },
