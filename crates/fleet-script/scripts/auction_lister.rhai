@@ -1,8 +1,9 @@
-// An auction lister: every 10 minutes, with a Turtle Master potion in its
-// hotbar, it reads the potions' prices on the auction house's first page,
-// skips its own listings, and lists one potion at the middle of the three
-// cheapest with "/ah sell {price}", confirming it on its screen once. Then it
-// collects its expired listings.
+// An auction lister: 10 to 30 seconds after it joins, then every 10
+// minutes, with a Turtle Master potion in its hotbar, it reads the potions'
+// prices on the auction house's first page, skips its own listings, and
+// lists one potion at the middle of the three cheapest with
+// "/ah sell {price}", confirming it on its screen once. Then it collects its
+// expired listings.
 //
 // The declared price's range starts at 100: that's the floor a bait listing
 // can't push the price below. A price under it is refused (bad_value), and
@@ -10,11 +11,14 @@
 fn on_join(first) {
     state.task = "";
     state.done = ();
-    timer.every(600000, "list");
+    // Soon after every join: a bot that's kicked more often than every 10
+    // minutes still lists.
+    timer.after(random.between(10000, 30000), "list");
 }
 
 fn on_timer(name) {
     if name == "list" {
+        timer.after(600000, "list");
         if state.task == "" && !menu.open && potion_key() != () {
             state.task = "prices";
             chat.send("auction");

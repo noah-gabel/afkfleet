@@ -488,6 +488,50 @@ fn a_bait_below_the_floor_never_sets_the_listers_price() {
     assert_eq!(world.log, ["Not listed at 20.0: below the floor."]);
 }
 
+/// A lister's first listing comes 10 to 30 s after a join, then every 10
+/// minutes from the last try: a bot kicked more often than every 10
+/// minutes still lists (found live, Plan.md P16.17). Each try here finds
+/// fewer than three potions listed, so it ends at once.
+#[rstest::rstest]
+#[case::the_lister(
+    "auction_lister",
+    "Fewer than three potions listed by others; nothing listed."
+)]
+#[case::the_anvil_lister(
+    "auction_lister_anvil",
+    "Listing stopped: fewer than three potions listed by others."
+)]
+fn a_listers_first_try_comes_soon_after_a_join_then_every_10_minutes(
+    #[case] name: &str,
+    #[case] nothing: &str,
+) {
+    let mut gate = ClickGate::new();
+    let mut world = World::new();
+    world.menu.inventory = inventory(&[(36, turtle_master())]);
+    let mut instance = instance_of(name);
+    world.run(&mut instance, &HookEvent::Join { first: true });
+
+    world.pass(&mut instance, Duration::from_millis(9_999));
+    let before_10_s = world.sent.len();
+    world.pass(&mut instance, Duration::from_millis(20_001));
+    let by_30_s = world.sent.len();
+    show(
+        &mut world,
+        &mut instance,
+        potions_listed(&mut gate, &[(450, "Seller1")]),
+    );
+    world.menu.screen = None;
+    world.run(&mut instance, &HookEvent::MenuClose);
+    world.pass(&mut instance, Duration::from_secs(570));
+    let within_10_minutes = world.sent.len();
+    world.pass(&mut instance, Duration::from_secs(30));
+
+    assert_eq!((before_10_s, by_30_s), (0, 1));
+    assert_eq!(within_10_minutes, 1);
+    assert_eq!(world.sent, ["/ah", "/ah"]);
+    assert_eq!(world.log, [nothing]);
+}
+
 // --- The auction lister on the anvil's flow ---
 
 /// The user's server's auction house: listings, a trap renamed "Create"
@@ -532,7 +576,7 @@ fn up_to_the_anvil(
     // The potion in the main inventory, window 0's 20.
     world.menu.inventory = inventory(&[(20, turtle_master())]);
     world.run(instance, &HookEvent::Join { first: true });
-    world.pass(instance, Duration::from_secs(600));
+    world.pass(instance, Duration::from_secs(30));
     let from = world.performed.len();
     show(world, instance, house_with_trap(gate));
     answer(world, instance);
@@ -633,15 +677,15 @@ fn the_anvil_lister_closes_an_unexpected_screen_and_its_watchdog_ends_a_stuck_li
     world.menu.inventory = inventory(&[(20, turtle_master())]);
     let mut instance = instance_of("auction_lister_anvil");
     world.run(&mut instance, &HookEvent::Join { first: true });
-    world.pass(&mut instance, Duration::from_secs(600));
+    world.pass(&mut instance, Duration::from_secs(30));
     let from = world.performed.len();
     show(&mut world, &mut instance, sell_menu(&mut gate, &[]));
     let unexpected = closes(&world, from);
 
-    // A new listing, which never gets a screen: the watchdog ends it.
+    // A new listing 10 minutes after the first try, which never gets a
+    // screen: the watchdog ends it a minute later, before the next try.
     world.menu.screen = None;
-    world.pass(&mut instance, Duration::from_secs(600));
-    world.pass(&mut instance, Duration::from_secs(61));
+    world.pass(&mut instance, Duration::from_secs(661));
 
     assert_eq!(unexpected, 1);
     assert_eq!(
@@ -676,7 +720,7 @@ fn operations_on(name: &str, screen: Screen, inventory_items: &[(usize, Item)]) 
     let mut instance = instance_of(name);
     world.run(&mut instance, &HookEvent::Join { first: true });
     // Its own timer first: a listing starts with the auction house.
-    world.pass(&mut instance, Duration::from_secs(600));
+    world.pass(&mut instance, Duration::from_secs(30));
     world.menu.screen = Some(screen);
     world.run(&mut instance, &HookEvent::MenuOpen);
     let wakes = world.pass(&mut instance, Duration::from_secs(1));
