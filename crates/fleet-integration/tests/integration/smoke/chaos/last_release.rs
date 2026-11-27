@@ -1,26 +1,36 @@
 //! An agent of the last release beside this release's server (Plan.md
-//! P15.29; ADR-0036, D13; ADR-0044, E3; ADR-0046): the server is updated
-//! first, so for a while its agents are older, and a scripted mode must
-//! never reach one.
+//! P15.29, P16.15, P16.20; ADR-0036, D13; ADR-0044, E3; ADR-0046;
+//! ADR-0053): the server is updated first, so for a while its agents are
+//! older, and a mode at a script API level an agent doesn't run must never
+//! reach it, nor a question it can't read.
 //!
 //! The chaos world's stack, with its second agent the image the last
-//! release published (`world::LAST_RELEASE_AGENT`), pulled once and pinned
-//! by its index digest. This release's own agent is stopped, disabled and
-//! released, so its three bots go to the old agent on their step mode, and
-//! run there. Then a scripted mode can't be set on one of them (409
-//! `agent_too_old`, nothing changed), and a new bot on it waits for a newer
-//! agent and is never placed on the old one. The old agent's stream never
-//! ends meanwhile, and its log holds no warning and no error: it refused
-//! nothing it was sent, because it was sent no script.
+//! release published (`world::LAST_RELEASE_AGENT`, v0.2.1, which runs
+//! script API level 1), pulled once and pinned by its index digest. This
+//! release's own agent is stopped, disabled and released, so its three
+//! bots go to the old agent on their step mode, and run there. Then:
+//! - a level-2 mode can't be set on one of them (409 `agent_too_old`,
+//!   nothing changed), and a new bot on it waits for a newer agent and is
+//!   never placed on the old one;
+//! - what a bot of the old agent sees is answered `agent_too_old` at once,
+//!   the old agent never asked, and the waiting bot's is `offline`;
+//! - a level-1 mode can be set, and its bot runs it there.
+//!
+//! The old agent's stream never ends meanwhile, and its log holds no
+//! warning and no error: it refused nothing it was sent, because it was
+//! sent nothing it can't read.
 //!
 //! `just test-slow` and `just test-stack` run it (the Stack workflow
 //! nightly), beside the smoke tests; its name says so.
+
+use std::time::Duration;
 
 use fleet_api_types::accounts::CreateOfflineAccountRequest;
 use fleet_api_types::agents::AgentStatus;
 use fleet_api_types::bots::{BotModeRequest, BotPatchRequest, BotStatusKind, UnplacedReason};
 use fleet_api_types::error::ErrorCode;
 use fleet_api_types::modes::{CreateModeRequest, ModeSteps, ModeVisibility};
+use fleet_api_types::screen::BotScreenKind;
 use fleet_api_types::{BoundedText, Open, PageQuery, SecretText};
 use fleet_client::ClientError;
 use fleet_core::id::{BotId, ModeId};
@@ -34,10 +44,13 @@ use crate::slow_scripts::request;
 const PROJECT: &str = "afkfleet-smoke-last-release";
 const NET: u8 = 140;
 /// The version the last release's agent reports in its hello.
-const LAST_RELEASE: &str = "0.1.3";
+const LAST_RELEASE: &str = "0.2.1";
+/// How long the server may take to say what a bot sees: its own bound
+/// (fleet-server's `SCREEN_WAIT`).
+const SCREEN_BOUND: Duration = Duration::from_secs(5);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn slow_smoke_an_agent_of_the_last_release_is_sent_no_script_and_refuses_nothing() {
+async fn slow_smoke_an_agent_of_the_last_release_is_sent_no_level_2_and_refuses_nothing() {
     let mut chaos = Chaos::start_beside_the_last_release(PROJECT, NET).await;
     let old = chaos.agent(SECOND, AgentStatus::Online).await;
     assert_eq!(
@@ -46,9 +59,10 @@ async fn slow_smoke_an_agent_of_the_last_release_is_sent_no_script_and_refuses_n
     );
 
     onto_the_old_agent(&mut chaos).await;
-    let scripted = a_scripted_mode(&chaos).await;
+    let level_2 = a_scripted_mode(&chaos, "auction_scan", 2).await;
+    let level_1 = a_scripted_mode(&chaos, "afk_farm", 1).await;
 
-    // A scripted mode is never set on a bot the old agent runs.
+    // A level-2 mode is never set on a bot the old agent runs.
     let first = chaos.bots[0];
     let before = chaos
         .shown(first)
@@ -58,7 +72,7 @@ async fn slow_smoke_an_agent_of_the_last_release_is_sent_no_script_and_refuses_n
     match chaos
         .owner
         .client
-        .set_bot_mode(first, &BotModeRequest { mode_id: scripted })
+        .set_bot_mode(first, &BotModeRequest { mode_id: level_2 })
         .await
     {
         Err(ClientError::Api(failure)) => {
@@ -69,7 +83,7 @@ async fn slow_smoke_an_agent_of_the_last_release_is_sent_no_script_and_refuses_n
                 "{failure:?}"
             );
         }
-        other => panic!("a scripted mode was set on a bot of the old agent: {other:?}"),
+        other => panic!("a level-2 mode was set on a bot of the old agent: {other:?}"),
     }
     assert_eq!(
         chaos
@@ -80,19 +94,48 @@ async fn slow_smoke_an_agent_of_the_last_release_is_sent_no_script_and_refuses_n
         before
     );
 
-    // A new bot on the scripted mode waits for a newer agent, and the old
-    // one never gets it.
-    let waiting = a_bot_on(&chaos, "AfkBot4", scripted).await;
+    // What it sees is answered at once, the old agent never asked.
+    assert_eq!(seen(&chaos, first).await, BotScreenKind::AgentTooOld);
+
+    // A new bot on the level-2 mode waits for a newer agent, and the old
+    // one never gets it; what it sees is that it isn't in a world.
+    let waiting = a_bot_on(&chaos, "AfkBot4", level_2).await;
     until(
         &chaos.stack.compose,
         "server",
-        "the scripted bot waiting for a newer agent",
+        "the level-2 bot waiting for a newer agent",
         async || {
             let shown = chaos.shown(waiting).await?;
             (shown.status.kind.known() == Some(BotStatusKind::Unplaced)
                 && shown.status.why.as_ref().and_then(Open::known)
                     == Some(UnplacedReason::AgentTooOld)
                 && shown.agent.is_none())
+            .then_some(())
+        },
+    )
+    .await;
+    assert_eq!(seen(&chaos, waiting).await, BotScreenKind::Offline);
+
+    // A level-1 mode is set, and its bot runs it on the old agent.
+    let second = chaos.bots[1];
+    chaos
+        .owner
+        .client
+        .set_bot_mode(second, &BotModeRequest { mode_id: level_1 })
+        .await
+        .unwrap();
+    until(
+        &chaos.stack.compose,
+        "server",
+        "the level-1 bot online on the old agent",
+        async || {
+            let shown = chaos.shown(second).await?;
+            (shown.mode_id == level_1
+                && Chaos::reported_online(&shown)
+                && shown
+                    .agent
+                    .as_ref()
+                    .is_some_and(|agent| agent.name.as_str() == SECOND))
             .then_some(())
         },
     )
@@ -106,6 +149,15 @@ async fn slow_smoke_an_agent_of_the_last_release_is_sent_no_script_and_refuses_n
     );
     assert_eq!(now.bots, u32::try_from(BOTS.len()).unwrap());
     its_log_holds_no_warning(&chaos);
+}
+
+/// What the server says `bot` sees, within its own bound.
+async fn seen(chaos: &Chaos, bot: BotId) -> BotScreenKind {
+    let answer = tokio::time::timeout(SCREEN_BOUND, chaos.owner.client.bot_screen(bot))
+        .await
+        .expect("the server answers within its bound")
+        .unwrap();
+    answer.kind.known().expect("a kind this release knows")
 }
 
 /// Stops this release's agent, as its host would be stopped for an update,
@@ -137,13 +189,14 @@ async fn onto_the_old_agent(chaos: &mut Chaos) {
     .await;
 }
 
-/// The reference's AFK farm as a scripted mode of the Owner's.
-async fn a_scripted_mode(chaos: &Chaos) -> ModeId {
+/// The reference's example `id` as a scripted mode of the Owner's, which
+/// the server stamps with script API level `level`.
+async fn a_scripted_mode(chaos: &Chaos, id: &str, level: u8) -> ModeId {
     let example = EXAMPLES
         .iter()
-        .find(|example| example.id == "afk_farm")
-        .expect("the AFK farm");
-    chaos
+        .find(|example| example.id == id)
+        .expect("the reference's example");
+    let mode = chaos
         .owner
         .client
         .create_mode_with_commands(&CreateModeRequest {
@@ -153,8 +206,9 @@ async fn a_scripted_mode(chaos: &Chaos) -> ModeId {
             script: Some(request(example.draft())),
         })
         .await
-        .unwrap()
-        .id
+        .unwrap();
+    assert_eq!(mode.script.map(|script| script.api), Some(level), "{id}");
+    mode.id
 }
 
 /// A new offline account `name` and its bot, sent to the project's
