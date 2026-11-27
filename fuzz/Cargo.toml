@@ -124,3 +124,24 @@ path = "fuzz_targets/chat_pattern.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "menu_snapshot"
+path = "fuzz_targets/menu_snapshot.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "number_helpers"
+path = "fuzz_targets/number_helpers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "click_guard"
+path = "fuzz_targets/click_guard.rs"
+test = false
+doc = false
+bench = false

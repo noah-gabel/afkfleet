@@ -26,6 +26,7 @@ Moved from `CLAUDE.md` word for word; it points here. CLAUDE.md keeps the rule: 
 |---|---|---|
 | Domain & runtime | Minecraft | `azalea` (fleet-mc only) |
 | | Chat components, translations | `azalea-chat`, `azalea-language` (fleet-mc only, for its bounded renderer) |
+| | Time zones | `jiff` `=1.0.1` (fleet-script only, for `clock.local`: `std` and `tzdb-bundle-always`, so the IANA data is compiled in and never read from the system; chrono stays the time type, and `chrono-tz` is never added; ADR-0038, ADR-0052) |
 | | Script engine | `rhai` `=1.27.0` (fleet-script only, by a `deny.toml` wrapper entry; `sync`, `no_module`, `no_time`, `no_custom_syntax`, never `unchecked` or `internals`; ADR-0036, ADR-0040) |
 | | MS auth | fleet-server's own adapter over `reqwest`; never `azalea-auth` directly (ADR-0018) |
 | | Async runtime | `tokio` |

@@ -111,6 +111,7 @@ pub(super) fn hot(rounds: u64) -> ScriptDraft {
         block_guard: Vec::new(),
         messages: Vec::new(),
         patterns: Vec::new(),
+        signs: Vec::new(),
     }
 }
 
@@ -124,11 +125,14 @@ fn hot_hook(rounds: u64) -> Option<Duration> {
     let mut instance = Instance::new(program, 1, Arc::new(OsStopwatch::start()));
     let facts = seen().facts;
     let mut limiter = ActionLimiter::new();
+    let menu = fleet_core::mc::MenuView::default();
     let moment = |quarter: u32| Moment {
         facts: &facts,
         now: anchor() + STEP * quarter,
         presence: Presence::InWorld,
         leash: None,
+        menu: &menu,
+        name: "AfkBot1",
     };
     instance.handle(&HookEvent::Join { first: true }, &moment(0), &mut limiter);
     let mut took = Vec::new();

@@ -10,9 +10,12 @@
 #![cfg(test)]
 
 mod chat;
+mod clock;
 mod convert;
 mod examples;
 mod limits;
+mod menu_examples;
+mod menus;
 mod objects;
 mod properties;
 mod refused;

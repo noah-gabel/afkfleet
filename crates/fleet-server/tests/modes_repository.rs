@@ -330,7 +330,7 @@ async fn a_stored_scripted_mode_of_an_unknown_level_is_corrupt(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
-    let newer = r#"{"script":{"api":2,"source":"fn on_join(first) {}","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}}"#;
+    let newer = r#"{"script":{"api":3,"source":"fn on_join(first) {}","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}}"#;
     let db = database(options).await;
     add_owner(db.write_pool()).await;
     Row {

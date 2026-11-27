@@ -13,7 +13,11 @@
 // On Windows the targets need MSVC's AddressSanitizer runtime at run time
 // (clang_rt.asan_dynamic-x86_64.dll, Visual Studio's "C++ AddressSanitizer" component):
 // without it on PATH a target exits with 0xc0000135 before it runs. The script asks vswhere
-// where it is and puts that folder first on the target's PATH; nothing else changes.
+// where it is and puts that folder first on the target's PATH.
+//
+// On every platform a target runs without AddressSanitizer's fake stack frames
+// (`ASAN_OPTIONS=detect_stack_use_after_return=0`, before any options already set):
+// fleet-script's stack guard can't measure a hook's stack in them (ADR-0030's amendment).
 // Tests: scripts/fuzz.test.mjs.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
@@ -97,6 +101,23 @@ export function withOnPath(env, folder, separator) {
   return { ...env, [name]: rest ? `${folder}${separator}${rest}` : folder };
 }
 
+/**
+ * AddressSanitizer's options for every target: no fake stack frames. With them (Linux's
+ * default since LLVM 15), a local whose address is taken lives on the heap, and
+ * fleet-script's stack guard, which measures a hook's stack by such a local's address, ends
+ * every hook at its first operation (ADR-0030's amendment of 2026-11-26).
+ */
+export const ASAN_OPTIONS = "detect_stack_use_after_return=0";
+
+/**
+ * `env` with {@link ASAN_OPTIONS} in `ASAN_OPTIONS`, before any options already set: the
+ * sanitizer reads them in order, so a deliberate setting still wins.
+ */
+export function withAsanOptions(env) {
+  const set = env.ASAN_OPTIONS;
+  return { ...env, ASAN_OPTIONS: set ? `${ASAN_OPTIONS}:${set}` : ASAN_OPTIONS };
+}
+
 /** Where Visual Studio's installer puts vswhere. */
 function vswherePath(env) {
   const programs = env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
@@ -140,7 +161,7 @@ function main() {
     mkdirSync(dirname(kept), { recursive: true });
     const run = spawnSync("cargo", cargoArgs(target, parsed.seconds), {
       cwd: root,
-      env: { ...environment.env, [KEEP_AT]: kept },
+      env: { ...withAsanOptions(environment.env), [KEEP_AT]: kept },
       stdio: "inherit",
     });
     if (run.status !== 0) {

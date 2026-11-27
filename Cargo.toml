@@ -165,6 +165,11 @@ rand = { version = "0.10.3", default-features = false }
 # Never `unchecked`, which removes every limit, nor `internals`. Its defaults stay: `std`,
 # and ahash seeded at run time.
 rhai = { version = "=1.27.0", features = ["sync", "no_module", "no_time", "no_custom_syntax"] }
+# jiff: the time of day in a named IANA time zone, for fleet-script's `clock` (Plan.md P16.21;
+# ADR-0052). The zone data is compiled in (`tzdb-bundle-always`) and nothing is read from the
+# system: no `tz-system`, `tzdb-zoneinfo` or `tzdb-concatenated`, so an agent's container needs no
+# zone files and a hook reads no file. chrono stays the workspace's time type (ADR-0038, C3).
+jiff = { version = "=1.0.1", default-features = false, features = ["std", "tzdb-bundle-always"] }
 # rcgen: the control plane's PKI. fleet-server makes the CA and the server certificate
 # (`pki init`) and signs agents' CSRs; fleet-agent makes its key and CSR (Plan.md P10.2,
 # P10.3). Without default features, which select ring: members enable `aws_lc_rs` (which

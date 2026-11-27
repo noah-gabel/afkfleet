@@ -583,7 +583,7 @@ async fn a_bot_whose_mode_isnt_valid_reads_as_unreadable(
     for definition in [
         r#"{"steps":[{"action":{"type":"nope"}}]}"#,
         r#"{"steps":[{"action":{"type":"jump"},"schedule":{"type":"on_teleport"},"probability":100}]}"#,
-        r#"{"script":{"api":2,"source":"fn on_join(first) {}","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}}"#,
+        r#"{"script":{"api":3,"source":"fn on_join(first) {}","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}}"#,
     ] {
         sqlx::query!(
             "UPDATE modes SET definition_json = ? WHERE id = ?",

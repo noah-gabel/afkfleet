@@ -57,6 +57,7 @@ fn program(source: &str) -> Arc<Program> {
         block_guard: Vec::new(),
         messages: Vec::new(),
         patterns: Vec::new(),
+        signs: Vec::new(),
     };
     Arc::new(compile(&Script::try_from(draft).unwrap()).unwrap())
 }
@@ -103,6 +104,8 @@ fn measure(program: &Arc<Program>) -> (usize, Outcome, usize) {
             now: start(),
             presence: Presence::InWorld,
             leash: None,
+            menu: &fleet_core::mc::MenuView::default(),
+            name: "AfkBot1",
         },
         &mut limiter,
     );
@@ -298,11 +301,14 @@ fn an_instance_that_ends_or_is_dropped_frees_its_state() {
     for round in 0..2_000 {
         let mut limiter = ActionLimiter::new();
         let mut instance = Instance::new(program.clone(), 7, still());
+        let menu = fleet_core::mc::MenuView::default();
         let moment = Moment {
             facts: &facts,
             now: start(),
             presence: Presence::InWorld,
             leash: None,
+            menu: &menu,
+            name: "AfkBot1",
         };
         instance.handle(&HookEvent::Join { first: true }, &moment, &mut limiter);
         // Half of them end in an orderly way; the others are just dropped.

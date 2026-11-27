@@ -25,11 +25,27 @@ pub enum ClickFate {
     /// No reply came within [`ClickGate::UNANSWERED_AFTER`]. Its screen
     /// takes no further click until it's opened again.
     Unanswered,
+    /// A correction came for a click on the screen's result slot
+    /// ([`ScreenKind::result_slot`](super::ScreenKind::result_slot)): a
+    /// trade, an anvil's result, a craft; or for a button, a trade or a
+    /// name, which predict no slot, so what the server sends after one is
+    /// its own picture.
+    /// Taking a result is a transaction the server decides itself (it
+    /// repeats a trade while the payment lasts, an anvil asks levels), so
+    /// what it did may still be what was asked, once or more. Never read
+    /// as [`Rejected`](Self::Rejected) (ADR-0052).
+    Unclear,
 }
 
 impl ClickFate {
     /// Every fate, in a fixed order.
-    pub const ALL: [Self; 4] = [Self::Ok, Self::Rejected, Self::Replaced, Self::Unanswered];
+    pub const ALL: [Self; 5] = [
+        Self::Ok,
+        Self::Rejected,
+        Self::Replaced,
+        Self::Unanswered,
+        Self::Unclear,
+    ];
 
     /// The fate as a script reads it: `ok`, or `result.reason`.
     #[must_use]
@@ -39,6 +55,7 @@ impl ClickFate {
             Self::Rejected => "rejected",
             Self::Replaced => "replaced",
             Self::Unanswered => "unanswered",
+            Self::Unclear => "unclear",
         }
     }
 }
@@ -118,6 +135,8 @@ struct Pending {
     slot: Option<u16>,
     /// The slots azalea predicted it to change.
     predicted: Vec<u16>,
+    /// Whether it clicked the screen's result slot, or predicts no slot.
+    on_result: bool,
     /// Which barrier is behind it, counted from 1.
     barrier: u64,
     sent: DateTime<Utc>,
@@ -247,10 +266,17 @@ impl ClickGate {
         predicted.sort_unstable();
         predicted.dedup();
         self.barriers_sent = self.barriers_sent.saturating_add(1);
+        // A click on the screen's result slot, or an action that predicts no
+        // slot (a button, a trade, a name): a correction of it doesn't say
+        // the trade, the name or the craft didn't happen (ADR-0052).
+        let on_result = action
+            .slot()
+            .is_none_or(|slot| now.and_then(|now| now.kind().result_slot()) == Some(slot));
         self.pending = Some(Pending {
             screen: seen,
             slot: action.slot(),
             predicted,
+            on_result,
             barrier: self.barriers_sent,
             sent: at,
             came: Came::Nothing,
@@ -298,6 +324,7 @@ impl ClickGate {
             .take_if(|pending| pending.barrier == answered)?;
         let fate = match pending.came {
             Came::Nothing => ClickFate::Ok,
+            Came::Correction if pending.on_result => ClickFate::Unclear,
             Came::Correction => ClickFate::Rejected,
             Came::Replaced => ClickFate::Replaced,
         };
@@ -446,6 +473,96 @@ mod tests {
         gone(&mut gate);
 
         assert_eq!(fate(gate.barrier_answered()), Some(ClickFate::Replaced));
+    }
+
+    /// A gate with `kind` open, and the screen as the hook sees it: a
+    /// diamond in every slot of its own.
+    fn open(kind: ScreenKind) -> (ClickGate, Screen) {
+        let mut gate = ClickGate::new();
+        let id = gate.opened(CHEST);
+        let items = (0..kind.own_slots()).map(|_| Some(item("diamond", 1)));
+        let screen = Screen::new(id, StateId::new(1), kind, "Screen", items, None);
+        (gate, screen)
+    }
+
+    #[rstest]
+    #[case::a_villagers_trade(ScreenKind::Merchant, 2)]
+    #[case::an_anvils_result(ScreenKind::Anvil, 2)]
+    #[case::a_crafting_tables_result(ScreenKind::Crafting, 0)]
+    #[case::the_inventorys_crafting_result(ScreenKind::Inventory, 0)]
+    #[case::a_grindstones_result(ScreenKind::Grindstone, 2)]
+    #[case::a_smithing_tables_result(ScreenKind::Smithing, 3)]
+    #[case::a_stonecutters_result(ScreenKind::Stonecutter, 1)]
+    #[case::a_looms_result(ScreenKind::Loom, 3)]
+    #[case::a_cartography_tables_result(ScreenKind::CartographyTable, 2)]
+    fn a_correction_of_a_click_on_a_result_slot_is_unclear_never_rejected(
+        #[case] kind: ScreenKind,
+        #[case] result: u16,
+    ) {
+        for click in [ClickKind::Left, ClickKind::Shift] {
+            let (mut gate, screen) = open(kind);
+            let action = MenuAction::Click(Click::on(&screen, click, result).unwrap());
+            gate.send(&action, Some(&screen), &[result], at(0)).unwrap();
+
+            gate.content(CHEST);
+
+            assert_eq!(fate(gate.barrier_answered()), Some(ClickFate::Unclear));
+        }
+        assert_eq!(kind.result_slot(), Some(result));
+    }
+
+    #[rstest]
+    #[case::a_merchants_payment(ScreenKind::Merchant, 0)]
+    #[case::an_anvils_input(ScreenKind::Anvil, 0)]
+    #[case::a_furnaces_output(ScreenKind::Furnace, 2)]
+    #[case::a_chests_slot(ScreenKind::Generic9x3, 2)]
+    fn a_correction_of_any_other_slot_is_rejected(#[case] kind: ScreenKind, #[case] slot: u16) {
+        let (mut gate, screen) = open(kind);
+        let action = MenuAction::Click(Click::on(&screen, ClickKind::Left, slot).unwrap());
+        gate.send(&action, Some(&screen), &[slot], at(0)).unwrap();
+
+        gate.content(CHEST);
+
+        assert_eq!(fate(gate.barrier_answered()), Some(ClickFate::Rejected));
+    }
+
+    #[test]
+    fn a_click_on_a_result_slot_that_nothing_corrects_is_ok_and_a_replaced_one_replaced() {
+        let (mut gate, screen) = open(ScreenKind::Merchant);
+        let action = MenuAction::Click(Click::on(&screen, ClickKind::Shift, 2).unwrap());
+        gate.send(&action, Some(&screen), &[2], at(0)).unwrap();
+        assert_eq!(fate(gate.barrier_answered()), Some(ClickFate::Ok));
+
+        gate.send(&action, Some(&screen), &[2], at(10)).unwrap();
+        gate.content(CHEST);
+        gate.closed();
+        assert_eq!(fate(gate.barrier_answered()), Some(ClickFate::Replaced));
+    }
+
+    #[test]
+    fn only_the_screens_that_make_something_have_a_result_slot() {
+        let with: Vec<ScreenKind> = ScreenKind::ALL
+            .into_iter()
+            .filter(|kind| kind.result_slot().is_some())
+            .collect();
+
+        assert_eq!(
+            with,
+            [
+                ScreenKind::Inventory,
+                ScreenKind::Anvil,
+                ScreenKind::Crafting,
+                ScreenKind::Grindstone,
+                ScreenKind::Loom,
+                ScreenKind::Merchant,
+                ScreenKind::Smithing,
+                ScreenKind::CartographyTable,
+                ScreenKind::Stonecutter,
+            ]
+        );
+        for kind in with {
+            assert!(kind.result_slot().unwrap() < kind.own_slots(), "{kind:?}");
+        }
     }
 
     #[test]
@@ -625,6 +742,7 @@ mod tests {
         assert_ne!(first, second);
         assert_eq!(first.window(), second.window());
         assert_eq!(gate.open(), Some(second));
+        assert_eq!((first.opening(), second.opening()), (1, 2));
     }
 
     #[test]
@@ -678,7 +796,28 @@ mod tests {
     }
 
     #[rstest]
+    #[case::the_whole_content(|gate: &mut ClickGate| gate.content(CHEST))]
+    #[case::the_cursor(|gate: &mut ClickGate| gate.cursor())]
+    fn a_correction_of_a_button_a_trade_or_a_name_is_unclear(
+        #[case] correction: fn(&mut ClickGate),
+    ) {
+        // They predict no slot: what the server sends after one is its own
+        // picture, which says nothing of a refusal (ADR-0052; on Paper, an
+        // anvil's name a plugin took came back with one).
+        let mut gate = ClickGate::new();
+        let id = gate.opened(CHEST);
+        let table = Screen::new(id, StateId::new(1), ScreenKind::Enchantment, "", [], None);
+        let press = MenuAction::Button(ButtonPress::on(&table, 2).unwrap());
+        gate.send(&press, Some(&table), &[], at(0)).unwrap();
+
+        correction(&mut gate);
+
+        assert_eq!(fate(gate.barrier_answered()), Some(ClickFate::Unclear));
+    }
+
+    #[rstest]
     #[case::ok(ClickFate::Ok, "ok")]
+    #[case::unclear(ClickFate::Unclear, "unclear")]
     #[case::rejected(ClickFate::Rejected, "rejected")]
     #[case::replaced(ClickFate::Replaced, "replaced")]
     #[case::unanswered(ClickFate::Unanswered, "unanswered")]

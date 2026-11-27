@@ -98,8 +98,9 @@ pub enum TemplateError {
         /// The brace's place.
         position: usize,
     },
-    /// The text starts with a value, which could turn it into a command.
-    #[error("the message starts with a value")]
+    /// The text starts with a word's value, which could turn it into a
+    /// command. A number's may come first: no number is a command.
+    #[error("the message starts with a value that isn't a number")]
     StartsWithValue,
     /// There are more than [`MessageTemplate::MAX_VALUES`] values.
     #[error("the message has {count} values; the limit is {max}", max = MessageTemplate::MAX_VALUES)]
@@ -484,7 +485,7 @@ impl TryFrom<MessageDraft> for MessageTemplate {
     ///
     /// The checks run in this order, the first problem winning: the key;
     /// the text (empty, a forbidden character, a brace, a brace in a
-    /// command's name, a value at the start); the values (how many, then
+    /// command's name, a value at the start that isn't a declared number); the values (how many, then
     /// each in order: its name, a name used before, its range, places or
     /// words); the text's names (one that isn't declared, one that comes a
     /// second time); a declared value the text doesn't hold; the longest
@@ -509,7 +510,18 @@ impl TryFrom<MessageDraft> for MessageTemplate {
         {
             return Err(TemplateError::BraceInCommandName { position });
         }
-        if matches!(parsed.segments.first(), Some(Segment::Named(_))) {
+        // A number's value may come first: no number starts with `/`, so it's
+        // never a command (the anvil's price alone, ADR-0052). A word may be
+        // any text the mode lists, so it may not.
+        if let Some(Segment::Named(first)) = parsed.segments.first()
+            && !draft.values.iter().any(|value| {
+                value.name == first.as_str()
+                    && matches!(
+                        value.kind,
+                        ValueKind::Integer { .. } | ValueKind::Decimal { .. }
+                    )
+            })
+        {
             return Err(TemplateError::StartsWithValue);
         }
         let values = check_values(draft.values)?;
@@ -576,8 +588,79 @@ fn written_decimal(number: f64, places: u8) -> String {
     }
 }
 
+/// How many places past a value's last one a decimal is rounded to before
+/// it's counted down: what lies beyond them is a decimal's binary noise,
+/// not the script's (`1234.56 - 1000.0` is 234.55999999999995 in a
+/// computer, and must still send 234.56).
+const NOISE_PLACES: usize = 6;
+
+/// `number` written with `places` places, counted down at the last one
+/// (ADR-0036, M15): toward the smaller number, never to the nearest, so a
+/// payout never sends more than the script gave. `places` 0 writes a
+/// whole number. A zero is never written with a minus.
+///
+/// The number is a value's, bounded before it's written: at most
+/// [`MessageTemplate::MAX_DECIMAL`] or a whole number's range, so the text
+/// is short.
+fn counted_down(number: f64, places: usize) -> String {
+    let rounded = format!("{number:.precision$}", precision = places + NOISE_PLACES);
+    let (negative, digits) = match rounded.strip_prefix('-') {
+        Some(digits) => (true, digits),
+        None => (false, rounded.as_str()),
+    };
+    let (whole, fraction) = digits.split_once('.').unwrap_or((digits, ""));
+    let kept = fraction.get(..places).unwrap_or(fraction);
+    let cut_off = fraction
+        .get(places..)
+        .is_some_and(|rest| rest.bytes().any(|digit| digit != b'0'));
+    let mut written = if places == 0 {
+        whole.to_owned()
+    } else {
+        format!("{whole}.{kept}")
+    };
+    // Written toward zero so far: for a negative number that is up, so
+    // whatever was cut off takes one more unit at the last place.
+    if negative && cut_off {
+        written = one_unit_more(&written);
+    }
+    if negative && written.bytes().any(|digit| matches!(digit, b'1'..=b'9')) {
+        written.insert(0, '-');
+    }
+    written
+}
+
+/// `digits` (a number without a sign, with or without a decimal point)
+/// with one more unit at its last place: `0.09` is `0.10`, `9.99` is
+/// `10.00`.
+fn one_unit_more(digits: &str) -> String {
+    let mut out: Vec<u8> = digits.bytes().collect();
+    let mut carry = true;
+    for digit in out.iter_mut().rev() {
+        if !carry {
+            break;
+        }
+        match *digit {
+            b'9' => *digit = b'0',
+            b'0'..=b'8' => {
+                *digit += 1;
+                carry = false;
+            }
+            _ => {}
+        }
+    }
+    let mut written = String::from_utf8(out).unwrap_or_default();
+    if carry {
+        written.insert(0, '1');
+    }
+    written
+}
+
+/// The largest whole number a decimal given for a whole-number value is
+/// written as at all: beyond it, it's out of every range a value can have.
+const LARGEST_WHOLE: f64 = 1e18;
+
 /// `written` if the number it reads as is in `min..=max`: the range is
-/// judged on what's sent, after rounding.
+/// judged on what's sent, after counting down.
 fn in_range(written: String, min: f64, max: f64) -> Option<String> {
     let number: f64 = written.parse().ok()?;
     (min..=max).contains(&number).then_some(written)
@@ -646,15 +729,28 @@ impl Checked {
                 if !(*min - 1.0..=*max + 1.0).contains(&number) {
                     return Err(RenderError::OutOfRange { value });
                 }
-                in_range(written_decimal(number, *places), *min, *max)
+                in_range(counted_down(number, usize::from(*places)), *min, *max)
+                    .ok_or(RenderError::OutOfRange { value })
+            }
+            (Self::Integer { min, max }, Given::Decimal(number)) => {
+                // Counted down to the next whole number (ADR-0036, M15). Not
+                // a number, or past any whole number's range: refused before
+                // it's written.
+                if number.is_nan() || number.abs() > LARGEST_WHOLE {
+                    return Err(RenderError::OutOfRange { value });
+                }
+                counted_down(number, 0)
+                    .parse::<i64>()
+                    .ok()
+                    .filter(|whole| (*min..=*max).contains(whole))
+                    .map(|whole| whole.to_string())
                     .ok_or(RenderError::OutOfRange { value })
             }
             (Self::Word(words), Given::Text(text)) => words
                 .contains(text)
                 .then(|| text.to_owned())
                 .ok_or(RenderError::NotAWord { value }),
-            (Self::Integer { .. }, Given::Decimal(_) | Given::Text(_))
-            | (Self::Decimal { .. }, Given::Text(_))
+            (Self::Integer { .. } | Self::Decimal { .. }, Given::Text(_))
             | (Self::Word(_), Given::Integer(_) | Given::Decimal(_)) => {
                 Err(RenderError::WrongKind { value })
             }
@@ -738,6 +834,28 @@ mod tests {
     }
 
     // --- Declaring ---
+
+    #[rstest]
+    #[case::a_whole_number_alone("{price}", integer("price", 1, 1_000_000), "1500")]
+    #[case::a_decimal_first("{amount} coins", decimal("amount", 0.5, 10.0, 1), "2.5 coins")]
+    fn a_number_may_start_a_message_since_no_number_is_a_command(
+        #[case] text: &str,
+        #[case] value: ValueDraft,
+        #[case] sent: &str,
+    ) {
+        let given = match value.kind {
+            ValueKind::Integer { .. } => Given::Integer(1500),
+            _ => Given::Decimal(2.5),
+        };
+        let name = value.name.clone();
+        let message = template(text, vec![value]);
+
+        let rendered = message.render(&[(name.as_str(), given)]).unwrap();
+
+        assert_eq!(rendered.as_str(), sent);
+        assert!(!rendered.is_command());
+        assert_eq!(message.command_name(), None);
+    }
 
     #[test]
     fn a_fixed_message_is_its_text() {
@@ -864,6 +982,10 @@ mod tests {
     )]
     #[case::a_value_first(
         draft("{greeting} all", vec![word("greeting", &["hi"])]),
+        TemplateError::StartsWithValue
+    )]
+    #[case::an_undeclared_value_first(
+        draft("{price} each", Vec::new()),
         TemplateError::StartsWithValue
     )]
     #[case::nine_values(
@@ -1085,12 +1207,14 @@ mod tests {
     #[case::places_are_filled(5.0, "/pay AfkMain 5.00")]
     #[case::the_smallest(1.0, "/pay AfkMain 1.00")]
     #[case::the_largest(1_000_000.0, "/pay AfkMain 1000000.00")]
-    #[case::rounded_down(2.344, "/pay AfkMain 2.34")]
-    #[case::rounded_up(2.346, "/pay AfkMain 2.35")]
+    #[case::below_the_middle(2.344, "/pay AfkMain 2.34")]
+    #[case::above_the_middle_still_down(2.346, "/pay AfkMain 2.34")]
+    #[case::just_below_the_next(2.349_999, "/pay AfkMain 2.34")]
     #[case::a_difference_of_two_decimals(1234.56 - 1000.0, "/pay AfkMain 234.56")]
-    #[case::just_below_the_range_but_written_inside(0.996, "/pay AfkMain 1.00")]
+    #[case::a_product_with_binary_noise(2.3 * 100.0, "/pay AfkMain 230.00")]
+    #[case::a_tenth_three_times(0.1 + 0.1 + 0.1 + 2.0, "/pay AfkMain 2.30")]
     #[case::just_above_the_range_but_written_inside(1_000_000.004, "/pay AfkMain 1000000.00")]
-    fn a_decimal_number_is_rounded_to_its_places(#[case] amount: f64, #[case] text: &str) {
+    fn a_decimal_number_counts_down_at_its_last_place(#[case] amount: f64, #[case] text: &str) {
         let sent = pay().render(&[("amount", Given::Decimal(amount))]).unwrap();
 
         assert_eq!(sent.as_str(), text);
@@ -1098,7 +1222,8 @@ mod tests {
 
     #[rstest]
     #[case::written_below(0.994)]
-    #[case::written_above(1_000_000.006)]
+    #[case::just_below_the_range_counted_down_below_it(0.996)]
+    #[case::written_above(1_000_000.01)]
     #[case::zero(0.0)]
     #[case::negative(-5.0)]
     #[case::huge(1e300)]
@@ -1113,10 +1238,16 @@ mod tests {
     }
 
     #[rstest]
-    #[case::a_small_negative(-0.001, "x 0.00")]
+    #[case::a_small_negative_counts_down(-0.001, "x -0.01")]
     #[case::negative_zero(-0.0, "x 0.00")]
+    #[case::a_hundredth_below_zero(-0.01, "x -0.01")]
     #[case::a_real_negative(-0.006, "x -0.01")]
-    fn a_zero_is_never_written_with_a_minus(#[case] value: f64, #[case] text: &str) {
+    #[case::a_negative_with_places_left_over(-0.016, "x -0.02")]
+    #[case::zero(0.0, "x 0.00")]
+    fn a_negative_counts_down_and_a_zero_is_never_written_with_a_minus(
+        #[case] value: f64,
+        #[case] text: &str,
+    ) {
         let message = template("x {a}", vec![decimal("a", -1.0, 1.0, 2)]);
 
         let sent = message.render(&[("a", Given::Decimal(value))]).unwrap();
@@ -1163,8 +1294,30 @@ mod tests {
     }
 
     #[rstest]
+    #[case::a_whole_decimal(5.0, Ok("/ah sell 5"))]
+    #[case::counted_down(5.9, Ok("/ah sell 5"))]
+    #[case::just_below_the_next(1499.999, Ok("/ah sell 1499"))]
+    #[case::binary_noise(2.3 * 100.0, Ok("/ah sell 230"))]
+    #[case::the_largest(1_000_000.7, Ok("/ah sell 1000000"))]
+    #[case::counted_down_below_the_range(0.99, Err(RenderError::OutOfRange { value: 0 }))]
+    #[case::above(1_000_001.0, Err(RenderError::OutOfRange { value: 0 }))]
+    #[case::huge(1e300, Err(RenderError::OutOfRange { value: 0 }))]
+    #[case::not_a_number(f64::NAN, Err(RenderError::OutOfRange { value: 0 }))]
+    #[case::endless(f64::INFINITY, Err(RenderError::OutOfRange { value: 0 }))]
+    fn a_decimal_for_a_whole_number_counts_down_to_one(
+        #[case] price: f64,
+        #[case] expected: Result<&str, RenderError>,
+    ) {
+        let sent = sell().render(&[("price", Given::Decimal(price))]);
+
+        assert_eq!(
+            sent.as_ref().map(ChatMessage::as_str),
+            expected.as_ref().copied()
+        );
+    }
+
+    #[rstest]
     #[case::text_for_a_whole_number(sell(), "price", Given::Text("5"))]
-    #[case::a_decimal_for_a_whole_number(sell(), "price", Given::Decimal(5.0))]
     #[case::text_for_a_decimal(pay(), "amount", Given::Text("5.00"))]
     #[case::a_number_for_a_word(
         template("/home {place}", vec![word("place", &["1"])]),

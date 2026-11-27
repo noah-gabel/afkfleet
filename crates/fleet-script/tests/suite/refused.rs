@@ -175,7 +175,8 @@ fn every_kind_has_its_own_short_name() {
     assert_eq!(
         names,
         [
-            "press", "look", "hotbar", "vehicle", "send", "expect", "timer", "log"
+            "press", "look", "hotbar", "vehicle", "send", "expect", "timer", "log", "click",
+            "screen", "sign"
         ]
     );
     names.sort_unstable();

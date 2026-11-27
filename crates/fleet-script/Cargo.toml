@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 chrono.workspace = true
 fleet-core.workspace = true
+jiff.workspace = true
 rand = { workspace = true, features = ["std_rng"] }
 rhai.workspace = true
 thiserror.workspace = true

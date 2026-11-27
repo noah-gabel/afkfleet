@@ -7,8 +7,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use chrono::{DateTime, Utc};
+use fleet_core::mc::MenuView;
+use fleet_core::script::menu::ScreenKind;
 use fleet_core::script::{
-    ActionLimiter, Captured, Hook, HookEvent, Input, Leash, Snapshot, Stopwatch, TimerName, limits,
+    ActionLimiter, Captured, ClickOutcome, Hook, HookEvent, Input, Leash, Refusal, Snapshot,
+    Stopwatch, TimerName, limits,
 };
 use rhai::{CallFnOptions, Dynamic, Engine, EvalAltResult, FLOAT, Map, Position, Scope};
 
@@ -51,6 +54,12 @@ pub struct Moment<'a> {
     /// that would lead further is refused when it's pressed. The session
     /// below holds the bot to it every tick, with or without this.
     pub leash: Option<Leash>,
+    /// The bot's inventory, the screen it has open and the sign editor
+    /// waiting for an answer, taken with the facts (API level 2).
+    pub menu: &'a MenuView,
+    /// The bot's own player name, as its account has it: `bot.name` (API
+    /// level 2; ADR-0036, M12).
+    pub name: &'a str,
 }
 
 /// How a call on an instance ended.
@@ -252,6 +261,10 @@ impl Running {
 
     /// How much of the stack the running hook takes right now: how far a
     /// local of this function is from where the hook started.
+    ///
+    /// The address sanitizer's fake stack frames put such a local on the
+    /// heap, where this measures nothing; the fuzz runner turns them off
+    /// (`scripts/fuzz.mjs`, ADR-0030's amendment).
     fn stack_used(&self) -> usize {
         let here = 0_u8;
         self.stack_top
@@ -399,7 +412,7 @@ impl Instance {
             }
         };
         Self {
-            engine: engine::runner(resolver, progress),
+            engine: engine::runner(program.script().api(), resolver, progress),
             program,
             turn,
             running,
@@ -427,6 +440,19 @@ impl Instance {
     /// [`HookEvent::Stop`] ends the script in an orderly way: `on_stop`
     /// runs, where only one declared message and releases are taken, then
     /// everything is released.
+    ///
+    /// **A screen that opens** ([`HookEvent::MenuOpen`]) let go of every key
+    /// and button below the script (ADR-0036, M8), so the script hears it as
+    /// a let-go first, whatever its level. A script that defines
+    /// `on_menu_open` then handles the screen. One that doesn't, at level 1
+    /// or 2, has a server's screen closed at once and what it held pressed
+    /// again, past the same limits as any press: it never stays behind a
+    /// screen it has no hook for. The bot's own inventory only a script
+    /// opens, and it's never closed for it (ADR-0052).
+    ///
+    /// [`HookEvent::Click`] tells the script that its action's fate came,
+    /// or that it wasn't sent after all: the next action may go, whether it
+    /// defines `on_click` or not.
     pub fn handle(
         &mut self,
         event: &HookEvent,
@@ -445,6 +471,16 @@ impl Instance {
         if hook.releases_first() {
             lock(&self.turn).holds.release_all();
             actions.push(Action::ReleaseAll);
+        }
+        match event {
+            HookEvent::MenuOpen => {
+                let held = self.let_go_for_a_screen();
+                if !self.program.defines(Hook::MenuOpen) {
+                    return self.screen_without_a_hook(moment, limiter, &held);
+                }
+            }
+            HookEvent::Click(_) => lock(&self.turn).heard_fate(),
+            _ => {}
         }
         let outcome = match self.run(event, moment, limiter, false) {
             Run::NotDefined => Outcome::NotDefined,
@@ -528,6 +564,63 @@ impl Instance {
         [turn.holds.next_due(), timers].into_iter().flatten().min()
     }
 
+    /// Lets go of everything the script holds, as the session did when a
+    /// screen opened: what was held, with when each was to be let go, and
+    /// whether the right button was held until used.
+    fn let_go_for_a_screen(&self) -> Held {
+        let mut turn = lock(&self.turn);
+        let holds = turn.holds.holds().collect();
+        let until_used = turn.held_until_used();
+        turn.holds.release_all();
+        Held { holds, until_used }
+    }
+
+    /// A screen opened for a script with no `on_menu_open`: a server's is
+    /// closed at once, and what the script held is pressed again.
+    fn screen_without_a_hook(
+        &mut self,
+        moment: &Moment<'_>,
+        limiter: &mut ActionLimiter,
+        held: &Held,
+    ) -> Ran {
+        let servers = moment
+            .menu
+            .screen
+            .as_ref()
+            .is_some_and(|screen| screen.kind() != ScreenKind::Inventory);
+        let mut turn = lock(&self.turn);
+        turn.begin(moment, core::mem::take(limiter), false);
+        if servers {
+            // A close is never refused while a screen is open.
+            let _ = turn.close_screen();
+            turn.press_again(&held.holds, held.until_used);
+        }
+        let (actions, back, refused) = turn.end();
+        drop(turn);
+        *limiter = back;
+        for Refused {
+            asked,
+            reason,
+            times,
+        } in refused
+        {
+            note(&mut self.refused, asked, reason, times);
+        }
+        Ran {
+            actions,
+            next_wake: self.wake_after(moment.now),
+            outcome: Outcome::NotDefined,
+            refused: core::mem::take(&mut self.refused),
+        }
+    }
+
+    /// Whether an action the script sent onto a screen still waits for its
+    /// fate: until then, the next one is `click_pending`.
+    #[must_use]
+    pub fn awaits_fate(&self) -> bool {
+        lock(&self.turn).awaits_fate()
+    }
+
     /// Tells the script that `inputs` were let go from below it: by the
     /// leash, by the tool guard, or because the item was used up.
     pub fn let_go(&mut self, inputs: impl IntoIterator<Item = Input>) {
@@ -544,6 +637,8 @@ impl Instance {
         let mut turn = lock(&self.turn);
         turn.holds.release_all();
         turn.timers.clear();
+        // A fate that didn't come before the session ended never comes.
+        turn.heard_fate();
     }
 
     /// Why the script stopped, if it failed or hit a limit.
@@ -671,38 +766,7 @@ impl Instance {
         self.running.start_time(allowance.time);
         lock(&self.turn).begin(moment, core::mem::take(limiter), stopping);
 
-        let options = CallFnOptions::new().eval_ast(false);
-        let mut scope = Scope::new();
-        let (engine, ast, name) = (&self.engine, self.program.ast(), hook.name());
-        let returned: Result<Dynamic, Box<EvalAltResult>> = match event {
-            HookEvent::Join { first } => {
-                engine.call_fn_with_options(options, &mut scope, ast, name, (*first,))
-            }
-            HookEvent::Timer(timer) => engine.call_fn_with_options(
-                options,
-                &mut scope,
-                ast,
-                name,
-                (timer.as_str().to_owned(),),
-            ),
-            HookEvent::Chat(found) => {
-                let values: Map = found
-                    .values
-                    .iter()
-                    .map(|(name, value)| (name.as_str().into(), captured(value)))
-                    .collect();
-                engine.call_fn_with_options(
-                    options,
-                    &mut scope,
-                    ast,
-                    name,
-                    (found.key.as_str().to_owned(), values),
-                )
-            }
-            HookEvent::WorldChange | HookEvent::Death | HookEvent::Respawn | HookEvent::Stop => {
-                engine.call_fn_with_options(options, &mut scope, ast, name, ())
-            }
-        };
+        let returned = call(&self.engine, self.program.ast(), event);
 
         let (actions, back, refused) = lock(&self.turn).end();
         *limiter = back;
@@ -760,6 +824,79 @@ impl Instance {
             },
         }
     }
+}
+
+/// Calls `event`'s hook in `ast` with what it's told, never running the
+/// script's top level.
+fn call(
+    engine: &Engine,
+    ast: &rhai::AST,
+    event: &HookEvent,
+) -> Result<Dynamic, Box<EvalAltResult>> {
+    let options = CallFnOptions::new().eval_ast(false);
+    let mut scope = Scope::new();
+    let name = event.hook().name();
+    match event {
+        HookEvent::Join { first } => {
+            engine.call_fn_with_options(options, &mut scope, ast, name, (*first,))
+        }
+        HookEvent::Timer(timer) => engine.call_fn_with_options(
+            options,
+            &mut scope,
+            ast,
+            name,
+            (timer.as_str().to_owned(),),
+        ),
+        HookEvent::Chat(found) => {
+            let values: Map = found
+                .values
+                .iter()
+                .map(|(name, value)| (name.as_str().into(), captured(value)))
+                .collect();
+            engine.call_fn_with_options(
+                options,
+                &mut scope,
+                ast,
+                name,
+                (found.key.as_str().to_owned(), values),
+            )
+        }
+        HookEvent::Click(outcome) => {
+            engine.call_fn_with_options(options, &mut scope, ast, name, (clicked(*outcome),))
+        }
+        HookEvent::WorldChange
+        | HookEvent::Death
+        | HookEvent::Respawn
+        | HookEvent::Stop
+        | HookEvent::MenuOpen
+        | HookEvent::MenuUpdate
+        | HookEvent::MenuClose
+        | HookEvent::SignOpen => engine.call_fn_with_options(options, &mut scope, ast, name, ()),
+    }
+}
+
+/// What a script held when a screen let go of it.
+struct Held {
+    holds: Vec<(Input, Option<DateTime<Utc>>)>,
+    until_used: bool,
+}
+
+/// What `on_click(result)` is told: `ok`, `reason` (empty for `ok`), and
+/// `slot`, `()` for a button, a trade or a name.
+fn clicked(outcome: ClickOutcome) -> Map {
+    let mut map = Map::new();
+    map.insert("ok".into(), Dynamic::from_bool(outcome.answer.is_ok()));
+    map.insert(
+        "reason".into(),
+        Dynamic::from(outcome.answer.err().map_or("", Refusal::as_str)),
+    );
+    map.insert(
+        "slot".into(),
+        outcome
+            .slot
+            .map_or(Dynamic::UNIT, |slot| Dynamic::from_int(i64::from(slot))),
+    );
+    map
 }
 
 /// A captured value as a script reads it: a number, or one of the
@@ -837,6 +974,7 @@ mod tests {
             block_guard: Vec::new(),
             messages: Vec::new(),
             patterns: Vec::new(),
+            signs: Vec::new(),
         })
         .unwrap();
         Arc::new(compile(&script).unwrap())
@@ -863,6 +1001,7 @@ mod tests {
     /// for the hook.
     fn join(source: &str, stack_budget: usize) -> (Ran, Instance) {
         let facts = facts();
+        let menu = MenuView::default();
         let mut instance = Instance::with_stack_budget(
             program(source),
             7,
@@ -876,6 +1015,8 @@ mod tests {
                 now: Utc.with_ymd_and_hms(2026, 11, 17, 12, 0, 0).unwrap(),
                 presence: Presence::InWorld,
                 leash: None,
+                menu: &menu,
+                name: "AfkBot1",
             },
             &mut ActionLimiter::new(),
         );
@@ -953,6 +1094,8 @@ mod tests {
                     now: Utc.with_ymd_and_hms(2026, 11, 17, 12, 0, 5).unwrap(),
                     presence: Presence::InWorld,
                     leash: None,
+                    menu: &MenuView::default(),
+                    name: "AfkBot1",
                 },
                 &mut ActionLimiter::new(),
             )

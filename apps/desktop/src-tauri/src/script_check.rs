@@ -121,13 +121,16 @@ mod tests {
 
     fn compiled(source: &str) -> Result<(), FieldError> {
         let script = fleet_core::script::Script::try_from(ScriptDraft {
-            api: ScriptApiLevel::NEWEST.get(),
+            // The level the server saves a mode at until it stamps a
+            // script's own (Plan.md P16.15).
+            api: ScriptApiLevel::V1.get(),
             source: source.to_owned(),
             leash: 8,
             tool_guard: 2,
             block_guard: Vec::new(),
             messages: Vec::new(),
             patterns: Vec::new(),
+            signs: Vec::new(),
         })
         .unwrap();
         fleet_script::compile(&script)
@@ -144,12 +147,20 @@ mod tests {
     #[test]
     fn every_example_of_the_reference_has_no_problem() {
         for example in fleet_script::EXAMPLES {
-            assert_eq!(
-                check(example.source),
-                ScriptCheck { problem: None },
-                "{}",
-                example.id
-            );
+            let problem = check(example.source).problem;
+            if example.level == ScriptApiLevel::V1 {
+                assert_eq!(problem, None, "{}", example.id);
+            } else {
+                // Saved at level 1 until the server stamps a script's level
+                // (Plan.md P16.15): the check names the level it needs, and
+                // the app offers no such example yet.
+                let shown = format!("{problem:?}");
+                assert!(
+                    shown.contains("needs script API level 2"),
+                    "{}: {shown}",
+                    example.id
+                );
+            }
         }
     }
 

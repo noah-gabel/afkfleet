@@ -14,12 +14,21 @@
 //! - **Chat is kept up to the feed's capacity;** a line beyond it is dropped
 //!   and counted. And none is kept at all unless the runner asked for chat,
 //!   which it does only while a script that declares patterns runs.
+//! - **Screens, clicks and sign editors are bounded as fleet-mc's bridge
+//!   bounds them** (ADR-0051, C2): a screen that opens drops what's unread
+//!   of the screens before it, all but the close of one whose opening was
+//!   read; a screen that closes before its opening was read takes the
+//!   opening and its update with it and is never heard of; an update waits
+//!   once a screen; a sign editor replaces one unread. A click's fate is
+//!   always kept: no action goes out while one is unread. So at most an
+//!   opening, an update, a close, a fate and a sign editor wait at once.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use fleet_core::chat::IncomingChat;
 use fleet_core::mc::LetGo;
+use fleet_core::script::menu::{ClickResult, ScreenId, SignEditor};
 use tokio::sync::Notify;
 
 /// Something of the bot's life that a script has a hook or a rule for.
@@ -33,6 +42,17 @@ pub enum Life {
     WorldChanged,
     /// The session let go of inputs by itself.
     LetGo(LetGo),
+    /// A screen opened: the server's or the bot's own inventory. Every key
+    /// and button was let go (ADR-0036, M8).
+    MenuOpened(ScreenId),
+    /// The open screen's content changed.
+    MenuUpdated(ScreenId),
+    /// The screen closed.
+    MenuClosed(ScreenId),
+    /// An action's fate (ADR-0036, R1).
+    Clicked(ClickResult),
+    /// The server opened a sign editor (ADR-0036, M16).
+    SignOpened(SignEditor),
 }
 
 /// What a runner reads from its inbox.
@@ -104,12 +124,12 @@ pub struct ScriptFeed {
 
 impl ScriptFeed {
     /// Tells the script about `event`. One of its kind that already waits
-    /// moves to the back instead of waiting twice.
+    /// moves to the back instead of waiting twice; a screen's events are
+    /// bounded as the module says.
     pub fn life(&self, event: Life) {
         {
             let mut state = self.shared.lock();
-            state.life.retain(|pending| *pending != event);
-            state.life.push_back(event);
+            push_life(&mut state.life, event);
         }
         self.shared.ready.notify_one();
     }
@@ -133,6 +153,41 @@ impl ScriptFeed {
         self.shared.ready.notify_one();
         true
     }
+}
+
+/// Puts `event` behind what waits in `life`, by the module's rules.
+fn push_life(life: &mut VecDeque<Life>, event: Life) {
+    match event {
+        Life::MenuOpened(_) => {
+            // What's unread of the screens before goes, but the close of
+            // one whose opening was read: the script must hear it closed.
+            let unread: Vec<ScreenId> = life
+                .iter()
+                .filter_map(|pending| match pending {
+                    Life::MenuOpened(screen) => Some(*screen),
+                    _ => None,
+                })
+                .collect();
+            life.retain(|pending| match pending {
+                Life::MenuOpened(_) | Life::MenuUpdated(_) | Life::SignOpened(_) => false,
+                Life::MenuClosed(screen) => !unread.contains(screen),
+                _ => true,
+            });
+        }
+        Life::MenuClosed(closed) => {
+            let opening_unread = life.contains(&Life::MenuOpened(closed));
+            life.retain(|pending| {
+                !matches!(pending, Life::MenuOpened(screen) | Life::MenuUpdated(screen) if *screen == closed)
+            });
+            if opening_unread {
+                // Never heard of: it opened and closed unread.
+                return;
+            }
+        }
+        Life::SignOpened(_) => life.retain(|pending| !matches!(pending, Life::SignOpened(_))),
+        _ => life.retain(|pending| *pending != event),
+    }
+    life.push_back(event);
 }
 
 /// The runner's side of a session's feed: what a script's runner reads
@@ -262,6 +317,126 @@ mod tests {
                 Fed::Life(Life::LetGo(LetGo::Leash))
             ]
         );
+    }
+
+    fn screens() -> [ScreenId; 3] {
+        use fleet_core::script::menu::{ClickGate, WindowId};
+        let mut gate = ClickGate::new();
+        [1, 2, 3].map(|window| gate.opened(WindowId::new(window)))
+    }
+
+    fn lives(inbox: &ScriptInbox) -> Vec<Life> {
+        waiting(inbox)
+            .into_iter()
+            .filter_map(|fed| match fed {
+                Fed::Life(life) => Some(life),
+                Fed::Chat(_) => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_screen_its_update_its_close_and_a_fate_arrive_in_order() {
+        use fleet_core::script::menu::{ClickFate, ClickResult};
+        let (feed, inbox) = script_feed(4);
+        let [chest, ..] = screens();
+        let fate = ClickResult {
+            screen: chest,
+            slot: Some(3),
+            fate: ClickFate::Ok,
+        };
+        feed.life(Life::MenuOpened(chest));
+        assert_eq!(lives(&inbox), [Life::MenuOpened(chest)]);
+
+        feed.life(Life::MenuUpdated(chest));
+        feed.life(Life::MenuUpdated(chest));
+        feed.life(Life::Clicked(fate));
+        feed.life(Life::MenuUpdated(chest));
+        let before_the_close = lives(&inbox);
+        feed.life(Life::MenuUpdated(chest));
+        feed.life(Life::MenuClosed(chest));
+
+        // An update waits once, at the back; a close takes its screen's
+        // update along, which has nothing left to update.
+        assert_eq!(
+            before_the_close,
+            [Life::Clicked(fate), Life::MenuUpdated(chest)]
+        );
+        assert_eq!(lives(&inbox), [Life::MenuClosed(chest)]);
+    }
+
+    #[test]
+    fn a_screen_that_opens_drops_what_is_unread_of_the_one_before() {
+        let (feed, inbox) = script_feed(4);
+        let [first, second, _] = screens();
+
+        feed.life(Life::MenuOpened(first));
+        feed.life(Life::MenuUpdated(first));
+        feed.life(Life::MenuOpened(second));
+
+        assert_eq!(lives(&inbox), [Life::MenuOpened(second)]);
+    }
+
+    #[test]
+    fn a_screen_whose_opening_was_read_keeps_its_close_when_another_opens() {
+        let (feed, mut inbox) = script_feed(4);
+        let [first, second, _] = screens();
+        feed.life(Life::MenuOpened(first));
+        assert_eq!(inbox.take(), Some(Fed::Life(Life::MenuOpened(first))));
+
+        feed.life(Life::MenuClosed(first));
+        feed.life(Life::MenuOpened(second));
+
+        assert_eq!(
+            lives(&inbox),
+            [Life::MenuClosed(first), Life::MenuOpened(second)]
+        );
+        let _ = &mut inbox;
+    }
+
+    #[test]
+    fn a_screen_that_closes_before_its_opening_was_read_is_never_heard_of() {
+        let (feed, inbox) = script_feed(4);
+        let [first, ..] = screens();
+
+        feed.life(Life::MenuOpened(first));
+        feed.life(Life::MenuUpdated(first));
+        feed.life(Life::MenuClosed(first));
+
+        assert_eq!(lives(&inbox), []);
+    }
+
+    #[test]
+    fn a_sign_editor_replaces_one_unread() {
+        use fleet_core::script::BlockPosition;
+        use fleet_core::script::menu::{SignDesk, SignSide};
+        let (feed, inbox) = script_feed(4);
+        let mut desk = SignDesk::new();
+        let first = desk.opened(BlockPosition { x: 0, y: 0, z: 0 }, SignSide::Front);
+        let second = desk.opened(BlockPosition { x: 1, y: 0, z: 0 }, SignSide::Front);
+
+        feed.life(Life::SignOpened(first));
+        feed.life(Life::SignOpened(second));
+
+        assert_eq!(lives(&inbox), [Life::SignOpened(second)]);
+    }
+
+    #[test]
+    fn a_server_that_opens_screens_in_a_loop_cant_fill_the_feed() {
+        use fleet_core::script::menu::{ClickGate, WindowId};
+        let (feed, inbox) = script_feed(4);
+        let mut gate = ClickGate::new();
+
+        for n in 0..10_000 {
+            let screen = gate.opened(WindowId::new(n % 100 + 1));
+            feed.life(Life::MenuOpened(screen));
+            feed.life(Life::MenuUpdated(screen));
+            if n % 3 == 0 {
+                feed.life(Life::MenuClosed(screen));
+            }
+        }
+
+        assert!(lives(&inbox).len() <= 3);
     }
 
     #[test]

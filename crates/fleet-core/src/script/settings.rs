@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::facts::{Identifier, IdentifierError};
+use super::menu::{SignDraft, SignTemplate, SignTemplateError};
 use super::pattern::{
     CaptureKind, ChatPattern, ChatPatterns, ChatPatternsError, PatternDraft, PatternError,
 };
@@ -241,8 +242,11 @@ impl ScriptApiLevel {
     /// Phase 15's API: keys, mouse, look, hotbar, vehicles, chat, timers,
     /// facts.
     pub const V1: Self = Self(1);
+    /// Phase 16's: the inventory, screens, clicks, signs, the bot's name and
+    /// the time of day (ADR-0036, D13; Plan.md P16.12, P16.21).
+    pub const V2: Self = Self(2);
     /// The newest level this version knows.
-    pub const NEWEST: Self = Self::V1;
+    pub const NEWEST: Self = Self::V2;
 
     /// The level's number.
     #[must_use]
@@ -282,8 +286,11 @@ impl From<ScriptApiLevel> for u8 {
 /// checked it.
 ///
 /// Its JSON is `{"api":…,"source":…,"leash":…,"tool_guard":…,
-/// "block_guard":[…],"messages":[…],"patterns":[…]}`. Every field is required, so a mode
-/// always says what it runs under; unknown fields are ignored (ADR-0010).
+/// "block_guard":[…],"messages":[…],"patterns":[…],"signs":[…]}`. Every field but
+/// `signs` is required, so a mode always says what it runs under; `signs`
+/// came with API level 2 and is left out when there are none, so a mode
+/// without any reads and writes as before. Unknown fields are ignored
+/// (ADR-0010).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScriptDraft {
     /// The API level the script was validated at.
@@ -300,6 +307,9 @@ pub struct ScriptDraft {
     pub messages: Vec<MessageDraft>,
     /// The chat lines the script reads.
     pub patterns: Vec<PatternDraft>,
+    /// The signs the script may write (ADR-0036, M16): API level 2.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signs: Vec<SignDraft>,
 }
 
 /// Why a [`ScriptDraft`] isn't a scripted mode's body.
@@ -360,6 +370,29 @@ pub enum ScriptError {
     /// The chat patterns aren't a list a mode may declare.
     #[error(transparent)]
     Patterns(#[from] ChatPatternsError),
+    /// There are more than [`Script::MAX_SIGNS`] declared signs.
+    #[error("the mode declares {count} signs; the limit is {max}", max = Script::MAX_SIGNS)]
+    TooManySigns {
+        /// How many there are.
+        count: usize,
+    },
+    /// A declared sign isn't a [`SignTemplate`].
+    #[error("sign {sign}: {reason}")]
+    Sign {
+        /// The sign's place.
+        sign: usize,
+        /// Why it isn't one.
+        reason: SignTemplateError,
+    },
+    /// Two declared signs have the same key.
+    #[error("sign {sign} has the key of an earlier one")]
+    DuplicateSign {
+        /// The second one's place.
+        sign: usize,
+    },
+    /// A level-1 script declares signs, which came with level 2.
+    #[error("declared signs need script API level 2")]
+    SignsNeedLevel2,
 }
 
 /// A scripted mode's body: the script's source, the API level it was
@@ -387,11 +420,15 @@ pub struct Script {
     block_guard: BlockGuard,
     messages: Vec<MessageTemplate>,
     patterns: ChatPatterns,
+    signs: Vec<SignTemplate>,
 }
 
 impl Script {
     /// The most messages a mode declares.
     pub const MAX_MESSAGES: usize = 16;
+
+    /// The most signs a mode declares.
+    pub const MAX_SIGNS: usize = 16;
 
     /// The most bytes of UTF-8 a mode's declarations hold together: every
     /// key, text, name and word of its messages and chat patterns, and every
@@ -453,6 +490,18 @@ impl Script {
         &self.patterns
     }
 
+    /// The declared signs, in the order they were declared.
+    #[must_use]
+    pub fn signs(&self) -> &[SignTemplate] {
+        &self.signs
+    }
+
+    /// The declared sign with this key.
+    #[must_use]
+    pub fn sign(&self, key: &str) -> Option<&SignTemplate> {
+        self.signs.iter().find(|sign| sign.key().as_str() == key)
+    }
+
     /// The names of the commands among the declared messages, in declared
     /// order, for the allowlist check: what
     /// [`MessageTemplate::command_name`] gives for each.
@@ -472,7 +521,8 @@ impl TryFrom<ScriptDraft> for Script {
     /// level, the source, the leash, the tool guard, the block guard; how
     /// much text the declarations hold together; the messages (how many,
     /// then each in order: itself, a key used before); the patterns (each
-    /// in order, then the list).
+    /// in order, then the list); the signs (the level, how many, then each
+    /// in order: itself, a key used before).
     fn try_from(draft: ScriptDraft) -> Result<Self, ScriptError> {
         let declared = declared_bytes(&draft);
         let api = ScriptApiLevel::try_from(draft.api)?;
@@ -511,6 +561,7 @@ impl TryFrom<ScriptDraft> for Script {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let patterns = ChatPatterns::try_new(patterns)?;
+        let signs = signs(api, draft.signs)?;
 
         Ok(Self {
             api,
@@ -520,8 +571,33 @@ impl TryFrom<ScriptDraft> for Script {
             block_guard,
             messages,
             patterns,
+            signs,
         })
     }
+}
+
+/// Checks the declared signs of a script at level `api`.
+fn signs(api: ScriptApiLevel, drafts: Vec<SignDraft>) -> Result<Vec<SignTemplate>, ScriptError> {
+    if drafts.is_empty() {
+        return Ok(Vec::new());
+    }
+    if api < ScriptApiLevel::V2 {
+        return Err(ScriptError::SignsNeedLevel2);
+    }
+    let count = drafts.len();
+    if count > Script::MAX_SIGNS {
+        return Err(ScriptError::TooManySigns { count });
+    }
+    let mut signs: Vec<SignTemplate> = Vec::with_capacity(count);
+    for (sign, draft) in drafts.into_iter().enumerate() {
+        let template =
+            SignTemplate::try_from(draft).map_err(|reason| ScriptError::Sign { sign, reason })?;
+        if signs.iter().any(|earlier| earlier.key() == template.key()) {
+            return Err(ScriptError::DuplicateSign { sign });
+        }
+        signs.push(template);
+    }
+    Ok(signs)
 }
 
 /// How many bytes of UTF-8 `draft`'s declarations hold together: what
@@ -549,9 +625,21 @@ fn declared_bytes(draft: &ScriptDraft) -> usize {
         });
         pattern.key.len() + pattern.text.len() + captures.sum::<usize>()
     });
+    let signs = draft.signs.iter().map(|sign| {
+        let lines = sign.lines.iter().map(String::len).sum::<usize>();
+        let values = sign.values.iter().map(|value| {
+            value.name.len()
+                + match &value.kind {
+                    ValueKind::Word { options } => words(options),
+                    ValueKind::Integer { .. } | ValueKind::Decimal { .. } => 0,
+                }
+        });
+        sign.key.len() + lines + values.sum::<usize>()
+    });
     blocks
         .saturating_add(messages.sum::<usize>())
         .saturating_add(patterns.sum::<usize>())
+        .saturating_add(signs.sum::<usize>())
 }
 
 impl From<Script> for ScriptDraft {
@@ -569,6 +657,7 @@ impl From<Script> for ScriptDraft {
                 .cloned()
                 .map(PatternDraft::from)
                 .collect(),
+            signs: script.signs.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -584,6 +673,7 @@ pub(crate) fn draft_of(source: &str) -> ScriptDraft {
         block_guard: Vec::new(),
         messages: Vec::new(),
         patterns: Vec::new(),
+        signs: Vec::new(),
     }
 }
 
@@ -789,19 +879,30 @@ mod tests {
     }
 
     #[test]
-    fn phase_15s_api_is_level_1_and_no_other_is_known() {
+    fn phase_15s_api_is_level_1_phase_16s_level_2_and_no_other_is_known() {
         assert_eq!(ScriptApiLevel::try_from(1), Ok(ScriptApiLevel::V1));
-        assert_eq!(ScriptApiLevel::NEWEST.get(), 1);
-        for level in [0, 2, 255] {
+        assert_eq!(ScriptApiLevel::try_from(2), Ok(ScriptApiLevel::V2));
+        assert_eq!(ScriptApiLevel::NEWEST, ScriptApiLevel::V2);
+        assert!(ScriptApiLevel::V1 < ScriptApiLevel::V2);
+        for level in [0, 3, 255] {
             assert_eq!(
                 ScriptApiLevel::try_from(level),
                 Err(ScriptApiLevelError { level })
             );
         }
         assert_eq!(
-            ScriptApiLevelError { level: 2 }.to_string(),
-            "script API level 2 isn't known here; the newest is 1"
+            ScriptApiLevelError { level: 3 }.to_string(),
+            "script API level 3 isn't known here; the newest is 2"
         );
+    }
+
+    #[rstest]
+    #[case::an_agent_from_before_scripts(0, false)]
+    #[case::a_phase_15_agent(1, false)]
+    #[case::an_agent_at_the_level(2, true)]
+    #[case::a_newer_agent(3, true)]
+    fn a_level_2_script_runs_only_on_a_level_2_agent(#[case] agent: u32, #[case] runs: bool) {
+        assert_eq!(ScriptApiLevel::V2.runs_on(agent), runs);
     }
 
     #[rstest]
@@ -820,7 +921,7 @@ mod tests {
         assert_eq!(serde_json::to_string(&ScriptApiLevel::V1).unwrap(), "1");
         assert!(serde_json::from_str::<LeashRadius>("0").is_err());
         assert!(serde_json::from_str::<ToolGuard>("101").is_err());
-        assert!(serde_json::from_str::<ScriptApiLevel>("2").is_err());
+        assert!(serde_json::from_str::<ScriptApiLevel>("3").is_err());
         assert!(serde_json::from_str::<LeashRadius>("-1").is_err());
     }
 
@@ -1033,8 +1134,8 @@ mod tests {
 
     #[rstest]
     #[case::an_unknown_level(
-        ScriptDraft { api: 2, ..draft_of("") },
-        ScriptError::Api(ScriptApiLevelError { level: 2 })
+        ScriptDraft { api: 3, ..draft_of("") },
+        ScriptError::Api(ScriptApiLevelError { level: 3 })
     )]
     #[case::a_source_that_isnt_one(
         draft_of("a\u{7}"),
@@ -1203,7 +1304,10 @@ mod tests {
         r#"{"api":1,"source":"","leash":8,"tool_guard":2,"block_guard":[],"messages":[]}"#
     )]
     #[case::a_newer_level(
-        r#"{"api":2,"source":"","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}"#
+        r#"{"api":3,"source":"","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}"#
+    )]
+    #[case::signs_that_are_no_list(
+        r#"{"api":2,"source":"","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[],"signs":{}}"#
     )]
     #[case::a_leash_that_is_off(
         r#"{"api":1,"source":"","leash":0,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}"#
@@ -1216,6 +1320,116 @@ mod tests {
     )]
     fn refuses_json_that_isnt_a_body(#[case] json: &str) {
         assert!(serde_json::from_str::<Script>(json).is_err(), "{json}");
+    }
+
+    // --- The signs ---
+
+    fn sign(key: &str, lines: &[&str]) -> SignDraft {
+        SignDraft {
+            key: key.to_owned(),
+            lines: lines.iter().map(|line| (*line).to_owned()).collect(),
+            values: Vec::new(),
+        }
+    }
+
+    fn with_signs(api: u8, signs: Vec<SignDraft>) -> ScriptDraft {
+        ScriptDraft {
+            api,
+            signs,
+            ..draft_of("")
+        }
+    }
+
+    #[test]
+    fn a_level_2_script_keeps_its_signs_in_order_and_finds_them_by_key() {
+        let price = SignDraft {
+            values: vec![crate::script::ValueDraft {
+                name: "price".to_owned(),
+                kind: ValueKind::Integer { min: 1, max: 1000 },
+            }],
+            ..sign("price", &["{price}"])
+        };
+        let script =
+            Script::try_from(with_signs(2, vec![price, sign("note", &["", "afk"])])).unwrap();
+
+        let keys: Vec<&str> = script
+            .signs()
+            .iter()
+            .map(|sign| sign.key().as_str())
+            .collect();
+        assert_eq!(keys, ["price", "note"]);
+        assert_eq!(script.sign("note").unwrap().key().as_str(), "note");
+        assert!(script.sign("Note").is_none());
+        assert!(script.sign("other").is_none());
+    }
+
+    #[test]
+    fn a_level_1_script_declares_no_signs() {
+        assert_eq!(
+            Script::try_from(with_signs(1, vec![sign("note", &["afk"])])),
+            Err(ScriptError::SignsNeedLevel2)
+        );
+        assert!(Script::try_from(with_signs(1, Vec::new())).is_ok());
+    }
+
+    #[test]
+    fn signs_are_bounded_checked_and_their_keys_unique() {
+        let many: Vec<SignDraft> = (0..=Script::MAX_SIGNS)
+            .map(|n| sign(&format!("s{n}"), &["afk"]))
+            .collect();
+        assert_eq!(
+            Script::try_from(with_signs(2, many)),
+            Err(ScriptError::TooManySigns { count: 17 })
+        );
+        assert!(matches!(
+            Script::try_from(with_signs(2, vec![sign("a", &["afk"]), sign("b", &[])])),
+            Err(ScriptError::Sign { sign: 1, .. })
+        ));
+        assert_eq!(
+            Script::try_from(with_signs(2, vec![sign("a", &["x"]), sign("a", &["y"])])),
+            Err(ScriptError::DuplicateSign { sign: 1 })
+        );
+    }
+
+    #[test]
+    fn a_signs_text_counts_towards_the_declarations_bound() {
+        // 16 messages of 761 bytes are 12,176, under 16 KiB; 16 signs of
+        // 341 bytes take them over it.
+        let long = "x".repeat(70);
+        let signs: Vec<SignDraft> = (0..16)
+            .map(|n| SignDraft {
+                key: format!("s{n:0>60}"),
+                lines: vec![long.clone(), long.clone(), long.clone(), long.clone()],
+                values: Vec::new(),
+            })
+            .collect();
+        let draft = ScriptDraft {
+            source: "x".repeat(10),
+            messages: (0..16)
+                .map(|n| message(&format!("m{n:0>60}"), &"y".repeat(700)))
+                .collect(),
+            ..with_signs(2, signs)
+        };
+
+        assert!(matches!(
+            Script::try_from(draft),
+            Err(ScriptError::DeclarationsTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn a_body_without_signs_reads_and_writes_as_before_and_with_them_keeps_them() {
+        let json = r#"{"api":1,"source":"","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}"#;
+        let script: Script = serde_json::from_str(json).unwrap();
+        assert_eq!(serde_json::to_string(&script).unwrap(), json);
+
+        let signed = Script::try_from(with_signs(2, vec![sign("note", &["afk"])])).unwrap();
+        let written = serde_json::to_string(&signed).unwrap();
+        assert!(
+            written.contains(r#""signs":[{"key":"note","lines":["afk"],"values":[]}]"#),
+            "{written}"
+        );
+        assert_eq!(serde_json::from_str::<Script>(&written).unwrap(), signed);
     }
 
     #[test]

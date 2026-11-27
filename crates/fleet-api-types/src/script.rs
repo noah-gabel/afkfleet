@@ -514,13 +514,17 @@ impl ModeScriptRequest {
             })
             .collect::<Result<_, ScriptFieldError>>()?;
         Script::try_from(ScriptDraft {
-            api: ScriptApiLevel::NEWEST.get(),
+            // Level 1 until the server stamps the level a script needs, with
+            // the wire at level 2 (Plan.md P16.15): a mode saved now never
+            // keeps an agent from Phase 15 from running it.
+            api: ScriptApiLevel::V1.get(),
             source: self.source.clone(),
             leash: self.leash,
             tool_guard: self.tool_guard,
             block_guard: self.block_guard.clone(),
             messages,
             patterns,
+            signs: Vec::new(),
         })
         .map_err(script_rule)
     }
@@ -672,6 +676,17 @@ fn script_rule(error: ScriptError) -> ScriptFieldError {
             ScriptFieldError::at(format!("script.messages[{message}].key"), error)
         }
         ScriptError::Pattern { pattern, reason } => pattern_rule(pattern, reason),
+        // A body declares no signs until the wire and the server take them
+        // (Plan.md P16.15); their places are named all the same.
+        ScriptError::TooManySigns { .. } | ScriptError::SignsNeedLevel2 => {
+            ScriptFieldError::at("script.signs", error)
+        }
+        ScriptError::Sign { sign, reason } => {
+            ScriptFieldError::at(format!("script.signs[{sign}]"), reason)
+        }
+        ScriptError::DuplicateSign { sign } => {
+            ScriptFieldError::at(format!("script.signs[{sign}].key"), error)
+        }
         ScriptError::Patterns(reason) => match reason {
             ChatPatternsError::TooMany { .. } => ScriptFieldError::at("script.patterns", reason),
             ChatPatternsError::DuplicateKey { pattern } => {
@@ -1139,6 +1154,16 @@ pub enum ScriptHookName {
     OnChat,
     /// `on_stop`.
     OnStop,
+    /// `on_menu_open` (API level 2).
+    OnMenuOpen,
+    /// `on_menu_update` (API level 2).
+    OnMenuUpdate,
+    /// `on_menu_close` (API level 2).
+    OnMenuClose,
+    /// `on_click` (API level 2).
+    OnClick,
+    /// `on_sign_open` (API level 2).
+    OnSignOpen,
 }
 
 impl OpenEnum for ScriptHookName {
@@ -1150,6 +1175,11 @@ impl OpenEnum for ScriptHookName {
         Self::OnTimer,
         Self::OnChat,
         Self::OnStop,
+        Self::OnMenuOpen,
+        Self::OnMenuUpdate,
+        Self::OnMenuClose,
+        Self::OnClick,
+        Self::OnSignOpen,
     ];
 
     fn as_str(self) -> &'static str {
@@ -1161,6 +1191,11 @@ impl OpenEnum for ScriptHookName {
             Self::OnTimer => "on_timer",
             Self::OnChat => "on_chat",
             Self::OnStop => "on_stop",
+            Self::OnMenuOpen => "on_menu_open",
+            Self::OnMenuUpdate => "on_menu_update",
+            Self::OnMenuClose => "on_menu_close",
+            Self::OnClick => "on_click",
+            Self::OnSignOpen => "on_sign_open",
         }
     }
 }
@@ -1175,6 +1210,11 @@ impl From<Hook> for ScriptHookName {
             Hook::Timer => Self::OnTimer,
             Hook::Chat => Self::OnChat,
             Hook::Stop => Self::OnStop,
+            Hook::MenuOpen => Self::OnMenuOpen,
+            Hook::MenuUpdate => Self::OnMenuUpdate,
+            Hook::MenuClose => Self::OnMenuClose,
+            Hook::Click => Self::OnClick,
+            Hook::SignOpen => Self::OnSignOpen,
         }
     }
 }
@@ -1414,10 +1454,10 @@ mod tests {
     }
 
     #[test]
-    fn a_body_reads_as_fleet_cores_script_at_the_newest_level() {
+    fn a_body_reads_as_fleet_cores_script_at_level_1_until_the_server_stamps_its_own() {
         let script = request(balance()).script().unwrap();
 
-        assert_eq!(script.api(), ScriptApiLevel::NEWEST);
+        assert_eq!(script.api(), ScriptApiLevel::V1);
         assert_eq!(script.leash().blocks(), 8);
         assert_eq!(
             script

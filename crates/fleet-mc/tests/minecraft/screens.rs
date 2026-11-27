@@ -32,9 +32,9 @@ use fleet_core::mode::GameAction;
 use fleet_core::net::TargetPolicy;
 use fleet_core::script::menu::{
     AnvilName, ButtonPress, Click, ClickFate, ClickKind, MenuAction, MenuRefusal, Rename, Screen,
-    ScreenKind, SignAnswer, SignDraft, SignTemplate, Slot, TradeChoice,
+    ScreenKind, Slot, TradeChoice,
 };
-use fleet_core::script::{Given, Input, Key, Position, ValueDraft, ValueKind};
+use fleet_core::script::{Input, Key, Position};
 use fleet_mc::{AzaleaConnector, McConfig, McEvents, McSession};
 
 use crate::checks::ticks_pass;
@@ -622,6 +622,9 @@ async fn a_villagers_trade(bench: &mut Bench) {
     let taken = bench.click(&paid, ClickKind::Shift, 2).await;
     eprintln!("MEASURE vanilla villager: trade {chosen}, take {taken}");
     bench.close().await;
+    // The trade went through though the server corrected the screen: a
+    // result slot's correction is unclear, never rejected (ADR-0052).
+    assert_eq!(taken, ClickFate::Unclear);
 
     let inventory = bench
         .until_menu("the bread in the inventory", |menu| {
@@ -691,6 +694,8 @@ async fn an_anvils_name(bench: &mut Bench) {
     bench.close().await;
 
     assert_eq!(renamed, ClickFate::Ok);
+    // The name took, though the server corrected the screen (ADR-0052).
+    assert_eq!(taken, ClickFate::Unclear);
     bench
         .until_menu("the named sword in the inventory", |menu| {
             menu.inventory.slots().any(|slot| {
@@ -893,7 +898,8 @@ async fn a_new_screen_between_the_hook_and_its_click(bench: &mut Bench) {
 /// The user's server's flow (P16.11's note, ADR-0036 M17), with
 /// fleet-mc's own calls: a search, the Create button by its slot in the
 /// last row, the potion selected wherever it is in the inventory, a
-/// confirm screen, the price on a sign, the final confirm.
+/// confirm screen, the price in the anvil the plugin opens (the user's
+/// correction of 2026-11-26), the final confirm.
 async fn the_users_auction_flow(bench: &mut Bench) {
     bench.rcon("harness reset").await;
     bench.rcon("harness fill 10").await;
@@ -937,7 +943,7 @@ async fn the_users_auction_flow(bench: &mut Bench) {
 }
 
 /// Steps 2 to 7 of the flow: the auction house, Create by its slot, the
-/// potion, the confirm screen, the price's sign and the final confirm.
+/// potion, the confirm screen, the price's anvil and the final confirm.
 async fn listing_a_potion_through_the_flow(bench: &mut Bench) {
     // 2. The auction house; Create in the last row, and the trap above.
     bench.chat("/ah").await;
@@ -998,24 +1004,9 @@ async fn listing_a_potion_through_the_flow(bench: &mut Bench) {
         bench.click(&confirm, ClickKind::Left, 11).await,
         ClickFate::Rejected
     );
-    // 6. The price on the sign the server opens.
-    let editor = bench
-        .until_menu("the sign editor", |menu| {
-            menu.sign.is_some() && menu.screen.is_none()
-        })
-        .await
-        .sign
-        .unwrap();
-    let price = price_sign(1_500);
-    assert_eq!(
-        bench
-            .menu(MenuCommand::AnswerSign {
-                editor,
-                answer: SignAnswer::Write(price),
-            })
-            .await,
-        Ok(())
-    );
+    // 6. The price in the anvil the plugin opens, as on the user's server:
+    // a cost of 1 shown, which a bot at level 0 needs no levels for.
+    the_price_in_the_anvil(bench).await;
     // 7. The final confirm.
     let last = bench.screen("Confirm Listing").await;
     assert!(
@@ -1035,22 +1026,80 @@ async fn listing_a_potion_through_the_flow(bench: &mut Bench) {
     the_potion_is_listed(bench).await;
 }
 
-/// The user's server's price sign: the price alone on its first line.
-fn price_sign(price: i64) -> fleet_core::script::menu::SignText {
-    SignTemplate::try_from(SignDraft {
-        key: "price".to_owned(),
-        lines: vec!["{price}".to_owned()],
-        values: vec![ValueDraft {
-            name: "price".to_owned(),
-            kind: ValueKind::Integer {
-                min: 1,
-                max: 1_000_000,
-            },
-        }],
-    })
-    .unwrap()
-    .render(&[("price", Given::Integer(price))])
-    .unwrap()
+/// The user's server's price anvil, "Preis eingeben" (the user's
+/// correction of 2026-11-26): paper named "Preis" in its left input, the
+/// confirm item in its result slot, a cost of 1 that needs no levels. A
+/// price the plugin refuses leaves it open; the price, from the anvil's
+/// name, opens Confirm Listing. Every result click's fate is recorded.
+async fn the_price_in_the_anvil(bench: &mut Bench) {
+    let levels = bench.rcon(&format!("xp query {NAME} levels")).await;
+    assert!(
+        levels.contains(&format!("{NAME} has 0 experience levels")),
+        "the bot has no levels, as a fresh account: {levels}"
+    );
+    let anvil = bench.screen("Preis eingeben").await;
+    assert_eq!(anvil.kind(), ScreenKind::Anvil);
+    let start = anvil.slot(0).and_then(Slot::item).unwrap();
+    assert_eq!(
+        (start.id().as_str(), start.name().as_str()),
+        ("minecraft:paper", "Preis")
+    );
+    let confirm = anvil.slot(2).and_then(Slot::item).unwrap();
+    assert_eq!(
+        (confirm.id().as_str(), confirm.name().as_str()),
+        ("minecraft:lime_dye", "Bestätigen")
+    );
+
+    // A price the plugin refuses: the anvil stays.
+    let (named, refused) = price(bench, &anvil, "0").await;
+    let after = bench.screen("Preis eingeben").await;
+    assert_eq!(after.id(), anvil.id(), "the same anvil, still open");
+    // The price.
+    let (named_again, taken) = price(bench, &after, "1500").await;
+    eprintln!(
+        "MEASURE paper price anvil: name {named}, refused {refused}, name {named_again}, confirm {taken}"
+    );
+
+    let log = bench.server.log().await;
+    assert!(
+        log.contains(&format!("harness-anvil player={NAME} text=0 level=0")),
+        "{log}"
+    );
+    assert!(
+        log.contains(&format!("harness-anvil player={NAME} text=1500 level=0")),
+        "{log}"
+    );
+    // Paper answers a name with the anvil's picture, and the plugin cancels
+    // a click on its own result: a confirm that worked comes back corrected,
+    // as unclear, never rejected. A step is judged by the screen that follows.
+    assert_eq!(
+        [named, refused, named_again, taken],
+        [ClickFate::Unclear; 4]
+    );
+}
+
+/// Names the price anvil `price`, then clicks its confirm, if it holds it:
+/// each one's fate.
+async fn price(bench: &mut Bench, anvil: &Screen, price: &str) -> (ClickFate, ClickFate) {
+    let name = AnvilName::try_from(&ChatMessage::try_from(price).unwrap()).unwrap();
+    let named = bench
+        .act(MenuAction::Rename(Rename::on(anvil, name).unwrap()))
+        .await;
+    let now = bench
+        .until_menu("the anvil after its name", |menu| {
+            menu.screen.as_ref().is_some_and(|screen| {
+                screen.id() == anvil.id()
+                    && screen
+                        .slot(2)
+                        .and_then(Slot::item)
+                        .is_some_and(|item| item.name().as_str() == "Bestätigen")
+            })
+        })
+        .await
+        .screen
+        .unwrap();
+    let taken = bench.click(&now, ClickKind::Left, 2).await;
+    (named, taken)
 }
 
 /// The listing is the bot's at its price, nothing was bought, and the

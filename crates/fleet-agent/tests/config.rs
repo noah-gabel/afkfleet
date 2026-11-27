@@ -1216,6 +1216,7 @@ fn a_bot_runs_a_script_file_with_its_settings_and_declarations() {
                 values: Vec::new(),
             }],
             patterns: Vec::new(),
+            signs: Vec::new(),
         })
         .unwrap();
         assert_eq!(

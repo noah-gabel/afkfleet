@@ -45,12 +45,23 @@ fn an_empty_script_and_one_of_comments_compile_and_define_no_hook() {
 }
 
 #[test]
-fn every_hook_compiles_with_its_own_parameters() {
-    let source = "fn on_join(first) {}\nfn on_world_change() {}\nfn on_death() {}\nfn on_respawn() {}\nfn on_timer(name) {}\nfn on_chat(key, values) {}\nfn on_stop() {}\n";
+fn every_hook_compiles_with_its_own_parameters_at_its_level() {
+    let one = "fn on_join(first) {}\nfn on_world_change() {}\nfn on_death() {}\nfn on_respawn() {}\nfn on_timer(name) {}\nfn on_chat(key, values) {}\nfn on_stop() {}\n";
+    let two = format!(
+        "{one}fn on_menu_open() {{}}\nfn on_menu_update() {{}}\nfn on_menu_close() {{}}\nfn on_click(result) {{}}\nfn on_sign_open() {{}}\n"
+    );
 
-    let program = compile(&script_of(draft(source))).unwrap();
+    let level_1 = compile(&script_of(draft(one))).unwrap();
+    let level_2 = compile(&script_of(fleet_core::script::ScriptDraft {
+        api: 2,
+        ..draft(&two)
+    }))
+    .unwrap();
 
-    assert!(Hook::ALL.iter().all(|hook| program.defines(*hook)));
+    for hook in Hook::ALL {
+        assert_eq!(level_1.defines(hook), hook.level().get() == 1, "{hook}");
+        assert!(level_2.defines(hook), "{hook}");
+    }
 }
 
 #[test]

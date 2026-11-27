@@ -30,6 +30,9 @@ pub(super) struct Session<S> {
     /// runner sets it, and clears it once its own last `ReleaseAll` went
     /// through (Plan.md P15.17).
     pub(super) held: Arc<AtomicBool>,
+    /// The bot's own player name, from the credentials it connected with:
+    /// `bot.name` (ADR-0036, M12).
+    pub(super) name: String,
 }
 
 /// The actor's hold on a session's mode runner.
@@ -90,16 +93,26 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
                 debug!(?reason, "the session let go of inputs by itself");
                 self.tell_script(Life::LetGo(reason));
             }
-            // Read here, so a click's fate counts as read; a script hears of
-            // screens, clicks and signs from Phase 16's group D on
+            // Read here, so a click's fate counts as read for the session; the
+            // script hears of it through its feed, which keeps every fate
             // (P16.13). Nothing of the server's text is in them.
-            Some(
-                event @ (SessionEvent::MenuOpened(_)
-                | SessionEvent::MenuUpdated(_)
-                | SessionEvent::MenuClosed(_)
-                | SessionEvent::Clicked(_)
-                | SessionEvent::SignOpened(_)),
-            ) => debug!(?event, "a screen, a click or a sign editor"),
+            Some(SessionEvent::MenuOpened(screen)) => {
+                debug!(?screen, "a screen opened; every key and button was let go");
+                self.tell_script(Life::MenuOpened(screen));
+            }
+            Some(SessionEvent::MenuUpdated(screen)) => self.tell_script(Life::MenuUpdated(screen)),
+            Some(SessionEvent::MenuClosed(screen)) => {
+                debug!(?screen, "a screen closed");
+                self.tell_script(Life::MenuClosed(screen));
+            }
+            Some(SessionEvent::Clicked(result)) => {
+                debug!(?result, "an action's fate came");
+                self.tell_script(Life::Clicked(result));
+            }
+            Some(SessionEvent::SignOpened(editor)) => {
+                debug!("the server opened a sign editor");
+                self.tell_script(Life::SignOpened(editor));
+            }
             Some(SessionEvent::Disconnected(reason)) => {
                 self.ended(reason.clone(), BotEvent::Disconnected(reason))
                     .await;

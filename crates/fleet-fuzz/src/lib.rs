@@ -16,6 +16,8 @@
 //! - [`script`]: scripted modes: a script's text, a running script, the
 //!   script API's arguments, a declared message and a declared chat
 //!   pattern (ADR-0036, D18; ADR-0037, C9);
+//! - [`menu`]: a screen and an inventory from anything a server sends, the
+//!   number helpers and the click guard (P16.14);
 //! - [`wire`]: the control plane's messages, both ways;
 //! - [`vault`]: the vault's envelopes;
 //! - [`metrics`]: the agent's metrics responder.
@@ -25,6 +27,7 @@
 //! libFuzzer alone doesn't on Windows.
 
 pub mod kept;
+pub mod menu;
 pub mod metrics;
 pub mod mode;
 pub mod script;
@@ -39,7 +42,7 @@ use std::borrow::Cow;
 pub type Target = (&'static str, fn(&[u8]));
 
 /// Every target.
-pub const TARGETS: [Target; 15] = [
+pub const TARGETS: [Target; 18] = [
     ("value_objects", text::value_objects),
     ("chat_sanitizer", text::chat_sanitizer),
     ("chat_formats", text::chat_formats),
@@ -51,6 +54,9 @@ pub const TARGETS: [Target; 15] = [
     ("script_api", script::script_api),
     ("message_template", script::message_template),
     ("chat_pattern", script::chat_pattern),
+    ("menu_snapshot", menu::menu_snapshot),
+    ("number_helpers", menu::number_helpers),
+    ("click_guard", menu::click_guard),
     ("agent_message", wire::agent_message),
     ("server_message", wire::server_message),
     ("vault_envelope", vault::vault_envelope),

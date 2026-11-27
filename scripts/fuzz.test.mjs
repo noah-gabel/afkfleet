@@ -16,6 +16,7 @@ import {
   parseArgs,
   TARGETS_FOLDER,
   targetNames,
+  withAsanOptions,
   withOnPath,
 } from "./fuzz.mjs";
 
@@ -119,6 +120,27 @@ describe("withOnPath", () => {
 
   it("sets PATH when there is none", () => {
     assert.deepEqual(withOnPath({}, "/asan", ":"), { PATH: "/asan" });
+  });
+});
+
+describe("withAsanOptions", () => {
+  it("turns ASan's fake stack frames off, which a hook's stack guard can't measure in", () => {
+    assert.deepEqual(withAsanOptions({ OTHER: "x" }), {
+      OTHER: "x",
+      ASAN_OPTIONS: "detect_stack_use_after_return=0",
+    });
+  });
+
+  it("keeps options already set, after its own, so a deliberate one still wins", () => {
+    assert.deepEqual(withAsanOptions({ ASAN_OPTIONS: "detect_stack_use_after_return=1" }), {
+      ASAN_OPTIONS: "detect_stack_use_after_return=0:detect_stack_use_after_return=1",
+    });
+  });
+
+  it("adds nothing after an empty setting", () => {
+    assert.deepEqual(withAsanOptions({ ASAN_OPTIONS: "" }), {
+      ASAN_OPTIONS: "detect_stack_use_after_return=0",
+    });
   });
 });
 

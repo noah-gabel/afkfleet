@@ -194,9 +194,34 @@ pub(crate) fn create_owner(stack: &mut Stack, password: &str) {
 /// Where Caddy keeps its internal CA's root certificate.
 const CADDY_ROOT: &str = "/data/caddy/pki/authorities/local/root.crt";
 
+/// The name both smoke Caddies serve (`AFKFLEET_DOMAIN`).
+const SITE: &str = "localhost";
+
+/// Whether Caddy's `log` holds the line that says it obtained the site's
+/// certificate. Caddy writes its internal CA's root first and the site's
+/// certificate about 80 ms later; a handshake between the two gets a TLS
+/// `internal_error` alert, which once failed the first login of
+/// `slow_smoke_with_caddy` (PR #138). Caddy 2.11.9 writes the line as
+/// `{"level":"info",…,"logger":"tls.obtain","msg":"certificate obtained
+/// successfully","identifier":"localhost","issuer":"local"}`.
+fn site_certificate_obtained(log: &str) -> bool {
+    let site = format!(r#""identifier":"{SITE}""#);
+    log.lines().any(|line| {
+        line.contains(r#""msg":"certificate obtained successfully""#) && line.contains(&site)
+    })
+}
+
 /// The root certificate of the Caddy in `service` (afkfleet's or the
-/// stand-in's), read into memory only, once Caddy has made it.
+/// stand-in's), read into memory only, once Caddy has made it and has
+/// obtained the site's certificate with it: only then does a handshake
+/// succeed.
 fn caddy_root(compose: &Compose, service: &str) -> CustomCa {
+    until_answered(compose, service, || {
+        let finished = compose
+            .run(&["logs", "--no-color", "--no-log-prefix", service], QUICK)
+            .ok()?;
+        site_certificate_obtained(&finished.stdout).then_some(())
+    });
     let pem = until_answered(compose, service, || {
         let finished = compose
             .run(&["exec", "-T", service, "cat", CADDY_ROOT], QUICK)
@@ -814,5 +839,37 @@ fn check_caddy_holds_net_bind_service_alone(stack: &mut Stack, service: &str) {
             sets.contains(&(name.to_owned(), held.to_owned())),
             "{service}: {sets:?}"
         );
+    }
+}
+
+mod tests {
+    use super::*;
+
+    /// Caddy 2.11.9's own lines about the site's certificate, word for word
+    /// from `caddy:2.11.9-alpine` with `tls internal` for `localhost`.
+    const OBTAINING: &str = r#"{"level":"info","ts":1795711426.3050203,"logger":"tls.obtain","msg":"obtaining certificate","identifier":"localhost"}"#;
+    const OBTAINED: &str = r#"{"level":"info","ts":1795711426.361312,"logger":"tls.obtain","msg":"certificate obtained successfully","identifier":"localhost","issuer":"local"}"#;
+    /// The root's line, written before the site's certificate exists.
+    const ROOT: &str = r#"{"level":"info","ts":1795711426.2784636,"logger":"pki.ca.local","msg":"root certificate trust store installation disabled; unconfigured clients may show warnings","path":"storage:pki/authorities/local/root.crt"}"#;
+
+    #[test]
+    fn the_sites_certificate_counts_as_obtained_only_at_caddys_own_line() {
+        assert!(!site_certificate_obtained(&format!(
+            "{ROOT}\n{OBTAINING}\n"
+        )));
+        assert!(site_certificate_obtained(&format!(
+            "{ROOT}\n{OBTAINING}\n{OBTAINED}\n"
+        )));
+    }
+
+    #[test]
+    fn another_sites_certificate_doesnt_count() {
+        let other = OBTAINED.replace(
+            "\"identifier\":\"localhost\"",
+            "\"identifier\":\"example.com\"",
+        );
+
+        assert!(!site_certificate_obtained(&other));
+        assert!(!site_certificate_obtained(""));
     }
 }

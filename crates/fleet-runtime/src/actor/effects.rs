@@ -205,6 +205,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             self.connect_failed(ConnectFailure::Other);
             return;
         };
+        let name = credentials.username().as_str().to_owned();
         let params = ConnectParams {
             bot_id: self.spec.id,
             server: self.spec.server.clone(),
@@ -236,6 +237,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
                     token: self.run_token.child_token(),
                     runner: None,
                     held: Arc::new(AtomicBool::new(false)),
+                    name,
                 });
                 self.session_events = Some(events);
             }
@@ -338,6 +340,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
         let done = CancellationToken::new();
         let parts = ScriptParts {
             bot_id: self.spec.id,
+            name: session.name.clone(),
             slot: self.script.clone(),
             programs: self.programs.clone(),
             turns: self.turns.clone(),

@@ -305,6 +305,13 @@ impl HoldTracker {
     pub fn held(&self) -> impl Iterator<Item = Input> {
         self.held.iter().map(|held| held.input)
     }
+
+    /// The inputs that are down with when each is let go by itself (`None`
+    /// until a release), in the order they were pressed: what a script held
+    /// when a screen made the session let go of it (ADR-0052).
+    pub fn holds(&self) -> impl Iterator<Item = (Input, Option<DateTime<Utc>>)> {
+        self.held.iter().map(|held| (held.input, held.until))
+    }
 }
 
 /// When a hold of `length` from `now` ends, if `length` is one a script may
@@ -340,6 +347,19 @@ mod tests {
 
     const fn ms(ms: u64) -> Duration {
         Duration::from_millis(ms)
+    }
+
+    #[test]
+    fn the_holds_say_what_is_down_and_until_when_in_the_order_pressed() {
+        let mut tracker = HoldTracker::new();
+        tracker.hold(RIGHT_BUTTON).unwrap();
+        tracker.hold_for(FORWARD, ms(3000), at(0)).unwrap();
+        tracker.hold(JUMP).unwrap();
+        tracker.release(JUMP);
+
+        let holds: Vec<_> = tracker.holds().collect();
+
+        assert_eq!(holds, [(RIGHT_BUTTON, None), (FORWARD, Some(at(3000)))]);
     }
 
     // --- The inputs ---

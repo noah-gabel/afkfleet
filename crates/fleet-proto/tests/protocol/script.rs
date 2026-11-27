@@ -36,6 +36,7 @@ fn draft() -> ScriptDraft {
             }],
         }],
         patterns: Vec::new(),
+        signs: Vec::new(),
     }
 }
 
@@ -93,10 +94,10 @@ fn a_script_fleet_core_refuses_is_refused_with_its_reason() {
         ))
     );
     assert_eq!(
-        with(|script| script.api = 2),
+        with(|script| script.api = 3),
         Err(error(
             "ModeDefinition.script",
-            Problem::Script(ScriptError::Api(ScriptApiLevelError { level: 2 }))
+            Problem::Script(ScriptError::Api(ScriptApiLevelError { level: 3 }))
         ))
     );
     assert_eq!(

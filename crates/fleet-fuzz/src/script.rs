@@ -14,6 +14,7 @@ use core::time::Duration;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use fleet_core::mc::{MenuCommand, MenuView};
 use fleet_core::mode::HotbarSlot;
 use fleet_core::script::{
     ActionLimiter, BlockPosition, Blocks, BotFacts, Captured, ChatMatch, ChatPattern, ChatPatterns,
@@ -46,6 +47,17 @@ fn id(text: &str) -> Option<Identifier> {
 fn script(source: &str) -> Option<Script> {
     let declared = EXAMPLES.iter().find(|example| example.id == "balance")?;
     Script::try_from(ScriptDraft {
+        source: source.to_owned(),
+        ..declared.draft()
+    })
+    .ok()
+}
+
+/// [`script`] at API level 2, where every member of the API is.
+fn script_2(source: &str) -> Option<Script> {
+    let declared = EXAMPLES.iter().find(|example| example.id == "balance")?;
+    Script::try_from(ScriptDraft {
+        api: 2,
         source: source.to_owned(),
         ..declared.draft()
     })
@@ -141,8 +153,10 @@ fn kind_of(action: &Action) -> Option<Limited> {
         Action::SelectHotbar(_) => Limited::Hotbar,
         Action::Mount(_) => Limited::Mount,
         Action::Dismount => Limited::Dismount,
+        Action::Menu(MenuCommand::Act(_) | MenuCommand::AnswerSign { .. }) => Limited::Click,
         Action::Send { message, .. } if !message.is_command() => Limited::PlainChat,
         Action::Send { .. }
+        | Action::Menu(MenuCommand::Close(_) | MenuCommand::OpenInventory)
         | Action::Expect { .. }
         | Action::ReleaseAll
         | Action::ReleaseKeys
@@ -241,6 +255,7 @@ impl Run {
     /// it `event`, each time with facts of `shape`.
     fn step(&mut self, pause: Duration, shape: u8, event: Option<&HookEvent>) {
         let Some(facts) = facts(shape) else { return };
+        let menu = MenuView::default();
         let leash = Leash::new(LeashRadius::DEFAULT, facts.bot().position);
         let end = time::add(self.now, pause);
         // At most as many wakes as timers and holds can be due in a pause.
@@ -253,6 +268,8 @@ impl Run {
                         now: self.now,
                         presence: self.presence,
                         leash: Some(leash),
+                        menu: &menu,
+                        name: "AfkBot1",
                     };
                     let before = self.stopwatch.shown();
                     let ran = self.instance.wake(&moment, &mut self.limiter);
@@ -269,13 +286,22 @@ impl Run {
             HookEvent::Join { .. } | HookEvent::Respawn | HookEvent::WorldChange => {
                 self.presence = Presence::InWorld;
             }
-            HookEvent::Timer(_) | HookEvent::Chat(_) | HookEvent::Stop => {}
+            HookEvent::Timer(_)
+            | HookEvent::Chat(_)
+            | HookEvent::Stop
+            | HookEvent::MenuOpen
+            | HookEvent::MenuUpdate
+            | HookEvent::MenuClose
+            | HookEvent::Click(_)
+            | HookEvent::SignOpen => {}
         }
         let moment = Moment {
             facts: &facts,
             now: self.now,
             presence: self.presence,
             leash: Some(leash),
+            menu: &menu,
+            name: "AfkBot1",
         };
         let before = self.stopwatch.shown();
         let ran = self.instance.handle(event, &moment, &mut self.limiter);
@@ -426,7 +452,10 @@ impl Run {
             | Action::Release(_)
             | Action::LookAtPosition(_)
             | Action::SelectHotbar(_)
-            | Action::Dismount => {}
+            | Action::Dismount
+            // A level-1 script never acts in a screen; level 2's are
+            // judged by the menus' targets (Plan.md P16.14).
+            | Action::Menu(_) => {}
         }
         let Some(kind) = kind_of(action) else { return };
         if let Some((_, before)) = self.last.iter_mut().find(|(known, _)| *known == kind) {
@@ -572,6 +601,9 @@ fn members() -> Vec<(String, &'static str, bool)> {
             let receivers: Vec<String> = match object.name {
                 "hooks" => Vec::new(),
                 "input" => vec!["keys.forward".to_owned(), "mouse.right".to_owned()],
+                // Maps the API hands out, reached as a script reaches them.
+                "slot" => vec!["menu.slot(0)".to_owned(), "inventory.slot(36)".to_owned()],
+                "time" => vec!["clock.local(\"UTC\")".to_owned()],
                 name => vec![name.to_owned()],
             };
             receivers.into_iter().flat_map(move |receiver| {
@@ -641,7 +673,7 @@ fn api_calls(data: &[u8]) -> String {
 pub fn script_api(data: &[u8]) {
     let (calls, rest) = halves(data);
     let source = api_calls(calls);
-    let program = script(&source).map(|script| compile(&script));
+    let program = script_2(&source).map(|script| compile(&script));
     // Whatever the bytes say, the calls are a script that compiles.
     let Some(Ok(program)) = program else {
         assert!(
@@ -662,11 +694,14 @@ pub fn script_api(data: &[u8]) {
     // know, which stops the script as "not plain data".
     let facts = facts(shape);
     if let Some(facts) = &facts {
+        let menu = MenuView::default();
         let moment = Moment {
             facts,
             now: run.now,
             presence: run.presence,
             leash: None,
+            menu: &menu,
+            name: "AfkBot1",
         };
         let ran = run.instance.handle(&join, &moment, &mut run.limiter);
         if let Outcome::Stopped(error) = &ran.outcome {
@@ -820,6 +855,8 @@ mod tests {
         assert!(members.contains(&("mouse.right".to_owned(), "hold_until_used", true)));
         assert!(members.contains(&("chat".to_owned(), "expect", true)));
         assert!(members.contains(&("bot".to_owned(), "health", false)));
+        assert!(members.contains(&("menu".to_owned(), "click", true)));
+        assert!(members.contains(&("menu.slot(0)".to_owned(), "lore", false)));
         assert!(members.iter().all(|(receiver, ..)| receiver != "hooks"));
     }
 
@@ -829,7 +866,7 @@ mod tests {
             let source = api_calls(data);
 
             assert!(
-                script(&source)
+                script_2(&source)
                     .and_then(|script| compile(&script).ok())
                     .is_some(),
                 "{source}"

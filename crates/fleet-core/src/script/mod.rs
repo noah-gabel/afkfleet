@@ -58,7 +58,7 @@ mod watch;
 mod word;
 
 pub use amount::DecimalMark;
-pub use event::{Hook, HookEvent, Refusal, TimerName, TimerNameError};
+pub use event::{ClickOutcome, Hook, HookEvent, Refusal, TimerName, TimerNameError};
 pub use facts::{
     BlockPosition, Blocks, BotFacts, EntityFact, HeldItem, Identifier, IdentifierError, LookingAt,
     Position, PositionError, Snapshot,

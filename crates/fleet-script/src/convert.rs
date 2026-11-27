@@ -205,13 +205,16 @@ pub fn convert(definition: &ModeDefinition) -> Result<Conversion, ConvertError> 
     }
     let source = write(steps, &timers, respawn_chat);
     let script = Script::try_from(ScriptDraft {
-        api: ScriptApiLevel::NEWEST.get(),
+        // A step mode does nothing level 1 doesn't have, so its script runs
+        // on every agent that runs scripts.
+        api: ScriptApiLevel::V1.get(),
         source,
         leash: LeashRadius::DEFAULT.blocks(),
         tool_guard: ToolGuard::DEFAULT.uses_left(),
         block_guard: Vec::new(),
         messages,
         patterns: Vec::new(),
+        signs: Vec::new(),
     })
     .map_err(ConvertError::Script)?;
     Ok(Conversion {

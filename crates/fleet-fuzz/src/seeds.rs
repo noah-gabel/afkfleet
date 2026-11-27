@@ -23,6 +23,9 @@ const ID: Uuid = Uuid::from_u128(0x0189_0000_0000_7000_8000_0000_0000_0001);
 /// The seeds of the target `name`; none for a name that isn't a target's.
 #[must_use]
 pub fn seeds(name: &str) -> Vec<Vec<u8>> {
+    if let Some(menus) = crate::menu::seeds(name) {
+        return menus;
+    }
     match name {
         "value_objects" => texts(&[
             "alice",
@@ -169,8 +172,11 @@ fn scripted(name: &str) -> Vec<Vec<u8>> {
 
 /// The reference's examples: scripts that compile and act.
 fn scripts() -> Vec<&'static str> {
+    // The menu examples are level 2's: the menus' targets read their
+    // screens.
     fleet_script::EXAMPLES
         .iter()
+        .filter(|example| example.level == fleet_core::script::ScriptApiLevel::V1)
         .map(|example| example.source)
         .collect()
 }

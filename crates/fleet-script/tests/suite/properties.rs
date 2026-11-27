@@ -5,6 +5,7 @@
 
 use core::fmt::Write;
 use core::time::Duration;
+use fleet_core::mc::MenuCommand;
 
 use chrono::{DateTime, Utc};
 use fleet_core::script::{
@@ -158,8 +159,10 @@ fn kind_of(action: &Action) -> Option<Limited> {
         Action::SelectHotbar(_) => Limited::Hotbar,
         Action::Mount(_) => Limited::Mount,
         Action::Dismount => Limited::Dismount,
+        Action::Menu(MenuCommand::Act(_) | MenuCommand::AnswerSign { .. }) => Limited::Click,
         Action::Send { message, .. } if !message.is_command() => Limited::PlainChat,
         Action::Send { .. }
+        | Action::Menu(MenuCommand::Close(_) | MenuCommand::OpenInventory)
         | Action::Expect { .. }
         | Action::ReleaseAll
         | Action::ReleaseKeys

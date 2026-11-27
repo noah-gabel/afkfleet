@@ -1503,6 +1503,7 @@ mod tests {
                     ],
                 },
             ],
+            signs: Vec::new(),
         })
         .unwrap();
         ModeDefinition::scripted(script)
@@ -1614,7 +1615,7 @@ mod tests {
     #[case::a_script_as_text(r#"{"script":"fn on_join(first) {}"}"#.to_owned())]
     #[case::a_script_without_its_settings(r#"{"script":{"api":1,"source":""}}"#.to_owned())]
     #[case::a_newer_api_level(script_json(
-        r#"{"api":2,"source":"","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}"#
+        r#"{"api":3,"source":"","leash":8,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}"#
     ))]
     #[case::a_leash_that_is_off(script_json(
         r#"{"api":1,"source":"","leash":0,"tool_guard":2,"block_guard":[],"messages":[],"patterns":[]}"#
