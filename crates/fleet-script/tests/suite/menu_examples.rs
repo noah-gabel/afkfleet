@@ -615,6 +615,78 @@ fn a_bait_below_the_floor_never_sets_the_listers_price() {
     assert_eq!(world.log, ["Not listed at 20.0: below the floor."]);
 }
 
+/// The lister closes the auction house itself before it lists, and the
+/// runtime tells it of that close as of any other (found live, Plan.md
+/// P16.17: it took that close for the confirm's and sent `/ah expired`,
+/// whose screen replaced Confirm Listing before it was confirmed). Only
+/// Confirm Listing's own close moves it on to the expired listings.
+#[test]
+fn the_lister_hears_its_own_close_of_the_auction_house_and_still_confirms_its_listing() {
+    let mut gate = ClickGate::new();
+    let mut world = World::new();
+    world.menu.inventory = inventory(&[(38, turtle_master())]);
+    let mut instance = instance_of("auction_lister");
+    world.run(&mut instance, &HookEvent::Join { first: true });
+    world.pass(&mut instance, Duration::from_secs(30));
+    show(
+        &mut world,
+        &mut instance,
+        potions_listed(
+            &mut gate,
+            &[(500, "Seller1"), (450, "Seller2"), (400, "Seller3")],
+        ),
+    );
+    world.menu.screen = None;
+    world.run(&mut instance, &HookEvent::MenuClose);
+    let after_its_own_close = world.sent.clone();
+
+    let from = world.performed.len();
+    show(
+        &mut world,
+        &mut instance,
+        confirm_screen(
+            &mut gate,
+            "Confirm Listing",
+            turtle_master().with_lore(["Price: $450.00"]),
+        ),
+    );
+    let confirmed = clicks(&world, from);
+    world.menu.screen = None;
+    world.run(&mut instance, &HookEvent::MenuClose);
+
+    assert_eq!(after_its_own_close, ["/ah", "/ah sell 450"]);
+    assert_eq!(confirmed, [(11, ClickKind::Left)]);
+    assert_eq!(world.sent, ["/ah", "/ah sell 450", "/ah expired"]);
+}
+
+/// A listing whose screen never came (the server refused `/ah sell`)
+/// doesn't hold the next try back: 10 minutes later it reads the prices
+/// again.
+#[test]
+fn a_listing_whose_screen_never_came_doesnt_hold_the_next_try_back() {
+    let mut gate = ClickGate::new();
+    let mut world = World::new();
+    world.menu.inventory = inventory(&[(38, turtle_master())]);
+    let mut instance = instance_of("auction_lister");
+    world.run(&mut instance, &HookEvent::Join { first: true });
+    world.pass(&mut instance, Duration::from_secs(30));
+    show(
+        &mut world,
+        &mut instance,
+        potions_listed(
+            &mut gate,
+            &[(500, "Seller1"), (450, "Seller2"), (400, "Seller3")],
+        ),
+    );
+    world.menu.screen = None;
+    world.run(&mut instance, &HookEvent::MenuClose);
+
+    // No Confirm Listing ever opens.
+    world.pass(&mut instance, Duration::from_secs(600));
+
+    assert_eq!(world.sent, ["/ah", "/ah sell 450", "/ah"]);
+}
+
 /// A lister's first listing comes 10 to 30 s after a join, then every 10
 /// minutes from the last try: a bot kicked more often than every 10
 /// minutes still lists (found live, Plan.md P16.17). Each try here finds

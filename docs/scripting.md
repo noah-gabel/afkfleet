@@ -1082,6 +1082,7 @@ The mode declares `auction`: `/ah`, `sell`: `/ah sell {price}` with `price` a wh
 fn on_join(first) {
     state.task = "";
     state.done = ();
+    state.on = "";
     // Soon after every join: a bot that's kicked more often than every 10
     // minutes still lists.
     timer.after(random.between(10000, 30000), "list");
@@ -1090,7 +1091,9 @@ fn on_join(first) {
 fn on_timer(name) {
     if name == "list" {
         timer.after(600000, "list");
-        if state.task == "" && !menu.open && potion_key() != () {
+        // With no screen open, a listing that didn't finish 10 minutes ago
+        // is over.
+        if !menu.open && potion_key() != () {
             state.task = "prices";
             chat.send("auction");
         }
@@ -1100,6 +1103,7 @@ fn on_timer(name) {
 }
 
 fn on_menu_open() {
+    state.on = menu.title;
     later();
 }
 
@@ -1112,11 +1116,12 @@ fn on_menu_update() {
 }
 
 fn on_menu_close() {
-    if state.task == "listing" {
-        // The confirm's screen closed: on to the expired listings.
+    // Only the confirm's own close moves on: the auction house, which it
+    // closes itself before it lists, closes too.
+    if state.task == "listing" && state.on == "Confirm Listing" {
         state.task = "expired";
         chat.send("expired");
-    } else if state.task == "expired" {
+    } else if state.task == "expired" && state.on == "Expired Listings" {
         state.task = "";
     }
 }
