@@ -57,5 +57,6 @@ mod managed_check;
 mod sftp;
 mod slow_on_respawn;
 mod slow_scripts;
+mod slow_trading;
 mod smoke;
 mod timing;

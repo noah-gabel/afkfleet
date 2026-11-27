@@ -3,10 +3,13 @@ package afkfleet.harness;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.TreeMap;
 import java.util.UUID;
 
 import io.papermc.paper.event.packet.UncheckedSignChangeEvent;
@@ -26,11 +29,13 @@ import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.PrepareAnvilEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.InventoryView;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.MenuType;
+import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.PotionMeta;
 import org.bukkit.inventory.view.AnvilView;
@@ -67,6 +72,11 @@ import org.bukkit.inventory.view.AnvilView;
  * </ul>
  *
  * Every click on a button is cancelled, as a plugin's are, and the server puts the item back.
+ *
+ * <p>The live tests' controls (Plan.md P16.17, P16.18) make each race happen on a known tick: the
+ * other player buying first (a snipe), the market redrawn on every open auction house (live), a
+ * price the anvil refuses (a cap), a confirm that never answers (a stall), a screen opened
+ * unasked (an intrusion) and a kick inside a click.
  */
 final class Menus {
     /** The auction house's listings per page. */
@@ -131,6 +141,184 @@ final class Menus {
 
     /** Each player's listing waiting for its price on an anvil. */
     private final Map<UUID, PriceAnvil> anvils = new HashMap<>();
+
+    // --- The tests' controls (Plan.md P16.17, P16.18), set by `harness …` ------------------------
+
+    /** Whether every open auction house is redrawn when the market changes, as most plugins do. */
+    private boolean live;
+    /** The highest price the price anvil takes: {@value #MAX_PRICE} unless the tests lower it. */
+    private long priceCap = MAX_PRICE;
+    /** Whether Confirm Item's confirm does nothing, as a plugin that hangs. */
+    private boolean stalled;
+
+    /**
+     * A purchase armed for the next time another player opens a screen: on {@code house}, the
+     * cheapest listing of {@code item} at {@code max} or less, the tick after they open the
+     * auction house; on {@code confirm}, the listing they're about to confirm, the tick after
+     * Confirm Purchase opens. The other player who buys first.
+     */
+    record Snipe(String buyer, String on, String item, BigDecimal max) {}
+
+    private final List<Snipe> snipes = new ArrayList<>();
+
+    /** A screen the plugin opens unasked for {@code player} the tick after they open {@code after}. */
+    record Intrusion(String player, String after, String menu) {}
+
+    private final List<Intrusion> intrusions = new ArrayList<>();
+
+    /** The players kicked at their next click, inside it. */
+    private final Set<String> kickAtClick = new HashSet<>();
+
+    void setLive(boolean on) {
+        live = on;
+    }
+
+    void setPriceCap(long cap) {
+        priceCap = cap;
+    }
+
+    void setStalled(boolean on) {
+        stalled = on;
+    }
+
+    void arm(Snipe snipe) {
+        snipes.add(snipe);
+    }
+
+    void intrude(Intrusion intrusion) {
+        intrusions.add(intrusion);
+    }
+
+    void kickAtClick(String player) {
+        kickAtClick.add(player.toLowerCase(Locale.ROOT));
+    }
+
+    /** Whether {@code player}'s click is the one to kick them at, once. */
+    boolean kicksAt(Player player) {
+        return kickAtClick.remove(player.getName().toLowerCase(Locale.ROOT));
+    }
+
+    /** The market changed: every open auction house shows it at once when the harness is live. */
+    void marketChanged() {
+        if (!live) {
+            return;
+        }
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            if (player.getOpenInventory().getTopInventory().getHolder() instanceof AuctionScreen screen) {
+                drawAuction(screen);
+            }
+        }
+    }
+
+    /** The listing a click meets: an auction house's slot as drawn, or a Confirm Purchase's confirm. */
+    String listingAt(InventoryClickEvent event) {
+        InventoryHolder holder = event.getView().getTopInventory().getHolder();
+        Integer id = switch (holder) {
+            case AuctionScreen screen -> screen.listingAt.get(event.getRawSlot());
+            case ConfirmPurchase screen -> event.getRawSlot() == 11 ? screen.listing : null;
+            case null, default -> null;
+        };
+        return id == null ? "-" : id.toString();
+    }
+
+    /** The listing a screen shows for purchase: a Confirm Purchase's. */
+    String listingOf(InventoryView view) {
+        return view.getTopInventory().getHolder() instanceof ConfirmPurchase screen
+                ? Integer.toString(screen.listing) : "-";
+    }
+
+    /** {@code player} opened a screen titled {@code title}: a snipe or an intrusion may follow. */
+    void opened(Player player, String title, InventoryView view) {
+        InventoryHolder holder = view.getTopInventory().getHolder();
+        String name = player.getName();
+        for (java.util.Iterator<Snipe> armed = snipes.iterator(); armed.hasNext();) {
+            Snipe snipe = armed.next();
+            if (snipe.buyer().equalsIgnoreCase(name)) {
+                continue;
+            }
+            Optional<Integer> target = switch (holder) {
+                case AuctionScreen screen when snipe.on().equals("house") -> cheapest(snipe.item(), snipe.max());
+                case ConfirmPurchase screen when snipe.on().equals("confirm") -> Optional.of(screen.listing);
+                case null, default -> null;
+            };
+            if (target == null) {
+                continue;
+            }
+            armed.remove();
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                Player buyer = Bukkit.getPlayerExact(snipe.buyer());
+                if (buyer == null || target.isEmpty()) {
+                    plugin.log("harness-snipe buyer=" + snipe.buyer() + " on=" + snipe.on() + " id=none");
+                    return;
+                }
+                plugin.log("harness-snipe buyer=" + snipe.buyer() + " on=" + snipe.on() + " id=" + target.get());
+                plugin.purchase(buyer, target.get());
+            });
+            break;
+        }
+        for (java.util.Iterator<Intrusion> armed = intrusions.iterator(); armed.hasNext();) {
+            Intrusion intrusion = armed.next();
+            if (!intrusion.player().equalsIgnoreCase(name) || !intrusion.after().equals(title)) {
+                continue;
+            }
+            armed.remove();
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                plugin.log("harness-intrude player=" + name + " after=\"" + title + "\" menu=" + intrusion.menu());
+                open(player, intrusion.menu());
+            });
+            break;
+        }
+    }
+
+    /** The cheapest listing of {@code item} (its key as {@link Market#sellKey} has it) at {@code max} or less. */
+    private Optional<Integer> cheapest(String item, BigDecimal max) {
+        return market.listings().stream()
+                .filter(listing -> Market.sellKey(listing.item()).equals(item))
+                .filter(listing -> listing.price().compareTo(max) <= 0)
+                .min(java.util.Comparator.comparing(Market.Listing::price))
+                .map(Market.Listing::id);
+    }
+
+    /** Opens the menu {@code menu} (ah, sell or expired) for {@code player}; false for another name. */
+    boolean open(Player player, String menu) {
+        switch (menu) {
+            case "ah" -> openAuction(player, 0);
+            case "sell" -> openSell(player);
+            case "expired" -> openExpired(player);
+            default -> {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * What the server has of {@code player}: the screen open (none for their own inventory), the
+     * cursor, the held slot (1 to 9) and item, whether a hand is raised (an item in use, a shield
+     * up), sneaking and sprinting, the effects, and every item they carry by its key and count.
+     */
+    String state(Player player) {
+        InventoryView view = player.getOpenInventory();
+        String screen = view.getTopInventory().getType() == InventoryType.CRAFTING
+                ? "none" : '"' + PlainTextComponentSerializer.plainText().serialize(view.title()) + '"';
+        ItemStack cursor = view.getCursor();
+        PlayerInventory inventory = player.getInventory();
+        ItemStack held = inventory.getItemInMainHand();
+        Map<String, Integer> items = new TreeMap<>();
+        for (ItemStack item : inventory.getContents()) {
+            if (item != null && !item.getType().isAir()) {
+                items.merge(Market.sellKey(item), item.getAmount(), Integer::sum);
+            }
+        }
+        List<String> effects = player.getActivePotionEffects().stream()
+                .map(effect -> effect.getType().getKey().toString()).sorted().toList();
+        return "state player=" + player.getName() + " screen=" + screen
+                + " cursor=" + (cursor.getType().isAir() ? "none" : Market.sellKey(cursor))
+                + " held=" + (inventory.getHeldItemSlot() + 1)
+                + " item=" + (held.getType().isAir() ? "none" : Market.sellKey(held))
+                + " raised=" + player.isHandRaised() + " sneaking=" + player.isSneaking()
+                + " sprinting=" + player.isSprinting() + " effects=" + effects + " items=" + items;
+    }
 
     static final class SellScreen extends Screen {}
 
@@ -494,6 +682,7 @@ final class Menus {
         if (id != null) {
             Optional<Market.Listing> listing = market.listing(id);
             if (listing.isEmpty()) {
+                plugin.log("harness-gone player=" + player.getName() + " id=" + id);
                 player.sendMessage(Component.text(Market.Refusal.GONE.text, NamedTextColor.RED));
                 drawAuction(screen);
                 return;
@@ -519,7 +708,9 @@ final class Menus {
     }
 
     private void clickConfirmItem(Player player, ConfirmItem screen, int slot) {
-        if (slot == 11) {
+        if (slot == 11 && stalled) {
+            plugin.log("harness-stalled player=" + player.getName());
+        } else if (slot == 11) {
             Bukkit.getScheduler().runTask(plugin, () -> openPriceAnvil(player, screen.item, screen.slot));
         } else if (slot == 15) {
             Bukkit.getScheduler().runTask(plugin, () -> player.closeInventory());
@@ -534,8 +725,9 @@ final class Menus {
     private void clickPrice(Player player, PriceAnvil anvil) {
         String text = anvil.view().getRenameText();
         String typed = text == null ? "" : text.trim();
-        plugin.log("harness-anvil player=" + player.getName() + " text=" + typed + " level=" + player.getLevel());
-        Optional<Long> price = wholePrice(typed);
+        Optional<Long> price = wholePrice(typed).filter(whole -> whole <= priceCap);
+        plugin.log("harness-anvil player=" + player.getName() + " text=" + typed + " level=" + player.getLevel()
+                + " taken=" + price.isPresent());
         if (price.isEmpty()) {
             player.sendMessage(Component.text("That's not a price.", NamedTextColor.RED));
             return;
@@ -601,6 +793,7 @@ final class Menus {
                         Bukkit.getCurrentTick());
                 plugin.getLogger().info("harness-listed id=" + listing.id() + " seller=" + player.getName()
                         + " price=" + listing.price().toPlainString());
+                marketChanged();
                 player.sendMessage(Component.text("Listed for " + Market.money(screen.price) + ".",
                         NamedTextColor.GREEN));
             }

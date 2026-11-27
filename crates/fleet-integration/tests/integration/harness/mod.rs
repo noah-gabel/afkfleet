@@ -16,6 +16,8 @@
 //!   each update logged (P11.7, S58).
 //! - [`logs`]: the one log of the server and every agent, which wakes the
 //!   waits.
+//! - [`paper`]: the Paper harness for the live trading cases, and the
+//!   records its plugin writes (Plan.md P16.17, P16.18).
 //! - [`world`]: all of them for one case.
 
 pub(crate) mod agent;
@@ -24,6 +26,7 @@ pub(crate) mod ledger;
 pub(crate) mod live;
 pub(crate) mod logs;
 pub(crate) mod microsoft;
+pub(crate) mod paper;
 pub(crate) mod proxy;
 pub(crate) mod server;
 pub(crate) mod world;

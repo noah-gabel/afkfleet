@@ -131,9 +131,11 @@ pub(crate) async fn example(world: &World, id: &str) -> ModeId {
         .iter()
         .find(|example| example.id == id)
         .expect("an example of that name");
+    // The app's template fills the script alone; the mode's name is the
+    // author's own, at most 32 characters, which a title may pass.
     world
         .owner
-        .scripted_mode(example.title, request(example.draft()))
+        .scripted_mode(example.id, request(example.draft()))
         .await
         .id
 }
