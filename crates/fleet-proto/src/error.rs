@@ -92,6 +92,12 @@ pub enum Problem {
     /// A bot that appears twice in a list.
     #[error("a bot that appears twice")]
     Duplicate,
+    /// A slot that appears twice in a screen or an inventory.
+    #[error("a slot that appears twice")]
+    DuplicateSlot,
+    /// A registry identifier that isn't one: `minecraft:stone` is.
+    #[error("not a registry identifier")]
+    NotAnIdentifier,
     /// A validated text that isn't in the exact form its type keeps, such as a
     /// chat message with spaces around it.
     #[error("not in its exact form")]

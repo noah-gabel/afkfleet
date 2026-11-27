@@ -23,4 +23,5 @@ mod outbound;
 #[path = "../common/pki.rs"]
 mod pki;
 mod rig;
+mod screen;
 mod scripted;

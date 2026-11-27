@@ -17,6 +17,7 @@
 mod agent;
 mod hello;
 mod renew;
+mod screen;
 mod server;
 
 use core::num::NonZeroU64;
@@ -32,6 +33,9 @@ pub use agent::{
 };
 pub use hello::{HelloRefusal, read_hello};
 pub use renew::{RENEW_CLIENT_DEADLINE, RENEW_SERVER_DEADLINE, RenewResponse};
+pub use screen::{
+    ScreenAnswer, ScreenOutcome, ScreenRequest, ScreenRequestId, ScreenUnseen, Seen, SeenSign,
+};
 pub use server::{
     Assignment, LifecycleCommand, RejectReason, SendChat, ServerMessage, SessionDenied,
     SessionGrant, Welcome,

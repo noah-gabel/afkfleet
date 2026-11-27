@@ -43,6 +43,7 @@ use self::command::{Command, Lifecycle, Reply};
 use crate::chat::ChatTicket;
 use crate::config::RuntimeConfig;
 use crate::event::FleetEvent;
+use crate::look::Look;
 use crate::metrics;
 
 /// Everything a fleet is built from (ADR-0013).
@@ -200,6 +201,19 @@ impl Fleet {
         tokio::time::timeout(self.reply_timeout, call)
             .await
             .unwrap_or(Err(FleetError::TimedOut.into()))
+    }
+
+    /// Hands the bot's actor a look at what the bot sees (Plan.md P16.20),
+    /// and returns the look, which answers within
+    /// [`LOOK_TIMEOUT`](crate::LOOK_TIMEOUT) of the actor taking it. A bot
+    /// without an actor (a failed one) sees nothing.
+    ///
+    /// # Errors
+    /// [`FleetError::UnknownBot`], [`FleetError::Busy`],
+    /// [`FleetError::ShuttingDown`] or [`FleetError::TimedOut`].
+    pub async fn look(&self, id: BotId) -> Result<Look, FleetError> {
+        self.call(self.reply_timeout, |reply| Command::Look { id, reply })
+            .await
     }
 
     /// Returns a bot's snapshot. A bot that's being removed still has one

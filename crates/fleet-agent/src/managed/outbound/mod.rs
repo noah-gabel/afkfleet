@@ -41,7 +41,7 @@ use fleet_core::bot::{BotNotification, BotSnapshot};
 use fleet_core::chat::{ChatMessage, IncomingChat};
 use fleet_core::id::{BotId, ChatRequestId};
 use fleet_core::script::{ScriptLogLine, ScriptState};
-use fleet_proto::control::{ChatFailedReason, Hello, SessionRequest};
+use fleet_proto::control::{ChatFailedReason, Hello, ScreenAnswer, SessionRequest};
 use tracing::{debug, warn};
 
 pub(crate) use self::state::Counts;
@@ -270,6 +270,15 @@ impl Outbox {
         inner.pushed(pushed, "notices");
     }
 
+    /// Queues `answer` to a screen request of the stream of `generation`
+    /// (Plan.md P16.20): dropped when that stream ended, and the oldest
+    /// dropped past a few waiting.
+    pub fn screen(&self, generation: LinkGeneration, answer: ScreenAnswer) {
+        let mut inner = self.lock();
+        inner.state.screen(generation.get(), answer);
+        inner.wake();
+    }
+
     /// Queues chat a bot received.
     pub fn received(&self, bot: BotId, at: DateTime<Utc>, chat: IncomingChat) {
         self.chat(bot, at, Chat::Received(chat));
@@ -319,6 +328,7 @@ impl fmt::Debug for Outbox {
             .field("chat_dropped", &counts.chat_dropped)
             .field("refused", &counts.refused)
             .field("requests_dropped", &counts.requests_dropped)
+            .field("screens_dropped", &counts.screens_dropped)
             .finish()
     }
 }

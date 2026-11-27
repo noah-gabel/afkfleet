@@ -44,6 +44,7 @@ mod credentials;
 mod event;
 mod failure_log;
 mod fleet;
+mod look;
 mod metrics;
 mod mode;
 mod script;
@@ -63,6 +64,7 @@ pub use fleet::{
     CapacitySetting, Fleet, FleetError, FleetParts, FleetSetupError, SendChatError, ShutdownReport,
     Supervisor,
 };
+pub use look::{LOOK_TIMEOUT, Look, LookError};
 pub use mode::ModeRunner;
 pub use script::{
     Life, LoggedValue, NotSent, ScriptEvent, ScriptFeed, ScriptInbox, ScriptLog, ScriptParts,

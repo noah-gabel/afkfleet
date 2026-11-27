@@ -9,6 +9,7 @@ use tokio::sync::oneshot;
 
 use super::{FleetError, SendChatError, ShutdownReport};
 use crate::chat::{ChatError, ChatTicket};
+use crate::look::Look;
 
 /// Where the supervisor answers a call.
 pub(super) type Reply<T> = oneshot::Sender<Result<T, FleetError>>;
@@ -40,6 +41,11 @@ pub(super) enum Command {
         id: BotId,
         message: ChatMessage,
         reply: oneshot::Sender<Result<ChatAnswer, SendChatError>>,
+    },
+    /// The supervisor answers with the look the actor answers on.
+    Look {
+        id: BotId,
+        reply: Reply<Look>,
     },
     Snapshot {
         id: BotId,
@@ -74,6 +80,9 @@ impl Command {
             }
             Self::SendChat { reply, .. } => {
                 let _ = reply.send(Err(error.into()));
+            }
+            Self::Look { reply, .. } => {
+                let _ = reply.send(Err(error));
             }
             Self::Snapshot { reply, .. } => {
                 let _ = reply.send(Err(error));

@@ -298,9 +298,10 @@ impl Rig {
                 .collect(),
             Instruction::Assign(assignment) => vec![&assignment.spec],
             Instruction::Update(spec) => vec![spec],
-            Instruction::Unassign(_) | Instruction::SendChat(_) | Instruction::Lifecycle(_) => {
-                Vec::new()
-            }
+            Instruction::Unassign(_)
+            | Instruction::SendChat(_)
+            | Instruction::Lifecycle(_)
+            | Instruction::ReadScreen(_) => Vec::new(),
         };
         for spec in specs {
             if let BotAccount::Offline(name) = &spec.account {

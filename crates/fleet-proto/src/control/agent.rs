@@ -9,7 +9,7 @@ use fleet_core::id::{BotId, ChatRequestId};
 use fleet_core::script::{ScriptLogLine, ScriptState};
 use fleet_core::value::{AgentCapacity, AgentName, AgentVersion};
 
-use super::{bots_from_wire, bots_to_wire, request_number};
+use super::{ScreenAnswer, bots_from_wire, bots_to_wire, request_number};
 use crate::convert::{
     chat_message_from_wire, enum_from_wire, id_from_wire, id_to_wire, log_from_wire, log_to_wire,
     required, status_from_wire, status_to_wire, time_from_wire, time_to_wire,
@@ -30,6 +30,8 @@ pub enum AgentMessage {
     Event(BotEvent),
     /// A bot asks for session credentials.
     SessionRequest(SessionRequest),
+    /// What a bot sees, as the server asked (Plan.md P16.20).
+    Screen(ScreenAnswer),
 }
 
 /// The first message on every stream: who the agent is, and what it runs.
@@ -180,6 +182,7 @@ impl TryFrom<AgentMessage> for wire::AgentMessage {
                 bot_id: id_to_wire(request.bot_id),
                 fresh: request.fresh,
             }),
+            AgentMessage::Screen(answer) => Msg::Screen(answer.into()),
         };
         Ok(Self { msg: Some(msg) })
     }
@@ -200,6 +203,7 @@ impl TryFrom<wire::AgentMessage> for AgentMessage {
                 bot_id: id_from_wire("SessionRequest.bot_id", &request.bot_id)?,
                 fresh: request.fresh,
             }),
+            Msg::Screen(answer) => Self::Screen(answer.try_into()?),
         })
     }
 }

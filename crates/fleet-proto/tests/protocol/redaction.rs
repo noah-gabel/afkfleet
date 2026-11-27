@@ -152,7 +152,7 @@ fn a_refused_token_never_shows_in_the_error() {
 }
 
 /// Fields named like a secret that aren't one, each with its reason.
-const NOT_SECRETS: [(&str, &str, &str); 3] = [
+const NOT_SECRETS: [(&str, &str, &str); 4] = [
     (
         "fleet.v1.Kick",
         "key",
@@ -167,6 +167,11 @@ const NOT_SECRETS: [(&str, &str, &str); 3] = [
         "fleet.v1.ChatPattern",
         "key",
         "the name a script knows a chat pattern by, such as balance",
+    ),
+    (
+        "fleet.v1.DeclaredSign",
+        "key",
+        "the name a script writes a declared sign by, such as price",
     ),
 ];
 

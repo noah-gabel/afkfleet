@@ -667,7 +667,10 @@ fn reported(message: AgentMessage) -> Option<(BotId, Reported)> {
             };
             Some((bot_id, reported))
         }
-        AgentMessage::Hello(_) | AgentMessage::Heartbeat | AgentMessage::SessionRequest(_) => None,
+        AgentMessage::Hello(_)
+        | AgentMessage::Heartbeat
+        | AgentMessage::SessionRequest(_)
+        | AgentMessage::Screen(_) => None,
     }
 }
 

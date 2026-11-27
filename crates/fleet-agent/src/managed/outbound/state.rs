@@ -12,7 +12,7 @@ use fleet_core::chat::{ChatMessage, IncomingChat};
 use fleet_core::id::{BotId, ChatRequestId};
 use fleet_core::script::{ScriptLogLine, ScriptState};
 use fleet_proto::control::{
-    AgentMessage, BotEvent, BotEventKind, ChatFailedReason, Hello, SessionRequest,
+    AgentMessage, BotEvent, BotEventKind, ChatFailedReason, Hello, ScreenAnswer, SessionRequest,
 };
 
 /// How much each class may hold (S66). The honest maximum fits under each
@@ -36,6 +36,10 @@ pub(crate) const CHAT_PER_BOT: usize = 64;
 
 /// Chat waiting in all, at most.
 pub(crate) const CHAT_TOTAL: usize = 1024;
+
+/// Screen answers waiting, at most (Plan.md P16.20): a person waits for
+/// each, and the server asks for few at once.
+pub(crate) const SCREENS: usize = 16;
 
 impl Caps {
     /// The caps of a fleet of `max_bots` bots whose chat queues hold
@@ -138,6 +142,8 @@ pub(crate) struct Counts {
     pub(crate) refused: u64,
     /// Session requests replaced, or dropped at a stream's end, unsent.
     pub(crate) requests_dropped: u64,
+    /// Screen answers dropped: past [`SCREENS`], or of a stream that ended.
+    pub(crate) screens_dropped: u64,
 }
 
 /// The outbox's state; see the [module docs](self).
@@ -151,6 +157,8 @@ pub(crate) struct State {
     overflowed: bool,
     /// One unsent session request per bot, in order.
     lane: VecDeque<SessionRequest>,
+    /// The current stream's screen answers, in order (Plan.md P16.20).
+    screens: VecDeque<ScreenAnswer>,
     /// Each bot's latest status.
     statuses: BTreeMap<BotId, BotSnapshot>,
     /// Each bot's latest death.
@@ -178,6 +186,7 @@ impl State {
             phase: Phase::Closed,
             overflowed: false,
             lane: VecDeque::new(),
+            screens: VecDeque::new(),
             statuses: BTreeMap::new(),
             died: BTreeMap::new(),
             removed: BTreeMap::new(),
@@ -315,6 +324,10 @@ impl State {
         let dropped = u64::try_from(self.lane.len()).unwrap_or(u64::MAX);
         self.counts.requests_dropped = self.counts.requests_dropped.saturating_add(dropped);
         self.lane.clear();
+        // A screen answer answers its own stream's request only.
+        let dropped = u64::try_from(self.screens.len()).unwrap_or(u64::MAX);
+        self.counts.screens_dropped = self.counts.screens_dropped.saturating_add(dropped);
+        self.screens.clear();
     }
 
     /// Ends whichever stream is current, as [`State::ended`] does: its
@@ -348,6 +361,22 @@ impl State {
         }
         self.lane.push_back(request);
         Ok(generation)
+    }
+
+    /// Queues `answer` to a screen request of the stream of `generation`:
+    /// dropped when that stream isn't the welcomed one any more, and the
+    /// oldest dropped past [`SCREENS`]. The server then answers its user
+    /// that the agent didn't, within its own bound.
+    pub(crate) fn screen(&mut self, generation: u64, answer: ScreenAnswer) {
+        if self.live() != Some(generation) {
+            self.counts.screens_dropped = self.counts.screens_dropped.saturating_add(1);
+            return;
+        }
+        if self.screens.len() >= SCREENS {
+            self.screens.pop_front();
+            self.counts.screens_dropped = self.counts.screens_dropped.saturating_add(1);
+        }
+        self.screens.push_back(answer);
     }
 
     /// Refuses an item of a never-drop class: counted, and the stream ends.
@@ -507,6 +536,10 @@ impl State {
     fn reconciled_next(&mut self) -> Option<AgentMessage> {
         if let Some(request) = self.lane.pop_front() {
             return Some(AgentMessage::SessionRequest(request));
+        }
+        // A person waits for it.
+        if let Some(answer) = self.screens.pop_front() {
+            return Some(AgentMessage::Screen(answer));
         }
         // A bot's status, then its death, then its script's status, by bot.
         let bot = [
@@ -852,6 +885,82 @@ mod tests {
         assert_eq!(welcomed, Ok(generation));
         assert_eq!(after, Err(LaneRefusal::NoStream));
         assert_eq!(state.counts().requests_dropped, 1, "the unsent one");
+    }
+
+    fn screen(number: u64, n: u8) -> ScreenAnswer {
+        ScreenAnswer {
+            id: fleet_proto::control::ScreenRequestId::new(
+                core::num::NonZeroU64::new(number).unwrap(),
+            ),
+            bot_id: bot(n),
+            outcome: fleet_proto::control::ScreenOutcome::Unseen(
+                fleet_proto::control::ScreenUnseen::Busy,
+            ),
+        }
+    }
+
+    /// Every message the stream of `generation` sends until it would wait.
+    fn drained(state: &mut State, generation: u64) -> Vec<AgentMessage> {
+        core::iter::from_fn(|| match state.next(generation) {
+            Next::Send(message) => Some(message),
+            Next::Wait { .. } | Next::End => None,
+        })
+        .collect()
+    }
+
+    #[test]
+    fn a_screen_answer_goes_on_its_own_stream_right_after_session_requests() {
+        let (mut state, generation) = reconciled(&[1, 2]);
+        state.chat(bot(2), at(1), Chat::ScriptLog(log("first")));
+        state.screen(generation, screen(1, 1));
+        state.request(request(1, 2)).unwrap();
+
+        let sent = drained(&mut state, generation);
+
+        assert!(matches!(
+            sent.first(),
+            Some(AgentMessage::SessionRequest(_))
+        ));
+        assert_eq!(sent.get(1), Some(&AgentMessage::Screen(screen(1, 1))));
+        assert!(matches!(sent.get(2), Some(AgentMessage::Event(_))));
+    }
+
+    #[test]
+    fn a_screen_answer_of_another_stream_or_an_ended_one_is_dropped() {
+        let (mut state, generation) = reconciled(&[1]);
+        state.screen(generation.saturating_add(1), screen(1, 1));
+        state.screen(generation, screen(2, 1));
+        state.ended(generation);
+        let next = state.open(hello(Vec::new()));
+        state.welcomed(next, INTERVAL);
+        state.reconciled(next, &[bot(1)].into());
+
+        assert_eq!(drained(&mut state, next), []);
+        assert_eq!(state.counts().screens_dropped, 2);
+    }
+
+    #[test]
+    fn past_the_screens_cap_the_oldest_answer_is_dropped() {
+        let (mut state, generation) = reconciled(&[1]);
+        let count = u64::try_from(SCREENS).unwrap() + 2;
+        for number in 1..=count {
+            state.screen(generation, screen(number, 1));
+        }
+
+        let numbers: Vec<u64> = drained(&mut state, generation)
+            .into_iter()
+            .filter_map(|message| match message {
+                AgentMessage::Screen(answer) => Some(answer.id.get().get()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(numbers, (3..=count).collect::<Vec<u64>>());
+        assert_eq!(state.counts().screens_dropped, 2);
+        assert!(
+            !state.overflowed(),
+            "a dropped answer never ends the stream"
+        );
     }
 
     #[test]

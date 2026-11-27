@@ -12,6 +12,7 @@
 //!   [`ReportText::MAX_CHARS`] characters, never refused for its length, and
 //!   a place is a line and a column that both count from 1.
 
+use fleet_core::script::menu::SignDraft;
 use fleet_core::script::{
     CaptureDraft, CaptureKind, DecimalMark, Hook, LogKind, MessageDraft, PatternDraft, ProblemKind,
     ReportText, Script, ScriptDraft, ScriptLogLine, ScriptPlace, ScriptProblem, ScriptState,
@@ -33,6 +34,7 @@ pub(crate) fn script_to_wire(script: Script) -> wire::Script {
         block_guard: draft.block_guard,
         messages: draft.messages.into_iter().map(message_to_wire).collect(),
         patterns: draft.patterns.into_iter().map(pattern_to_wire).collect(),
+        signs: draft.signs.into_iter().map(sign_to_wire).collect(),
     }
 }
 
@@ -57,7 +59,12 @@ pub(crate) fn script_from_wire(script: wire::Script) -> Result<Script, ConvertEr
             .enumerate()
             .map(|(index, pattern)| pattern_from_wire(pattern).map_err(|e| e.at(index)))
             .collect::<Result<_, _>>()?,
-        signs: Vec::new(),
+        signs: script
+            .signs
+            .into_iter()
+            .enumerate()
+            .map(|(index, sign)| sign_from_wire(sign).map_err(|e| e.at(index)))
+            .collect::<Result<_, _>>()?,
     };
     let checked = Script::try_from(draft.clone())
         .map_err(|e| ConvertError::new("ModeDefinition.script", e.into()))?;
@@ -77,35 +84,59 @@ fn small(field: &'static str, number: u32) -> Result<u8, ConvertError> {
 }
 
 fn message_to_wire(message: MessageDraft) -> wire::DeclaredMessage {
-    use wire::declared_value::Kind;
     wire::DeclaredMessage {
         key: message.key,
         text: message.text,
-        values: message
-            .values
-            .into_iter()
-            .map(|value| wire::DeclaredValue {
-                name: value.name,
-                kind: Some(match value.kind {
-                    ValueKind::Integer { min, max } => {
-                        Kind::Integer(wire::IntegerRange { min, max })
-                    }
-                    ValueKind::Decimal { min, max, places } => Kind::Decimal(wire::DecimalRange {
-                        min,
-                        max,
-                        places: u32::from(places),
-                    }),
-                    ValueKind::Word { options } => Kind::Word(wire::Words { options }),
-                }),
-            })
-            .collect(),
+        values: values_to_wire(message.values),
     }
 }
 
-fn message_from_wire(message: wire::DeclaredMessage) -> Result<MessageDraft, ConvertError> {
+fn sign_to_wire(sign: SignDraft) -> wire::DeclaredSign {
+    wire::DeclaredSign {
+        key: sign.key,
+        lines: sign.lines,
+        values: values_to_wire(sign.values),
+    }
+}
+
+fn sign_from_wire(sign: wire::DeclaredSign) -> Result<SignDraft, ConvertError> {
+    Ok(SignDraft {
+        key: sign.key,
+        lines: sign.lines,
+        values: values_from_wire(sign.values)?,
+    })
+}
+
+fn values_to_wire(values: Vec<ValueDraft>) -> Vec<wire::DeclaredValue> {
     use wire::declared_value::Kind;
-    let values = message
-        .values
+    values
+        .into_iter()
+        .map(|value| wire::DeclaredValue {
+            name: value.name,
+            kind: Some(match value.kind {
+                ValueKind::Integer { min, max } => Kind::Integer(wire::IntegerRange { min, max }),
+                ValueKind::Decimal { min, max, places } => Kind::Decimal(wire::DecimalRange {
+                    min,
+                    max,
+                    places: u32::from(places),
+                }),
+                ValueKind::Word { options } => Kind::Word(wire::Words { options }),
+            }),
+        })
+        .collect()
+}
+
+fn message_from_wire(message: wire::DeclaredMessage) -> Result<MessageDraft, ConvertError> {
+    Ok(MessageDraft {
+        key: message.key,
+        text: message.text,
+        values: values_from_wire(message.values)?,
+    })
+}
+
+fn values_from_wire(values: Vec<wire::DeclaredValue>) -> Result<Vec<ValueDraft>, ConvertError> {
+    use wire::declared_value::Kind;
+    values
         .into_iter()
         .map(|value| {
             let kind = match required("DeclaredValue.kind", value.kind)? {
@@ -127,12 +158,7 @@ fn message_from_wire(message: wire::DeclaredMessage) -> Result<MessageDraft, Con
                 kind,
             })
         })
-        .collect::<Result<_, ConvertError>>()?;
-    Ok(MessageDraft {
-        key: message.key,
-        text: message.text,
-        values,
-    })
+        .collect()
 }
 
 fn pattern_to_wire(pattern: PatternDraft) -> wire::ChatPattern {
@@ -255,13 +281,7 @@ fn problem_to_wire(problem: &ScriptProblem) -> wire::ScriptProblem {
         ProblemKind::State => wire::ScriptProblemKind::State,
     };
     let hook = match problem.hook {
-        // API level 2's hooks get their own values with the wire at level 2
-        // (Plan.md P16.15). Until then no level-2 script reaches a server,
-        // so none of them is ever reported there.
-        None
-        | Some(
-            Hook::MenuOpen | Hook::MenuUpdate | Hook::MenuClose | Hook::Click | Hook::SignOpen,
-        ) => wire::ScriptHook::Unspecified,
+        None => wire::ScriptHook::Unspecified,
         Some(Hook::Join) => wire::ScriptHook::Join,
         Some(Hook::WorldChange) => wire::ScriptHook::WorldChange,
         Some(Hook::Death) => wire::ScriptHook::Death,
@@ -269,6 +289,11 @@ fn problem_to_wire(problem: &ScriptProblem) -> wire::ScriptProblem {
         Some(Hook::Timer) => wire::ScriptHook::Timer,
         Some(Hook::Chat) => wire::ScriptHook::Chat,
         Some(Hook::Stop) => wire::ScriptHook::Stop,
+        Some(Hook::MenuOpen) => wire::ScriptHook::MenuOpen,
+        Some(Hook::MenuUpdate) => wire::ScriptHook::MenuUpdate,
+        Some(Hook::MenuClose) => wire::ScriptHook::MenuClose,
+        Some(Hook::Click) => wire::ScriptHook::Click,
+        Some(Hook::SignOpen) => wire::ScriptHook::SignOpen,
     };
     wire::ScriptProblem {
         kind: kind.into(),
@@ -307,6 +332,11 @@ fn problem_from_wire(problem: &wire::ScriptProblem) -> Result<ScriptProblem, Con
         Some(wire::ScriptHook::Timer) => Some(Hook::Timer),
         Some(wire::ScriptHook::Chat) => Some(Hook::Chat),
         Some(wire::ScriptHook::Stop) => Some(Hook::Stop),
+        Some(wire::ScriptHook::MenuOpen) => Some(Hook::MenuOpen),
+        Some(wire::ScriptHook::MenuUpdate) => Some(Hook::MenuUpdate),
+        Some(wire::ScriptHook::MenuClose) => Some(Hook::MenuClose),
+        Some(wire::ScriptHook::Click) => Some(Hook::Click),
+        Some(wire::ScriptHook::SignOpen) => Some(Hook::SignOpen),
     };
     // A line and a column, both from 1, or neither.
     let place = match (problem.line, problem.column) {
@@ -338,6 +368,7 @@ pub(crate) fn log_to_wire(line: &ScriptLogLine) -> wire::ScriptLogLine {
         LogKind::Matched => wire::ScriptLogKind::Matched,
         LogKind::Refused => wire::ScriptLogKind::Refused,
         LogKind::StopFailed => wire::ScriptLogKind::StopFailed,
+        LogKind::Click => wire::ScriptLogKind::Click,
     };
     wire::ScriptLogLine {
         kind: kind.into(),
@@ -358,6 +389,7 @@ pub(crate) fn log_from_wire(line: &wire::ScriptLogLine) -> Result<ScriptLogLine,
         wire::ScriptLogKind::Matched => LogKind::Matched,
         wire::ScriptLogKind::Refused => LogKind::Refused,
         wire::ScriptLogKind::StopFailed => LogKind::StopFailed,
+        wire::ScriptLogKind::Click => LogKind::Click,
         wire::ScriptLogKind::Unspecified => return Err(ConvertError::new(KIND, Problem::Missing)),
     };
     Ok(ScriptLogLine {

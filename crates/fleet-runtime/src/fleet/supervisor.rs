@@ -30,6 +30,7 @@ use crate::chat::{ChatBucket, ChatError, ChatTickets};
 use crate::clock::RuntimeClock;
 use crate::config::RuntimeConfig;
 use crate::event::{FleetEvent, FleetEventKind};
+use crate::look::{Look, LookError};
 use crate::metrics;
 use crate::script::{ScriptPrograms, ScriptSlot, ScriptTurns};
 use crate::snapshot::SnapshotOwner;
@@ -198,6 +199,9 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> Supervisor<C, P> {
             Command::SendChat { id, message, reply } => {
                 let _ = reply.send(self.send_chat(id, message));
             }
+            Command::Look { id, reply } => {
+                let _ = reply.send(self.look(id));
+            }
             Command::Snapshot { id, reply } => {
                 let _ = reply.send(self.snapshot(id));
             }
@@ -346,6 +350,25 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> Supervisor<C, P> {
             .try_send(BotCommand::SendChat { message, reply })
             .map_err(|_| FleetError::Busy)?;
         Ok(answer)
+    }
+
+    /// Hands a look at what the bot sees to its actor, which answers on the
+    /// look this returns. A bot without an actor (a failed one) sees
+    /// nothing.
+    fn look(&self, id: BotId) -> Result<Look, FleetError> {
+        let entry = self
+            .bots
+            .get(&id)
+            .filter(|entry| !entry.removing)
+            .ok_or(FleetError::UnknownBot)?;
+        let Some(live) = entry.actor.as_ref() else {
+            return Ok(Look::answered(Err(LookError::NotOnline)));
+        };
+        let (reply, answer) = oneshot::channel();
+        live.inbox
+            .try_send(BotCommand::Look { reply })
+            .map_err(|_| FleetError::Busy)?;
+        Ok(Look::new(answer))
     }
 
     fn snapshot(&self, id: BotId) -> Result<BotSnapshot, FleetError> {

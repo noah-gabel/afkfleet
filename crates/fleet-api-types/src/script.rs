@@ -1321,6 +1321,10 @@ pub enum ScriptLogKind {
     Refused,
     /// `on_stop` failed.
     StopFailed,
+    /// Something the script did in a screen or a sign editor didn't go as
+    /// asked: a click, a button, a trade, a name, a close or a sign's answer
+    /// that wasn't sent, or whose fate wasn't `ok` (API level 2).
+    Click,
 }
 
 impl OpenEnum for ScriptLogKind {
@@ -1334,6 +1338,7 @@ impl OpenEnum for ScriptLogKind {
         Self::Matched,
         Self::Refused,
         Self::StopFailed,
+        Self::Click,
     ];
 
     fn as_str(self) -> &'static str {
@@ -1347,6 +1352,7 @@ impl OpenEnum for ScriptLogKind {
             Self::Matched => "matched",
             Self::Refused => "refused",
             Self::StopFailed => "stop_failed",
+            Self::Click => "click",
         }
     }
 }
@@ -1376,6 +1382,7 @@ impl From<&CoreLogLine> for ScriptLogLine {
             LogKind::Matched => ScriptLogKind::Matched,
             LogKind::Refused => ScriptLogKind::Refused,
             LogKind::StopFailed => ScriptLogKind::StopFailed,
+            LogKind::Click => ScriptLogKind::Click,
         };
         Self {
             kind: kind.into(),

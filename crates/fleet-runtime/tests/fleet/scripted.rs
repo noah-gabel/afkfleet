@@ -142,7 +142,7 @@ fn scripted(draft: ScriptDraft) -> BotSpec {
 
 /// What the fake session shows a bot that stands at the origin of the
 /// overworld, where its leash is anchored.
-fn seen() -> Observation {
+pub(crate) fn seen() -> Observation {
     let place = Position::try_new(0.5, 64.0, 0.5).unwrap();
     let bot = BotFacts {
         health: 20.0,
@@ -1860,7 +1860,10 @@ mod menus {
         ));
         assert_eq!(
             texts(&mut harness),
-            ["a click on slot 0 came back rejected", "false rejected 0"]
+            [
+                "a click on slot 0 was put back by the server (rejected)",
+                "false rejected 0"
+            ]
         );
     }
 
@@ -1882,7 +1885,7 @@ mod menus {
         assert_eq!(
             texts(&mut harness),
             [
-                "a click on slot 0 wasn't sent: screen_changed",
+                "a click on slot 0 wasn't sent: another screen is open than the one the hook saw, or than the one the slot was read on (screen_changed)",
                 "click refused (too_soon), 1 time",
                 "screen_changed false"
             ]
@@ -1920,7 +1923,10 @@ mod menus {
         assert_eq!(before, Vec::<String>::new());
         assert_eq!(
             at_patience,
-            ["a click on slot 0 came back unanswered", "unanswered"]
+            [
+                "a click on slot 0 got no answer from the server, which may or may not have done it (unanswered)",
+                "unanswered"
+            ]
         );
         assert_eq!(texts(&mut harness), Vec::<String>::new());
     }

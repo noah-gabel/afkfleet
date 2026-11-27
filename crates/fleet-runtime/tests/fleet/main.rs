@@ -22,6 +22,7 @@ mod chaos;
 mod common;
 mod credentials;
 mod harness;
+mod look;
 mod metrics;
 mod panicky;
 mod recorder;

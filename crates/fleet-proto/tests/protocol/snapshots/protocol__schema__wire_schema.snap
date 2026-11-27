@@ -37,6 +37,7 @@ message fleet.v1.AgentMessage
   3 status: fleet.v1.BotSnapshot (oneof msg)
   4 event: fleet.v1.BotEvent (oneof msg)
   5 session_request: fleet.v1.SessionRequest (oneof msg)
+  6 screen: fleet.v1.ScreenAnswer (oneof msg)
 message fleet.v1.AmountRange
   1 min: double
   2 max: double
@@ -123,6 +124,10 @@ message fleet.v1.DeclaredMessage
   1 key: string
   2 text: string
   3 values: repeated fleet.v1.DeclaredValue
+message fleet.v1.DeclaredSign
+  1 key: string
+  2 lines: repeated string
+  3 values: repeated fleet.v1.DeclaredValue
 message fleet.v1.DeclaredValue
   1 name: string
   2 integer: fleet.v1.IntegerRange (oneof kind)
@@ -201,6 +206,14 @@ message fleet.v1.Schedule
 message fleet.v1.Schedule.Every
   1 interval_ms: uint64
   2 jitter_ms: uint64
+message fleet.v1.ScreenAnswer
+  1 id: uint64
+  2 bot_id: bytes
+  3 seen: fleet.v1.Seen (oneof answer)
+  4 unseen: fleet.v1.ScreenUnseen (oneof answer)
+message fleet.v1.ScreenRequest
+  1 id: uint64
+  2 bot_id: bytes
 message fleet.v1.Script
   1 api: uint32
   2 source: string
@@ -209,6 +222,7 @@ message fleet.v1.Script
   5 block_guard: repeated string
   6 messages: repeated fleet.v1.DeclaredMessage
   7 patterns: repeated fleet.v1.ChatPattern
+  8 signs: repeated fleet.v1.DeclaredSign
 message fleet.v1.ScriptLogLine
   1 kind: fleet.v1.ScriptLogKind
   2 text: string
@@ -223,6 +237,35 @@ message fleet.v1.ScriptStatus
   2 stopped: fleet.v1.ScriptProblem (oneof status)
   3 refused: fleet.v1.ScriptProblem (oneof status)
   4 crashed: fleet.v1.Unit (oneof status)
+message fleet.v1.Seen
+  1 inventory: repeated fleet.v1.SeenSlot
+  2 screen: fleet.v1.SeenScreen
+  3 sign: fleet.v1.SeenSign
+message fleet.v1.SeenEnchantment
+  1 id: string
+  2 level: uint32
+message fleet.v1.SeenItem
+  1 id: string
+  2 count: uint32
+  3 name: string
+  4 lore: repeated string
+  5 potion: string
+  6 enchantments: repeated fleet.v1.SeenEnchantment
+  7 stored_enchantments: repeated fleet.v1.SeenEnchantment
+  8 durability: optional uint32
+message fleet.v1.SeenScreen
+  1 kind: string
+  2 title: string
+  3 slots: repeated fleet.v1.SeenSlot
+  4 cursor: fleet.v1.SeenItem
+message fleet.v1.SeenSign
+  1 x: int32
+  2 y: int32
+  3 z: int32
+  4 front: bool
+message fleet.v1.SeenSlot
+  1 index: uint32
+  2 item: fleet.v1.SeenItem
 message fleet.v1.SendChat
   1 request_id: bytes
   2 bot_id: bytes
@@ -238,6 +281,7 @@ message fleet.v1.ServerMessage
   8 session_denied: fleet.v1.SessionDenied (oneof msg)
   9 reject: fleet.v1.Reject (oneof msg)
   10 lifecycle: fleet.v1.LifecycleCommand (oneof msg)
+  11 screen_request: fleet.v1.ScreenRequest (oneof msg)
 message fleet.v1.SessionDenied
   1 id: uint64
   2 bot_id: bytes
@@ -339,6 +383,12 @@ enum fleet.v1.RejectReason
   5 REJECT_REASON_ALREADY_CONNECTED
   6 REJECT_REASON_CERTIFICATE_REVOKED
   7 REJECT_REASON_CERTIFICATE_EXPIRED
+enum fleet.v1.ScreenUnseen
+  0 SCREEN_UNSEEN_UNSPECIFIED
+  1 SCREEN_UNSEEN_NOT_ONLINE
+  2 SCREEN_UNSEEN_BUSY
+  3 SCREEN_UNSEEN_TIMED_OUT
+  4 SCREEN_UNSEEN_UNKNOWN_BOT
 enum fleet.v1.ScriptHook
   0 SCRIPT_HOOK_UNSPECIFIED
   1 SCRIPT_HOOK_JOIN
@@ -348,6 +398,11 @@ enum fleet.v1.ScriptHook
   5 SCRIPT_HOOK_TIMER
   6 SCRIPT_HOOK_CHAT
   7 SCRIPT_HOOK_STOP
+  8 SCRIPT_HOOK_MENU_OPEN
+  9 SCRIPT_HOOK_MENU_UPDATE
+  10 SCRIPT_HOOK_MENU_CLOSE
+  11 SCRIPT_HOOK_CLICK
+  12 SCRIPT_HOOK_SIGN_OPEN
 enum fleet.v1.ScriptLogKind
   0 SCRIPT_LOG_KIND_UNSPECIFIED
   1 SCRIPT_LOG_KIND_LINE
@@ -359,6 +414,7 @@ enum fleet.v1.ScriptLogKind
   7 SCRIPT_LOG_KIND_MATCHED
   8 SCRIPT_LOG_KIND_REFUSED
   9 SCRIPT_LOG_KIND_STOP_FAILED
+  10 SCRIPT_LOG_KIND_CLICK
 enum fleet.v1.ScriptProblemKind
   0 SCRIPT_PROBLEM_KIND_UNSPECIFIED
   1 SCRIPT_PROBLEM_KIND_COMPILE

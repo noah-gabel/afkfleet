@@ -29,6 +29,7 @@ mod rejects;
 mod renewal;
 mod round_trip;
 mod schema;
+mod screen;
 mod script;
 mod strategies;
 
@@ -112,6 +113,7 @@ fn same_server_message(a: &ServerMessage, b: &ServerMessage) -> bool {
         (ServerMessage::SessionDenied(a), ServerMessage::SessionDenied(b)) => a == b,
         (ServerMessage::Reject(a), ServerMessage::Reject(b)) => a == b,
         (ServerMessage::Lifecycle(a), ServerMessage::Lifecycle(b)) => a == b,
+        (ServerMessage::ReadScreen(a), ServerMessage::ReadScreen(b)) => a == b,
         _ => false,
     }
 }

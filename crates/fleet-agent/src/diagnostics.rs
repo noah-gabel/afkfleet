@@ -302,6 +302,7 @@ mod tests {
             chat_dropped: 12,
             refused: 1,
             requests_dropped: 3,
+            screens_dropped: 0,
         };
 
         metrics::with_local_recorder(&recorder, || {

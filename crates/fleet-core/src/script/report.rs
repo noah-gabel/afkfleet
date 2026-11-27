@@ -140,8 +140,8 @@ pub struct ScriptLogLine {
 }
 
 /// What a line of a script's log is about. [`Line`](Self::Line) is the
-/// script's own; every other kind is the runtime's about the script's chat
-/// or its end.
+/// script's own; every other kind is the runtime's about the script's chat,
+/// its screens or its end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LogKind {
     /// A line the script wrote.
@@ -162,11 +162,16 @@ pub enum LogKind {
     Refused,
     /// `on_stop` failed.
     StopFailed,
+    /// Something the script did in a screen or a sign editor didn't go as
+    /// asked: a click, a button, a trade, a name, a close or a sign's answer
+    /// that wasn't sent, or whose fate wasn't `ok` (ADR-0052, G6; Plan.md
+    /// P16.16).
+    Click,
 }
 
 impl LogKind {
     /// Every kind, in a fixed order.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Line,
         Self::Sent,
         Self::NotSent,
@@ -176,6 +181,7 @@ impl LogKind {
         Self::Matched,
         Self::Refused,
         Self::StopFailed,
+        Self::Click,
     ];
 
     /// Its stable name.
@@ -191,6 +197,7 @@ impl LogKind {
             Self::Matched => "matched",
             Self::Refused => "refused",
             Self::StopFailed => "stop_failed",
+            Self::Click => "click",
         }
     }
 }

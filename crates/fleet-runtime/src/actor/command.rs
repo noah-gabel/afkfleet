@@ -3,10 +3,12 @@
 
 use fleet_core::bot::BotSpec;
 use fleet_core::chat::ChatMessage;
+use fleet_core::mc::MenuView;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::chat::{ChatError, ChatTicket};
+use crate::look::LookError;
 
 /// A message to a bot's actor: one per `Fleet` call (ADR-0013).
 ///
@@ -33,6 +35,12 @@ pub enum BotCommand {
         message: ChatMessage,
         /// Where the actor answers.
         reply: oneshot::Sender<Result<ChatTicket, ChatError>>,
+    },
+    /// Look at what the bot sees (Plan.md P16.20): answered within
+    /// [`LOOK_TIMEOUT`](crate::LOOK_TIMEOUT), one look at a time.
+    Look {
+        /// Where the look answers.
+        reply: oneshot::Sender<Result<MenuView, LookError>>,
     },
 }
 

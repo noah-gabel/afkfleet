@@ -511,6 +511,28 @@ impl Screen {
         }
     }
 
+    /// A screen as it's shown away from its session (what a bot sees,
+    /// Plan.md P16.20): in window 0, at opening 0 and state 0, which no
+    /// [`ClickGate`](super::ClickGate) hands out, so it's never the screen a
+    /// click is checked against. Its title and slots are kept as
+    /// [`Screen::new`] keeps them.
+    #[must_use]
+    pub fn shown(
+        kind: ScreenKind,
+        title: &str,
+        items: impl IntoIterator<Item = Option<Item>>,
+        cursor: Option<Item>,
+    ) -> Self {
+        Self::new(
+            ScreenId::new(WindowId::new(0), 0),
+            StateId::new(0),
+            kind,
+            title,
+            items,
+            cursor,
+        )
+    }
+
     /// The same screen with a merchant's trades, in the merchant's order:
     /// the first [`Screen::MAX_OFFERS`], and none for any other kind.
     #[must_use]
@@ -745,6 +767,32 @@ pub(crate) mod tests {
         names.dedup();
 
         assert_eq!(names.len(), ScreenKind::ALL.len());
+    }
+
+    #[test]
+    fn a_screen_shown_away_from_its_session_is_never_one_a_gate_opened() {
+        let mut gate = crate::script::menu::ClickGate::new();
+        let opened = gate.opened(WindowId::new(0));
+
+        let shown = Screen::shown(
+            ScreenKind::Generic9x6,
+            "Auction House",
+            (1..=54).map(|n| Some(item("stone", n))),
+            None,
+        );
+
+        assert_eq!(shown.id().opening(), 0);
+        assert_ne!(shown.id(), opened);
+        assert_eq!(shown.state(), StateId::new(0));
+        assert_eq!(
+            (shown.kind(), shown.title().as_str()),
+            (ScreenKind::Generic9x6, "Auction House")
+        );
+        assert_eq!(shown.own().count(), 54);
+        assert_eq!(
+            shown.slot(13).unwrap().place(),
+            Some(Place { row: 1, column: 4 })
+        );
     }
 
     #[test]
