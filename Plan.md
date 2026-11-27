@@ -492,6 +492,7 @@ The full analysis lives in `docs/threat-model.md`.
 | gRPC enrollment | 5/min | IP |
 | gRPC `Connect` | 10/min | Client certificate (its fingerprint) |
 | Fresh session requests on an agent's stream | 6/hour, burst 6 | Bot |
+| What a bot sees (`GET /bots/{id}/screen`) | 12/min, burst 12 | User |
 
 Responses use `429` with a `Retry-After` header. The client IP is the socket peer address.
 
@@ -2781,14 +2782,18 @@ What would be left to do:
   > Note (P16.13, group D) ([ADR-0052](docs/adr/0052-menus-in-scripts-and-the-time-of-day.md), G4 to G6): **every action a hook was given `ok` for gets one `on_click`:** its fate, or the session's reason it wasn't sent; a send the session didn't answer in time waits 10 s for its fate, then is `unanswered`. **A screen opening is a let-go for every script;** one without `on_menu_open`, at level 1 or 2, has a server's screen closed at once and what it held pressed again, past the limiter. The menu events join the feed, bounded as fleet-mc's bridge bounds them; `on_menu_update` at most once a game tick; every miss and every refusal in a screen is a line of the log, never dropped (as `refused` lines until P16.16). Live on both servers: a villager's and an anvil's result `unclear` with the trade done, and on Paper the user's flow through the price anvil at level 0, every fate on it `unclear`.
 - [x] **P16.14** **Fuzz targets** for a snapshot made from anything a server could send, the number helpers and the click guard; the operation budget measured again on real pages.
   > Note (P16.14, group D) ([ADR-0052](docs/adr/0052-menus-in-scripts-and-the-time-of-day.md), G9): `menu_snapshot` (a screen, its trades and an inventory from any bytes: bounded, and read whole by a level-2 script), `number_helpers` and `click_guard`, eighteen targets in all. A full page of 45 listings costs the scan 1,939 operations, the lister 2,538 and the anvil lister 2,765, of a hook's 10,000: the budgets stand.
-- [ ] **P16.15** 🔴 **The wire and the server at level 2.**
+- [x] **P16.15** 🔴 **The wire and the server at level 2.**
   > Note (P16.15, from group D) ([ADR-0052](docs/adr/0052-menus-in-scripts-and-the-time-of-day.md), "What group E inherits"): the wire's values for the five menu hooks (fleet-proto maps them to "no hook" until then); **the server stamps the level a script needs** (compile at level 1, at level 2 when that answers `NeedsLevel`), where fleet-api-types stamps level 1 today; then `ScriptApi`'s `OFFERED` becomes level 2. A mode's declared signs, `ScriptDraft.signs`, on the wire and in the API.
   > Note (P16.15, the user's addition at group B's start, 2026-11-25) ([ADR-0036](docs/adr/0036-scripted-modes.md), M16): a mode's declared sign messages are part of its script, stored and on the wire, at level 2.
-- [ ] **P16.16** **The app:** the log's trade lines, the two starter templates, autocomplete for the new objects; the threat model's rows for text that steers a script.
+  >
+  > Note (P16.15, group E) ([ADR-0053](docs/adr/0053-level-2-on-the-wire-in-the-app-and-what-a-bot-sees.md), E1, E2, E7): **the server compiles a script at level 1, and at level 2 only when that answers `NeedsLevel`,** and stamps the level that compiled; declared signs and `bot.name` force level 2, and the reasons travel with it to the editor. The five hooks, declared signs and the click lines on the wire. **An older app's save never drops signs:** a body without `signs` is the last release's app, and its save of a mode that declares them is 422 at `script.signs` (ADR-0046's C6 shape). Live with the published **v0.2.1** agent, pinned by its digest: a level-2 mode is 409 and waits, a level-1 one runs there, its stream never ends (`slow_smoke_an_agent_of_the_last_release_is_sent_no_level_2_and_refuses_nothing`, renamed from `…_is_sent_no_script_…`).
+- [x] **P16.16** **The app:** the log's trade lines, the two starter templates, autocomplete for the new objects; the threat model's rows for text that steers a script.
   > Note (P16.16, from group D) ([ADR-0052](docs/adr/0052-menus-in-scripts-and-the-time-of-day.md), G6): the trade lines get a log kind of their own (group D writes them as `refused`), and the app's completion learns the description's maps, `slot` and `time`, as values rather than game objects (its `GAME_OBJECTS` filters only `input` and `hooks`).
   > Note (P16.16, the user's addition, 2026-11-25) ([ADR-0036](docs/adr/0036-scripted-modes.md), M13, M14): the starter templates are four: the sell macro, the auction scan, the farm that sells and the auction lister. What the bot sees on demand is P16.20.
   >
   > Note (P16.16, the user's addition at group B's start, 2026-11-25) ([ADR-0036](docs/adr/0036-scripted-modes.md), M17): **five,** with the auction lister's second variant on the user's server's flow.
+  >
+  > Note (P16.16, group E) ([ADR-0053](docs/adr/0053-level-2-on-the-wire-in-the-app-and-what-a-bot-sees.md), E3, E4): **a click line is its own kind,** `click`, its fate in words with the name a script reads (`unclear`: "may have worked: the script checks the next screen"). The editor offers `ScriptApi` at level 2: only game objects for a name, a map's keys after a call that answers one (`menu.slot(13).`, `clock.local(zone).`), the level the server would stamp and why, declared signs in a section of their own, and the five level-2 examples among the starter templates. The threat model's rows are the scripted modes table's last five.
 - [ ] **P16.17** **Live:** the auction scan and the sell macro on the harness, with the other player buying a listing between the scan and the click.
   > Note (P16.17, the user's correction, 2026-11-26) ([ADR-0036](docs/adr/0036-scripted-modes.md), M17 amended): **the second lister's live case goes through the price anvil,** with the trap listing and the watchdog as planned, plus a price the plugin refuses.
   > Note (P16.17, the user's addition, 2026-11-25) ([ADR-0036](docs/adr/0036-scripted-modes.md), M13): **also the farm that sells and the auction lister,** as written: a bait listing below the declared floor is never matched, the lister skips its own listings, and expired ones are collected.
@@ -2800,7 +2805,8 @@ What would be left to do:
   > Note (P16.21, the user's addition, 2026-11-26): **why:** the user's payout script asks for the balance only between 14:00 and 19:00 German time, and a script has no clock. Tests: both of Berlin's switch days with the hour skipped or repeated, midnight and the weekday's change at it, and property tests against the zone data.
   >
   > Note (P16.21, group D) ([ADR-0052](docs/adr/0052-menus-in-scripts-and-the-time-of-day.md), G8): `clock.local(zone)` answers a map of `year`, `month`, `day`, `hour`, `minute`, `second`, `weekday` (1 Monday) and `offset` in minutes. **jiff 1.0.1 with its bundled data only** (`tzdb-bundle-always`; no system zone files), in fleet-script: ADR-0038 rules out `chrono-tz`. **An unknown zone stops the script with its line,** as an undeclared message does. Property tests hold Berlin to the EU rule written out apart, 1997 to 2037, and every zone of the build to every moment from 1900 to 2100.
-- [ ] **P16.20** 🔴 **What the bot sees, on demand** (the user's addition, 2026-11-25; [ADR-0036](docs/adr/0036-scripted-modes.md), M14): on a bot's page, what the bot sees in the screen it has open: each slot's item, count, name, lore and components, as plain text. `GET /api/v1/bots/{id}/screen` for View on the bot (404 below), its own rate-limit class, not audited, in the authorization matrix and the route-coverage test; the agent answers from P16.5's snapshot on its stream within a bound; the bot's page gets a panel with a refresh button.
+- [x] **P16.20** 🔴 **What the bot sees, on demand** (the user's addition, 2026-11-25; [ADR-0036](docs/adr/0036-scripted-modes.md), M14): on a bot's page, what the bot sees in the screen it has open: each slot's item, count, name, lore and components, as plain text. `GET /api/v1/bots/{id}/screen` for View on the bot (404 below), its own rate-limit class, not audited, in the authorization matrix and the route-coverage test; the agent answers from P16.5's snapshot on its stream within a bound; the bot's page gets a panel with a refresh button.
+  > Note (P16.20, group E) ([ADR-0053](docs/adr/0053-level-2-on-the-wire-in-the-app-and-what-a-bot-sees.md), E5, E6): **asked only of a stream at script API level 2,** so the last release's agent is never sent a message it can't read and its bot answers `agent_too_old` at once; at most 8 questions wait on a stream, the server waits 5 s (`no_answer`), the agent's conductor 3 s and the bot's actor 2 s, one look a bot at a time, and a busy agent is 503. Its limit is `screen_reads_per_user_per_min` (12, 1 to 60). **Without a screen open, the bot's own inventory** (the user's suggestion), and a sign editor that waits. On the page, "What it sees" asks on Look only; each slot with its number, row and column and, in a screen's own grid, `menu.at(row, column)`; every text selectable.
 
 **DoD:** The reference's sell macro and auction scan run against the harness as written. In the long run no listing is bought twice and no failed or missed buy lacks its log line. A click is never sent to a screen other than the one the script saw.
 
@@ -2926,6 +2932,7 @@ chat_per_bot_interval_secs = 3
 chat_per_bot_burst = 3
 chat_per_user_per_min = 20
 ws_connections_per_user = 3
+screen_reads_per_user_per_min = 12      # what a bot sees, asked of its agent, per user
 
 [vault]
 master_key_files = { 1 = "/run/secrets/vault_key_1" }
@@ -2974,6 +2981,8 @@ retention_days = 365                     # 90–730: every entry holds a user's 
 > Note (Appendix A, Phase 11, group L3) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U110, S127): `[rate_limits]` gains `grant_candidates_per_user_per_hour` (1–600, 60 by default, all at once if need be; the user's approval at the plan review): how many times one user may read the suggestions behind "Share with" in an hour, one bucket across all their accounts.
 
 > Note (Appendix A, Phase 12, group B) ([ADR-0022](docs/adr/0022-deployment-and-phase-12-refinements.md), S10): both configs gain `[metrics]` with one key, `bind`, off unless set: the address of `GET /metrics`, an IP address and a port other than 0; on the server not `[http] bind`'s or `[grpc] bind`'s port, whatever their addresses. In a container it's `0.0.0.0`, on the project's network only (P12.2).
+
+> Note (Appendix A, Phase 16, group E) ([ADR-0053](docs/adr/0053-level-2-on-the-wire-in-the-app-and-what-a-bot-sees.md), E5): `[rate_limits]` gains `screen_reads_per_user_per_min` (1–60, 12 by default): how often one user may ask what a bot sees, across bots, spent after `authorize()`.
 
 `agent.toml`
 ```toml
@@ -3045,6 +3054,7 @@ All routes are prefixed with `/api/v1`. The required level is checked through `a
 | `GET /accounts/{id}/grant-candidates?q=` | Manage | "Share with"'s suggestions: at most 8 enabled users' names that start with `q` and could be given a grant (P11.11, ADR-0020, U110, S127) |
 | `GET /bots` · `GET/PATCH /bots/{id}` · `PUT /bots/{id}/mode` | View / Manage / Control | Bots and their state; the server address; the mode |
 | `POST /bots/{id}/start\|stop\|restart\|reset\|resume` | Control | Lifecycle |
+| `GET /bots/{id}/screen` | View | What the bot sees, asked of its agent: its open screen or its inventory, slot by slot (P16.20, ADR-0053) |
 | `POST /bots/{id}/chat` · `POST /bots/{id}/command` · `GET /bots/{id}/chat` | Control (a command off the allowlist: Manage, and only through `/command`) / View | Chat |
 | `GET/POST /modes` · `PUT/DELETE /modes/{id}` | Member+ (own) / Admin+ (shared) (`POST`, `PUT` with a command off the allowlist: their `/with-commands` twins) | Modes |
 | `GET/POST /server-settings` · `PUT/DELETE /server-settings/{id}` | Admin+ | Each Minecraft server's settings: its conflict texts and chat formats (P11.9) |

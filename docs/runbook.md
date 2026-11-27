@@ -260,6 +260,12 @@ sh setup.sh update
   Only then write scripted modes, or convert step modes to scripts.
 - **The release after 0.2.1 removes "Get into the nearest minecart"** (`enter_minecart`, [ADR-0034](adr/0034-a-stopgap-action-into-the-nearest-minecart.md), [ADR-0046](adr/0046-the-stopgaps-way-out-and-phase-15s-check.md), C5). **Before you update to it,** open each step mode that still uses it, on the release you run, and convert it to a script (**Convert to script** in the mode's editor, then Save): the script gets in with `vehicle.mount("minecart")`. A server of that release that finds such a mode stored won't start: its last log line, "the server can't start", names every one, as "`2 stored modes still hold enter_minecart, which this release removed: "Back in" (<id>), …`". Then go back to the release you ran, with its images and files: this release adds no migration, so it reads the database as it is. Convert the modes there, and update again.
   - Its agents read a step with the action, sent by an older server, as one they can't read and refuse it (`unreadable`, as above): update the server first, as always.
+- **The release after 0.2.1 adds script API level 2** (screens, the inventory, clicks, sign editors, the time of day; [ADR-0053](adr/0053-level-2-on-the-wire-in-the-app-and-what-a-bot-sees.md)). The server stamps each script with the lowest level that runs it, so a script that uses none of that stays at level 1. Update in the usual order:
+  1. **The server.** An agent of 0.2.1 beside it keeps running step modes and level-1 scripts. It's never sent a level-2 mode, nor asked what a bot sees: setting a level-2 mode on one of its bots says to update the agent, a bot on a level-2 mode waits for an updated agent and says so, and "What it sees" says its agent needs this release.
+  2. **Every agent**, those on other hosts too.
+  3. **The app.** An app of 0.2.1 can't save a mode that declares signs, which it doesn't show: the server refuses it with "update the app", so the signs are never lost. It saves everything else as before.
+
+  Only then write scripts that use screens, signs or the clock.
 - **Going back** is a restore, never an older `fetch`. A server rolled back past a mode feature reads such modes as corrupt: switch the bots off them, or delete them, before you restore an older backup.
 - **When `fetch` stops halfway** it leaves `.afkfleet-fetch` for a look and says why; `RELEASE` still names the old release. Fix what it named, then remove the folder and fetch again. Success: as above.
   ```sh

@@ -554,9 +554,9 @@ The recipient is text of the declaration: nothing the server prints can change w
 
 ## Part 2: inventory, menus, signs and the time of day (Phase 16)
 
-Phase 16 adds to Part 1 and changes nothing in it. **What's here is API level 2:** the objects `inventory`, `menu`, `sign` and `clock`, `bot.name`, and the hooks `on_menu_open`, `on_menu_update`, `on_menu_close`, `on_click` and `on_sign_open`. A script that uses any of them needs agents of this release or later, and the server never sends it to an older one. In a level-1 script these names are the script's own, as they always were: `let menu = 3;` still works there, and naming the object `menu` is refused when the mode is saved, with the level it needs.
+Phase 16 adds to Part 1 and changes nothing in it. **What's here is API level 2:** the objects `inventory`, `menu`, `sign` and `clock`, `bot.name`, and the hooks `on_menu_open`, `on_menu_update`, `on_menu_close`, `on_click` and `on_sign_open`. A script that uses any of them needs agents of this release or later, and the server never sends it to an older one. **The server saves each script at the lowest level that runs it:** a script that uses none of these stays at level 1, so the last release's agents still run it, and declaring a sign needs level 2 whatever the script uses. Under the editor, the app says which level a script is and why. In a level-1 script these names are the script's own, as they always were: `let menu = 3;` still works there, and naming the object `menu` is refused when the mode is saved, with the level it needs.
 
-A server's menu is a container with another look: a chest-shaped screen where a button is an item with a name and a few lines of lore. So a script reads slots and clicks slots, as a player does.
+A server's menu is a container with another look: a chest-shaped screen where a button is an item with a name and a few lines of lore. So a script reads slots and clicks slots, as a player does. **To see a screen as a script reads it,** open it with the bot and press Look in "What it sees" on the bot's page: each slot with its number, its row and column, and its item's ID, name, lore and components, as text to copy.
 
 ### Slots
 A slot is a map of plain data: a script can keep one in its state. `menu.slot(n)` and `inventory.slot(n)` read one; a list of slots is a list of their numbers, which a script reads one by one:
@@ -681,7 +681,7 @@ Every action a hook was given `ok` for gets exactly one `on_click(result)`: the 
 
 **A fate never decides a repeat. Judge a step by the screen that follows it:** the confirm screen that opens, the listing that's gone, the items in the inventory. A script that clicks again because a click came back `rejected`, `unclear`, `replaced` or `unanswered` can buy twice. Every example below reads the next screen or the inventory instead.
 
-**Every click that wasn't sent, came back other than `ok` or got no answer is a line in the script's log,** written by the runtime, and so is every click a hook was refused: the click limit bounds them, so none is ever dropped.
+**Every click that wasn't sent, came back other than `ok` or got no answer is a line in the script's log,** written by the runtime, and so is every click a hook was refused: the click limit bounds them, so none is ever dropped. The app labels them "Click": what was clicked, what came of it in words, and the name `on_click` reads, as in "a click on slot 13 may have worked: the script checks the next screen (unclear)".
 
 **What a server can notice.** After every click the bot asks the server for its statistics, as a vanilla client's statistics screen does: the server's answer to that request is how the runtime knows the click was handled. A vanilla client never asks for statistics while a container is open, so a server's anti-cheat could notice it. Whether that matters is yours to weigh per server; try a new server with one bot first.
 
@@ -698,7 +698,7 @@ Every action a hook was given `ok` for gets exactly one `on_click(result)`: the 
 | `sign.cancel()` | Answers with nothing written. Once an editor. |
 <!-- end of generated table -->
 
-A script answers a sign editor the server opens, with a sign the mode declares and nothing else: up to four lines of fixed text and typed values, as declared messages have, a line at most 80 characters as Paper takes them. A line may start with a value (the price alone on its line) and may be empty. `sign.cancel()` writes four empty lines. **Only the editor the server opened last is answered, and only once:** an editor the script doesn't answer is never answered, and a new screen, a death or a world change ends it. Declaring a sign comes with the app's support for level 2.
+A script answers a sign editor the server opens, with a sign the mode declares and nothing else: up to four lines of fixed text and typed values, as declared messages have, a line at most 80 characters as Paper takes them. A line may start with a value (the price alone on its line) and may be empty. `sign.cancel()` writes four empty lines. **Only the editor the server opened last is answered, and only once:** an editor the script doesn't answer is never answered, and a new screen, a death or a world change ends it. A mode declares its signs in the mode editor's Signs section, beside its messages, each with a key, its lines and its values.
 
 ### The time of day
 <!-- generated table: clock -->
