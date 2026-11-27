@@ -93,9 +93,11 @@ function Level({
   if (level === 0) {
     return null;
   }
+  // A text that answers sign editors says so already; declared signs are a reason of their own
+  // only for a text that doesn't.
   const reasons = [
     ...needs.map((need) => NEED_TEXT[need] ?? need),
-    ...(signs ? [DECLARES_SIGNS] : []),
+    ...(signs && !needs.includes("signs") ? [DECLARES_SIGNS] : []),
   ];
   return (
     <p className="text-sm text-muted-foreground" data-testid="script-level">

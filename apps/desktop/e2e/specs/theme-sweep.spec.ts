@@ -1147,15 +1147,23 @@ test("scripts: the editor with its marks, a conversion, a mode's declarations, a
   await main.getByRole("link", { name: "Open Balance" }).click();
   await expect(main.getByText(/^Riskier:/)).toBeVisible();
   await bothThemes(page, "a scripted mode, its messages and an any-time pattern", {
-    height: 3400,
+    height: 3600,
   });
 
   // A mode at script API level 2 (P16.15): a declared sign, and the level with why.
   await nav(page, "Modes");
   await main.getByRole("link", { name: "Open Seller" }).click();
+  if (shooting()) {
+    // The linter's delay, as for the marks above: the check, and with it the level, comes a
+    // second later.
+    await page.clock.setFixedTime(new Date(new Date(NOW).getTime() + 1000));
+  }
   await expect(main.getByTestId("script-level")).toContainText("Script API level 2");
+  if (shooting()) {
+    await page.clock.setFixedTime(new Date(NOW));
+  }
   await expect(main.getByRole("group", { name: "Sign 1" })).toBeVisible();
-  await bothThemes(page, "a scripted mode at level 2, its sign and why", { height: 2600 });
+  await bothThemes(page, "a scripted mode at level 2, its sign and why", { height: 1800 });
 
   await nav(page, "Home");
   await page.getByRole("link", { name: "Open AfkBot1" }).click();

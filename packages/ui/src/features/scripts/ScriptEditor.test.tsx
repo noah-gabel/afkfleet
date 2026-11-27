@@ -130,6 +130,17 @@ describe("ScriptEditor", () => {
     );
   });
 
+  it("names a sign once when the text answers sign editors and the mode declares signs", async () => {
+    renderEditor({ declared: { signs: ["price"], messages: [], replies: [] } }, async () => ({
+      level: 2,
+      needs: ["signs"],
+    }));
+
+    expect((await screen.findByTestId("script-level", {}, { timeout: 3000 })).textContent).toMatch(
+      /^Script API level 2 \(answers sign editors\): /,
+    );
+  });
+
   it("says no level while the text has a problem the server finds", async () => {
     renderEditor();
 

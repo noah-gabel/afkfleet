@@ -44,7 +44,7 @@ import {
 function ItemFields({ item }: { item: BotScreenItem }) {
   return (
     <>
-      <p className="font-mono text-sm break-all">{itemLine(item.id, item.count)}</p>
+      <p className="font-mono text-sm break-words">{itemLine(item.id, item.count)}</p>
       <p className="text-sm break-words">{item.name}</p>
       {item.lore.length === 0 ? null : (
         <p className="text-sm break-words whitespace-pre-line text-muted-foreground">
@@ -52,13 +52,15 @@ function ItemFields({ item }: { item: BotScreenItem }) {
         </p>
       )}
       {item.potion === undefined ? null : (
-        <p className="font-mono text-xs break-all">{potionLine(item.potion)}</p>
+        <p className="font-mono text-xs break-words">{potionLine(item.potion)}</p>
       )}
       {item.enchantments.length === 0 ? null : (
-        <p className="font-mono text-xs break-all">{enchantmentsLine(false, item.enchantments)}</p>
+        <p className="font-mono text-xs break-words">
+          {enchantmentsLine(false, item.enchantments)}
+        </p>
       )}
       {item.stored_enchantments.length === 0 ? null : (
-        <p className="font-mono text-xs break-all">
+        <p className="font-mono text-xs break-words">
           {enchantmentsLine(true, item.stored_enchantments)}
         </p>
       )}
@@ -183,12 +185,17 @@ export function BotSight({ bot }: { bot: BotResponse }) {
             {look.data === undefined && failure === null ? SIGHT_LOOK : SIGHT_LOOK_AGAIN}
           </Button>
         </div>
-        <p className="text-xs text-muted-foreground">{SIGHT_NOTE}</p>
-        <div role="status" className="flex flex-col gap-3">
-          {look.isFetching ? <p className="text-sm text-muted-foreground">{SIGHT_ASKING}</p> : null}
-          {failure !== null && !look.isFetching ? (
-            <p className="text-sm text-destructive">{describeError(failure)}</p>
-          ) : null}
+        <div className="flex flex-col">
+          <p className="text-xs text-muted-foreground">{SIGHT_NOTE}</p>
+          {/* Always there, so a screen reader hears what comes; spaced only when it holds something. */}
+          <div role="status" className="flex flex-col gap-3 [&:not(:empty)]:mt-3">
+            {look.isFetching ? (
+              <p className="text-sm text-muted-foreground">{SIGHT_ASKING}</p>
+            ) : null}
+            {failure !== null && !look.isFetching ? (
+              <p className="text-sm text-destructive">{describeError(failure)}</p>
+            ) : null}
+          </div>
         </div>
         {look.data === undefined || failure !== null ? null : <Answer answer={look.data} />}
       </Card>
