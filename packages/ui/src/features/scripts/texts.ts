@@ -27,6 +27,11 @@ export function undeclaredReply(key: string): string {
   return `The mode declares no reply pattern "${key}": the script would stop on this line.`;
 }
 
+/** `sign.write` with a key the mode doesn't declare. */
+export function undeclaredSign(key: string): string {
+  return `The mode declares no sign "${key}": the script would stop on this line.`;
+}
+
 /** The check's state under the editor. */
 export const NO_PROBLEMS = "No problems found.";
 /** One problem, at its place when it has one. */
@@ -50,5 +55,21 @@ export function problemCount(count: number): string {
 export function couldntCheck(reason: string): string {
   return `Couldn't check the script: ${reason} The server checks it again at save.`;
 }
+/** Why a script needs script API level 2, in words (Plan.md P16.15). */
+export const NEED_TEXT = {
+  menus: "uses screens and the inventory",
+  signs: "answers sign editors",
+  clock: "uses the clock",
+  bot_name: "reads the bot's name",
+} as const;
+/** A mode that declares signs needs level 2 whatever its text uses. */
+export const DECLARES_SIGNS = "declares signs";
+/** The level the server would stamp the script with, and why. */
+export function levelLine(level: number, reasons: readonly string[]): string {
+  return level < 2
+    ? "Script API level 1: every agent that runs scripts runs it."
+    : `Script API level 2 (${reasons.join(", ")}): only agents of this release or newer run it. A bot on an older agent waits until its agent is updated.`;
+}
+
 /** The server's own finding at save. */
 export const SERVER_FOUND = "The server refused it at save:";

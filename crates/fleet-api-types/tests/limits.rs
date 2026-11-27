@@ -50,6 +50,7 @@ fn expected() -> BTreeMap<&'static str, u64> {
         ("SCRIPT_MAX_MESSAGES", usize(Script::MAX_MESSAGES)),
         ("SCRIPT_MAX_VALUES", usize(MessageTemplate::MAX_VALUES)),
         ("SCRIPT_MAX_PATTERNS", usize(ChatPatterns::MAX_PATTERNS)),
+        ("SCRIPT_MAX_SIGNS", usize(Script::MAX_SIGNS)),
         ("SCRIPT_MAX_CAPTURES", usize(ChatPattern::MAX_CAPTURES)),
         ("STEP_UP_WINDOW_SECS", STEP_UP_WINDOW.as_secs()),
         ("MC_NAME_MIN_CHARS", usize(McUsername::MIN_LEN)),

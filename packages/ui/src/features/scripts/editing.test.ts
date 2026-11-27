@@ -94,9 +94,20 @@ describe("the checks the compiler can't make", () => {
     expect(messages(text)).toEqual([]);
   });
 
+  it("finds a sign sign.write names that the mode doesn't declare, only when it knows its signs", () => {
+    const text = 'fn on_sign_open() { sign.write("prise", #{}); sign.write(key, #{}); }';
+
+    expect(messages(text, { signs: ["price"], messages: [], replies: [] })).toEqual([
+      ['"prise"', 'The mode declares no sign "prise": the script would stop on this line.'],
+    ]);
+    expect(messages(text, { signs: ["prise"], messages: [], replies: [] })).toEqual([]);
+    expect(messages(text, { messages: [], replies: [] })).toEqual([]);
+  });
+
   it("passes every example of the reference with its mode's declarations", () => {
     for (const { id, script } of SCRIPT_API.examples) {
       const declared = {
+        signs: script.signs.map((sign) => sign.key),
         messages: script.messages.map((message) => message.key),
         replies: script.patterns.filter((one) => one.when === "reply").map((one) => one.key),
       };
@@ -155,14 +166,39 @@ describe("completion", () => {
     );
   });
 
-  it("offers the game objects for a name, or when asked", () => {
+  it("offers the game objects for a name, or when asked: never a map a script reads", () => {
     const names = SCRIPT_API.objects
-      .map((object) => object.name)
-      .filter((name) => name !== "input" && name !== "hooks");
+      .filter((object) => object.kind === "game")
+      .map((object) => object.name);
 
     expect(labelsAt("fn on_join(first) { k| }")).toEqual(names);
     expect(labelsAt("fn on_join(first) { | }", true)).toEqual(names);
     expect(labelsAt("fn on_join(first) { | }")).toBeNull();
+    expect(names).toEqual(expect.arrayContaining(["inventory", "menu", "sign", "clock"]));
+    for (const value of ["slot", "time", "input", "hooks"]) {
+      expect(names).not.toContain(value);
+    }
+  });
+
+  it("offers a map's keys after a call that answers one, as the description says (Plan.md P16.16)", () => {
+    const slot = objectNamed("slot")?.members.map((member) => member.name);
+    const time = objectNamed("time")?.members.map((member) => member.name);
+
+    expect(labelsAt("fn on_menu_open() { menu.slot(13).| }")).toEqual(slot);
+    expect(labelsAt("fn on_menu_open() { menu.at(menu.rows - 1, 4).| }")).toEqual(slot);
+    expect(labelsAt('fn on_join(first) { inventory.find("minecraft:potion").co| }')).toEqual(slot);
+    expect(labelsAt('fn on_join(first) { clock.local("Europe/Berlin").| }')).toEqual(time);
+    expect(time).toEqual(expect.arrayContaining(["hour", "minute", "weekday"]));
+    expect(labelsAt("fn on_join(first) { bot.name.| }")).toBeNull();
+    expect(labelsAt("fn on_join(first) { menu.close().| }")).toBeNull();
+  });
+
+  it("knows level 2's names: bot.name, the menu's, the sign's and the five hooks", () => {
+    expect(labelsAt("fn on_join(first) { bot.| }")).toContain("name");
+    expect(labelsAt("fn on_join(first) { sign.| }")).toContain("write");
+    expect(labelsAt("fn on_menu_close() { }\non_|")).toEqual(
+      expect.arrayContaining(["on_menu_open", "on_menu_update", "on_click", "on_sign_open"]),
+    );
   });
 });
 

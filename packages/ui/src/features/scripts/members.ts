@@ -6,10 +6,19 @@
 import type { ScriptApiObject } from "../../generated/ScriptApiObject";
 import { memberOf, objectNamed } from "./api";
 import { type Token, tokens } from "./rhai";
-import { notAMethod, notCalled, undeclaredMessage, undeclaredReply, unknownMember } from "./texts";
+import {
+  notAMethod,
+  notCalled,
+  undeclaredMessage,
+  undeclaredReply,
+  undeclaredSign,
+  unknownMember,
+} from "./texts";
 
-/** What the mode declares, for a script's `chat.send` and `chat.expect`. */
+/** What the mode declares, for a script's `chat.send`, `chat.expect` and `sign.write`. */
 export interface Declared {
+  /** The declared signs' keys; none known when it's left out. */
+  readonly signs?: readonly string[];
   /** The declared messages' keys. */
   readonly messages: readonly string[];
   /** The keys of the patterns declared as replies. */
@@ -55,6 +64,15 @@ function chatProblem(
   return null;
 }
 
+/** A declared sign's key `sign.write` names, if the mode doesn't declare it. */
+function signProblem(argument: Token | undefined, signs: readonly string[]): MemberProblem | null {
+  const key = literal(argument);
+  if (argument === undefined || key === undefined || signs.includes(key)) {
+    return null;
+  }
+  return { from: argument.from, to: argument.to, message: undeclaredSign(key) };
+}
+
 /** The problem of the chain that starts at `all[start]`, a game object, if it has one. */
 function chainProblem(
   all: readonly Token[],
@@ -81,6 +99,9 @@ function chainProblem(
     }
     if (object.name === "chat" && declared !== undefined) {
       return chatProblem(member.name, all[at + 3], declared);
+    }
+    if (object.name === "sign" && member.name === "write" && declared?.signs !== undefined) {
+      return signProblem(all[at + 3], declared.signs);
     }
     const next = member.object === undefined ? undefined : objectNamed(member.object);
     if (next === undefined) {

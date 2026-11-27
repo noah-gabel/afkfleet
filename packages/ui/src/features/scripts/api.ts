@@ -7,8 +7,6 @@ import type { ScriptApiObject } from "../../generated/ScriptApiObject";
 import type { ScriptExample } from "../../generated/ScriptExample";
 import { SCRIPT_API } from "../../generated/script-api";
 
-/** The description's name for what a key or a mouse button is. */
-const INPUT = "input";
 /** The description's name for the functions a script defines. */
 const HOOKS = "hooks";
 
@@ -17,11 +15,13 @@ const OBJECTS: ReadonlyMap<string, ScriptApiObject> = new Map(
   SCRIPT_API.objects.map((object) => [object.name, object]),
 );
 
-/** The game objects' names: what a script names to reach the game (`keys`, `bot`, …). */
+/**
+ * The game objects' names: what a script names to reach the game (`keys`, `bot`, `menu`, …).
+ * Never a value: `input`, or a map a script reads (`slot`, `time`), whose name a script may give
+ * a variable of its own (Plan.md P16.16).
+ */
 export const GAME_OBJECTS: ReadonlySet<string> = new Set(
-  SCRIPT_API.objects
-    .map((object) => object.name)
-    .filter((name) => name !== INPUT && name !== HOOKS),
+  SCRIPT_API.objects.filter((object) => object.kind === "game").map((object) => object.name),
 );
 
 /** The game object or the API object `name`, if the description has it. */
@@ -40,19 +40,32 @@ export const HOOK_MEMBERS: readonly ScriptApiMember[] = OBJECTS.get(HOOKS)?.memb
 /** The reference's examples, as starter templates. */
 export const EXAMPLES: readonly ScriptExample[] = SCRIPT_API.examples;
 
+/** A name in a chain, and whether it's called: `menu.slot(13)` is `menu`, then `slot` called. */
+export interface ChainPart {
+  readonly name: string;
+  readonly called: boolean;
+}
+
 /**
- * Where a chain of names leads: `["keys", "forward"]` is an `input`; a chain whose first name is
- * no game object, or that passes through a value, leads nowhere the description knows.
+ * Where a chain leads: `keys.forward` is an `input`, `menu.slot(13)` a `slot` map,
+ * `clock.local(zone)` a `time` map. A chain whose first name is no game object, or that passes
+ * through a value the description doesn't name, leads nowhere it knows.
  */
-export function resolveChain(names: readonly string[]): ScriptApiObject | undefined {
-  const [first, ...rest] = names;
-  if (first === undefined || !GAME_OBJECTS.has(first)) {
+export function resolveCalls(parts: readonly ChainPart[]): ScriptApiObject | undefined {
+  const [first, ...rest] = parts;
+  if (first === undefined || first.called || !GAME_OBJECTS.has(first.name)) {
     return undefined;
   }
-  let object = OBJECTS.get(first);
-  for (const name of rest) {
-    const member = object === undefined ? undefined : memberOf(object, name);
-    object = member?.object === undefined ? undefined : OBJECTS.get(member.object);
+  let object = OBJECTS.get(first.name);
+  for (const part of rest) {
+    const member = object === undefined ? undefined : memberOf(object, part.name);
+    const next = part.called ? member?.answers : member?.object;
+    object = next === undefined ? undefined : OBJECTS.get(next);
   }
   return object;
+}
+
+/** Where a chain of names, none called, leads: `["keys", "forward"]` is an `input`. */
+export function resolveChain(names: readonly string[]): ScriptApiObject | undefined {
+  return resolveCalls(names.map((name) => ({ name, called: false })));
 }

@@ -50,6 +50,11 @@ export function shownScript(request: ModeScriptRequest): ModeScript {
     })),
     patterns: request.patterns,
     any_time_chat: request.patterns.some((pattern) => pattern.when === "any_time"),
+    signs: (request.signs ?? []).map((sign) => ({
+      key: sign.key,
+      lines: sign.lines,
+      values: sign.values,
+    })),
   };
 }
 
@@ -133,7 +138,7 @@ export async function atMode(
         return updated(target, request);
       },
       updateModeWithCommands: async (target, request) => updated(target, request),
-      checkScript: async () => ({}),
+      checkScript: async () => ({ level: 1, needs: [] }),
       ...options.handlers,
     },
     options.user === undefined ? {} : { user: options.user },

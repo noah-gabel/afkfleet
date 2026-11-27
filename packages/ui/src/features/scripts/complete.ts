@@ -1,6 +1,8 @@
 // The editor's completion (Plan.md P15.25; ADR-0045), from the generated description alone:
 // - after a game object's dot, its members, each with its signature and summary; a method's
 //   parameters become fields to fill in (`hold_for(ms)`), and after `keys.forward.` an input's;
+// - after a call that answers a map, the map's keys: `menu.slot(13).` offers a slot's fields,
+//   `clock.local(zone).` a time's (Plan.md P16.16);
 // - `on_` at a line's start, or after `fn `, offers each hook with its parameters and an empty
 //   body (`fn on_join(first) { }`);
 // - any other name offers the game objects.
@@ -14,17 +16,22 @@ import {
 import { syntaxTree } from "@codemirror/language";
 
 import type { ScriptApiMember } from "../../generated/ScriptApiMember";
-import { GAME_OBJECTS, HOOK_MEMBERS, objectNamed, resolveChain } from "./api";
+import { type ChainPart, GAME_OBJECTS, HOOK_MEMBERS, objectNamed, resolveCalls } from "./api";
 
-/** The chain of names before a dot at the end of `before`: `keys.forward.` is `["keys", "forward"]`. */
-function chainBefore(before: string): string[] | null {
-  const match = /((?:[A-Za-z_]\w*\s*\.\s*)+)$/.exec(before);
-  return match?.[1] === undefined
-    ? null
-    : match[1]
-        .split(".")
-        .map((name) => name.trim())
-        .filter((name) => name !== "");
+/**
+ * The chain before a dot at the end of `before`: `keys.forward.` is `keys`, `forward`;
+ * `menu.slot(13).` is `menu`, then `slot` called. A call's arguments may hold no parentheses of
+ * their own.
+ */
+function chainBefore(before: string): ChainPart[] | null {
+  const match = /((?:[A-Za-z_]\w*\s*(?:\([^()]*\)\s*)?\.\s*)+)$/.exec(before);
+  if (match?.[1] === undefined) {
+    return null;
+  }
+  return [...match[1].matchAll(/([A-Za-z_]\w*)\s*(\([^()]*\))?\s*\./g)].map((part) => ({
+    name: part[1] ?? "",
+    called: part[2] !== undefined,
+  }));
 }
 
 /** A snippet's text for `signature`: each parameter a field, `hold_for(${ms})`. */
@@ -75,7 +82,7 @@ export function scriptCompletions(context: CompletionContext): CompletionResult 
 
   const chain = chainBefore(before);
   if (chain !== null) {
-    const object = resolveChain(chain);
+    const object = resolveCalls(chain);
     return object === undefined
       ? null
       : { from, options: object.members.map(memberOption), validFor: /^\w*$/ };

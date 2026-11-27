@@ -83,6 +83,7 @@ describe("a new scripted mode (ADR-0036, D15)", () => {
           block_guard: ["minecraft:cobblestone"],
           messages: [],
           patterns: [],
+          signs: [],
         },
       },
     ]);
@@ -120,6 +121,49 @@ describe("a new scripted mode (ADR-0036, D15)", () => {
     await waitFor(() =>
       expect(marks().map(([, message]) => message)).toContain("`kees` isn't defined"),
     );
+  });
+});
+
+describe("a mode's declared signs (Plan.md P16.15; ADR-0036, M16)", () => {
+  /** A new scripted mode with one sign whose first line is `line`, saved. */
+  async function saveWithSign(line: string, createMode?: () => Promise<never>) {
+    const { app } = await atMode("new", {
+      user: ADMIN,
+      handlers: createMode === undefined ? {} : { createMode },
+    });
+    await app.user.selectOptions(screen.getByRole("combobox", { name: "What it runs" }), "script");
+    await fill(app, screen.getByRole("textbox", { name: "Name" }), "Signer");
+    await app.user.click(screen.getByRole("button", { name: "Add sign" }));
+    const sign = screen.getByRole("group", { name: "Sign 1" });
+    await fill(app, within(sign).getByRole("textbox", { name: "Key" }), "confirm");
+    await fill(app, within(sign).getByRole("textbox", { name: "Line 1" }), line);
+    await fill(app, within(sign).getByRole("textbox", { name: "Line 3" }), "afk");
+    await app.user.click(saveButton());
+    return app;
+  }
+
+  it("sends each sign with its lines, the empty ones at its end left out", async () => {
+    const app = await saveWithSign("yes");
+
+    await waitFor(() => expect(calls(app, "createMode")).toHaveLength(1));
+    expect(calls(app, "createMode")[0]?.[0]).toMatchObject({
+      script: { signs: [{ key: "confirm", lines: ["yes", "", "afk"], values: [] }] },
+    });
+  });
+
+  it("shows the server's refusal of a sign's line at that line", async () => {
+    const answer = refusal(422, "validation", {
+      fields: [{ path: "script.signs[0].lines[0]", message: "names no value" }],
+    });
+
+    await saveWithSign("{price}", async () => {
+      throw answer;
+    });
+
+    const sign = screen.getByRole("group", { name: "Sign 1" });
+    const line = within(sign).getByRole("textbox", { name: "Line 1" });
+    await waitFor(() => expect(line.getAttribute("aria-invalid")).toBe("true"));
+    expect(within(sign).getByText("names no value")).toBeTruthy();
   });
 });
 

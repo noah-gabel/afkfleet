@@ -427,6 +427,15 @@ const modeScriptRequest = z.strictObject({
       captures: z.array(modeCaptureRequest),
     }),
   ),
+  // Always sent, `[]` for none: a save without it is an older app's, which the server refuses for a
+  // mode that declares signs (Plan.md P16.15).
+  signs: z.array(
+    z.strictObject({
+      key: z.string(),
+      lines: z.array(z.string()),
+      values: z.array(modeValueRequest),
+    }),
+  ),
 });
 
 export const createModeRequest = z.strictObject({

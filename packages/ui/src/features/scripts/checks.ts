@@ -16,6 +16,7 @@ import { toApiError } from "../../api/ApiError";
 import { describeError } from "../../api/describeError";
 import type { FieldError } from "../../generated/FieldError";
 import type { ScriptCheck } from "../../generated/ScriptCheck";
+import type { ScriptNeed } from "../../generated/ScriptNeed";
 import { type Declared, memberProblems } from "./members";
 import { markAt, offsetOf, placeOf } from "./places";
 
@@ -32,7 +33,14 @@ export interface Mark {
 /** Where the check stands, as the editor shows it. */
 export type CheckStatus =
   | { readonly kind: "checking" }
-  | { readonly kind: "done"; readonly marks: readonly Mark[] }
+  | {
+      readonly kind: "done";
+      readonly marks: readonly Mark[];
+      /** The level the server would stamp the text with, 1 or 2; 0 with a problem. */
+      readonly level: number;
+      /** Why the text needs level 2 (Plan.md P16.15). */
+      readonly needs: readonly ScriptNeed[];
+    }
   | { readonly kind: "failed"; readonly reason: string; readonly marks: readonly Mark[] };
 
 /** `marks` on `doc` as the editor lists them, in the text's order. */
@@ -106,7 +114,12 @@ export function checkSource(deps: CheckDeps): (view: EditorView) => Promise<Diag
     try {
       const answer = await deps.check(state.doc.toString());
       const marks = findings(state, deps, answer.problem);
-      deps.report({ kind: "done", marks: listed(state.doc, marks) });
+      deps.report({
+        kind: "done",
+        marks: listed(state.doc, marks),
+        level: answer.level,
+        needs: answer.needs,
+      });
       return marks;
     } catch (rejection) {
       const marks = findings(state, deps, undefined);

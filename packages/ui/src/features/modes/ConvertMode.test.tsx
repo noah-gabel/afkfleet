@@ -145,6 +145,7 @@ describe("Convert to script (P15.27)", () => {
           block_guard: [],
           messages: [{ key: "respawn_1", text: "/login hunter2", values: [] }],
           patterns: [],
+          signs: [],
         },
       },
     ]);
