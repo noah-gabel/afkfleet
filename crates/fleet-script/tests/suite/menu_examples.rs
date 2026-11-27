@@ -306,6 +306,111 @@ fn the_auction_scan_confirms_nothing_but_the_listing_it_picked() {
     assert_eq!(world.log, ["Not the listing picked; nothing bought."]);
 }
 
+/// `seen` as the plugin redraws it in place, `listings` in its slots: the
+/// same screen in its next state.
+fn redrawn(seen: &Screen, listings: &[(usize, Item)]) -> Screen {
+    let mut items: Vec<(usize, Item)> = listings.to_vec();
+    items.extend((45..54).map(|slot| (slot, named("minecraft:black_stained_glass_pane", " "))));
+    items.push((47, named("minecraft:emerald", "Create")));
+    Screen::new(
+        seen.id(),
+        StateId::new(seen.state().get() + 1),
+        ScreenKind::Generic9x6,
+        "Auction House",
+        laid_out(54, &items),
+        None,
+    )
+}
+
+/// The other player bought the listing the scan picked between its scan
+/// and its click (found live, Plan.md P16.17): the plugin refuses the
+/// click and draws the next listing in its slot. The scan logs the miss,
+/// closes, never clicks the listing now in that slot, and scans again.
+#[test]
+fn the_auction_scan_logs_a_listing_gone_before_its_click_and_never_clicks_another_in_its_place() {
+    let mut gate = ClickGate::new();
+    let mut world = World::new();
+    let mut instance = instance_of("auction_scan");
+    world.run(&mut instance, &HookEvent::Join { first: true });
+    world.pass(&mut instance, Duration::from_secs(30));
+    let house = auction_house(
+        &mut gate,
+        &[
+            (0, listing("minecraft:diamond", 1400, "Seller2")),
+            (1, listing("minecraft:diamond", 1450, "Seller3")),
+        ],
+    );
+    let from = world.performed.len();
+    show(&mut world, &mut instance, house.clone());
+    let picked = clicks(&world, from);
+
+    world.menu.screen = Some(redrawn(
+        &house,
+        &[(0, listing("minecraft:diamond", 1450, "Seller3"))],
+    ));
+    world.run(&mut instance, &HookEvent::MenuUpdate);
+    answer(&mut world, &mut instance);
+    world.pass(&mut instance, Duration::from_secs(3));
+    let after = clicks(&world, from);
+    let closed = closes(&world, from);
+    world.menu.screen = None;
+    world.run(&mut instance, &HookEvent::MenuClose);
+    world.pass(&mut instance, Duration::from_secs(30));
+
+    assert_eq!(picked, [(0, ClickKind::Left)]);
+    assert_eq!(after, picked, "nothing clicked in its place");
+    assert_eq!(closed, 1);
+    assert_eq!(
+        world.log,
+        ["The listing for 1400.0 was gone before the click; nothing bought."]
+    );
+    assert_eq!(world.sent, ["/ah", "/ah"], "it scans again");
+}
+
+/// A confirm screen that comes after the scan gave up on its listing (a
+/// slow server) is closed, never confirmed.
+#[test]
+fn a_confirm_screen_the_scan_no_longer_waits_for_is_closed_unconfirmed() {
+    let mut gate = ClickGate::new();
+    let mut world = World::new();
+    let mut instance = instance_of("auction_scan");
+    world.run(&mut instance, &HookEvent::Join { first: true });
+    show(
+        &mut world,
+        &mut instance,
+        auction_house(
+            &mut gate,
+            &[(0, listing("minecraft:diamond", 900, "Seller1"))],
+        ),
+    );
+    answer(&mut world, &mut instance);
+    world.pass(&mut instance, Duration::from_secs(3));
+    world.menu.screen = None;
+    world.run(&mut instance, &HookEvent::MenuClose);
+    let from = world.performed.len();
+
+    show(
+        &mut world,
+        &mut instance,
+        confirm_screen(
+            &mut gate,
+            "Confirm Purchase",
+            listing("minecraft:diamond", 900, "Seller1"),
+        ),
+    );
+
+    assert_eq!(clicks(&world, from), []);
+    assert_eq!(closes(&world, from), 1);
+    assert_eq!(
+        world.log,
+        [
+            "The listing for 900.0 was gone before the click; nothing bought.",
+            "Not the listing picked; nothing bought."
+        ]
+    );
+    assert_eq!(instance.error(), None, "the script runs on");
+}
+
 // --- The farm that sells ---
 
 #[test]

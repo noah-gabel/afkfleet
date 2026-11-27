@@ -3,7 +3,9 @@
 // judged by what follows it, never by a click's fate: the plugin answers
 // every button "rejected" though it acted, so the diamonds in the inventory
 // say what was bought. Each Confirm Purchase screen is confirmed at most
-// once, and only for the listing picked, so no listing is bought twice.
+// once, and only for the listing picked, so no listing is bought twice. When
+// the listing picked is gone before its click, no Confirm Purchase opens: it
+// logs the miss and closes, and never clicks another listing in its place.
 fn on_join(first) {
     if first {
         state.bought = 0;
@@ -23,6 +25,8 @@ fn on_timer(name) {
         pick();
     } else if name == "confirm" {
         confirm();
+    } else if name == "no_confirm" {
+        no_confirm();
     }
 }
 
@@ -83,7 +87,20 @@ fn pick() {
         return;
     }
     state.wanted = #{ price: price, seller: seller_of(best) };
-    if !menu.click(best).ok {
+    if menu.click(best).ok {
+        // Confirm Purchase opens on the plugin's next tick, or never.
+        timer.after(3000, "no_confirm");
+    } else {
+        state.wanted = ();
+        menu.close();
+    }
+}
+
+// Still on the auction house 3 seconds after the click: the listing picked
+// was gone, and the plugin may have drawn another in its slot.
+fn no_confirm() {
+    if state.wanted != () && !state.confirmed && menu.open && menu.title == "Auction House" {
+        log.info(`The listing for ${state.wanted.price} was gone before the click; nothing bought.`);
         state.wanted = ();
         menu.close();
     }
@@ -91,11 +108,13 @@ fn pick() {
 
 // On Confirm Purchase: confirms only the listing picked, once.
 fn confirm() {
-    if !menu.open || menu.title != "Confirm Purchase" || state.wanted == () || state.confirmed {
+    if !menu.open || menu.title != "Confirm Purchase" || state.confirmed {
         return;
     }
     let button = menu.slot(11);
-    let same = menu.slot(13).id == "minecraft:diamond"
+    // A confirm it no longer waits for is no listing picked.
+    let same = state.wanted != ()
+        && menu.slot(13).id == "minecraft:diamond"
         && menu.lore_number(13, "Price") == state.wanted.price
         && menu.lore_has(13, state.wanted.seller);
     if !same || button.id != "minecraft:lime_stained_glass_pane" || button.name != "Confirm" {
