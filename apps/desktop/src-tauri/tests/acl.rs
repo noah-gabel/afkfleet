@@ -217,7 +217,7 @@ fn every_contract_command_passes_the_acl_and_answers_as_the_contract_says() {
             (_, _, answer) => panic!("{command}: unexpected answer {answer:?}"),
         }
     }
-    assert_eq!(entries.len(), 73);
+    assert_eq!(entries.len(), 74);
 }
 
 /// The version the contract's answers name. The TypeScript tests' fakes answer it; the

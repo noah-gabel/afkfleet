@@ -28,6 +28,7 @@ use fleet_api_types::app::{
 use fleet_api_types::audit::{AuditPage, AuditPageQuery};
 use fleet_api_types::auth::{LoginRequest, RegisterRequest, RegisterResponse, StepUpRequest};
 use fleet_api_types::bots::{BotModeRequest, BotPage, BotPatchRequest, BotResponse};
+use fleet_api_types::screen::BotScreenResponse;
 use fleet_api_types::chat::{
     ChatCommandRequest, ChatPage, ChatPageQuery, ChatSendRequest, ChatSendResponse,
 };
@@ -884,6 +885,16 @@ impl<F: StoreFactory> AppState<F> {
         validate(&query)?;
         let conn = self.conn.read().await;
         conn.client()?.chat(id, &query).await.map_err(error::client)
+    }
+
+    /// The `bot_screen` command: what the bot sees, asked of its agent
+    /// (Plan.md P16.20).
+    ///
+    /// # Errors
+    /// `no_server`, `no_session`, or `api` 404, 429 or 503 (`busy`).
+    pub async fn bot_screen(&self, id: BotId) -> Result<BotScreenResponse, CommandError> {
+        let conn = self.conn.read().await;
+        conn.client()?.bot_screen(id).await.map_err(error::client)
     }
 
     /// The `send_chat` command: a line for the bot to send, plain chat or a

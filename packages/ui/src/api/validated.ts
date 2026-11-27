@@ -142,6 +142,10 @@ export function validated(client: ApiClient): ApiClient {
       ]);
       return client.botChat(id, before, limit);
     },
+    botScreen: async (id) => {
+      checkAll(problems(schemas.id, id, "id"));
+      return client.botScreen(id);
+    },
     sendChat: async (id, request) => {
       checkAll([...problems(schemas.id, id, "id"), ...problems(schemas.chatSendRequest, request)]);
       return client.sendChat(id, request);

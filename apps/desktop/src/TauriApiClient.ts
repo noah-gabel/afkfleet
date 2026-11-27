@@ -18,6 +18,7 @@ import type { BotModeRequest } from "@afkfleet/ui/generated/BotModeRequest";
 import type { BotPage } from "@afkfleet/ui/generated/BotPage";
 import type { BotPatchRequest } from "@afkfleet/ui/generated/BotPatchRequest";
 import type { BotResponse } from "@afkfleet/ui/generated/BotResponse";
+import type { BotScreenResponse } from "@afkfleet/ui/generated/BotScreenResponse";
 import type { ChangeGrantRequest } from "@afkfleet/ui/generated/ChangeGrantRequest";
 import type { ChatCommandRequest } from "@afkfleet/ui/generated/ChatCommandRequest";
 import type { ChatPage } from "@afkfleet/ui/generated/ChatPage";
@@ -249,6 +250,10 @@ export class TauriApiClient implements ApiClient {
 
   botChat(id: string, before?: number, limit?: number): Promise<ChatPage> {
     return this.#call("bot_chat", { id, before, limit });
+  }
+
+  botScreen(id: string): Promise<BotScreenResponse> {
+    return this.#call("bot_screen", { id });
   }
 
   sendChat(id: string, request: ChatSendRequest): Promise<ChatSendResponse> {

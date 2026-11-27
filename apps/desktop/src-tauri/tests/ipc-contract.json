@@ -497,6 +497,13 @@
       "expect": { "error": "no_server" }
     },
     {
+      "command": "bot_screen",
+      "method": "botScreen",
+      "inputs": ["01900000-0000-7000-8000-00000000000b"],
+      "args": { "id": "01900000-0000-7000-8000-00000000000b" },
+      "expect": { "error": "no_server" }
+    },
+    {
       "command": "send_chat",
       "method": "sendChat",
       "inputs": ["01900000-0000-7000-8000-00000000000b", { "message": "hello" }],

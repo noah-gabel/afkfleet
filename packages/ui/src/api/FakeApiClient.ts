@@ -14,6 +14,7 @@ import type { BotModeRequest } from "../generated/BotModeRequest";
 import type { BotPage } from "../generated/BotPage";
 import type { BotPatchRequest } from "../generated/BotPatchRequest";
 import type { BotResponse } from "../generated/BotResponse";
+import type { BotScreenResponse } from "../generated/BotScreenResponse";
 import type { ChangeGrantRequest } from "../generated/ChangeGrantRequest";
 import type { ChatCommandRequest } from "../generated/ChatCommandRequest";
 import type { ChatPage } from "../generated/ChatPage";
@@ -242,6 +243,10 @@ export class FakeApiClient implements ApiClient {
 
   async botChat(id: string, before?: number, limit?: number): Promise<ChatPage> {
     return this.#handler("botChat", [id, before, limit])(id, before, limit);
+  }
+
+  async botScreen(id: string): Promise<BotScreenResponse> {
+    return this.#handler("botScreen", [id])(id);
   }
 
   async sendChat(id: string, request: ChatSendRequest): Promise<ChatSendResponse> {
