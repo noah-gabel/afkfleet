@@ -2,7 +2,8 @@
 # and on demand. They need Docker, take about ten minutes and contact Mojang's
 # session server, so they aren't a required check (ADR-0011). Since Phase 12 they
 # also build both production images, cold, for the stack's smoke tests and run
-# those and the SFTP account's test (ADR-0022, S19), hence the longer timeout.
+# those and the SFTP account's test (ADR-0022, S19), hence the longer timeout. Since
+# Phase 16 they also run the long run against the Paper harness, in parts (P16.18, ADR-0054).
 # Third-party actions are pinned to full commit SHAs (version in the comment), as
 # in ci.yml.
 name: Slow tests
@@ -40,3 +41,4 @@ jobs:
         with:
           tool: just@${{ env.JUST_VERSION }},cargo-nextest@0.9.146
       - run: just test-slow
+      - run: just long-run

@@ -18,6 +18,8 @@
 //!   waits.
 //! - [`paper`]: the Paper harness for the live trading cases, and the
 //!   records its plugin writes (Plan.md P16.17, P16.18).
+//! - [`trades`]: the long run's ledger: double buys, silent misses and
+//!   clicks onto another screen, counted from the harness's records.
 //! - [`world`]: all of them for one case.
 
 pub(crate) mod agent;
@@ -29,4 +31,5 @@ pub(crate) mod microsoft;
 pub(crate) mod paper;
 pub(crate) mod proxy;
 pub(crate) mod server;
+pub(crate) mod trades;
 pub(crate) mod world;

@@ -4,7 +4,7 @@
 // (ADR-0031): every profile ends a test after ten 60 s periods. The default profile's
 // setting is inherited by the others, and each says it again, so dropping one line can't
 // lift the limit for the profile CI runs. It also holds which profile runs which tests:
-// the load tests (P13.4) and the chaos tests (P13.5) only in their own.
+// the load tests (P13.4), the chaos tests (P13.5) and the long run (P16.18) only in their own.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -67,12 +67,13 @@ describe("profiles", () => {
 describe(".config/nextest.toml", () => {
   const tables = profiles(readFileSync(join(root, ".config", "nextest.toml"), "utf8"));
 
-  it("has the six profiles the recipes and CI run", () => {
+  it("has the seven profiles the recipes and CI run", () => {
     assert.deepEqual([...tables.keys()].sort(), [
       "chaos",
       "ci",
       "default",
       "load",
+      "long",
       "manual",
       "slow",
     ]);
@@ -86,15 +87,16 @@ describe(".config/nextest.toml", () => {
     }
   });
 
-  it("runs the load tests and the chaos tests each in their own profile and in no other", () => {
+  it("runs the load tests, the chaos tests and the long run each in their own profile and in no other", () => {
     const filter = (name) => tables.get(name).find((line) => line.startsWith("default-filter"));
 
     assert.equal(filter("load"), 'default-filter = "test(/(^|::)load_/)"');
     assert.equal(filter("chaos"), 'default-filter = "test(/(^|::)chaos_/)"');
+    assert.equal(filter("long"), 'default-filter = "test(/(^|::)long_/)"');
     for (const name of ["default", "ci"]) {
       assert.equal(
         filter(name),
-        'default-filter = "not test(/(^|::)(slow|manual|load|chaos)_/)"',
+        'default-filter = "not test(/(^|::)(slow|manual|load|chaos|long)_/)"',
         name,
       );
     }
