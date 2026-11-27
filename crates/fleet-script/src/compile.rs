@@ -3,7 +3,7 @@
 
 use std::sync::LazyLock;
 
-use fleet_core::script::{Hook, Script, ScriptApiLevel};
+use fleet_core::script::{Hook, Script, ScriptApiLevel, ScriptDraft};
 use fleet_core::text;
 use rhai::{AST, Dynamic, Engine, LexError, ParseError, ParseErrorType, Position, Scope};
 
@@ -143,6 +143,127 @@ pub fn compile(script: &Script) -> Result<Program, CompileError> {
         script: script.clone(),
         hooks,
     })
+}
+
+/// Why a script needs API level 2: what of level 2's it uses (Plan.md
+/// P16.15; ADR-0052, G1). The app says it in words beside the level, so
+/// an author knows the mode needs agents that run it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum LevelReason {
+    /// `inventory` or `menu`, or a hook of a screen's: `on_menu_open`,
+    /// `on_menu_update`, `on_menu_close` or `on_click`.
+    Menus,
+    /// `sign` or `on_sign_open`, or a declared sign.
+    Signs,
+    /// `clock`.
+    Clock,
+    /// `bot.name`.
+    BotName,
+}
+
+impl LevelReason {
+    /// Every reason, in the order a script's are listed.
+    pub const ALL: [Self; 4] = [Self::Menus, Self::Signs, Self::Clock, Self::BotName];
+
+    /// Its name: `menus`, `signs`, `clock`, `bot_name`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Menus => "menus",
+            Self::Signs => "signs",
+            Self::Clock => "clock",
+            Self::BotName => "bot_name",
+        }
+    }
+}
+
+/// A script compiled at the lowest API level that runs it, with why it
+/// needs that level: none at level 1.
+#[derive(Debug, Clone)]
+pub struct Leveled {
+    /// The program, whose script carries the level it was compiled at.
+    pub program: Program,
+    /// What of a newer level's the script uses, each once, in
+    /// [`LevelReason::ALL`]'s order.
+    pub reasons: Vec<LevelReason>,
+}
+
+/// Compiles `script` at the lowest API level, at or below its own, that
+/// runs it, and says why it needs that level (Plan.md P16.15; ADR-0052,
+/// G1): what the server stamps a mode with at save, and what the app's
+/// check shows while a script is typed.
+///
+/// A script of level 2 is tried at level 1 first, unless it declares signs
+/// or reads `bot.name`, which no compile finds: Rhai looks a member up when
+/// the line runs, so a level-1 script that reads it would stop there. A
+/// compile at level 1 that finds a name of level 2's (`NeedsLevel`) is
+/// done again at level 2; any other problem is the script's at level 1,
+/// found first in the text. At level 1 a name of level 2's is the
+/// script's own (`let menu = 1`), so such a script stays at level 1.
+///
+/// # Errors
+/// As [`compile`]'s, at the level the script is compiled at.
+pub fn compile_lowest(script: &Script) -> Result<Leveled, CompileError> {
+    let scanned = scan(script.source().as_str());
+    let declares_signs = !script.signs().is_empty();
+    if script.api() > ScriptApiLevel::V1 && !declares_signs && scanned.newer.bot_name.is_none() {
+        let lower = ScriptDraft {
+            api: ScriptApiLevel::V1.get(),
+            ..ScriptDraft::from(script.clone())
+        };
+        // Without signs, a script of level 2 is one of level 1 too.
+        if let Ok(lower) = Script::try_from(lower) {
+            match compile(&lower) {
+                Ok(program) => {
+                    return Ok(Leveled {
+                        program,
+                        reasons: Vec::new(),
+                    });
+                }
+                Err(error) if !matches!(error.kind, CompileErrorKind::NeedsLevel { .. }) => {
+                    return Err(error);
+                }
+                Err(_) => {}
+            }
+        }
+    }
+    let program = compile(script)?;
+    let reasons = if program.script().api() > ScriptApiLevel::V1 {
+        reasons(&program, &scanned, declares_signs)
+    } else {
+        Vec::new()
+    };
+    Ok(Leveled { program, reasons })
+}
+
+/// Why `program`, compiled at level 2, needs it: what `scanned` found of
+/// level 2's names, its hooks, and its declared signs.
+fn reasons(program: &Program, scanned: &Scanned, declares_signs: bool) -> Vec<LevelReason> {
+    let names = |objects: &[&str]| {
+        scanned
+            .newer
+            .objects
+            .iter()
+            .any(|object| objects.contains(object))
+    };
+    let hooks = |hooks: &[Hook]| hooks.iter().any(|hook| program.defines(*hook));
+    LevelReason::ALL
+        .into_iter()
+        .filter(|reason| match reason {
+            LevelReason::Menus => {
+                names(&["inventory", "menu"])
+                    || hooks(&[
+                        Hook::MenuOpen,
+                        Hook::MenuUpdate,
+                        Hook::MenuClose,
+                        Hook::Click,
+                    ])
+            }
+            LevelReason::Signs => declares_signs || names(&["sign"]) || hooks(&[Hook::SignOpen]),
+            LevelReason::Clock => names(&["clock"]),
+            LevelReason::BotName => scanned.newer.bot_name.is_some(),
+        })
+        .collect()
 }
 
 /// Checks every function of the program and says which hooks it defines.
