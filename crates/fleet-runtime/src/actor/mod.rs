@@ -46,14 +46,14 @@ use fleet_core::bot::{BotEvent, BotRules, BotSpec, BotState, DesiredRunState, Tr
 use fleet_core::chat::ChatFormats;
 use fleet_core::disconnect::DisconnectReason;
 use fleet_core::mc::{
-    CredentialError, MinecraftConnector, SessionCredentialProvider, SessionCredentials,
-    SessionEvent, SessionHandle as _,
+    CredentialError, MenuView, MinecraftConnector, SessionCredentialProvider, SessionCredentials,
+    SessionError, SessionEvent, SessionHandle as _,
 };
 use fleet_core::mode::ModeDefinition;
 use fleet_core::resilience::{CircuitBreaker, RetryPolicy};
 use fleet_core::script::Stopwatch;
 use rand::rngs::StdRng;
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task::{JoinError, JoinSet};
 use tokio::time::Sleep;
 use tokio::time::error::Elapsed;
@@ -69,6 +69,7 @@ use crate::chat::{ChatBucket, ChatQueue, ChatTickets};
 use crate::clock::RuntimeClock;
 use crate::config::RuntimeConfig;
 use crate::event::FleetEvent;
+use crate::look::{LOOK_TIMEOUT, LookError};
 use crate::metrics;
 use crate::script::{ScriptPrograms, ScriptSlot, ScriptTurns};
 use crate::snapshot::SnapshotPublisher;
@@ -238,6 +239,8 @@ pub struct BotActor<C: MinecraftConnector, P> {
     runners: JoinSet<()>,
     deliveries: JoinSet<()>,
     teardowns: JoinSet<u64>,
+    /// The look at what the bot sees, while one runs: at most one.
+    looks: JoinSet<()>,
 }
 
 impl<C: MinecraftConnector, P> fmt::Debug for BotActor<C, P> {
@@ -325,6 +328,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             runners: JoinSet::new(),
             deliveries: JoinSet::new(),
             teardowns: JoinSet::new(),
+            looks: JoinSet::new(),
             spec,
         };
         (actor, BotInbox::new(sender))
@@ -376,6 +380,14 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             }
             Some(done) = self.teardowns.join_next(), if !self.teardowns.is_empty() => {
                 finished(done, CrashedTask::Teardown, Input::TornDown)
+            }
+            Some(done) = self.looks.join_next(), if !self.looks.is_empty() => {
+                // A look's panic loses only its answer, which then says the
+                // bot isn't in a world: nothing of the bot's own depends on it.
+                if done.as_ref().is_err_and(JoinError::is_panic) {
+                    warn!("a look at the bot's screen panicked");
+                }
+                Input::Nothing
             }
             command = self.inbox.recv() => command.map_or(Input::End, Input::Command),
             answer = wait(&mut self.session_request), if self.session_request.is_some() => {
@@ -457,7 +469,46 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
                 // An error only means the caller stopped waiting.
                 let _ = reply.send(self.queue.send(message));
             }
+            BotCommand::Look { reply } => self.look(reply),
         }
+    }
+
+    /// Looks at what the bot sees, in a task of its own, one at a time
+    /// (Plan.md P16.20): never waiting on the session here.
+    fn look(&mut self, reply: oneshot::Sender<Result<MenuView, LookError>>) {
+        // An error of a send only means the caller stopped waiting.
+        let Some(session) = self.session.as_ref() else {
+            let _ = reply.send(Err(LookError::NotOnline));
+            return;
+        };
+        if !self.looks.is_empty() {
+            let _ = reply.send(Err(LookError::Busy));
+            return;
+        }
+        let handle = session.handle.clone();
+        // Ends with its session, and within LOOK_TIMEOUT in any case.
+        let token = session.token.child_token();
+        self.looks.spawn(
+            async move {
+                let observed = tokio::select! {
+                    // Both cancel-safe: whichever loses is dropped whole.
+                    () = token.cancelled() => Ok(Err(SessionError::Closed)),
+                    observed = tokio::time::timeout(LOOK_TIMEOUT, handle.observe()) => observed,
+                };
+                let seen = match observed {
+                    Ok(Ok(observation)) => Ok(observation.menu),
+                    Ok(Err(SessionError::NotInWorld | SessionError::Closed)) => {
+                        Err(LookError::NotOnline)
+                    }
+                    Ok(Err(SessionError::QueueFull | SessionError::ChatUnavailable)) => {
+                        Err(LookError::Busy)
+                    }
+                    Ok(Err(SessionError::TimedOut)) | Err(_) => Err(LookError::TimedOut),
+                };
+                let _ = reply.send(seen);
+            }
+            .instrument(self.span.clone()),
+        );
     }
 
     /// Stop, then Start: a new run. While Connecting or Online that goes

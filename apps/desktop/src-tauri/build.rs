@@ -64,6 +64,7 @@ const COMMANDS: &[&str] = &[
     "reset_bot",
     "resume_bot",
     "bot_chat",
+    "bot_screen",
     "send_chat",
     "send_command",
     "server_settings",

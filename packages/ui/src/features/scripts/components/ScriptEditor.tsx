@@ -23,12 +23,22 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useApiClient } from "../../../api/context";
 import type { FieldError } from "../../../generated/FieldError";
+import type { ScriptNeed } from "../../../generated/ScriptNeed";
 import type { CheckDeps, CheckStatus, Mark } from "../checks";
 import { setServerProblem } from "../checks";
 import type { Declared } from "../members";
 import { offsetOf } from "../places";
 import { scriptExtensions } from "../setup";
-import { couldntCheck, KEYBOARD_HINT, NO_PROBLEMS, problemAt, problemCount } from "../texts";
+import {
+  couldntCheck,
+  DECLARES_SIGNS,
+  KEYBOARD_HINT,
+  levelLine,
+  NEED_TEXT,
+  NO_PROBLEMS,
+  problemAt,
+  problemCount,
+} from "../texts";
 
 /** A place in the text, from 1, as the engine counts. */
 export interface Place {
@@ -67,19 +77,60 @@ function MarkList({ marks, onPick }: { marks: readonly Mark[]; onPick: (mark: Ma
   );
 }
 
-/** What the check says under the editor. */
-function Status({ status, onPick }: { status: CheckStatus | null; onPick: (mark: Mark) => void }) {
+/**
+ * The level the server would stamp the script with, and why, in words: what the check found in
+ * the text, and the mode's declared signs (Plan.md P16.15). None while the text has a problem.
+ */
+function Level({
+  level,
+  needs,
+  signs,
+}: {
+  level: number;
+  needs: readonly ScriptNeed[];
+  signs: boolean;
+}) {
+  if (level === 0) {
+    return null;
+  }
+  // A text that answers sign editors says so already; declared signs are a reason of their own
+  // only for a text that doesn't.
+  const reasons = [
+    ...needs.map((need) => NEED_TEXT[need] ?? need),
+    ...(signs && !needs.includes("signs") ? [DECLARES_SIGNS] : []),
+  ];
+  return (
+    <p className="text-sm text-muted-foreground" data-testid="script-level">
+      {levelLine(signs ? 2 : level, reasons)}
+    </p>
+  );
+}
+
+/** What the check says under the editor; `signs` says whether the mode declares signs. */
+function Status({
+  status,
+  signs,
+  onPick,
+}: {
+  status: CheckStatus | null;
+  signs: boolean;
+  onPick: (mark: Mark) => void;
+}) {
   if (status === null) {
     return null;
   }
   switch (status.kind) {
     case "done":
       return status.marks.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{NO_PROBLEMS}</p>
+        <>
+          <p className="text-sm text-muted-foreground">{NO_PROBLEMS}</p>
+          <Level level={status.level} needs={status.needs} signs={signs} />
+        </>
       ) : (
         <>
           <p className="text-sm text-destructive">{problemCount(status.marks.length)}</p>
           <MarkList marks={status.marks} onPick={onPick} />
+          <Level level={status.level} needs={status.needs} signs={signs} />
         </>
       );
     case "failed":
@@ -193,7 +244,7 @@ export function ScriptEditor(props: ScriptEditorProps) {
       />
       <p className="text-sm text-muted-foreground">{KEYBOARD_HINT}</p>
       <div role="status" className="flex flex-col gap-1">
-        <Status status={status} onPick={goTo} />
+        <Status status={status} signs={(props.declared?.signs ?? []).length > 0} onPick={goTo} />
       </div>
     </div>
   );

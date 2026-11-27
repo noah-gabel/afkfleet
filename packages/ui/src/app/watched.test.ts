@@ -188,7 +188,7 @@ describe("watched", () => {
         if (answer === "no_session") {
           throw fakeApiError("no_session");
         }
-        return {};
+        return { level: 1, needs: [] };
       },
     });
     stores.session.getState().signIn();

@@ -4,6 +4,12 @@
 //! the first raw string is (`#"…"#`, which a script may not hold:
 //! ADR-0040's amendment, A6).
 //!
+//! It also notes what of API level 2's the text names (ADR-0052, G1): a
+//! level-2 object named as one, never as a member, a map's key, a call of
+//! a function or its definition; and `bot.name`, which no compile finds,
+//! since Rhai looks a member up when the line runs. Inside a text's
+//! `${ … }` too.
+//!
 //! It judges nothing but a raw string, so it may run before Rhai has
 //! parsed the text; it skips comments and texts as Rhai's tokenizer does
 //! and reads names, braces and parentheses. A place it can't find is `None`,
@@ -14,6 +20,7 @@
 
 use core::cell::Cell;
 
+use crate::api::OBJECTS_2;
 use crate::error::SourcePosition;
 
 /// A function as its definition is written.
@@ -36,6 +43,16 @@ pub(crate) struct Binding {
     pub(crate) at: SourcePosition,
 }
 
+/// What of API level 2's a text names.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Newer {
+    /// The level-2 objects it names as objects, each once, in the order
+    /// first named.
+    pub(crate) objects: Vec<&'static str>,
+    /// Where `bot.name` is first read.
+    pub(crate) bot_name: Option<SourcePosition>,
+}
+
 /// What a scan found.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Scanned {
@@ -47,6 +64,8 @@ pub(crate) struct Scanned {
     pub(crate) outside: Option<SourcePosition>,
     /// The first raw string, wherever it is.
     pub(crate) raw_string: Option<SourcePosition>,
+    /// What of API level 2's it names.
+    pub(crate) newer: Newer,
 }
 
 impl Scanned {
@@ -79,6 +98,13 @@ struct Lexer<'a> {
     nesting: u32,
     /// Where the first raw string is, even one inside a text's `${ … }`.
     raw_string: &'a Cell<Option<SourcePosition>>,
+    /// The three tokens before the next one, the last nearest.
+    before: [Option<Token>; 3],
+    /// A level-2 object's name waiting for the token after it, which says
+    /// whether it's named as the object.
+    pending: Option<&'static str>,
+    /// What of API level 2's the tokens so far name.
+    newer: Newer,
 }
 
 /// How deep texts in backticks may hold code that holds such a text. Rhai
@@ -219,10 +245,44 @@ impl Lexer<'_> {
     }
 }
 
-impl Iterator for Lexer<'_> {
-    type Item = (Token, SourcePosition);
+impl Lexer<'_> {
+    /// Notes what of API level 2's `next` and the tokens before it name;
+    /// `None` is the text's end.
+    fn note(&mut self, next: Option<&(Token, SourcePosition)>) {
+        if let Some(object) = self.pending.take() {
+            // A call of a function of the script's own, or a map's key.
+            let own = matches!(next, Some((Token::Symbol('(' | ':'), _)));
+            if !own && !self.newer.objects.contains(&object) {
+                self.newer.objects.push(object);
+            }
+        }
+        let Some((token, at)) = next else {
+            return;
+        };
+        let is =
+            |token: &Option<Token>, word: &str| matches!(token, Some(Token::Word(w)) if w == word);
+        let symbol =
+            |token: &Option<Token>, c: char| matches!(token, Some(Token::Symbol(s)) if *s == c);
+        let [third, second, last] = &self.before;
+        if let Token::Word(word) = token {
+            let after_dot = symbol(last, '.');
+            if word == "name" && after_dot && self.newer.bot_name.is_none() {
+                // `bot.name` and `bot?.name`.
+                let of_bot = is(second, "bot") || (symbol(second, '?') && is(third, "bot"));
+                if of_bot {
+                    self.newer.bot_name = Some(*at);
+                }
+            }
+            let named = !after_dot && !is(last, "fn");
+            if named {
+                self.pending = OBJECTS_2.iter().copied().find(|object| object == word);
+            }
+        }
+        self.before = [second.clone(), last.clone(), Some(token.clone())];
+    }
 
-    fn next(&mut self) -> Option<(Token, SourcePosition)> {
+    /// The next token, unnoted.
+    fn read(&mut self) -> Option<(Token, SourcePosition)> {
         loop {
             let c = self.bump()?;
             let at = SourcePosition {
@@ -268,17 +328,30 @@ impl Iterator for Lexer<'_> {
     }
 }
 
+impl Iterator for Lexer<'_> {
+    type Item = (Token, SourcePosition);
+
+    fn next(&mut self) -> Option<(Token, SourcePosition)> {
+        let next = self.read();
+        self.note(next.as_ref());
+        next
+    }
+}
+
 /// Scans a script's text.
 pub(crate) fn scan(source: &str) -> Scanned {
     let raw_string = Cell::new(None);
-    let mut tokens = Lexer {
+    let mut lexer = Lexer {
         chars: source.chars().peekable(),
         line: 1,
         column: 0,
         nesting: 0,
         raw_string: &raw_string,
-    }
-    .peekable();
+        before: [None, None, None],
+        pending: None,
+        newer: Newer::default(),
+    };
+    let mut tokens = (&mut lexer).peekable();
     let mut scanned = Scanned::default();
     // How many braces are open. Functions are defined at none.
     let mut depth = 0_u32;
@@ -337,6 +410,7 @@ pub(crate) fn scan(source: &str) -> Scanned {
     }
     drop(tokens);
     scanned.raw_string = raw_string.get();
+    scanned.newer = lexer.newer;
     scanned
 }
 

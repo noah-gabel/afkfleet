@@ -16,6 +16,8 @@ Moved from `CLAUDE.md` word for word; it points here.
 **The gRPC port:**
 - Its listener bounds each connection's age itself: 80 s, lifted only while an agent's welcomed stream lives. fleet-server's `clippy.toml` bans tonic's server-wide `max_connection_age`, its grace and `Server::timeout`, which would cut agents' streams (ADR-0019, U7).
 - An agent's identity comes only from its client certificate's fingerprint and SAN, never from what it sends (ADR-0019).
+- **An agent ends its stream at a message it can't read,** so a message an older release doesn't know goes only to a stream whose hello names a script API level that knows it: a scripted mode through `registry::needs`, a question what a bot sees only at level 2 (`read_screen`). Its bot answers the older agent's reason at once, never by waiting (ADR-0036, D13; ADR-0053, E5).
+- **A question to an agent** (what a bot sees) waits on the stream that holds the bot, bounded in number per stream, and only that stream's answer settles it; the stream's end drops it, and the caller's wait has its own bound (ADR-0053, E5).
 
 Server module layout:
 ```

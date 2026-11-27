@@ -36,6 +36,10 @@ pub struct Member {
     /// `keys`' keys and `mouse`'s buttons is an `input`, so the editor knows
     /// what follows `keys.forward.` (Plan.md P15.25).
     pub object: Option<&'static str>,
+    /// The map of this API that a method answers, when it answers one:
+    /// `menu.slot(n)` answers a `slot`, so the editor knows what follows
+    /// `menu.slot(3).` (Plan.md P16.16).
+    pub answers: Option<&'static str>,
     /// The API level it came with: a script below it can't use it
     /// (ADR-0036, D13).
     pub level: ScriptApiLevel,
@@ -49,6 +53,26 @@ impl Member {
             ..self
         }
     }
+
+    /// The method, answering a `map` of this API.
+    const fn answering(self, map: &'static str) -> Self {
+        Self {
+            answers: Some(map),
+            ..self
+        }
+    }
+}
+
+/// What an object of the API is to a script (Plan.md P16.16).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ObjectKind {
+    /// A name a script uses to reach the game: `keys`, `menu`.
+    Game,
+    /// What a member is or a method answers, never named by a script:
+    /// `input` (what `keys.forward` is), a `slot` map, a `time` map.
+    Value,
+    /// The functions a script defines.
+    Hooks,
 }
 
 /// An object of the API, or a group of names that belong together.
@@ -67,6 +91,29 @@ pub struct Object {
     pub level: ScriptApiLevel,
 }
 
+impl Object {
+    /// What it is to a script: the functions it defines, a value a member
+    /// is or a method answers, or a name it uses to reach the game.
+    #[must_use]
+    pub fn kind(&self) -> ObjectKind {
+        let all = |kind: MemberKind| {
+            !self.members.is_empty() && self.members.iter().all(|member| member.kind == kind)
+        };
+        if all(MemberKind::Hook) {
+            return ObjectKind::Hooks;
+        }
+        let answered = API
+            .iter()
+            .flat_map(|object| object.members)
+            .any(|member| member.object == Some(self.name) || member.answers == Some(self.name));
+        if answered || all(MemberKind::Field) {
+            ObjectKind::Value
+        } else {
+            ObjectKind::Game
+        }
+    }
+}
+
 const fn method(name: &'static str, signature: &'static str, summary: &'static str) -> Member {
     Member {
         name,
@@ -74,6 +121,7 @@ const fn method(name: &'static str, signature: &'static str, summary: &'static s
         signature,
         summary,
         object: None,
+        answers: None,
         level: ScriptApiLevel::V1,
     }
 }
@@ -85,6 +133,7 @@ const fn property(name: &'static str, summary: &'static str) -> Member {
         signature: name,
         summary,
         object: None,
+        answers: None,
         level: ScriptApiLevel::V1,
     }
 }
@@ -97,6 +146,7 @@ const fn field(name: &'static str, summary: &'static str) -> Member {
         signature: name,
         summary,
         object: None,
+        answers: None,
         level: ScriptApiLevel::V2,
     }
 }
@@ -109,6 +159,7 @@ const fn input(name: &'static str, summary: &'static str) -> Member {
         signature: name,
         summary,
         object: Some("input"),
+        answers: None,
         level: ScriptApiLevel::V1,
     }
 }
@@ -120,6 +171,7 @@ const fn hook(hook: Hook, signature: &'static str, summary: &'static str) -> Mem
         signature,
         summary,
         object: None,
+        answers: None,
         level: hook.level(),
     }
 }
@@ -348,7 +400,9 @@ pub const API: &[Object] = &[
                 "Every slot's number: the armour 5 to 8, the main inventory 9 to 35, the hotbar 36 to 44, the offhand 45.",
             )
             .v2(),
-            method("slot", "slot(n)", "Slot n, or ().").v2(),
+            method("slot", "slot(n)", "Slot n, or ().")
+                .v2()
+                .answering("slot"),
             method(
                 "lore_has",
                 "lore_has(slot, text)",
@@ -366,7 +420,8 @@ pub const API: &[Object] = &[
                 "find(id)",
                 "The first slot that holds the item id, or ().",
             )
-            .v2(),
+            .v2()
+            .answering("slot"),
             method(
                 "count",
                 "count(id)",
@@ -378,7 +433,8 @@ pub const API: &[Object] = &[
                 "hotbar(n)",
                 "The hotbar slot of number key n, 1 to 9, or ().",
             )
-            .v2(),
+            .v2()
+            .answering("slot"),
             method(
                 "open",
                 "open()",
@@ -421,19 +477,22 @@ pub const API: &[Object] = &[
                 "slot(n)",
                 "Slot n of the screen, its own or the bot's, or ().",
             )
-            .v2(),
+            .v2()
+            .answering("slot"),
             method(
                 "at",
                 "at(row, column)",
                 "A grid's slot by its row and column, from 0 at the top left, or ().",
             )
-            .v2(),
+            .v2()
+            .answering("slot"),
             method(
                 "find",
                 "find(id)",
                 "The first of the screen's own slots that holds the item id, or ().",
             )
-            .v2(),
+            .v2()
+            .answering("slot"),
             property("cursor", "The item on the cursor, or ().").v2(),
             property("trades", "How many trades a merchant offers; 0 for any other screen.").v2(),
             method(
@@ -550,7 +609,8 @@ pub const API: &[Object] = &[
             "local(zone)",
             "The time in an IANA time zone such as \"Europe/Berlin\", summer time included: a time map.",
         )
-        .v2()],
+        .v2()
+        .answering("time")],
         level: ScriptApiLevel::V2,
     },
     Object {
@@ -824,6 +884,55 @@ mod tests {
         expected.extend([("mouse", "left"), ("mouse", "right")]);
 
         assert_eq!(inputs, expected);
+    }
+
+    /// What the editor completes after `menu.slot(3).` (Plan.md P16.16).
+    #[test]
+    fn a_method_that_answers_a_map_names_one_of_the_apis_maps() {
+        let answering: Vec<(&str, &str, &str)> = API
+            .iter()
+            .flat_map(|object| {
+                object.members.iter().filter_map(move |member| {
+                    member.answers.map(|map| (object.name, member.name, map))
+                })
+            })
+            .collect();
+
+        assert_eq!(
+            answering,
+            [
+                ("inventory", "slot", "slot"),
+                ("inventory", "find", "slot"),
+                ("inventory", "hotbar", "slot"),
+                ("menu", "slot", "slot"),
+                ("menu", "at", "slot"),
+                ("menu", "find", "slot"),
+                ("clock", "local", "time"),
+            ]
+        );
+        for (object, member, map) in answering {
+            let answered = API.iter().find(|known| known.name == map).unwrap();
+            assert_eq!(answered.kind(), ObjectKind::Value, "{object}.{member}");
+        }
+    }
+
+    #[test]
+    fn every_object_has_its_kind() {
+        let kinds: Vec<(&str, ObjectKind)> = API
+            .iter()
+            .map(|object| (object.name, object.kind()))
+            .filter(|(_, kind)| *kind != ObjectKind::Game)
+            .collect();
+
+        assert_eq!(
+            kinds,
+            [
+                ("input", ObjectKind::Value),
+                ("slot", ObjectKind::Value),
+                ("time", ObjectKind::Value),
+                ("hooks", ObjectKind::Hooks),
+            ]
+        );
     }
 
     #[test]

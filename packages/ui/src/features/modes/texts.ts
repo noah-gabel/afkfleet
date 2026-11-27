@@ -321,6 +321,26 @@ export const PLACES_FIELD = "Decimals";
 export const WORDS_FIELD = "Words";
 export const WORDS_HINT = "Separated by spaces.";
 
+/** The declared signs (API level 2; ADR-0036, M16). */
+export const SIGNS_HEADING = "Signs";
+/** Under the signs' heading: what a sign is for, and its level. */
+export const SIGNS_HINT =
+  'What the script may write on a sign the server opens, by its key: sign.write("key", #{ name: value }). Up to four lines; a line may start with a value, or be empty. Needs agents of this release or newer.';
+/** The button that adds a sign. */
+export const ADD_SIGN = "Add sign";
+/** A sign's group, from 1. */
+export function signLabel(n: number): string {
+  return `Sign ${n}`;
+}
+/** The button that removes sign `n`. */
+export function removeSign(n: number): string {
+  return `Remove sign ${n}`;
+}
+/** A sign's line `n`, from 1. */
+export function signLineField(n: number): string {
+  return `Line ${n}`;
+}
+
 /** The declared chat patterns (ADR-0037). */
 export const PATTERNS_HEADING = "Chat patterns";
 export const PATTERNS_HINT =

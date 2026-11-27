@@ -216,6 +216,17 @@ pub enum ScriptLog {
     },
 }
 
+/// What `reason` means, as a part of a sentence: the reference's line,
+/// lowercase and without its full stop.
+fn meaning(reason: Refusal) -> String {
+    let meaning = fleet_script::reason_meaning(reason);
+    let meaning = meaning.strip_suffix('.').unwrap_or(meaning);
+    let mut chars = meaning.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_lowercase().chain(chars).collect()
+    })
+}
+
 impl ScriptLog {
     /// The line as the agent reports it to the server (Plan.md P15.23):
     /// its kind, and the agent's wording, cleaned and bounded.
@@ -257,7 +268,12 @@ impl ScriptLog {
                 (LogKind::Matched, text)
             }
             Self::Refused(refused) => (
-                LogKind::Refused,
+                // A refusal in a screen or a sign editor is a click line
+                // (Plan.md P16.16); `refused` is chat's.
+                match refused.asked {
+                    Asked::Click | Asked::Screen | Asked::Sign => LogKind::Click,
+                    _ => LogKind::Refused,
+                },
                 format!(
                     "{} refused ({}), {} time{}",
                     refused.asked.as_str(),
@@ -267,8 +283,8 @@ impl ScriptLog {
                 ),
             ),
             Self::StopFailed(error) => (LogKind::StopFailed, format!("on_stop failed: {error}")),
-            // A kind of its own comes with the app's trade lines (Plan.md
-            // P16.16); until then these go as refusals.
+            // A click line (Plan.md P16.16): what was clicked and its fate,
+            // in words a person reads, with the fate's name a script reads.
             Self::Menu {
                 asked,
                 slot,
@@ -282,11 +298,23 @@ impl ScriptLog {
                     _ => "closing the screen or opening the inventory".to_owned(),
                 };
                 let text = if *sent {
-                    format!("{what} came back {reason}")
+                    match reason {
+                        Refusal::Unclear => {
+                            format!("{what} may have worked: the script checks the next screen")
+                        }
+                        Refusal::Rejected => format!("{what} was put back by the server"),
+                        Refusal::Replaced => format!(
+                            "{what} wasn't answered: its screen closed or another opened first"
+                        ),
+                        Refusal::Unanswered => format!(
+                            "{what} got no answer from the server, which may or may not have done it"
+                        ),
+                        _ => format!("{what} came back"),
+                    }
                 } else {
-                    format!("{what} wasn't sent: {reason}")
+                    format!("{what} wasn't sent: {}", meaning(*reason))
                 };
-                (LogKind::Refused, text)
+                (LogKind::Click, format!("{text} ({reason})"))
             }
         };
         ScriptLogLine {
@@ -553,6 +581,89 @@ mod tests {
                 .as_str()
                 .starts_with("on_stop failed: ")
         );
+    }
+
+    /// A screen's line as the agent reports it.
+    fn menu_line(asked: Asked, slot: Option<u16>, reason: Refusal, sent: bool) -> ScriptLogLine {
+        ScriptLog::Menu {
+            asked,
+            slot,
+            reason,
+            sent,
+        }
+        .report()
+    }
+
+    #[rstest::rstest]
+    #[case::unclear(
+        Refusal::Unclear,
+        "a click on slot 13 may have worked: the script checks the next screen (unclear)"
+    )]
+    #[case::rejected(
+        Refusal::Rejected,
+        "a click on slot 13 was put back by the server (rejected)"
+    )]
+    #[case::replaced(
+        Refusal::Replaced,
+        "a click on slot 13 wasn't answered: its screen closed or another opened first (replaced)"
+    )]
+    #[case::unanswered(
+        Refusal::Unanswered,
+        "a click on slot 13 got no answer from the server, which may or may not have done it (unanswered)"
+    )]
+    fn a_clicks_fate_is_a_click_line_in_words_with_its_name(
+        #[case] fate: Refusal,
+        #[case] text: &str,
+    ) {
+        let line = menu_line(Asked::Click, Some(13), fate, true);
+
+        assert_eq!((line.kind, line.text.as_str()), (LogKind::Click, text));
+    }
+
+    #[test]
+    fn what_wasnt_sent_is_a_click_line_with_the_reasons_meaning() {
+        let cases = [
+            (
+                menu_line(Asked::Click, Some(0), Refusal::SlotChanged, false),
+                "a click on slot 0 wasn't sent: a slot the click touches holds something else than the hook or the slot saw (slot_changed)",
+            ),
+            (
+                menu_line(Asked::Click, None, Refusal::NoMenu, false),
+                "a screen's button, trade or name wasn't sent: no screen is open (no_menu)",
+            ),
+            (
+                menu_line(Asked::Sign, None, Refusal::NoSign, false),
+                "the sign's answer wasn't sent: no sign editor waits for an answer (no_sign)",
+            ),
+            (
+                menu_line(Asked::Screen, None, Refusal::NotInWorld, false),
+                "closing the screen or opening the inventory wasn't sent: the bot is between worlds, or its session is ending (not_in_world)",
+            ),
+        ];
+
+        for (line, text) in cases {
+            assert_eq!((line.kind, line.text.as_str()), (LogKind::Click, text));
+        }
+    }
+
+    #[test]
+    fn a_hooks_refusal_in_a_screen_is_a_click_line_and_chats_stays_a_refusal() {
+        let refused = |asked| {
+            ScriptLog::Refused(Refused {
+                asked,
+                reason: Refusal::TooSoon,
+                times: 2,
+            })
+            .report()
+            .kind
+        };
+
+        for asked in [Asked::Click, Asked::Screen, Asked::Sign] {
+            assert_eq!(refused(asked), LogKind::Click, "{asked:?}");
+        }
+        for asked in [Asked::Send, Asked::Expect] {
+            assert_eq!(refused(asked), LogKind::Refused, "{asked:?}");
+        }
     }
 
     #[test]

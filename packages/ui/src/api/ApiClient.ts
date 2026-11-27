@@ -14,6 +14,7 @@ import type { BotModeRequest } from "../generated/BotModeRequest";
 import type { BotPage } from "../generated/BotPage";
 import type { BotPatchRequest } from "../generated/BotPatchRequest";
 import type { BotResponse } from "../generated/BotResponse";
+import type { BotScreenResponse } from "../generated/BotScreenResponse";
 import type { ChangeGrantRequest } from "../generated/ChangeGrantRequest";
 import type { ChatCommandRequest } from "../generated/ChatCommandRequest";
 import type { ChatPage } from "../generated/ChatPage";
@@ -185,6 +186,12 @@ export interface ApiClient {
   /** A page of the bot's chat, newest first, older than the line `before` (P11.3). */
   botChat(id: string, before?: number, limit?: number): Promise<ChatPage>;
   /**
+   * What the bot sees, asked of its agent (Plan.md P16.20): its screen or its inventory, each slot
+   * as a script names it; or why that can't be said. Each call asks the agent and spends the
+   * caller's own limit, so it's read on demand.
+   */
+  botScreen(id: string): Promise<BotScreenResponse>;
+  /**
    * Has the bot send a line (Control): plain chat or a command on the server's allowlist.
    * A manager's command off it is 403 `command_needs_step_up`, for `sendCommand` (S4). A
    * typed command may hold a password, so this is always a direct call (U34).
@@ -323,6 +330,7 @@ export const API_METHODS = [
   "resetBot",
   "resumeBot",
   "botChat",
+  "botScreen",
   "sendChat",
   "sendCommand",
   "serverSettings",

@@ -8,7 +8,7 @@ use fleet_core::chat::ChatMessage;
 use fleet_core::id::{AgentId, BotId, ChatRequestId};
 use fleet_core::mc::SessionCredentials;
 
-use super::{SessionRequestId, bots_from_wire, request_number};
+use super::{ScreenRequest, SessionRequestId, bots_from_wire, request_number};
 use crate::convert::{
     chat_message_from_wire, enum_from_wire, id_from_wire, id_to_wire, required, session_from_wire,
     session_to_wire,
@@ -43,6 +43,9 @@ pub enum ServerMessage {
     /// A user's restart, reset or resume of a bot the agent runs, acted on
     /// once and never answered (ADR-0019, S49).
     Lifecycle(LifecycleCommand),
+    /// A user asks what a bot sees (Plan.md P16.20). The server sends it
+    /// only to an agent whose hello says it runs script API level 2.
+    ReadScreen(ScreenRequest),
 }
 
 /// The answer to a hello the server accepts.
@@ -235,6 +238,7 @@ impl TryFrom<ServerMessage> for wire::ServerMessage {
                 }
                 .into(),
             }),
+            ServerMessage::ReadScreen(request) => Msg::ScreenRequest(request.into()),
         };
         Ok(Self { msg: Some(msg) })
     }
@@ -306,6 +310,7 @@ impl TryFrom<wire::ServerMessage> for ServerMessage {
                     },
                 })
             }
+            Msg::ScreenRequest(request) => Self::ReadScreen(request.try_into()?),
         })
     }
 }

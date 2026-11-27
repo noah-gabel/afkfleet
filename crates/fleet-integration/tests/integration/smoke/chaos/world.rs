@@ -107,7 +107,7 @@ const BACKUPS_CAP: &str = "16m";
 /// The agent of the last release, which every agent of this one must
 /// stand beside until it's updated (Plan.md P15.29): the image the release
 /// published, pinned by its index digest.
-pub(crate) const LAST_RELEASE_AGENT: &str = "ghcr.io/noah-gabel/afkfleet-agent:0.1.3@sha256:2bf28e7e7be52d8fdf19a2debb6d46c228d8ee0e2e09ffa2c8e7a9034c98ef93";
+pub(crate) const LAST_RELEASE_AGENT: &str = "ghcr.io/noah-gabel/afkfleet-agent:0.2.1@sha256:1978a000e3cc3b3585dec2719ae0f9fdb228a4304c4c121d8e485454295c6ce3";
 
 /// The compose file a chaos stack adds to the production ones; see the
 /// [module docs](self).

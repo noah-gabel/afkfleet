@@ -22,6 +22,7 @@ import {
   SCRIPT_MAX_CAPTURES,
   SCRIPT_MAX_MESSAGES,
   SCRIPT_MAX_PATTERNS,
+  SCRIPT_MAX_SIGNS,
   SCRIPT_MAX_VALUES,
 } from "../../../api/limits";
 import { FormField } from "../../../components/FormField";
@@ -39,6 +40,7 @@ import {
   newCapture,
   newMessage,
   newPattern,
+  newSign,
   newValue,
   PATTERN_WHENS,
   scriptValuesOf,
@@ -49,6 +51,7 @@ import {
   ADD_CAPTURE,
   ADD_MESSAGE,
   ADD_PATTERN,
+  ADD_SIGN,
   ADD_VALUE,
   ANY_TIME_WARNING,
   atMost,
@@ -80,11 +83,16 @@ import {
   removeCapture,
   removeMessage,
   removePattern,
+  removeSign,
   removeValue,
   SAFETY_HEADING,
   SAFETY_HINT,
   SCRIPT_HEADING,
   SCRIPT_HINT,
+  SIGNS_HEADING,
+  SIGNS_HINT,
+  signLabel,
+  signLineField,
   TEMPLATE_FIELD,
   TEMPLATE_HINT,
   TEMPLATE_NONE,
@@ -285,11 +293,11 @@ function ScriptCard({
 }: Part & { templates: boolean; serverProblem: FieldError | null; focusAt: Place | null }) {
   const pickId = useId();
   const [picked, setPicked] = useState("");
-  const [messages, patterns] = useWatch({
+  const [messages, patterns, signs] = useWatch({
     control: form.control,
-    name: ["script.messages", "script.patterns"],
+    name: ["script.messages", "script.patterns", "script.signs"],
   });
-  const declared = declaredOf({ ...form.getValues("script"), messages, patterns });
+  const declared = declaredOf({ ...form.getValues("script"), messages, patterns, signs });
 
   /** Replaces the body with the picked example's, as an edit. */
   function applyExample(): void {
@@ -425,7 +433,9 @@ function ValueFields({
   form,
   view,
   path,
-}: Part & { path: `script.messages.${number}.values.${number}` }) {
+}: Part & {
+  path: `script.messages.${number}.values.${number}` | `script.signs.${number}.values.${number}`;
+}) {
   const type = useWatch({ control: form.control, name: `${path}.type` });
   return (
     <div className="grid gap-3 @min-[40rem]/content:grid-cols-2">
@@ -535,6 +545,87 @@ function MessagesCard({ form, view }: Part) {
         what="messages"
         label={ADD_MESSAGE}
         onAdd={() => messages.append(newMessage())}
+      />
+    </Card>
+  );
+}
+
+/** A declared sign: its key, its four lines, its values. */
+function SignItem({ form, view, index, onRemove }: Part & { index: number; onRemove: () => void }) {
+  const values = useFieldArray({ control: form.control, name: `script.signs.${index}.values` });
+  const full = values.fields.length >= SCRIPT_MAX_VALUES;
+  return (
+    <Item
+      label={signLabel(index + 1)}
+      remove={removeSign(index + 1)}
+      view={view}
+      onRemove={onRemove}
+    >
+      <TextField
+        form={form}
+        view={view}
+        name={`script.signs.${index}.key`}
+        label={KEY_FIELD}
+        mono
+      />
+      <div className="grid gap-3 @min-[40rem]/content:grid-cols-2">
+        {([0, 1, 2, 3] as const).map((line) => (
+          <TextField
+            key={line}
+            form={form}
+            view={view}
+            name={`script.signs.${index}.lines.${line}`}
+            label={signLineField(line + 1)}
+            mono
+          />
+        ))}
+      </div>
+      <p className="text-sm font-semibold">{VALUES_HEADING}</p>
+      {values.fields.map((field, v) => (
+        <Item
+          key={field.id}
+          label={valueLabel(v + 1)}
+          remove={removeValue(v + 1)}
+          view={view}
+          onRemove={() => values.remove(v)}
+        >
+          <ValueFields form={form} view={view} path={`script.signs.${index}.values.${v}`} />
+        </Item>
+      ))}
+      <Add
+        view={view}
+        full={full}
+        max={SCRIPT_MAX_VALUES}
+        what="values"
+        label={ADD_VALUE}
+        onAdd={() => values.append(newValue())}
+      />
+    </Item>
+  );
+}
+
+/** The declared signs (API level 2). */
+function SignsCard({ form, view }: Part) {
+  const signs = useFieldArray({ control: form.control, name: "script.signs" });
+  const full = signs.fields.length >= SCRIPT_MAX_SIGNS;
+  return (
+    <Card heading={SIGNS_HEADING} hint={SIGNS_HINT}>
+      {signs.fields.map((field, s) => (
+        <SignItem
+          key={field.id}
+          form={form}
+          view={view}
+          index={s}
+          onRemove={() => signs.remove(s)}
+        />
+      ))}
+      <Add
+        view={view}
+        full={full}
+        max={SCRIPT_MAX_SIGNS}
+        what="signs"
+        label={ADD_SIGN}
+        onAdd={() => signs.append(newSign())}
       />
     </Card>
   );
@@ -704,6 +795,7 @@ export function ScriptSections({
       />
       <SafetyCard form={form} view={view} />
       <MessagesCard form={form} view={view} />
+      <SignsCard form={form} view={view} />
       <PatternsCard form={form} view={view} />
     </>
   );

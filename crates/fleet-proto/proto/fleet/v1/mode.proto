@@ -35,6 +35,19 @@ message Script {
   repeated DeclaredMessage messages = 6;
   // The chat lines the script reads, at most 8.
   repeated ChatPattern patterns = 7;
+  // The signs the script may write, at most 16: API level 2 (ADR-0036, M16).
+  repeated DeclaredSign signs = 8;
+}
+
+// A sign a scripted mode declares: the only text its script can write on a
+// sign the server opens (ADR-0036, M16).
+message DeclaredSign {
+  // The key a script names it by.
+  string key = 1;
+  // One to four lines, top first, each with a `{name}` where a value goes.
+  repeated string lines = 2;
+  // The values the lines hold, all of them together.
+  repeated DeclaredValue values = 3;
 }
 
 // A message a scripted mode declares: the only text its script can send.

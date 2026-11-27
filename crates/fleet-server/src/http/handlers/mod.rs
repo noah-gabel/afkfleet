@@ -51,6 +51,7 @@ pub(super) mod me;
 pub(super) mod metrics;
 pub(super) mod mfa;
 pub(super) mod modes;
+pub(super) mod screen;
 pub(super) mod server_settings;
 pub(super) mod users;
 

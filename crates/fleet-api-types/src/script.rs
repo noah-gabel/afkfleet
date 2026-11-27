@@ -26,6 +26,7 @@
 
 use core::fmt;
 
+use fleet_core::script::menu::{SignDraft, SignTemplateError};
 use fleet_core::script::{BlockGuardError, Ident, Identifier, Word};
 use fleet_core::script::{
     CaptureDraft, CaptureKind, ChatPatternsError, DecimalMark, Hook, LogKind, MessageDraft,
@@ -91,6 +92,30 @@ pub struct ModeScriptRequest {
     pub messages: Vec<ModeMessageRequest>,
     /// The server's chat lines the script reads, at most 8.
     pub patterns: Vec<ModePatternRequest>,
+    /// The signs the script may write, at most 16: API level 2 (ADR-0036,
+    /// M16). This app always sends it, `[]` for none. An app of the last
+    /// release leaves it out, and an edit without it of a mode that
+    /// declares signs is refused: that app doesn't show them, and would
+    /// lose them (Plan.md P16.15).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[schema(nullable = false)]
+    pub signs: Option<Vec<ModeSignRequest>>,
+}
+
+/// A sign a scripted mode declares, in a request (ADR-0036, M16).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ModeSignRequest {
+    /// The key a script writes it by: 1 to 32 letters, digits and `_`.
+    #[schema(schema_with = BoundedText::<SCRIPT_KEY_MAX_CHARS>::schema)]
+    pub key: String,
+    /// One to four lines, top first, each with a `{name}` where a value
+    /// goes; a line may start with a value, and may be empty.
+    #[schema(schema_with = lines_schema)]
+    pub lines: Vec<String>,
+    /// The values the lines hold, at most 8 for the whole sign.
+    pub values: Vec<ModeValueRequest>,
 }
 
 /// A message a scripted mode declares, in a request.
@@ -513,18 +538,38 @@ impl ModeScriptRequest {
                 })
             })
             .collect::<Result<_, ScriptFieldError>>()?;
+        let signs = self
+            .signs
+            .iter()
+            .flatten()
+            .enumerate()
+            .map(|(s, sign)| {
+                let values = sign
+                    .values
+                    .iter()
+                    .enumerate()
+                    .map(|(v, value)| value_draft(&format!("script.signs[{s}].values[{v}]"), value))
+                    .collect::<Result<_, _>>()?;
+                Ok(SignDraft {
+                    key: sign.key.clone(),
+                    lines: sign.lines.clone(),
+                    values,
+                })
+            })
+            .collect::<Result<_, ScriptFieldError>>()?;
         Script::try_from(ScriptDraft {
-            // Level 1 until the server stamps the level a script needs, with
-            // the wire at level 2 (Plan.md P16.15): a mode saved now never
-            // keeps an agent from Phase 15 from running it.
-            api: ScriptApiLevel::V1.get(),
+            // The newest level, which takes every declaration: the server
+            // compiles the script at the lowest level that runs it and
+            // stamps that one (Plan.md P16.15), so a mode that needs only
+            // level 1 still runs on an agent of the last release.
+            api: ScriptApiLevel::NEWEST.get(),
             source: self.source.clone(),
             leash: self.leash,
             tool_guard: self.tool_guard,
             block_guard: self.block_guard.clone(),
             messages,
             patterns,
-            signs: Vec::new(),
+            signs,
         })
         .map_err(script_rule)
     }
@@ -676,14 +721,10 @@ fn script_rule(error: ScriptError) -> ScriptFieldError {
             ScriptFieldError::at(format!("script.messages[{message}].key"), error)
         }
         ScriptError::Pattern { pattern, reason } => pattern_rule(pattern, reason),
-        // A body declares no signs until the wire and the server take them
-        // (Plan.md P16.15); their places are named all the same.
         ScriptError::TooManySigns { .. } | ScriptError::SignsNeedLevel2 => {
             ScriptFieldError::at("script.signs", error)
         }
-        ScriptError::Sign { sign, reason } => {
-            ScriptFieldError::at(format!("script.signs[{sign}]"), reason)
-        }
+        ScriptError::Sign { sign, reason } => sign_rule(sign, reason),
         ScriptError::DuplicateSign { sign } => {
             ScriptFieldError::at(format!("script.signs[{sign}].key"), error)
         }
@@ -719,6 +760,33 @@ fn message_rule(message: usize, reason: TemplateError) -> ScriptFieldError {
         | TemplateError::Repeated { position } => at(".text").column_of(position),
         TemplateError::Empty | TemplateError::StartsWithValue | TemplateError::TooLong { .. } => {
             at(".text")
+        }
+    }
+}
+
+/// Where a declared sign broke a rule: a line's own rule at that line, with
+/// the column of a place in it; a value's at that value, as a message's.
+fn sign_rule(sign: usize, reason: SignTemplateError) -> ScriptFieldError {
+    let base = format!("script.signs[{sign}]");
+    let at = |field: &str| ScriptFieldError::at(format!("{base}{field}"), reason);
+    let line = |line: usize| at(&format!(".lines[{line}]"));
+    match reason {
+        SignTemplateError::Key(_) => at(".key"),
+        SignTemplateError::Lines { .. } | SignTemplateError::Empty => at(".lines"),
+        SignTemplateError::ForbiddenChar { line: l, position }
+        | SignTemplateError::Brace { line: l, position }
+        | SignTemplateError::Undeclared { line: l, position }
+        | SignTemplateError::Repeated { line: l, position } => line(l).column_of(position),
+        SignTemplateError::TooLong { line: l, .. } => line(l),
+        SignTemplateError::Unused { value } => at(&format!(".values[{value}].name")),
+        SignTemplateError::Values(values) => {
+            let message = message_rule(0, values);
+            // The values' rules, as a message's: their place under the sign.
+            ScriptFieldError {
+                path: message.path.replacen("script.messages[0]", &base, 1),
+                message: SignTemplateError::Values(values).to_string(),
+                ..message
+            }
         }
     }
 }
@@ -822,6 +890,28 @@ pub struct ModeScript {
     /// to its own command: the riskier kind, which the app marks (ADR-0037,
     /// C5).
     pub any_time_chat: bool,
+    /// The signs the script may write (API level 2).
+    // Always sent, so required in the schema; an answer from a server older
+    // than this app, without it, reads as none.
+    #[serde(default)]
+    #[schema(required = true)]
+    pub signs: Vec<ModeSign>,
+}
+
+/// A declared sign as its viewer sees it: a sign's line is never a command,
+/// so every viewer sees it whole.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
+pub struct ModeSign {
+    /// Its key.
+    #[ts(type = "string")]
+    #[schema(schema_with = BoundedText::<SCRIPT_KEY_MAX_CHARS>::schema)]
+    pub key: BoundedText<SCRIPT_KEY_MAX_CHARS>,
+    /// Its lines, top first.
+    #[ts(as = "Vec<String>")]
+    #[schema(schema_with = lines_schema)]
+    pub lines: Vec<BoundedText<SCRIPT_TEXT_MAX_CHARS>>,
+    /// Its values.
+    pub values: Vec<ModeValue>,
 }
 
 /// A declared message as its viewer may see it.
@@ -960,6 +1050,19 @@ impl ModeScript {
                 .collect(),
             patterns: draft.patterns.iter().map(shown_pattern).collect(),
             any_time_chat,
+            signs: draft
+                .signs
+                .iter()
+                .map(|sign| ModeSign {
+                    key: BoundedText::new(&sign.key),
+                    lines: sign
+                        .lines
+                        .iter()
+                        .map(|line| BoundedText::new(line))
+                        .collect(),
+                    values: sign.values.iter().map(shown_value).collect(),
+                })
+                .collect(),
         }
     }
 }
@@ -1321,6 +1424,10 @@ pub enum ScriptLogKind {
     Refused,
     /// `on_stop` failed.
     StopFailed,
+    /// Something the script did in a screen or a sign editor didn't go as
+    /// asked: a click, a button, a trade, a name, a close or a sign's answer
+    /// that wasn't sent, or whose fate wasn't `ok` (API level 2).
+    Click,
 }
 
 impl OpenEnum for ScriptLogKind {
@@ -1334,6 +1441,7 @@ impl OpenEnum for ScriptLogKind {
         Self::Matched,
         Self::Refused,
         Self::StopFailed,
+        Self::Click,
     ];
 
     fn as_str(self) -> &'static str {
@@ -1347,6 +1455,7 @@ impl OpenEnum for ScriptLogKind {
             Self::Matched => "matched",
             Self::Refused => "refused",
             Self::StopFailed => "stop_failed",
+            Self::Click => "click",
         }
     }
 }
@@ -1376,6 +1485,7 @@ impl From<&CoreLogLine> for ScriptLogLine {
             LogKind::Matched => ScriptLogKind::Matched,
             LogKind::Refused => ScriptLogKind::Refused,
             LogKind::StopFailed => ScriptLogKind::StopFailed,
+            LogKind::Click => ScriptLogKind::Click,
         };
         Self {
             kind: kind.into(),
@@ -1389,6 +1499,13 @@ impl From<&CoreLogLine> for ScriptLogLine {
 /// A script's text: a string of at most 16,384 characters.
 fn source_schema() -> RefOr<Schema> {
     BoundedText::<SCRIPT_SOURCE_MAX_BYTES>::schema()
+}
+
+/// A sign's lines: texts of at most [`SCRIPT_TEXT_MAX_CHARS`] characters.
+fn lines_schema() -> RefOr<Schema> {
+    ArrayBuilder::new()
+        .items(BoundedText::<SCRIPT_TEXT_MAX_CHARS>::schema())
+        .into()
 }
 
 /// Blocks: registry names of at most [`SCRIPT_BLOCK_MAX_CHARS`] characters.
@@ -1453,11 +1570,13 @@ mod tests {
         ScriptFieldError::at(path, message)
     }
 
+    /// The server compiles it at the lowest level that runs it and stamps
+    /// that one (Plan.md P16.15): fleet-script's `compile_lowest`.
     #[test]
-    fn a_body_reads_as_fleet_cores_script_at_level_1_until_the_server_stamps_its_own() {
+    fn a_body_reads_as_fleet_cores_script_at_the_newest_level_for_the_server_to_lower() {
         let script = request(balance()).script().unwrap();
 
-        assert_eq!(script.api(), ScriptApiLevel::V1);
+        assert_eq!(script.api(), ScriptApiLevel::V2);
         assert_eq!(script.leash().blocks(), 8);
         assert_eq!(
             script
@@ -1537,6 +1656,165 @@ mod tests {
         );
     }
 
+    /// A sign with a price alone on its first line, a fixed second, and a
+    /// third with a word.
+    fn signed() -> Value {
+        let mut body = balance();
+        body["signs"] = json!([
+            { "key": "price", "lines": ["{price}", "for sale", "by {who}"], "values": [
+                { "name": "price", "type": "integer", "min": 1, "max": 1_000_000 },
+                { "name": "who", "type": "word", "options": ["me", "you"] }
+            ] }
+        ]);
+        body
+    }
+
+    fn signed_with(change: impl FnOnce(&mut Value)) -> ScriptFieldError {
+        let mut body = signed();
+        change(&mut body);
+        request(body).script().unwrap_err()
+    }
+
+    /// What an app of the last release (0.2.1) sends: no `signs`, which an
+    /// edit tells from this app's `[]` (Plan.md P16.15).
+    #[test]
+    fn a_body_without_signs_is_the_last_releases_and_reads_as_none() {
+        let old = request(balance());
+        let mut body = balance();
+        body["signs"] = json!([]);
+        let new = request(body);
+
+        assert_eq!(old.signs, None);
+        assert_eq!(new.signs, Some(Vec::new()));
+        assert_eq!(old.script().unwrap().signs(), []);
+        let written = serde_json::to_value(&old).unwrap();
+        assert!(
+            !written.as_object().unwrap().contains_key("signs"),
+            "left out, never null"
+        );
+    }
+
+    #[test]
+    fn a_bodys_signs_are_its_scripts_at_level_2() {
+        let script = request(signed()).script().unwrap();
+
+        assert_eq!(script.api(), ScriptApiLevel::V2);
+        let sign = script.sign("price").unwrap();
+        assert_eq!(sign.lines(), ["{price}", "for sale", "by {who}"]);
+        assert_eq!(sign.values().len(), 2);
+    }
+
+    /// A field error's path, line and column.
+    type Place = (&'static str, Option<u32>, Option<u32>);
+
+    #[test]
+    fn a_signs_rule_is_named_at_its_field_with_its_column() {
+        let place = |error: &ScriptFieldError| (error.path.clone(), error.line, error.column);
+        let cases: Vec<(ScriptFieldError, Place)> = vec![
+            (
+                signed_with(|body| body["signs"][0]["key"] = json!("no spaces")),
+                ("script.signs[0].key", None, None),
+            ),
+            (
+                signed_with(|body| body["signs"][0]["lines"][1] = json!("for \u{202e}sale")),
+                ("script.signs[0].lines[1]", Some(1), Some(5)),
+            ),
+            (
+                signed_with(|body| body["signs"][0]["lines"][1] = json!("a } b")),
+                ("script.signs[0].lines[1]", Some(1), Some(3)),
+            ),
+            (
+                signed_with(|body| body["signs"][0]["lines"][1] = json!("{nope}")),
+                ("script.signs[0].lines[1]", Some(1), Some(1)),
+            ),
+            (
+                signed_with(|body| body["signs"][0]["lines"][1] = json!("x".repeat(100))),
+                ("script.signs[0].lines[1]", None, None),
+            ),
+            (
+                signed_with(|body| body["signs"][0]["lines"] = json!([])),
+                ("script.signs[0].lines", None, None),
+            ),
+            (
+                signed_with(|body| body["signs"][0]["lines"][2] = json!("by someone")),
+                ("script.signs[0].values[1].name", None, None),
+            ),
+            (
+                signed_with(|body| body["signs"][0]["values"][0]["max"] = json!(0)),
+                ("script.signs[0].values[0]", None, None),
+            ),
+            (
+                signed_with(|body| body["signs"][0]["values"][0]["places"] = json!(2)),
+                ("script.signs[0].values[0].places", None, None),
+            ),
+            (
+                signed_with(|body| {
+                    let first = body["signs"][0].clone();
+                    body["signs"] = json!([first.clone(), first]);
+                }),
+                ("script.signs[1].key", None, None),
+            ),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(
+                place(&error),
+                (expected.0.to_owned(), expected.1, expected.2),
+                "{error:?}"
+            );
+        }
+    }
+
+    /// The app has no rule of its own for a declared message or sign: its
+    /// check and the server's save both read a body through this, which is
+    /// fleet-core's, so the two never differ (Plan.md P16.15). Group D's
+    /// rule holds here: a message may start with a number's value, never a
+    /// word's; a sign's line may start with either, since it's never a
+    /// command.
+    #[test]
+    fn a_message_may_start_with_a_numbers_value_never_a_words_and_a_signs_line_with_either() {
+        let messages = |text: &str, value: Value| {
+            with(|body| {
+                body["messages"] = json!([{ "key": "first", "text": text, "values": [value] }]);
+            })
+        };
+        let integer = json!({ "name": "n", "type": "integer", "min": 1, "max": 9 });
+        let decimal = json!({ "name": "n", "type": "decimal", "min": 1, "max": 9, "places": 2 });
+        let word = json!({ "name": "n", "type": "word", "options": ["a"] });
+
+        assert!(messages("{n}", integer).is_ok());
+        assert!(messages("{n} coins", decimal).is_ok());
+        assert_eq!(
+            messages("{n} more", word).unwrap_err(),
+            rule(
+                "script.messages[0].text",
+                &TemplateError::StartsWithValue.to_string()
+            )
+        );
+        assert!(request(signed()).script().is_ok(), "a price alone");
+        let mut word_first = signed();
+        word_first["signs"][0]["lines"] = json!(["{price}", "{who} sells"]);
+        assert!(request(word_first).script().is_ok());
+    }
+
+    #[test]
+    fn an_answer_shows_a_scripts_signs_as_declared() {
+        let script = request(signed()).script().unwrap();
+
+        let shown = ModeScript::of(&script, false);
+
+        let sign = shown.signs.first().unwrap();
+        assert_eq!(sign.key.as_str(), "price");
+        let lines: Vec<&str> = sign.lines.iter().map(BoundedText::as_str).collect();
+        assert_eq!(lines, ["{price}", "for sale", "by {who}"]);
+        let names: Vec<&str> = sign
+            .values
+            .iter()
+            .map(|value| value.name.as_str())
+            .collect();
+        assert_eq!(names, ["price", "who"]);
+    }
+
     #[test]
     fn a_body_has_no_level_or_other_unknown_field() {
         let mut body = balance();
@@ -1566,7 +1844,7 @@ mod tests {
 
         let shown = ModeScript::of(&script, true);
 
-        assert_eq!(shown.api, 1);
+        assert_eq!(shown.api, 2);
         assert!(shown.any_time_chat);
         assert_eq!(shown.source.as_str(), balance()["source"]);
         assert_eq!(

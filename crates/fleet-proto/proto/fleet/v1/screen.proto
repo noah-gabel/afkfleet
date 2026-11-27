@@ -1,0 +1,119 @@
+// What a bot sees, on demand (Plan.md P16.20; ADR-0036, M14): the server
+// asks for one bot, and the agent answers from the snapshot a script's hook
+// is given (P16.5), or says why it can't. Every text is a Minecraft server's:
+// the server cleans and bounds it again as fleet-core does, and shows it only
+// as plain text.
+syntax = "proto3";
+
+package fleet.v1;
+
+// A user asks what a bot sees.
+message ScreenRequest {
+  // The server's number for this request, from 1; the answer repeats it.
+  uint64 id = 1;
+  // The bot's ID, a version 7 UUID.
+  bytes bot_id = 2;
+}
+
+// What a bot sees, or why the agent can't say.
+message ScreenAnswer {
+  // The request's number.
+  uint64 id = 1;
+  // The bot's ID, a version 7 UUID.
+  bytes bot_id = 2;
+  // The answer.
+  oneof answer {
+    // What it sees.
+    Seen seen = 3;
+    // Why the agent can't say.
+    ScreenUnseen unseen = 4;
+  }
+}
+
+// Why an agent can't say what a bot sees.
+enum ScreenUnseen {
+  // Not set; never valid.
+  SCREEN_UNSEEN_UNSPECIFIED = 0;
+  // The bot isn't in a world: it's offline, connecting, or between worlds.
+  SCREEN_UNSEEN_NOT_ONLINE = 1;
+  // The agent is looking for this bot already, or for as many bots as it
+  // looks for at once.
+  SCREEN_UNSEEN_BUSY = 2;
+  // The bot's session didn't answer in time.
+  SCREEN_UNSEEN_TIMED_OUT = 3;
+  // The agent doesn't run the bot.
+  SCREEN_UNSEEN_UNKNOWN_BOT = 4;
+}
+
+// What a bot sees: its own inventory, the screen it has open and the sign
+// editor that waits for its answer.
+message Seen {
+  // The bot's own slots that hold something, numbered as its inventory
+  // screen numbers them: its armour 5 to 8, its 36 slots 9 to 44, its
+  // offhand 45.
+  repeated SeenSlot inventory = 1;
+  // The screen it has open, if one is: a server's, or its own inventory.
+  SeenScreen screen = 2;
+  // The sign editor that waits for its answer, if one does.
+  SeenSign sign = 3;
+}
+
+// A screen a bot has open.
+message SeenScreen {
+  // Its kind, as a script reads it in `menu.kind`: `generic_9x3`.
+  string kind = 1;
+  // Its title, as plain text.
+  string title = 2;
+  // Its slots that hold something, in its own numbering, from 0.
+  repeated SeenSlot slots = 3;
+  // The item on the cursor, if there is one.
+  SeenItem cursor = 4;
+}
+
+// A slot that holds something.
+message SeenSlot {
+  // Its number.
+  uint32 index = 1;
+  // What it holds.
+  SeenItem item = 2;
+}
+
+// An item, as a script reads it: no text but its name and its lore.
+message SeenItem {
+  // Its registry identifier: `minecraft:potion`.
+  string id = 1;
+  // How many, from 1.
+  uint32 count = 2;
+  // The name the client shows, as plain text.
+  string name = 3;
+  // Its lore's lines, as plain text.
+  repeated string lore = 4;
+  // A potion's kind, as a registry identifier; empty for none.
+  string potion = 5;
+  // Its enchantments.
+  repeated SeenEnchantment enchantments = 6;
+  // An enchanted book's stored enchantments.
+  repeated SeenEnchantment stored_enchantments = 7;
+  // The uses it has left, for an item that wears.
+  optional uint32 durability = 8;
+}
+
+// An enchantment and its level.
+message SeenEnchantment {
+  // Its registry identifier: `minecraft:sharpness`.
+  string id = 1;
+  // Its level.
+  uint32 level = 2;
+}
+
+// A sign editor that waits for its answer.
+message SeenSign {
+  // The sign's block: x.
+  int32 x = 1;
+  // The sign's block: y.
+  int32 y = 2;
+  // The sign's block: z.
+  int32 z = 3;
+  // Whether the editor writes its front; its back otherwise.
+  bool front = 4;
+}

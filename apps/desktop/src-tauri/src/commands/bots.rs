@@ -6,6 +6,7 @@ use fleet_api_types::app::{BotCommandResponse, CommandError};
 use fleet_api_types::bots::{BotModeRequest, BotPage, BotPatchRequest, BotResponse};
 use fleet_api_types::chat::{ChatCommandRequest, ChatPage, ChatSendRequest, ChatSendResponse};
 use fleet_api_types::modes::ModePage;
+use fleet_api_types::screen::BotScreenResponse;
 use fleet_api_types::{BotId, ModeId, SafeInt};
 
 use super::Managed;
@@ -93,6 +94,14 @@ pub(crate) async fn bot_chat(
     limit: Option<u32>,
 ) -> Result<ChatPage, CommandError> {
     state.bot_chat(id, before, limit).await
+}
+
+#[tauri::command]
+pub(crate) async fn bot_screen(
+    state: Managed<'_>,
+    id: BotId,
+) -> Result<BotScreenResponse, CommandError> {
+    state.bot_screen(id).await
 }
 
 #[tauri::command]

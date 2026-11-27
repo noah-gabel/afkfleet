@@ -25,8 +25,10 @@
 pub mod chat;
 pub mod history;
 pub mod lifecycle;
+pub mod screen;
 pub mod settings;
 
+use core::time::Duration;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -46,6 +48,7 @@ use tracing::{debug, error};
 pub use chat::{ChatOutcome, ChatRoute, ChatSendDone, ChatSendError, ChatWait};
 pub use history::{ChatHistory, ChatHistoryError};
 pub use lifecycle::{BotAction, Controlled};
+pub use screen::{BotSight, SCREEN_WAIT, ScreenError};
 pub use settings::Configured;
 
 use super::agents::last_seen;
@@ -152,6 +155,8 @@ pub struct BotService {
     reconcile: Arc<dyn Reconcile>,
     live_hints: Arc<dyn LiveHints>,
     chat_wait: ChatWait,
+    /// How long a look at a bot's screen waits for its agent.
+    screen_wait: Duration,
 }
 
 impl BotService {
@@ -184,6 +189,7 @@ impl BotService {
             reconcile: Arc::new(NoReconcile),
             live_hints: Arc::new(NoLiveHints),
             chat_wait: ChatWait::default(),
+            screen_wait: SCREEN_WAIT,
         }
     }
 

@@ -19,6 +19,8 @@ const SCRIPT = "fn on_join(first) {\n\tkees.jump.tap();\n\tkeys.jump.tapp();\n}\
 /** The place the fake check names: `kees` on line 2. */
 const KEES: ScriptCheck = {
   problem: { path: "script.source", message: "`kees` isn't defined", line: 2, column: 2 },
+  level: 0,
+  needs: [],
 };
 
 /** The editor rendered with a check that answers `check`. */
@@ -95,14 +97,65 @@ describe("ScriptEditor", () => {
   });
 
   it("says there are no problems when there are none", async () => {
-    renderEditor({ value: "fn on_join(first) {\n    keys.jump.tap();\n}\n" }, async () => ({}));
+    renderEditor({ value: "fn on_join(first) {\n    keys.jump.tap();\n}\n" }, async () => ({
+      level: 1,
+      needs: [],
+    }));
 
     expect(await screen.findByText("No problems found.", {}, { timeout: 3000 })).toBeTruthy();
   });
 
+  it("says the level the server would stamp, and why in words (Plan.md P16.15)", async () => {
+    const plain = "fn on_join(first) {\n    keys.jump.tap();\n}\n";
+    renderEditor({ value: plain }, async () => ({ level: 1, needs: [] }));
+
+    expect((await screen.findByTestId("script-level", {}, { timeout: 3000 })).textContent).toBe(
+      "Script API level 1: every agent that runs scripts runs it.",
+    );
+  });
+
+  it("names each reason a script needs level 2, and declared signs as one more", async () => {
+    const { unmount } = renderEditor({}, async () => ({ level: 2, needs: ["menus", "clock"] }));
+    expect((await screen.findByTestId("script-level", {}, { timeout: 3000 })).textContent).toBe(
+      "Script API level 2 (uses screens and the inventory, uses the clock): only agents of this release or newer run it. A bot on an older agent waits until its agent is updated.",
+    );
+    unmount();
+
+    renderEditor({ declared: { signs: ["price"], messages: [], replies: [] } }, async () => ({
+      level: 1,
+      needs: [],
+    }));
+    expect((await screen.findByTestId("script-level", {}, { timeout: 3000 })).textContent).toMatch(
+      /^Script API level 2 \(declares signs\): /,
+    );
+  });
+
+  it("names a sign once when the text answers sign editors and the mode declares signs", async () => {
+    renderEditor({ declared: { signs: ["price"], messages: [], replies: [] } }, async () => ({
+      level: 2,
+      needs: ["signs"],
+    }));
+
+    expect((await screen.findByTestId("script-level", {}, { timeout: 3000 })).textContent).toMatch(
+      /^Script API level 2 \(answers sign editors\): /,
+    );
+  });
+
+  it("says no level while the text has a problem the server finds", async () => {
+    renderEditor();
+
+    expect(
+      await screen.findByText("Line 2, column 2: `kees` isn't defined", {}, { timeout: 3000 }),
+    );
+    expect(screen.queryByTestId("script-level")).toBeNull();
+  });
+
   it("shows the server's problem at once, until the text changes", async () => {
     const problem = { path: "script.source", message: "refused at save", line: 3, column: 2 };
-    const { view } = renderEditor({ serverProblem: problem }, async () => ({}));
+    const { view } = renderEditor({ serverProblem: problem }, async () => ({
+      level: 1,
+      needs: [],
+    }));
 
     await waitFor(() => expect(marks(view())).toContainEqual(["keys", "refused at save"]));
     view().dispatch({ changes: { from: 0, insert: " " } });

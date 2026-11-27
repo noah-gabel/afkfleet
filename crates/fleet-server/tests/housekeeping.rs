@@ -99,6 +99,7 @@ async fn setup(options: SqliteConnectOptions) -> Setup {
             link_flows: LinkFlowLimits::default(),
             grants_by_name: one,
             grant_candidates: one,
+            screen_reads: one,
             enroll: one,
             connect: one,
             bot_actions: one,

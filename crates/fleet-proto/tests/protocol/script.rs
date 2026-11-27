@@ -5,6 +5,7 @@
 use fleet_core::bot::BotSpec;
 use fleet_core::chat::{ChatFormats, ChatFormatsError};
 use fleet_core::mode::ModeDefinition;
+use fleet_core::script::menu::SignDraft;
 use fleet_core::script::{
     LeashRadiusError, LogKind, MessageDraft, ProblemKind, ReportText, Script, ScriptApiLevelError,
     ScriptDraft, ScriptError, ScriptLogLine, ScriptPlace, ScriptProblem, ScriptState, ValueDraft,
@@ -106,6 +107,65 @@ fn a_script_fleet_core_refuses_is_refused_with_its_reason() {
     );
     assert_eq!(
         with(|script| script.messages[0].values[0].kind = None),
+        Err(error("DeclaredValue.kind", Problem::Missing).at(0))
+    );
+}
+
+/// A level-2 script with a sign whose line starts with its value.
+fn signed() -> ModeDefinition {
+    ModeDefinition::scripted(
+        Script::try_from(ScriptDraft {
+            api: 2,
+            signs: vec![SignDraft {
+                key: "price".to_owned(),
+                lines: vec!["{price}".to_owned(), String::new(), "afk".to_owned()],
+                values: vec![ValueDraft {
+                    name: "price".to_owned(),
+                    kind: ValueKind::Integer {
+                        min: 1,
+                        max: 1_000_000,
+                    },
+                }],
+            }],
+            ..draft()
+        })
+        .unwrap(),
+    )
+}
+
+#[test]
+fn a_level_2_scripts_declared_signs_cross_as_themselves() {
+    let written = wire::ModeDefinition::from(signed());
+
+    let script = written.script.as_ref().unwrap();
+    assert_eq!(script.api, 2);
+    assert_eq!(script.signs.len(), 1);
+    assert_eq!(script.signs[0].key, "price");
+    assert_eq!(script.signs[0].lines, ["{price}", "", "afk"]);
+    assert_eq!(read(written), Ok(signed()));
+}
+
+#[test]
+fn a_level_1_script_with_signs_on_the_wire_is_refused_as_fleet_core_refuses_it() {
+    let mut mode = wire::ModeDefinition::from(signed());
+    mode.script.as_mut().unwrap().api = 1;
+
+    assert_eq!(
+        read(mode),
+        Err(error(
+            "ModeDefinition.script",
+            Problem::Script(ScriptError::SignsNeedLevel2)
+        ))
+    );
+}
+
+#[test]
+fn a_signs_missing_value_kind_is_refused_at_its_place() {
+    let mut mode = wire::ModeDefinition::from(signed());
+    mode.script.as_mut().unwrap().signs[0].values[0].kind = None;
+
+    assert_eq!(
+        read(mode),
         Err(error("DeclaredValue.kind", Problem::Missing).at(0))
     );
 }
@@ -255,6 +315,68 @@ fn a_scripts_status_crosses_with_its_hook_place_and_message() {
             place: ScriptPlace::new(3, 9),
             message: ReportText::clean("`kees` isn't defined"),
         }))
+    );
+}
+
+#[test]
+fn every_hook_crosses_in_a_status_level_2s_too() {
+    for hook in fleet_core::script::Hook::ALL {
+        let state = ScriptState::Stopped(ScriptProblem {
+            kind: ProblemKind::Error,
+            hook: Some(hook),
+            place: None,
+            message: ReportText::clean("stopped"),
+        });
+        let message = AgentMessage::Event(fleet_proto::control::BotEvent {
+            bot_id: BOT.parse().unwrap(),
+            at: chrono::DateTime::from_timestamp_millis(AT).unwrap(),
+            kind: BotEventKind::ScriptStatus(state.clone()),
+        });
+
+        let written = wire::AgentMessage::try_from(message).unwrap();
+        let Some(wire::agent_message::Msg::Event(wire::BotEvent {
+            kind: Some(wire::bot_event::Kind::ScriptStatus(status)),
+            ..
+        })) = written.msg.clone()
+        else {
+            panic!("not a status")
+        };
+        let Some(wire::script_status::Status::Stopped(problem)) = status.status else {
+            panic!("not stopped")
+        };
+
+        assert_ne!(
+            problem.hook,
+            i32::from(wire::ScriptHook::Unspecified),
+            "{hook:?}"
+        );
+        assert_eq!(
+            reported(AgentMessage::try_from(written).unwrap()),
+            BotEventKind::ScriptStatus(state),
+            "{hook:?}"
+        );
+    }
+}
+
+#[test]
+fn a_click_line_crosses_as_a_kind_of_its_own() {
+    let read = reported(
+        event(wire::bot_event::Kind::ScriptLog(wire::ScriptLogLine {
+            kind: wire::ScriptLogKind::Click.into(),
+            text: "a click on slot 13 may have worked: the script checks the next screen (unclear)"
+                .to_owned(),
+        }))
+        .unwrap(),
+    );
+
+    assert_eq!(
+        read,
+        BotEventKind::ScriptLog(ScriptLogLine {
+            kind: LogKind::Click,
+            text: ReportText::clean(
+                "a click on slot 13 may have worked: the script checks the next screen (unclear)"
+            ),
+        })
     );
 }
 

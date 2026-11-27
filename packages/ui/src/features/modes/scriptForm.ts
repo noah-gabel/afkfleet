@@ -18,6 +18,7 @@ import type { ModeCaptureRequest } from "../../generated/ModeCaptureRequest";
 import type { ModeDecimalMark } from "../../generated/ModeDecimalMark";
 import type { ModeScript } from "../../generated/ModeScript";
 import type { ModeScriptRequest } from "../../generated/ModeScriptRequest";
+import type { ModeValue } from "../../generated/ModeValue";
 import type { ModeValueKind } from "../../generated/ModeValueKind";
 import type { ModeValueRequest } from "../../generated/ModeValueRequest";
 import type { PatternWhen } from "../../generated/PatternWhen";
@@ -39,6 +40,14 @@ export interface ValueValues {
 export interface MessageValues {
   key: string;
   text: string;
+  values: ValueValues[];
+}
+
+/** A declared sign on the form (API level 2; ADR-0036, M16): always four lines, the empty ones
+ * at its end left out of a request. */
+export interface SignValues {
+  key: string;
+  lines: [string, string, string, string];
   values: ValueValues[];
 }
 
@@ -69,6 +78,7 @@ export interface ScriptValues {
   blocks: { block: string }[];
   messages: MessageValues[];
   patterns: PatternValues[];
+  signs: SignValues[];
 }
 
 /** Every value type, capture type and `when` this version knows (S12), from the generated types. */
@@ -102,6 +112,7 @@ export function newScriptValues(): ScriptValues {
     blocks: [],
     messages: [],
     patterns: [],
+    signs: [],
   };
 }
 
@@ -113,6 +124,11 @@ export function newValue(): ValueValues {
 /** A new declared message. */
 export function newMessage(): MessageValues {
   return { key: "", text: "", values: [] };
+}
+
+/** A new declared sign: four empty lines. */
+export function newSign(): SignValues {
+  return { key: "", lines: ["", "", "", ""], values: [] };
 }
 
 /** A new capture. */
@@ -130,6 +146,23 @@ function textOf(value: number | undefined): string {
   return value === undefined ? "" : String(value);
 }
 
+/** A declared value as its fields show it. */
+function valueValuesOf(value: ModeValue): ValueValues {
+  return {
+    name: value.name,
+    type: value.type,
+    min: textOf(value.min),
+    max: textOf(value.max),
+    places: textOf(value.places),
+    words: (value.options ?? []).join(" "),
+  };
+}
+
+/** A sign's lines as its four fields show them. */
+function fourLines(lines: readonly string[]): [string, string, string, string] {
+  return [lines[0] ?? "", lines[1] ?? "", lines[2] ?? "", lines[3] ?? ""];
+}
+
 /** `body`'s values; see the module comment. */
 export function scriptValuesOf(body: ModeScript): ScriptValues {
   return {
@@ -140,14 +173,12 @@ export function scriptValuesOf(body: ModeScript): ScriptValues {
     messages: body.messages.map((message) => ({
       key: message.key,
       text: message.text,
-      values: message.values.map((value) => ({
-        name: value.name,
-        type: value.type,
-        min: textOf(value.min),
-        max: textOf(value.max),
-        places: textOf(value.places),
-        words: (value.options ?? []).join(" "),
-      })),
+      values: message.values.map(valueValuesOf),
+    })),
+    signs: (body.signs ?? []).map((sign) => ({
+      key: sign.key,
+      lines: fourLines(sign.lines),
+      values: sign.values.map(valueValuesOf),
     })),
     patterns: body.patterns.map((pattern) => ({
       key: pattern.key,
@@ -168,8 +199,8 @@ export function scriptValuesOf(body: ModeScript): ScriptValues {
 /** Whether the form can hold `body`: every type, `when` and mark is one this version knows. */
 export function isKnownScript(body: ModeScript): boolean {
   return (
-    body.messages.every((message) =>
-      message.values.every((value) => Object.hasOwn(VALUE_KINDS, value.type)),
+    [...body.messages, ...(body.signs ?? [])].every((declared) =>
+      declared.values.every((value) => Object.hasOwn(VALUE_KINDS, value.type)),
     ) &&
     body.patterns.every(
       (pattern) =>
@@ -186,6 +217,7 @@ export function isKnownScript(body: ModeScript): boolean {
 /** What the form declares, for the editor's marks of `chat.send` and `chat.expect`. */
 export function declaredOf(values: ScriptValues): Declared {
   return {
+    signs: values.signs.map((sign) => sign.key.trim()),
     messages: values.messages.map((message) => message.key.trim()),
     replies: values.patterns
       .filter((pattern) => pattern.when === "reply")
@@ -241,6 +273,30 @@ function captureRequest(capture: CaptureValues): ModeCaptureRequest {
   }
 }
 
+/** A sign's lines as a request sends them: the empty ones at its end left out, at least one. */
+function linesOf(lines: readonly string[]): string[] {
+  const kept = [...lines];
+  while (kept.length > 1 && kept[kept.length - 1]?.trim() === "") {
+    kept.pop();
+  }
+  return kept;
+}
+
+/** The paths of a declared value's fields: `at` on the wire, `field` on the form. */
+function valuePaths(paths: Record<string, string>, at: string, field: string): void {
+  paths[at] = `${field}.min`;
+  for (const [wire, form] of [
+    ["name", "name"],
+    ["type", "type"],
+    ["min", "min"],
+    ["max", "max"],
+    ["places", "places"],
+    ["options", "words"],
+  ]) {
+    paths[`${at}.${wire}`] = `${field}.${form}`;
+  }
+}
+
 /** What a save sends of the body, and where each path of its errors shows. */
 export interface BuiltScript {
   readonly script: ModeScriptRequest;
@@ -274,6 +330,19 @@ export function scriptRequestOf(values: ScriptValues): BuiltScript {
       ]) {
         paths[`${at}.values[${v}].${wire}`] = `${value}.${form}`;
       }
+    });
+  });
+  values.signs.forEach((sign, s) => {
+    const at = `script.signs[${s}]`;
+    const field = `script.signs.${s}`;
+    paths[`${at}.key`] = `${field}.key`;
+    paths[`${at}.lines`] = `${field}.lines.0`;
+    paths[`${at}.values`] = `${field}.key`;
+    for (const l of [0, 1, 2, 3]) {
+      paths[`${at}.lines[${l}]`] = `${field}.lines.${l}`;
+    }
+    sign.values.forEach((_, v) => {
+      valuePaths(paths, `${at}.values[${v}]`, `${field}.values.${v}`);
     });
   });
   values.patterns.forEach((pattern, p) => {
@@ -313,6 +382,11 @@ export function scriptRequestOf(values: ScriptValues): BuiltScript {
         when: pattern.when,
         text: pattern.text,
         captures: pattern.captures.map(captureRequest),
+      })),
+      signs: values.signs.map((sign) => ({
+        key: sign.key,
+        lines: linesOf(sign.lines),
+        values: sign.values.map(valueRequest),
       })),
     },
     paths: paths as Record<string, Path<ModeValues>>,

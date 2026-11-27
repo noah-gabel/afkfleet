@@ -99,6 +99,7 @@ use fleet_api_types::mfa::{
     CODE_MAX_CHARS, MfaConfirmRequest, MfaConfirmResponse, MfaEnrollResponse, MfaResetResponse,
 };
 use fleet_api_types::modes::{CreateModeRequest, ModePage, ModeResponse, UpdateModeRequest};
+use fleet_api_types::screen::BotScreenResponse;
 use fleet_api_types::server_settings::{
     CreateServerSettingsRequest, PreviewChatFormatsRequest, PreviewChatFormatsResponse,
     ServerSettingsPage, ServerSettingsPageQuery, ServerSettingsResponse,
@@ -822,6 +823,15 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
 
     pub(crate) async fn bot(self: &Arc<Self>, id: BotId) -> Result<BotResponse, ClientError> {
         let url = self.server.api(&["bots", &id.to_string()]);
+        let answer = self.authed(Method::GET, url, None).await?;
+        expect_json(answer, 200)
+    }
+
+    pub(crate) async fn bot_screen(
+        self: &Arc<Self>,
+        id: BotId,
+    ) -> Result<BotScreenResponse, ClientError> {
+        let url = self.server.api(&["bots", &id.to_string(), "screen"]);
         let answer = self.authed(Method::GET, url, None).await?;
         expect_json(answer, 200)
     }
@@ -1646,6 +1656,8 @@ mod tests {
     use serde_json::{Value, json};
     use tokio::sync::Notify;
     use tokio::time::timeout;
+
+    use fleet_api_types::screen::BotScreenKind;
 
     use super::*;
     use crate::store::{MemoryStore, StoreError, StoreOp};
@@ -3189,6 +3201,40 @@ mod tests {
             core.transport.seen(),
             [sent("GET /api/v1/bots", None), sent(&one, None)]
         );
+    }
+
+    /// What a bot sees, from its route: an answer that says it's offline here.
+    #[tokio::test]
+    async fn what_a_bot_sees_is_read_from_its_route() {
+        let core = signed_in().await;
+        let route = format!("GET /api/v1/bots/{BOT}/screen");
+        let offline = BotScreenResponse::unseen(BotScreenKind::Offline);
+        core.transport.on(&route, Ok(dto(200, &offline)));
+
+        let seen = core.bot_screen(id(BOT)).await.unwrap();
+
+        assert_eq!(seen, offline);
+        assert_eq!(core.transport.seen(), [sent(&route, None)]);
+    }
+
+    #[rstest]
+    #[case::not_found(404, ErrorCode::NotFound)]
+    #[case::too_many(429, ErrorCode::RateLimited)]
+    #[case::busy(503, ErrorCode::Busy)]
+    #[tokio::test]
+    async fn a_refused_look_comes_back_with_the_servers_code(
+        #[case] status: u16,
+        #[case] code: ErrorCode,
+    ) {
+        use fleet_api_types::OpenEnum as _;
+        let core = signed_in().await;
+        let route = format!("GET /api/v1/bots/{BOT}/screen");
+        core.transport
+            .on(&route, Ok(refusal(status, code.as_str())));
+
+        let refused = core.bot_screen(id(BOT)).await.unwrap_err();
+
+        assert!(is_api(&refused, status, code), "{refused:?}");
     }
 
     #[tokio::test]

@@ -34,4 +34,5 @@ export const SCRIPT_MAX_BLOCKS = 16;
 export const SCRIPT_MAX_MESSAGES = 16;
 export const SCRIPT_MAX_VALUES = 8;
 export const SCRIPT_MAX_PATTERNS = 8;
+export const SCRIPT_MAX_SIGNS = 16;
 export const SCRIPT_MAX_CAPTURES = 4;

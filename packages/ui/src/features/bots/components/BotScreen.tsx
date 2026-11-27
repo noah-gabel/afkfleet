@@ -4,7 +4,7 @@
 // first (U105). That's measured on the content column, not the window, since the sidebar takes a part
 // of it (U113). While it's open, its notices are acknowledged (R109). A bot on a scripted mode has
 // a Script card under its own (P15.26), and one no agent online can run says an agent must be
-// updated (ADR-0036, D13).
+// updated (ADR-0036, D13), to this release for a mode at script API level 2 (P16.15).
 // A read that answers 404 says the bot doesn't exist or can't be seen, also when it goes
 // while its screen is open (a `bot_removed` resets its query, which reads it again, R98).
 import { Link } from "@tanstack/react-router";
@@ -21,12 +21,20 @@ import { Card } from "../../../components/ui/card";
 import { useNow } from "../../../hooks/useNow";
 import { botFacts, modesOf, uptimeNextChange } from "../facts";
 import { botActions } from "../permissions";
-import { AGENT_TOO_OLD, AGENTS_LINK, agentLastSeen, BOT_NOT_FOUND, LOADING_BOT } from "../texts";
+import {
+  AGENT_TOO_OLD,
+  AGENT_TOO_OLD_LEVEL_2,
+  AGENTS_LINK,
+  agentLastSeen,
+  BOT_NOT_FOUND,
+  LOADING_BOT,
+} from "../texts";
 import { BotChat } from "./BotChat";
 import { BotControls } from "./BotControls";
 import { BotState } from "./BotParts";
 import { BotScript } from "./BotScript";
 import { BotSettings } from "./BotSettings";
+import { BotSight } from "./BotSight";
 import { BotTimeline } from "./BotTimeline";
 import { ChatSend } from "./ChatSend";
 
@@ -88,7 +96,9 @@ export function BotScreen({ id }: { id: string }) {
               <BotControls bot={data} />
               <Facts facts={facts} place="screen" />
               {data.status.kind === "unplaced" && data.status.why === "agent_too_old" ? (
-                <p className="text-sm">{AGENT_TOO_OLD}</p>
+                <p className="text-sm">
+                  {(mode?.script?.api ?? 1) >= 2 ? AGENT_TOO_OLD_LEVEL_2 : AGENT_TOO_OLD}
+                </p>
               ) : null}
               {lastSeen === undefined ? null : (
                 <p className="text-sm text-muted-foreground">{agentLastSeen(lastSeen, now)}</p>
@@ -101,6 +111,7 @@ export function BotScreen({ id }: { id: string }) {
             </Card>
           </section>
           <BotScript bot={data} mode={mode} />
+          <BotSight bot={data} />
           <BotSettings bot={data} />
           <BotTimeline id={data.id} />
         </div>

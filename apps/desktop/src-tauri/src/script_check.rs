@@ -3,7 +3,7 @@
 //!
 //! - **The same check, the same words.** The text goes through fleet-api-types'
 //!   `ModeScriptRequest::script` (fleet-core's rules for a script's text) and
-//!   fleet-script's own `compile`, the one the server and the agent run; a
+//!   fleet-script's own `compile_lowest`, the one the server runs at save; a
 //!   problem is the field error the server's 422 would carry
 //!   (`script.source`, its message, its line and its column). The server
 //!   stays the judge: it checks again at save, with the mode's settings and
@@ -24,7 +24,9 @@ use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use fleet_api_types::FieldError;
-use fleet_api_types::app::{CommandError, CommandErrorCode, ScriptCheck, ScriptCheckRequest};
+use fleet_api_types::app::{
+    CommandError, CommandErrorCode, ScriptCheck, ScriptCheckRequest, ScriptNeed,
+};
 use fleet_api_types::script::{ModeScriptRequest, not_a_program};
 use fleet_core::script::{LeashRadius, ToolGuard};
 use garde::Validate as _;
@@ -44,7 +46,8 @@ pub const TURN_WAIT: Duration = Duration::from_secs(5);
 static TURN: LazyLock<Arc<Semaphore>> = LazyLock::new(|| Arc::new(Semaphore::new(1)));
 
 /// The first problem the server's check at save would find in `source`, or
-/// none; see the module comment.
+/// none, and the level the server would stamp it with, with why; see the
+/// module comment.
 #[must_use]
 pub fn check(source: &str) -> ScriptCheck {
     let request = ModeScriptRequest {
@@ -54,14 +57,26 @@ pub fn check(source: &str) -> ScriptCheck {
         block_guard: Vec::new(),
         messages: Vec::new(),
         patterns: Vec::new(),
+        signs: Some(Vec::new()),
     };
-    let problem = match request.script() {
-        Err(rule) => Some(FieldError::from(rule)),
-        Ok(script) => fleet_script::compile(&script)
-            .err()
-            .map(|error| not_a_program(&error)),
-    };
-    ScriptCheck { problem }
+    let checked = request
+        .script()
+        .map_err(FieldError::from)
+        .and_then(|script| {
+            fleet_script::compile_lowest(&script).map_err(|error| not_a_program(&error))
+        });
+    match checked {
+        Ok(leveled) => ScriptCheck {
+            problem: None,
+            level: leveled.program.script().api().get(),
+            needs: leveled.reasons.into_iter().map(ScriptNeed::from).collect(),
+        },
+        Err(problem) => ScriptCheck {
+            problem: Some(problem),
+            level: 0,
+            needs: Vec::new(),
+        },
+    }
 }
 
 /// The `check_script` command: `request` checked in `spawn_blocking`, one
@@ -106,6 +121,7 @@ async fn run(
 
 #[cfg(test)]
 mod tests {
+    use fleet_api_types::app::ScriptNeed;
     use fleet_api_types::script::not_a_program;
     use fleet_core::script::{ScriptApiLevel, ScriptDraft};
 
@@ -119,11 +135,11 @@ mod tests {
         check(source).problem.unwrap()
     }
 
+    /// What the server's save finds: the script compiled at the lowest
+    /// level that runs it (Plan.md P16.15).
     fn compiled(source: &str) -> Result<(), FieldError> {
         let script = fleet_core::script::Script::try_from(ScriptDraft {
-            // The level the server saves a mode at until it stamps a
-            // script's own (Plan.md P16.15).
-            api: ScriptApiLevel::V1.get(),
+            api: ScriptApiLevel::NEWEST.get(),
             source: source.to_owned(),
             leash: 8,
             tool_guard: 2,
@@ -133,7 +149,7 @@ mod tests {
             signs: Vec::new(),
         })
         .unwrap();
-        fleet_script::compile(&script)
+        fleet_script::compile_lowest(&script)
             .map(|_| ())
             .map_err(|error| not_a_program(&error))
     }
@@ -145,23 +161,62 @@ mod tests {
     }
 
     #[test]
-    fn every_example_of_the_reference_has_no_problem() {
+    fn every_example_of_the_reference_has_no_problem_and_needs_its_own_level() {
         for example in fleet_script::EXAMPLES {
-            let problem = check(example.source).problem;
-            if example.level == ScriptApiLevel::V1 {
-                assert_eq!(problem, None, "{}", example.id);
-            } else {
-                // Saved at level 1 until the server stamps a script's level
-                // (Plan.md P16.15): the check names the level it needs, and
-                // the app offers no such example yet.
-                let shown = format!("{problem:?}");
-                assert!(
-                    shown.contains("needs script API level 2"),
-                    "{}: {shown}",
-                    example.id
-                );
-            }
+            let checked = check(example.source);
+
+            assert_eq!(checked.problem, None, "{}", example.id);
+            assert_eq!(checked.level, example.level.get(), "{}", example.id);
+            assert_eq!(
+                checked.needs.is_empty(),
+                example.level == ScriptApiLevel::V1,
+                "{}",
+                example.id
+            );
         }
+    }
+
+    #[test]
+    fn a_script_that_needs_level_2_is_told_so_with_why() {
+        let menus = check(
+            "fn on_menu_open() {
+    menu.close();
+}
+",
+        );
+        let clock = check(
+            "fn on_join(first) {
+    let now = clock.local(\"Europe/Berlin\");
+    log.info(bot.name);
+}
+",
+        );
+        let farm = check(
+            "fn on_join(first) {
+    mouse.right.hold();
+}
+",
+        );
+
+        assert_eq!((menus.level, menus.needs), (2, vec![ScriptNeed::Menus]));
+        assert_eq!(
+            (clock.level, clock.needs),
+            (2, vec![ScriptNeed::Clock, ScriptNeed::BotName])
+        );
+        assert_eq!((farm.level, farm.needs), (1, Vec::new()));
+    }
+
+    #[test]
+    fn a_script_with_a_problem_says_no_level() {
+        let checked = check(
+            "fn on_join(first) {
+    menu.close(;
+}
+",
+        );
+
+        assert!(checked.problem.is_some());
+        assert_eq!((checked.level, checked.needs), (0, Vec::new()));
     }
 
     #[test]
@@ -283,6 +338,8 @@ mod tests {
             let here = std::thread::current().id();
             ScriptCheck {
                 problem: (here == caller).then(|| FieldError::new("thread", "the caller's")),
+                level: 1,
+                needs: Vec::new(),
             }
         })
         .await

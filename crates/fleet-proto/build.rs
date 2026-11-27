@@ -15,13 +15,14 @@ use std::path::PathBuf;
 use protox::prost_reflect::{Cardinality, DescriptorPool, FieldDescriptor, Kind};
 
 /// The protocol's files, relative to `proto/`.
-const PROTOS: [&str; 6] = [
+const PROTOS: [&str; 7] = [
     "fleet/v1/agent.proto",
     "fleet/v1/bot.proto",
     "fleet/v1/chat.proto",
     "fleet/v1/common.proto",
     "fleet/v1/enrollment.proto",
     "fleet/v1/mode.proto",
+    "fleet/v1/screen.proto",
 ];
 
 /// The messages that hold a secret, by their full protobuf name.
@@ -41,6 +42,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .build_transport(false)
         .codec_path("crate::codec::BoundedCodec")
         .skip_debug(REDACTED.map(|name| format!(".{name}")))
+        // What a bot sees is far larger than any other case of its oneof.
+        .boxed(".fleet.v1.ScreenAnswer.answer.seen")
         .compile_fds(files)?;
     Ok(())
 }

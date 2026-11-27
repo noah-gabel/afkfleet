@@ -13,6 +13,7 @@ mod chat;
 mod clock;
 mod convert;
 mod examples;
+mod levels;
 mod limits;
 mod menu_examples;
 mod menus;

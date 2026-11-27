@@ -77,6 +77,7 @@ GET /api/v1/bots/{id}/chat                                                      
 POST /api/v1/bots/{id}/chat                       plain chat, a bot that isn't online                   401        404                   403                   409 bot_not_online    409 bot_not_online    409 bot_not_online    409 bot_not_online
 POST /api/v1/bots/{id}/chat                       an allowlisted command, a bot that isn't online       401        404                   403                   409 bot_not_online    409 bot_not_online    409 bot_not_online    409 bot_not_online
 POST /api/v1/bots/{id}/command                    a command off the allowlist, a bot that isn't online  401        404                   403                   403                   409 bot_not_online    409 bot_not_online    409 bot_not_online
+GET /api/v1/bots/{id}/screen                      a bot that isn't online                               401        404                   200                   200                   200                   200                   200
 POST /api/v1/events/ticket                                                                              401        200                   200                   200                   200                   200                   200
 GET /api/v1/events                                an upgrade with the session's ticket                  401        101                   101                   101                   101                   101                   101
 GET /api/v1/modes                                                                                       401        200                   200                   200                   200                   200                   200
@@ -134,3 +135,4 @@ GET /api/v1/bots/{id}/chat                                                      
 POST /api/v1/bots/{id}/chat                 plain chat, a bot that isn't online                   404     404    409 bot_not_online
 POST /api/v1/bots/{id}/chat                 an allowlisted command, a bot that isn't online       404     404    409 bot_not_online
 POST /api/v1/bots/{id}/command              a command off the allowlist, a bot that isn't online  404     404    409 bot_not_online
+GET /api/v1/bots/{id}/screen                a bot that isn't online                               404     404    200

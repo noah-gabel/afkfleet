@@ -1,7 +1,7 @@
 //! [`Conductor`]: the one task that owns every Fleet call and the mapping
 //! state of a managed agent (Plan.md P10.7; ADR-0019, S65, R47–R49).
 //!
-//! - **One FIFO.** The stream's reader hands the six instructions to an
+//! - **One FIFO.** The stream's reader hands the seven instructions to an
 //!   [`Inbox`] of [`INBOUND_QUEUE`] (the server's queue depth) and never
 //!   waits: a full one ends the stream, and the next hello resyncs. Session
 //!   answers go straight to the credentials, never through here.
@@ -49,12 +49,17 @@ use std::sync::Arc;
 
 use fleet_core::bot::{BotSnapshot, BotSpec, DesiredRunState, Lifecycle, StickyState};
 use fleet_core::id::BotId;
-use fleet_proto::control::{Assignment, LifecycleCommand, SendChat};
+use fleet_proto::control::{
+    Assignment, LifecycleCommand, ScreenAnswer, ScreenOutcome, ScreenRequest, ScreenUnseen, Seen,
+    SendChat,
+};
 use fleet_runtime::{
-    ChatTicket, Fleet, FleetError, FleetEvent, FleetEventKind, RuntimeClock, ScriptEvent,
+    ChatTicket, Fleet, FleetError, FleetEvent, FleetEventKind, LOOK_TIMEOUT, LookError,
+    RuntimeClock, ScriptEvent,
 };
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::task::JoinSet;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
@@ -71,7 +76,11 @@ pub const INBOUND_QUEUE: usize = 2048;
 /// How often pending applies and busy removals are tried again.
 pub const RETRY_TICK: Duration = Duration::from_secs(1);
 
-/// The six instructions of a stream, in the order the reader read them.
+/// The longest the conductor waits for a look at a bot's screen: its
+/// actor's own bound, and a second more.
+const LOOK_WAIT: Duration = LOOK_TIMEOUT.saturating_add(Duration::from_secs(1));
+
+/// The seven instructions of a stream, in the order the reader read them.
 #[derive(Debug, Clone)]
 pub enum Instruction {
     /// The full reconcile: every bot the agent should run.
@@ -86,6 +95,8 @@ pub enum Instruction {
     SendChat(SendChat),
     /// Restart, reset or resume a bot.
     Lifecycle(LifecycleCommand),
+    /// Say what a bot sees (Plan.md P16.20).
+    ReadScreen(ScreenRequest),
 }
 
 /// What the conductor takes, in order.
@@ -216,6 +227,11 @@ pub struct Conductor {
     tickets: ChatRequests<ChatTicket>,
     /// A lag's resync that failed, tried again on the tick.
     resync_owed: bool,
+    /// The looks at bots' screens being waited for, at most `max_looks`,
+    /// each answered on its own stream (Plan.md P16.20).
+    looks: JoinSet<(LinkGeneration, ScreenAnswer)>,
+    /// `[runtime] max_bots`: the most looks waited for at once.
+    max_looks: usize,
 }
 
 impl Conductor {
@@ -234,6 +250,8 @@ impl Conductor {
             book: Book::new(parts.max_bots),
             tickets: ChatRequests::new(parts.max_bots.saturating_mul(parts.chat_queue)),
             resync_owed: false,
+            looks: JoinSet::new(),
+            max_looks: parts.max_bots,
         }
     }
 
@@ -256,6 +274,14 @@ impl Conductor {
                 _ = tick.tick() => self.tick().await,
                 received = self.events.recv(), if self.events_open => {
                     self.received(received).await;
+                }
+                // Cancel-safe too: a look's task that loses waits in the set.
+                Some(looked) = self.looks.join_next(), if !self.looks.is_empty() => {
+                    match looked {
+                        Ok((generation, answer)) => self.outbox.screen(generation, answer),
+                        // Its server times the request out.
+                        Err(error) => warn!(%error, "a look at a bot's screen failed"),
+                    }
                 }
             }
             self.drain().await;
@@ -312,6 +338,7 @@ impl Conductor {
             }
             Instruction::SendChat(chat) => self.send_chat(generation, chat).await,
             Instruction::Lifecycle(command) => self.lifecycle(generation, command).await,
+            Instruction::ReadScreen(request) => self.read_screen(generation, request).await,
         }
     }
 
@@ -440,6 +467,56 @@ impl Conductor {
                     .chat_failed(bot, self.clock.now(), request, mapping::refused(error));
             }
         }
+    }
+
+    /// A screen request (Plan.md P16.20): one Fleet call, only while its
+    /// stream lives, whose look is then waited for in [`Conductor::looks`],
+    /// never here. Past as many waiting looks as the fleet runs bots, it's
+    /// answered busy at once.
+    async fn read_screen(&mut self, generation: LinkGeneration, request: ScreenRequest) {
+        if !self.outbox.is_live(generation) {
+            debug!(bot_id = %request.bot_id, "a screen request of an ended stream was dropped");
+            return;
+        }
+        let answer = move |outcome| ScreenAnswer {
+            id: request.id,
+            bot_id: request.bot_id,
+            outcome,
+        };
+        if self.looks.len() >= self.max_looks {
+            let busy = answer(ScreenOutcome::Unseen(ScreenUnseen::Busy));
+            self.outbox.screen(generation, busy);
+            return;
+        }
+        let look = match self.fleet.look(request.bot_id).await {
+            Ok(look) => look,
+            Err(FleetError::UnknownBot) => {
+                let unknown = answer(ScreenOutcome::Unseen(ScreenUnseen::UnknownBot));
+                self.outbox.screen(generation, unknown);
+                return;
+            }
+            Err(error) => {
+                debug!(bot_id = %request.bot_id, %error, "a screen request was refused");
+                self.outbox.screen(
+                    generation,
+                    answer(ScreenOutcome::Unseen(ScreenUnseen::Busy)),
+                );
+                return;
+            }
+        };
+        self.looks.spawn(async move {
+            // The actor answers within LOOK_TIMEOUT; this bounds the wait
+            // whatever becomes of it.
+            let outcome = match tokio::time::timeout(LOOK_WAIT, look.seen()).await {
+                Ok(Ok(view)) => ScreenOutcome::Seen(Box::new(Seen::of(&view))),
+                Ok(Err(LookError::NotOnline)) => ScreenOutcome::Unseen(ScreenUnseen::NotOnline),
+                Ok(Err(LookError::Busy)) => ScreenOutcome::Unseen(ScreenUnseen::Busy),
+                Ok(Err(LookError::TimedOut)) | Err(_) => {
+                    ScreenOutcome::Unseen(ScreenUnseen::TimedOut)
+                }
+            };
+            (generation, answer(outcome))
+        });
     }
 
     /// A user's lifecycle command: one Fleet call, only while its stream

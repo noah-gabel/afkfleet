@@ -58,6 +58,7 @@
 //! | `GET /api/v1/bots/{id}/chat` | user (View) | one page of the bot's chat, newest first, each line under its field rules |
 //! | `POST /api/v1/bots/{id}/chat` | user (Control; a command off the allowlist: pointed to `/command`) | a line for the bot to send: 200 sent, 202 pending |
 //! | `POST /api/v1/bots/{id}/command` | user (Control for an allowlisted command, Manage for any other) | a command for the bot to send: 200 sent, 202 pending |
+//! | `GET /api/v1/bots/{id}/screen` | user (View) | what the bot sees, asked of its agent: its screen or its inventory, or why that can't be said; spends the caller's own `screen_reads_per_user_per_min` |
 //! | `GET /api/v1/modes` | user | one page of the modes the user may see, each under its field rules |
 //! | `POST /api/v1/modes` | user (a shared mode: Admin+; steps sending a command off the allowlist: pointed to `/with-commands`) | a new mode of the user's: 201 |
 //! | `POST /api/v1/modes/with-commands` | user (a shared mode: Admin+) | a new mode of the user's, whatever its steps send: 201 |
@@ -91,7 +92,7 @@ use utoipa_axum::routes;
 
 use super::handlers::{
     accounts, agents, audit, auth, bots, chat, events, grants, health, invites, me, metrics, mfa,
-    modes, server_settings, users,
+    modes, screen, server_settings, users,
 };
 use super::middleware::RequestIds;
 use super::openapi::ApiDocs;
@@ -296,6 +297,7 @@ pub fn api_routes(routes: Routes) -> Routes {
         .authed_route(RateClass::Standard, routes!(chat::history))
         .authed_route(RateClass::Standard, routes!(chat::send))
         .authed_route(RateClass::Standard, routes!(chat::command))
+        .authed_route(RateClass::Standard, routes!(screen::screen))
         .authed_route(RateClass::Standard, routes!(modes::list))
         .authed_route(RateClass::Standard, routes!(modes::create))
         .authed_route(RateClass::Standard, routes!(modes::create_with_commands))

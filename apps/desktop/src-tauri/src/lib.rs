@@ -136,6 +136,7 @@ pub fn configure<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
             commands::bots::reset_bot,
             commands::bots::resume_bot,
             commands::bots::bot_chat,
+            commands::bots::bot_screen,
             commands::bots::send_chat,
             commands::bots::send_command,
             commands::server_settings::server_settings,

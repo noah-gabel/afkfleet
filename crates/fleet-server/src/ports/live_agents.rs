@@ -3,7 +3,8 @@
 //! S5): to end one whose permission ended, what the server knows of one that
 //! lives and of a bot it holds, a bot's latest report kept in memory, a
 //! user's lifecycle command or chat line for the stream that holds a bot,
-//! and the answer to a session request for the stream that asked.
+//! the answer to a session request for the stream that asked, and a
+//! request for what a bot sees, answered from that stream only.
 //!
 //! The gRPC port's `AgentRegistry` implements it, so the app reaches the
 //! streams without knowing the port; a service calls [`LiveAgents::end`]
@@ -18,6 +19,8 @@ use fleet_core::bot::{BotSnapshot, LastReport, LastState, Lifecycle};
 use fleet_core::chat::ChatMessage;
 use fleet_core::id::{AgentId, BotId, ChatRequestId};
 use fleet_core::mc::SessionCredentials;
+use fleet_proto::control::ScreenOutcome;
+use tokio::sync::oneshot;
 
 /// Why an agent's permission to stream ended (S27).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -184,6 +187,34 @@ pub enum AnswerRefused {
     Unsendable,
 }
 
+/// Why a screen request didn't go to a stream (Plan.md P16.20).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ScreenRefused {
+    /// No live stream of the agent holds the bot assigned.
+    #[error("no live stream holds the bot")]
+    NotHeld,
+    /// The stream ended meanwhile.
+    #[error("the stream ended")]
+    NotConnected,
+    /// The stream's agent runs a script API level below 2, and would end
+    /// its stream on a message it can't read: it's never sent one.
+    #[error("the stream's agent doesn't read screen requests")]
+    AgentTooOld,
+    /// As many screen requests wait on the stream as it takes.
+    #[error("as many screen requests wait on the stream as it takes")]
+    Busy,
+    /// The stream's queue was full, which ends the stream.
+    #[error("the stream's queue is full")]
+    QueueFull,
+    /// The request couldn't be written, which a valid one never is.
+    #[error("the request can't be written")]
+    Unsendable,
+}
+
+/// Where a screen request's answer comes, from the stream it went to only:
+/// closed unanswered when that stream ends.
+pub type ScreenWait = oneshot::Receiver<ScreenOutcome>;
+
 /// The agents' live streams; see the [module docs](self).
 pub trait LiveAgents: Send + Sync + fmt::Debug {
     /// Ends `agent`'s stream for `reason`, its last message the matching
@@ -266,6 +297,22 @@ pub trait LiveAgents: Send + Sync + fmt::Debug {
         generation: u64,
         answer: SessionAnswer,
     ) -> Result<(), AnswerRefused>;
+
+    /// Asks what `bot` sees through generation `generation` of `agent`'s
+    /// live stream, the one found holding it (Plan.md P16.20): checked and
+    /// queued at once, only while that stream lives, isn't ended, holds the
+    /// bot assigned and runs script API level 2, and only while fewer than
+    /// its bound of requests wait on it. Its answer comes only from that
+    /// stream.
+    ///
+    /// # Errors
+    /// [`ScreenRefused`].
+    fn read_screen(
+        &self,
+        agent: AgentId,
+        generation: u64,
+        bot: BotId,
+    ) -> Result<ScreenWait, ScreenRefused>;
 }
 
 #[cfg(test)]

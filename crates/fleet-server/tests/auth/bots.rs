@@ -38,6 +38,7 @@ use super::support::{
 
 pub(crate) mod chat;
 mod history;
+mod screen;
 
 const BOTS: &str = "/api/v1/bots";
 

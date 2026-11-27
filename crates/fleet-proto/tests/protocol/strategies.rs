@@ -17,6 +17,10 @@ use fleet_core::disconnect::{
 use fleet_core::id::{AccountId, AgentId, BotId, ChatRequestId};
 use fleet_core::mc::SessionCredentials;
 use fleet_core::mode::{Action, HotbarSlot, ModeDefinition, ModeDraft, Schedule, Step};
+use fleet_core::script::menu::{
+    BotInventory, Item, ItemData, Screen, ScreenKind, SignDraft, SignSide,
+};
+use fleet_core::script::{BlockPosition, Identifier};
 use fleet_core::script::{
     CaptureDraft, CaptureKind, DecimalMark, Hook, LogKind, MessageDraft, PatternDraft, ProblemKind,
     ReportText, Script, ScriptDraft, ScriptLogLine, ScriptPlace, ScriptProblem, ScriptState,
@@ -25,6 +29,7 @@ use fleet_core::script::{
 use fleet_core::value::{AgentCapacity, McUsername, ServerAddress};
 use fleet_proto::control::{
     AgentMessage, Assignment, BotEvent, BotEventKind, ChatFailedReason, Hello, LifecycleCommand,
+    ScreenAnswer, ScreenOutcome, ScreenRequest, ScreenRequestId, ScreenUnseen, Seen, SeenSign,
     SendChat, ServerMessage, SessionDenied, SessionGrant, SessionRequest, SessionRequestId,
     Welcome,
 };
@@ -209,9 +214,32 @@ fn declared_pattern(n: usize) -> impl Strategy<Value = PatternDraft> {
     })
 }
 
+/// A sign a scripted mode declares: fixed lines, or a price alone on its
+/// line.
+fn declared_sign(n: usize) -> impl Strategy<Value = SignDraft> {
+    prop_oneof![
+        Just(SignDraft {
+            key: format!("note_{n}"),
+            lines: vec!["afk".to_owned(), String::new(), "bot".to_owned()],
+            values: Vec::new(),
+        }),
+        (1..=1000_i64).prop_map(move |min| SignDraft {
+            key: format!("price_{n}"),
+            lines: vec!["{price}".to_owned()],
+            values: vec![ValueDraft {
+                name: "price".to_owned(),
+                kind: ValueKind::Integer {
+                    min,
+                    max: 1_000_000,
+                },
+            }],
+        }),
+    ]
+}
+
 /// A valid scripted mode's body: a script of printable text and line breaks,
-/// any leash, tool guard and list of blocks, and up to three messages and two
-/// patterns of every kind.
+/// any leash, tool guard and list of blocks, up to three messages and two
+/// patterns of every kind, and at level 2 up to two signs.
 pub(crate) fn script() -> impl Strategy<Value = Script> {
     let blocks = proptest::sample::subsequence(
         vec![
@@ -229,27 +257,34 @@ pub(crate) fn script() -> impl Strategy<Value = Script> {
         blocks,
         0..=3_usize,
         0..=2_usize,
+        prop::option::of(0..=2_usize),
     )
-        .prop_flat_map(|(source, leash, tool_guard, blocks, messages, patterns)| {
-            let messages: Vec<_> = (0..messages).map(declared_message).collect();
-            let patterns: Vec<_> = (0..patterns).map(declared_pattern).collect();
-            (
-                Just((source, leash, tool_guard, blocks)),
-                messages,
-                patterns,
-            )
-        })
+        .prop_flat_map(
+            |(source, leash, tool_guard, blocks, messages, patterns, signs)| {
+                let messages: Vec<_> = (0..messages).map(declared_message).collect();
+                let patterns: Vec<_> = (0..patterns).map(declared_pattern).collect();
+                // No count of signs is level 1, which declares none.
+                let level = if signs.is_some() { 2 } else { 1 };
+                let signs: Vec<_> = (0..signs.unwrap_or(0)).map(declared_sign).collect();
+                (
+                    Just((source, leash, tool_guard, blocks, level)),
+                    messages,
+                    patterns,
+                    signs,
+                )
+            },
+        )
         .prop_map(
-            |((source, leash, tool_guard, blocks), messages, patterns)| {
+            |((source, leash, tool_guard, blocks, level), messages, patterns, signs)| {
                 Script::try_from(ScriptDraft {
-                    api: 1,
+                    api: level,
                     source,
                     leash,
                     tool_guard,
                     block_guard: blocks.into_iter().map(str::to_owned).collect(),
                     messages,
                     patterns,
-                    signs: Vec::new(),
+                    signs,
                 })
                 .unwrap()
             },
@@ -330,14 +365,7 @@ pub(crate) fn chat_formats() -> impl Strategy<Value = ChatFormats> {
 pub(crate) fn script_state() -> impl Strategy<Value = ScriptState> {
     let problem = (
         select(ProblemKind::ALL.to_vec()),
-        // Level 1's hooks: the wire carries level 2's from P16.15 on, and
-        // reports them as no hook until then.
-        prop::option::of(select(
-            Hook::ALL
-                .into_iter()
-                .filter(|hook| hook.level() == fleet_core::script::ScriptApiLevel::V1)
-                .collect::<Vec<_>>(),
-        )),
+        prop::option::of(select(Hook::ALL.to_vec())),
         prop::option::of((1..=u32::MAX, 1..=u32::MAX)),
         "[ -~]{0,200}",
     )
@@ -599,6 +627,101 @@ pub(crate) fn hello() -> impl Strategy<Value = Hello> {
         )
 }
 
+/// An item as a script reads it, without its data components: what crosses
+/// in a screen's answer.
+fn seen_item() -> impl Strategy<Value = Item> {
+    (
+        select(vec![
+            "minecraft:potion",
+            "minecraft:stone",
+            "minecraft:diamond_sword",
+            "minecraft:enchanted_book",
+        ]),
+        1..=64_u32,
+        "[ -~]{0,80}",
+        vec("[ -~]{0,40}", 0..=20),
+        prop::option::of(0..=2000_u32),
+        vec(
+            (
+                select(vec!["minecraft:sharpness", "minecraft:mending"]),
+                -5..=300_i32,
+            ),
+            0..=3,
+        ),
+    )
+        .prop_map(|(id, count, name, lore, durability, enchantments)| {
+            Item::new(
+                Identifier::try_from(id).unwrap(),
+                NonZeroU32::new(count).unwrap(),
+                ItemData::new(Vec::new()),
+            )
+            .with_durability(durability)
+            .named(&name)
+            .with_lore(&lore)
+            .with_potion(Some("minecraft:turtle_master"))
+            .with_enchantments(enchantments.iter().map(|(id, level)| (*id, *level)))
+            .with_stored_enchantments(enchantments.iter().map(|(id, level)| (*id, *level)))
+        })
+}
+
+/// `count` slots, some of them empty.
+fn seen_items(count: u16) -> impl Strategy<Value = Vec<Option<Item>>> {
+    vec(prop::option::weighted(0.3, seen_item()), usize::from(count))
+}
+
+/// What a bot sees, as it crosses: any inventory, maybe a screen of any
+/// kind with its cursor, maybe a sign editor.
+pub(crate) fn seen() -> impl Strategy<Value = Seen> {
+    let screen = (
+        select(ScreenKind::ALL.to_vec()),
+        "[ -~]{0,140}",
+        prop::option::of(seen_item()),
+    )
+        .prop_flat_map(|(kind, title, cursor)| {
+            (Just((kind, title, cursor)), seen_items(kind.slots()))
+        })
+        .prop_map(|((kind, title, cursor), items)| Screen::shown(kind, &title, items, cursor));
+    let sign = (any::<(i32, i32, i32)>(), any::<bool>()).prop_map(|((x, y, z), front)| SeenSign {
+        at: BlockPosition { x, y, z },
+        side: if front {
+            SignSide::Front
+        } else {
+            SignSide::Back
+        },
+    });
+    (
+        seen_items(46),
+        prop::option::of(screen),
+        prop::option::of(sign),
+    )
+        .prop_map(|(inventory, screen, sign)| Seen {
+            inventory: BotInventory::new(inventory),
+            screen,
+            sign,
+        })
+}
+
+fn screen_request_id() -> impl Strategy<Value = ScreenRequestId> {
+    (1..=u64::MAX).prop_map(|n| ScreenRequestId::new(NonZeroU64::new(n).unwrap()))
+}
+
+/// A screen request's answer: what the bot sees, or each reason it can't.
+pub(crate) fn screen_answer() -> impl Strategy<Value = ScreenAnswer> {
+    (
+        screen_request_id(),
+        bot_id(),
+        prop_oneof![
+            seen().prop_map(|seen| ScreenOutcome::Seen(Box::new(seen))),
+            select(ScreenUnseen::ALL.to_vec()).prop_map(ScreenOutcome::Unseen),
+        ],
+    )
+        .prop_map(|(id, bot_id, outcome)| ScreenAnswer {
+            id,
+            bot_id,
+            outcome,
+        })
+}
+
 pub(crate) fn agent_message() -> impl Strategy<Value = AgentMessage> {
     prop_oneof![
         hello().prop_map(AgentMessage::Hello),
@@ -609,6 +732,7 @@ pub(crate) fn agent_message() -> impl Strategy<Value = AgentMessage> {
         (session_request_id(), bot_id(), any::<bool>()).prop_map(|(id, bot_id, fresh)| {
             AgentMessage::SessionRequest(SessionRequest { id, bot_id, fresh })
         }),
+        screen_answer().prop_map(AgentMessage::Screen),
     ]
 }
 
@@ -658,5 +782,7 @@ pub(crate) fn server_message() -> impl Strategy<Value = ServerMessage> {
         (bot_id(), select(Lifecycle::ALL.to_vec())).prop_map(|(bot_id, command)| {
             ServerMessage::Lifecycle(LifecycleCommand { bot_id, command })
         }),
+        (screen_request_id(), bot_id())
+            .prop_map(|(id, bot_id)| ServerMessage::ReadScreen(ScreenRequest { id, bot_id })),
     ]
 }

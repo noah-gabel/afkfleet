@@ -115,6 +115,24 @@ describe("a bot's script on its screen (P15.26)", () => {
     expect(within(card()).queryByRole("link", { name: "Show in the script" })).toBeNull();
   });
 
+  it("labels a click line as one, its fate in words with the name a script reads (P16.16)", async () => {
+    const { watch } = await scripted();
+    const text = "a click on slot 13 may have worked: the script checks the next screen (unclear)";
+
+    act(() => {
+      watch
+        .latest()
+        .push(event({ type: "bot_script_log", bot_id: ID, log: { kind: "click", text } }));
+    });
+
+    const log = await within(card()).findByRole("list", { name: "Log" });
+    expect(
+      within(log)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
+    ).toEqual([`Click${text}`]);
+  });
+
   it("has no Script card for a bot on a step mode with nothing reported", async () => {
     await atBot(ID, { bot: async () => bot(1), modes: async () => ({ items: [mode(1)] }) });
     await screen.findByRole("heading", { name: bot(1).account.name });
@@ -134,6 +152,31 @@ describe("a bot's script on its screen (P15.26)", () => {
     expect(
       screen.getByText(
         "Its mode is a script, and every agent online runs a version too old for it. Update an agent.",
+      ),
+    ).toBeTruthy();
+  });
+});
+
+describe("a bot whose mode needs script API level 2 (P16.15)", () => {
+  it("says its agent needs this release, and why the mode needs it", async () => {
+    const lister = SCRIPT_API.examples.find((one) => one.id === "auction_lister")?.script;
+    const watch = fakeWatch();
+    const shown = bot(1, {
+      desired_state: "running",
+      status: { kind: "unplaced", why: "agent_too_old" },
+    });
+    await atBot(ID, {
+      bot: async () => shown,
+      modes: async () => ({
+        items: [mode(1, { name: "Lister", ...(lister === undefined ? {} : { script: lister }) })],
+      }),
+      watchEvents: watch.handler,
+    });
+    await screen.findByRole("heading", { name: shown.account.name });
+
+    expect(
+      screen.getByText(
+        "Its mode uses script API level 2 (screens, signs, the clock or the bot's name), and every agent online runs a version from before it. Update an agent to this release.",
       ),
     ).toBeTruthy();
   });

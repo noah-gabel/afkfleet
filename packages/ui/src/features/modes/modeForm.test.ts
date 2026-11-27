@@ -104,7 +104,7 @@ describe("a mode's values and its request (R158, R159)", () => {
     const body = SCRIPT_API.examples[3]?.script;
     const script = valuesOf(mode(1, { ...(body === undefined ? {} : { script: body }) })).script;
     expect(Object.keys(script).sort()).toEqual(
-      ["blocks", "leash", "messages", "patterns", "source", "toolGuard"].sort(),
+      ["blocks", "leash", "messages", "patterns", "signs", "source", "toolGuard"].sort(),
     );
     expect(Object.keys(script.messages[0] ?? {}).sort()).toEqual(["key", "text", "values"]);
     expect(Object.keys(request?.action ?? {}).sort()).toEqual(["message", "type"]);

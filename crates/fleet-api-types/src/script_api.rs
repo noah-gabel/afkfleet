@@ -12,7 +12,7 @@
 //! the UI's own. It never crosses the HTTP API or an IPC call.
 
 use fleet_core::script::{Script, ScriptApiLevel, ScriptError};
-use fleet_script::{EXAMPLES, MemberKind};
+use fleet_script::{EXAMPLES, MemberKind, ObjectKind};
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -37,10 +37,37 @@ pub struct ScriptApi {
 pub struct ScriptApiObject {
     /// Its name in a script: `keys`.
     pub name: String,
+    /// What it is to a script: a name it uses, a value, or the hooks.
+    pub kind: ScriptApiObjectKind,
     /// What it's for, in a line.
     pub summary: String,
     /// Its members.
     pub members: Vec<ScriptApiMember>,
+    /// The script API level it came with: 1 or 2.
+    pub level: u8,
+}
+
+/// What an object of the script API is to a script (Plan.md P16.16).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ScriptApiObjectKind {
+    /// A name a script uses to reach the game: `keys`, `menu`.
+    Game,
+    /// What a member is or a method answers, never named by a script:
+    /// `input`, a `slot` map, a `time` map.
+    Value,
+    /// The functions a script defines.
+    Hooks,
+}
+
+impl From<ObjectKind> for ScriptApiObjectKind {
+    fn from(kind: ObjectKind) -> Self {
+        match kind {
+            ObjectKind::Game => Self::Game,
+            ObjectKind::Value => Self::Value,
+            ObjectKind::Hooks => Self::Hooks,
+        }
+    }
 }
 
 /// A member of an object.
@@ -59,6 +86,13 @@ pub struct ScriptApiMember {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub object: Option<String>,
+    /// The map of this API that a method answers, when it answers one:
+    /// `menu.slot(n)` answers a `slot`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub answers: Option<String>,
+    /// The script API level it came with: 1 or 2.
+    pub level: u8,
 }
 
 /// What a member of an object is.
@@ -84,15 +118,9 @@ impl From<MemberKind> for ScriptApiMemberKind {
     }
 }
 
-/// The newest API level the editor offers: level 1 until the server
-/// stamps the level a script needs, with the wire at level 2 (Plan.md
-/// P16.15). Until then a mode is saved at level 1, so the editor offers
-/// nothing a save would refuse (ADR-0052).
-const OFFERED: ScriptApiLevel = ScriptApiLevel::V1;
-
-/// How many of the reasons, in fleet-core's order, a level-1 script can
-/// meet: the first ten (Phase 15's).
-const LEVEL_1_REASONS: usize = 10;
+/// The newest API level the editor offers: the newest there is, since the
+/// server stamps the level a script needs (Plan.md P16.15; ADR-0052).
+const OFFERED: ScriptApiLevel = ScriptApiLevel::NEWEST;
 
 /// One of the reference's examples: a complete scripted mode to start from.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -107,10 +135,9 @@ pub struct ScriptExample {
 }
 
 impl ScriptApi {
-    /// fleet-script's description, its reasons and its examples, as far as
-    /// level 1 goes until the server stamps a script's level (P16.15): an
-    /// object, a member, a reason and an example of a
-    /// newer level are left out.
+    /// fleet-script's description, its reasons and its examples, each with
+    /// the API level it came with: the editor says which a script uses, and
+    /// the server stamps the level it needs (P16.15).
     ///
     /// # Errors
     /// [`ScriptError`] if an example breaks one of fleet-core's rules for a
@@ -122,7 +149,9 @@ impl ScriptApi {
             .filter(|object| object.level <= OFFERED)
             .map(|object| ScriptApiObject {
                 name: object.name.to_owned(),
+                kind: object.kind().into(),
                 summary: object.summary.to_owned(),
+                level: object.level.get(),
                 members: object
                     .members
                     .iter()
@@ -133,6 +162,8 @@ impl ScriptApi {
                         signature: member.signature.to_owned(),
                         summary: member.summary.to_owned(),
                         object: member.object.map(str::to_owned),
+                        answers: member.answers.map(str::to_owned),
+                        level: member.level.get(),
                     })
                     .collect(),
             })
@@ -153,7 +184,6 @@ impl ScriptApi {
             objects,
             reasons: fleet_script::reasons()
                 .into_iter()
-                .take(LEVEL_1_REASONS)
                 .map(str::to_owned)
                 .collect(),
             examples,
@@ -165,19 +195,27 @@ impl ScriptApi {
 mod tests {
     use super::*;
 
-    #[test]
-    fn it_holds_every_level_1_object_and_member_of_fleet_scripts_description_in_its_order() {
-        let api = ScriptApi::describe().unwrap();
-        let offered: Vec<&fleet_script::Object> = fleet_script::API
-            .iter()
-            .filter(|object| object.level == ScriptApiLevel::V1)
-            .collect();
+    /// A member as the test compares it: name, signature, summary, what it
+    /// is, what it answers, and its level.
+    type Compared<'a> = (
+        &'a str,
+        &'a str,
+        &'a str,
+        Option<&'a str>,
+        Option<&'a str>,
+        u8,
+    );
 
-        assert_eq!(api.objects.len(), offered.len());
-        for (shown, object) in api.objects.iter().zip(offered) {
+    #[test]
+    fn it_holds_every_object_and_member_of_fleet_scripts_description_in_its_order() {
+        let api = ScriptApi::describe().unwrap();
+
+        assert_eq!(api.objects.len(), fleet_script::API.len());
+        for (shown, object) in api.objects.iter().zip(fleet_script::API) {
             assert_eq!(shown.name, object.name);
             assert_eq!(shown.summary, object.summary);
-            let members: Vec<(&str, &str, &str, Option<&str>)> = shown
+            assert_eq!(shown.level, object.level.get());
+            let members: Vec<Compared<'_>> = shown
                 .members
                 .iter()
                 .map(|member| {
@@ -186,14 +224,24 @@ mod tests {
                         member.signature.as_str(),
                         member.summary.as_str(),
                         member.object.as_deref(),
+                        member.answers.as_deref(),
+                        member.level,
                     )
                 })
                 .collect();
-            let described: Vec<(&str, &str, &str, Option<&str>)> = object
+            let described: Vec<Compared<'_>> = object
                 .members
                 .iter()
-                .filter(|member| member.level == ScriptApiLevel::V1)
-                .map(|member| (member.name, member.signature, member.summary, member.object))
+                .map(|member| {
+                    (
+                        member.name,
+                        member.signature,
+                        member.summary,
+                        member.object,
+                        member.answers,
+                        member.level.get(),
+                    )
+                })
                 .collect();
             assert_eq!(members, described, "{}", object.name);
         }
@@ -219,39 +267,64 @@ mod tests {
         );
     }
 
+    /// The server stamps the level a script needs (Plan.md P16.15), so the
+    /// editor offers level 2, saying which name came with it, and knows the
+    /// maps a script reads as values, never as names it uses.
     #[test]
-    fn level_2_stays_out_of_the_editor_until_the_server_stamps_the_level() {
+    fn level_2_is_offered_with_each_names_level_and_its_maps_as_values() {
         let api = ScriptApi::describe().unwrap();
-        let names: Vec<&str> = api
+        let object = |name: &str| {
+            api.objects
+                .iter()
+                .find(|object| object.name == name)
+                .unwrap()
+        };
+        let kinds: Vec<(&str, ScriptApiObjectKind, u8)> = api
             .objects
             .iter()
-            .map(|object| object.name.as_str())
+            .map(|object| (object.name.as_str(), object.kind, object.level))
+            .filter(|(name, _, _)| {
+                ["keys", "menu", "clock", "input", "slot", "time", "hooks"].contains(name)
+            })
             .collect();
 
-        for newer in ["inventory", "menu", "sign", "clock", "slot", "time"] {
-            assert!(!names.contains(&newer), "{newer}");
-        }
-        let hooks = api
-            .objects
+        assert_eq!(
+            kinds,
+            [
+                ("keys", ScriptApiObjectKind::Game, 1),
+                ("input", ScriptApiObjectKind::Value, 1),
+                ("menu", ScriptApiObjectKind::Game, 2),
+                ("clock", ScriptApiObjectKind::Game, 2),
+                ("slot", ScriptApiObjectKind::Value, 2),
+                ("time", ScriptApiObjectKind::Value, 2),
+                ("hooks", ScriptApiObjectKind::Hooks, 1),
+            ]
+        );
+        let name = object("bot")
+            .members
             .iter()
-            .find(|object| object.name == "hooks")
+            .find(|member| member.name == "name")
             .unwrap();
-        assert!(hooks.members.iter().all(|hook| hook.name != "on_menu_open"));
-        let bot = api
-            .objects
+        assert_eq!(name.level, 2);
+        let slot = object("menu")
+            .members
             .iter()
-            .find(|object| object.name == "bot")
+            .find(|member| member.name == "slot")
             .unwrap();
-        assert!(bot.members.iter().all(|member| member.name != "name"));
-        assert_eq!(api.reasons.len(), 10);
-        assert_eq!(api.reasons.last().map(String::as_str), Some("no_command"));
+        assert_eq!(slot.answers.as_deref(), Some("slot"));
+        assert!(
+            object("hooks")
+                .members
+                .iter()
+                .any(|hook| hook.name == "on_menu_open" && hook.level == 2)
+        );
     }
 
     #[test]
     fn it_holds_the_reasons_and_every_example_as_an_editor_reads_its_mode() {
         let api = ScriptApi::describe().unwrap();
 
-        assert_eq!(api.reasons, fleet_script::reasons()[..LEVEL_1_REASONS]);
+        assert_eq!(api.reasons, fleet_script::reasons());
         let ids: Vec<&str> = api
             .examples
             .iter()
@@ -263,16 +336,19 @@ mod tests {
                 "afk_farm",
                 "minecart_farm",
                 "cobblestone_generator",
-                "balance"
+                "balance",
+                "sell_macro",
+                "auction_scan",
+                "farm_that_sells",
+                "auction_lister",
+                "auction_lister_anvil"
             ]
         );
-        for (shown, example) in api
-            .examples
-            .iter()
-            .zip(EXAMPLES.iter().filter(|example| example.draft().api == 1))
-        {
+        for (shown, example) in api.examples.iter().zip(EXAMPLES.iter()) {
             assert_eq!(shown.title, example.title);
             assert_eq!(shown.script.source.as_str(), example.source);
+            // At its own level, which the server stamps it with too.
+            assert_eq!(shown.script.api, example.level.get(), "{}", example.id);
             assert!(
                 shown
                     .script

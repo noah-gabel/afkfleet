@@ -36,6 +36,7 @@ use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, Invit
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaConfirmResponse, MfaEnrollResponse};
 use fleet_api_types::modes::{CreateModeRequest, ModePage, ModeResponse, UpdateModeRequest};
+use fleet_api_types::screen::BotScreenResponse;
 use fleet_api_types::server_settings::{
     CreateServerSettingsRequest, PreviewChatFormatsRequest, PreviewChatFormatsResponse,
     ServerSettingsPage, ServerSettingsPageQuery, ServerSettingsResponse,
@@ -884,6 +885,16 @@ impl<F: StoreFactory> AppState<F> {
         validate(&query)?;
         let conn = self.conn.read().await;
         conn.client()?.chat(id, &query).await.map_err(error::client)
+    }
+
+    /// The `bot_screen` command: what the bot sees, asked of its agent
+    /// (Plan.md P16.20).
+    ///
+    /// # Errors
+    /// `no_server`, `no_session`, or `api` 404, 429 or 503 (`busy`).
+    pub async fn bot_screen(&self, id: BotId) -> Result<BotScreenResponse, CommandError> {
+        let conn = self.conn.read().await;
+        conn.client()?.bot_screen(id).await.map_err(error::client)
     }
 
     /// The `send_chat` command: a line for the bot to send, plain chat or a

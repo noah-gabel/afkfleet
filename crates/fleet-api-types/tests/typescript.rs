@@ -37,7 +37,7 @@ fn exported() -> (TempDir, BTreeMap<String, String>) {
 }
 
 /// Every file the export writes, sorted: one per type.
-const EXPORTED_FILES: [&str; 166] = [
+const EXPORTED_FILES: [&str; 177] = [
     "AccountKind.ts",
     "AccountLabel.ts",
     "AccountPage.ts",
@@ -63,6 +63,13 @@ const EXPORTED_FILES: [&str; 166] = [
     "BotPage.ts",
     "BotPatchRequest.ts",
     "BotResponse.ts",
+    "BotScreenEnchantment.ts",
+    "BotScreenItem.ts",
+    "BotScreenKind.ts",
+    "BotScreenResponse.ts",
+    "BotScreenSign.ts",
+    "BotScreenSlot.ts",
+    "BotScreenView.ts",
     "BotStateKind.ts",
     "BotStateReason.ts",
     "BotStatus.ts",
@@ -149,6 +156,8 @@ const EXPORTED_FILES: [&str; 166] = [
     "ModeScheduleRequest.ts",
     "ModeScript.ts",
     "ModeScriptRequest.ts",
+    "ModeSign.ts",
+    "ModeSignRequest.ts",
     "ModeStep.ts",
     "ModeStepRequest.ts",
     "ModeValue.ts",
@@ -169,6 +178,7 @@ const EXPORTED_FILES: [&str; 166] = [
     "ScriptApiMember.ts",
     "ScriptApiMemberKind.ts",
     "ScriptApiObject.ts",
+    "ScriptApiObjectKind.ts",
     "ScriptCheck.ts",
     "ScriptCheckRequest.ts",
     "ScriptConversion.ts",
@@ -177,6 +187,7 @@ const EXPORTED_FILES: [&str; 166] = [
     "ScriptHookName.ts",
     "ScriptLogKind.ts",
     "ScriptLogLine.ts",
+    "ScriptNeed.ts",
     "ScriptProblem.ts",
     "ScriptProblemKind.ts",
     "ScriptStateKind.ts",
@@ -215,7 +226,7 @@ fn the_export_writes_one_file_per_type() {
 
 /// The desktop app's IPC types (ADR-0017): never on the HTTP wire, so the
 /// `OpenAPI` document leaves them out.
-const APP_TYPES: [&str; 32] = [
+const APP_TYPES: [&str; 34] = [
     "ApiErrorDetails.ts",
     "AppVersion.ts",
     "BotCommandEffect.ts",
@@ -236,11 +247,13 @@ const APP_TYPES: [&str; 32] = [
     "ScriptApiMember.ts",
     "ScriptApiMemberKind.ts",
     "ScriptApiObject.ts",
+    "ScriptApiObjectKind.ts",
     "ScriptCheck.ts",
     "ScriptCheckRequest.ts",
     "ScriptConversion.ts",
     "ScriptConvertRequest.ts",
     "ScriptExample.ts",
+    "ScriptNeed.ts",
     "ServerProfileRequest.ts",
     "ServerProfileResponse.ts",
     "ServerProfileState.ts",

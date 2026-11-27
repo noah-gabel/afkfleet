@@ -69,3 +69,4 @@ Each architecture decision record (ADR) holds one decision with its context, its
 - [0050. Menus in fleet-core: a server's text, the screen's snapshot, the click guard, one click at a time, and the sign desk](adr/0050-menus-in-fleet-core.md)
 - [0051. Menus in fleet-mc: each window's state, azalea's gaps put right, the guard at sending, the barrier, and the user's auction flow](adr/0051-menus-in-fleet-mc.md)
 - [0052. Menus in scripts and the runtime, the time of day, and a fate that never misleads](adr/0052-menus-in-scripts-and-the-time-of-day.md)
+- [0053. Level 2 on the wire, in the server and in the app, and what a bot sees](adr/0053-level-2-on-the-wire-in-the-app-and-what-a-bot-sees.md)

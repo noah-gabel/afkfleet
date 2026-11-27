@@ -7,6 +7,7 @@ package fleet.v1;
 import "fleet/v1/bot.proto";
 import "fleet/v1/chat.proto";
 import "fleet/v1/common.proto";
+import "fleet/v1/screen.proto";
 
 // The service an enrolled agent calls with its client certificate.
 service AgentControl {
@@ -46,6 +47,8 @@ message AgentMessage {
     BotEvent event = 4;
     // A bot asks for session credentials.
     SessionRequest session_request = 5;
+    // What a bot sees, as the server asked (Plan.md P16.20).
+    ScreenAnswer screen = 6;
   }
 }
 
@@ -166,6 +169,16 @@ enum ScriptHook {
   SCRIPT_HOOK_CHAT = 6;
   // `on_stop`.
   SCRIPT_HOOK_STOP = 7;
+  // `on_menu_open` (API level 2).
+  SCRIPT_HOOK_MENU_OPEN = 8;
+  // `on_menu_update` (API level 2).
+  SCRIPT_HOOK_MENU_UPDATE = 9;
+  // `on_menu_close` (API level 2).
+  SCRIPT_HOOK_MENU_CLOSE = 10;
+  // `on_click` (API level 2).
+  SCRIPT_HOOK_CLICK = 11;
+  // `on_sign_open` (API level 2).
+  SCRIPT_HOOK_SIGN_OPEN = 12;
 }
 
 // One line of a script's log (ADR-0037, C7).
@@ -198,6 +211,10 @@ enum ScriptLogKind {
   SCRIPT_LOG_KIND_REFUSED = 8;
   // `on_stop` failed.
   SCRIPT_LOG_KIND_STOP_FAILED = 9;
+  // Something the script did in a screen or a sign editor didn't go as
+  // asked: a click, a button, a trade, a name, a close or a sign's answer
+  // that wasn't sent, or whose fate wasn't `ok` (API level 2).
+  SCRIPT_LOG_KIND_CLICK = 10;
 }
 
 // A user's chat message was sent.
@@ -284,6 +301,10 @@ message ServerMessage {
     Reject reject = 9;
     // A user's restart, reset or resume of a bot the agent runs.
     LifecycleCommand lifecycle = 10;
+    // A user asks what a bot sees (Plan.md P16.20). Sent only to an agent
+    // whose hello says it runs script API level 2: an older one would end
+    // its stream on a message it can't read.
+    ScreenRequest screen_request = 11;
   }
 }
 

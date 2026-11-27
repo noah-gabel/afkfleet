@@ -44,10 +44,10 @@ use fleet_core::pki::CertFingerprint;
 use fleet_core::placement::Unplaced;
 use fleet_core::system::RandomError;
 use fleet_core::value::{AgentName, ServerAddress, Username};
-use fleet_proto::control::ChatFailedReason;
+use fleet_proto::control::{ChatFailedReason, ScreenOutcome, ScreenUnseen, Seen};
 use fleet_server::app::bots::{
-    BotAction, BotService, BotWriteError, ChatHistory, ChatHistoryError, ChatOutcome, ChatRoute,
-    ChatSendError, ChatWait, Controlled,
+    BotAction, BotService, BotSight, BotWriteError, ChatHistory, ChatHistoryError, ChatOutcome,
+    ChatRoute, ChatSendError, ChatWait, Controlled, ScreenError,
 };
 use fleet_server::app::events::{EventBus, LiveEvent, LiveEventKind};
 use fleet_server::app::users::ActingUser;
@@ -68,7 +68,7 @@ use fleet_server::ports::grants::{GrantReads, GrantWrites};
 use fleet_server::ports::invites::{InviteReads, InviteWrites};
 use fleet_server::ports::live_agents::{
     AnswerRefused, CommandRefused, HeldBot, LatestReport, LiveAgents, LiveStream, PermissionEnd,
-    SessionAnswer,
+    ScreenRefused, ScreenWait, SessionAnswer,
 };
 use fleet_server::ports::login_attempts::{LoginAttemptReads, LoginAttemptWrites};
 use fleet_server::ports::mfa::{MfaReads, MfaWrites};
@@ -138,6 +138,24 @@ struct Live {
     /// How the agent answers a line, on which bus, when a test says so: at
     /// once, as the ingest publishes a `ChatSent` or `ChatFailed`.
     chat_reply: Mutex<Option<(EventBus, LiveEventKind)>>,
+    /// How the next screen request is taken; refused `NotHeld` when a test
+    /// says nothing.
+    screen: Mutex<Option<Screened>>,
+    /// How many screen requests were taken, refused or not.
+    screens_asked: Mutex<usize>,
+    /// The answers a test keeps open, so their requests are never answered.
+    unanswered: Mutex<Vec<tokio::sync::oneshot::Sender<ScreenOutcome>>>,
+}
+
+/// How the fake takes a screen request.
+#[derive(Debug)]
+enum Screened {
+    /// Refused.
+    Refused(ScreenRefused),
+    /// Answered at once.
+    Answered(ScreenOutcome),
+    /// Taken, never answered.
+    Never,
 }
 
 impl LiveAgents for Live {
@@ -243,6 +261,35 @@ impl LiveAgents for Live {
         _answer: SessionAnswer,
     ) -> Result<(), AnswerRefused> {
         Err(AnswerRefused::NotConnected)
+    }
+
+    fn read_screen(
+        &self,
+        agent: AgentId,
+        generation: u64,
+        bot: BotId,
+    ) -> Result<ScreenWait, ScreenRefused> {
+        *self.screens_asked.lock().unwrap() += 1;
+        match self.held(agent, bot) {
+            None => return Err(ScreenRefused::NotHeld),
+            Some(held) if held.generation != generation => {
+                return Err(ScreenRefused::NotConnected);
+            }
+            Some(_) => {}
+        }
+        let (answer, wait) = tokio::sync::oneshot::channel();
+        match self.screen.lock().unwrap().take() {
+            None => Err(ScreenRefused::NotHeld),
+            Some(Screened::Refused(refused)) => Err(refused),
+            Some(Screened::Answered(outcome)) => {
+                answer.send(outcome).unwrap();
+                Ok(wait)
+            }
+            Some(Screened::Never) => {
+                self.unanswered.lock().unwrap().push(answer);
+                Ok(wait)
+            }
+        }
     }
 }
 
@@ -2195,4 +2242,157 @@ async fn a_lines_entry_names_its_route_and_command_kind_never_its_text(
             "{recorded}"
         );
     }
+}
+
+// --- What a bot sees (Plan.md P16.20; ADR-0036, M14) -----------------------------------
+
+impl Setup {
+    /// Makes `bot` run on agent 1's live stream at script API level
+    /// `script_api`, generation 1, which reported it in `state`.
+    async fn held_at(&self, bot: BotId, state: BotState, script_api: u32) {
+        self.held_in(bot, state).await;
+        if let Some(stream) = self.live.streams.lock().unwrap().get_mut(&agent(1)) {
+            stream.script_api = script_api;
+        }
+    }
+
+    /// The agent takes the next screen request as `screened`.
+    fn screen(&self, screened: Screened) {
+        *self.live.screen.lock().unwrap() = Some(screened);
+    }
+
+    fn screens_asked(&self) -> usize {
+        *self.live.screens_asked.lock().unwrap()
+    }
+
+    /// The service, waiting 50 ms for a screen's answer.
+    fn looking(&self) -> BotService {
+        self.service(true)
+            .with_screen_wait(Duration::from_millis(50))
+    }
+}
+
+/// What a bot sees: nothing in its inventory, no screen.
+fn nothing() -> Seen {
+    Seen::of(&fleet_core::mc::MenuView::default())
+}
+
+#[sqlx::test(migrations = false)]
+async fn what_an_online_bot_sees_comes_from_its_agent(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let bot = setup.bot(1).await;
+    setup.held_at(bot, online(), 2).await;
+    setup.screen(Screened::Answered(ScreenOutcome::Seen(Box::new(nothing()))));
+
+    let seen = setup.looking().screen(&the_owner(), bot).await.unwrap();
+
+    assert_eq!(seen, BotSight::Seen(Box::new(nothing())));
+    assert_eq!(setup.screens_asked(), 1);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_bot_that_isnt_online_or_on_no_live_stream_is_offline_without_asking(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let stopped = setup.bot(1).await;
+    setup.held_at(stopped, BotState::Stopped, 2).await;
+    let nowhere = setup.bot(2).await;
+
+    let first = setup.looking().screen(&the_owner(), stopped).await.unwrap();
+    let second = setup.looking().screen(&the_owner(), nowhere).await.unwrap();
+
+    assert_eq!((first, second), (BotSight::Offline, BotSight::Offline));
+    assert_eq!(setup.screens_asked(), 0);
+}
+
+/// An agent of the last release would end its stream on a message it can't
+/// read: it's never asked (Plan.md P16.20).
+#[sqlx::test(migrations = false)]
+async fn an_agent_below_level_2_is_never_asked(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let bot = setup.bot(1).await;
+    setup.held_at(bot, online(), 1).await;
+
+    let seen = setup.looking().screen(&the_owner(), bot).await.unwrap();
+
+    assert_eq!(seen, BotSight::AgentTooOld);
+    assert_eq!(setup.screens_asked(), 0);
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_agent_that_doesnt_answer_in_time_or_cant_look_is_no_answer(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let bot = setup.bot(1).await;
+    setup.held_at(bot, online(), 2).await;
+
+    setup.screen(Screened::Never);
+    let silent = setup.looking().screen(&the_owner(), bot).await.unwrap();
+    setup.screen(Screened::Answered(ScreenOutcome::Unseen(
+        ScreenUnseen::TimedOut,
+    )));
+    let timed_out = setup.looking().screen(&the_owner(), bot).await.unwrap();
+    setup.screen(Screened::Answered(ScreenOutcome::Unseen(
+        ScreenUnseen::NotOnline,
+    )));
+    let between_worlds = setup.looking().screen(&the_owner(), bot).await.unwrap();
+
+    assert_eq!(silent, BotSight::NoAnswer);
+    assert_eq!(timed_out, BotSight::NoAnswer);
+    assert_eq!(between_worlds, BotSight::Offline);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_look_the_agent_or_its_stream_is_too_busy_for_is_busy(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let bot = setup.bot(1).await;
+    setup.held_at(bot, online(), 2).await;
+
+    setup.screen(Screened::Refused(ScreenRefused::Busy));
+    let stream = setup.looking().screen(&the_owner(), bot).await;
+    setup.screen(Screened::Answered(ScreenOutcome::Unseen(
+        ScreenUnseen::Busy,
+    )));
+    let agent = setup.looking().screen(&the_owner(), bot).await;
+
+    assert!(matches!(stream, Err(ScreenError::Busy)), "{stream:?}");
+    assert!(matches!(agent, Err(ScreenError::Busy)), "{agent:?}");
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_bot_unknown_or_unseen_by_its_viewer_is_refused(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let bot = setup.bot(1).await;
+    setup.held_at(bot, online(), 2).await;
+    let stranger = Actor {
+        id: UserId::new_v7(at(T0), [9; 10]).unwrap(),
+        role: Role::Member,
+    };
+
+    let unseen = setup.looking().screen(&stranger, bot).await;
+    let unknown = setup.looking().screen(&the_owner(), bot_n(7)).await;
+
+    assert!(matches!(unseen, Err(ScreenError::Denied(_))), "{unseen:?}");
+    assert!(matches!(unknown, Err(ScreenError::NotFound)), "{unknown:?}");
+    assert_eq!(setup.screens_asked(), 0);
+}
+
+fn bot_n(n: u8) -> BotId {
+    bot(n)
 }

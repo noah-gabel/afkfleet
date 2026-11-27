@@ -57,9 +57,9 @@ mod timers;
 mod turn;
 
 pub use action::{Action, Asked, PressKind, Refused};
-pub use api::describe::{API, Member, MemberKind, Object, reason_meaning, reasons};
+pub use api::describe::{API, Member, MemberKind, Object, ObjectKind, reason_meaning, reasons};
 pub use api::reference::{ReferenceError, table, with_tables};
-pub use compile::{Program, compile};
+pub use compile::{LevelReason, Leveled, Program, compile, compile_lowest};
 pub use convert::{Conversion, ConvertError, Note, NoteKind, convert};
 pub use error::{
     CompileError, CompileErrorKind, Limit, Misuse, ScriptError, ScriptErrorKind, SourcePosition,

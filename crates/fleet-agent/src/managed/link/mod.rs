@@ -462,6 +462,7 @@ impl Link {
             ServerMessage::Update(spec) => Instruction::Update(spec),
             ServerMessage::SendChat(chat) => Instruction::SendChat(chat),
             ServerMessage::Lifecycle(command) => Instruction::Lifecycle(command),
+            ServerMessage::ReadScreen(request) => Instruction::ReadScreen(request),
         };
         match self.parts.inbox.instruction(generation, instruction) {
             Ok(()) => None,

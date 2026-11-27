@@ -84,6 +84,8 @@ struct State {
     /// How long [`SessionHandle::disconnect`] takes after it has closed the
     /// session.
     disconnect_delay: Duration,
+    /// How long [`SessionHandle::observe`] takes before it answers.
+    observe_delay: Duration,
     frozen_tick: Option<Instant>,
     frozen_packet: Option<Instant>,
     dropped_chat: u64,
@@ -367,7 +369,13 @@ impl SessionHandle for FakeSession {
 
     fn observe(&self) -> impl Future<Output = Result<Observation, SessionError>> + Send {
         let shared = Arc::clone(&self.shared);
-        async move { shared.observe() }
+        async move {
+            let delay = shared.lock().observe_delay;
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+            shared.observe()
+        }
     }
 
     fn set_guards(&self, guards: Guards) -> impl Future<Output = Result<(), SessionError>> + Send {
@@ -644,6 +652,12 @@ impl SessionController {
     /// returns after `delay` on tokio's clock.
     pub fn delay_disconnect(&self, delay: Duration) {
         self.shared.lock().disconnect_delay = delay;
+    }
+
+    /// Makes every later [`SessionHandle::observe`] take `delay` on tokio's
+    /// clock before it answers, as a host thread busy with a long job does.
+    pub fn delay_observe(&self, delay: Duration) {
+        self.shared.lock().observe_delay = delay;
     }
 
     /// Returns what the code under test did in this session, in order.

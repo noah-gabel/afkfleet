@@ -80,6 +80,7 @@ import type { PreviewChatFormatsResponse } from "@afkfleet/ui/generated/PreviewC
 import type { RegisterResponse } from "@afkfleet/ui/generated/RegisterResponse";
 import type { ScriptCheck } from "@afkfleet/ui/generated/ScriptCheck";
 import type { ScriptConversion } from "@afkfleet/ui/generated/ScriptConversion";
+import type { ScriptNeed } from "@afkfleet/ui/generated/ScriptNeed";
 import type { ServerProfileState } from "@afkfleet/ui/generated/ServerProfileState";
 import type { ServerSettingsPage } from "@afkfleet/ui/generated/ServerSettingsPage";
 import type { ServerSettingsResponse } from "@afkfleet/ui/generated/ServerSettingsResponse";
@@ -89,6 +90,8 @@ import type { UpdateCheck } from "@afkfleet/ui/generated/UpdateCheck";
 import type { UserPage } from "@afkfleet/ui/generated/UserPage";
 import type { UserResponse } from "@afkfleet/ui/generated/UserResponse";
 import type { UserRole } from "@afkfleet/ui/generated/UserRole";
+
+import { AUCTION_HOUSE } from "./screen";
 
 /** The Owner's username and every user's password. */
 export const OWNER = "afkowner";
@@ -164,6 +167,7 @@ export const COMMANDS = [
   "reset_bot",
   "resume_bot",
   "bot_chat",
+  "bot_screen",
   "send_chat",
   "send_command",
   "server_settings",
@@ -190,9 +194,24 @@ export const COMMANDS = [
 export type Command = (typeof COMMANDS)[number];
 
 /**
+ * What makes a text need level 2, as the fake guesses it from names alone (Plan.md P16.15): the real
+ * check is the compiler's, at the lowest level that runs the text.
+ */
+function needsOf(source: string): ScriptNeed[] {
+  const found: [ScriptNeed, RegExp][] = [
+    ["menus", /\b(?:menu|inventory)\./],
+    ["signs", /\bsign\./],
+    ["clock", /\bclock\./],
+    ["bot_name", /\bbot\.name\b/],
+  ];
+  return found.filter(([, pattern]) => pattern.test(source)).map(([need]) => need);
+}
+
+/**
  * The fake's stand-in for the app's compiler (ADR-0045): the first `kees`, a misspelled `keys`, is
- * an undefined name at its place, in the compiler's words; any other text is clean. The real
- * check is the desktop crate's, against fleet-script; this only lets a flow show a mark.
+ * an undefined name at its place, in the compiler's words; any other text is clean, at the level
+ * `needsOf` guesses. The real check is the desktop crate's, against fleet-script; this only lets
+ * a flow show a mark.
  */
 function checkedScript(source: string): ScriptCheck {
   const lines = source.split("\n");
@@ -206,10 +225,13 @@ function checkedScript(source: string): ScriptCheck {
           line: index + 1,
           column: at + 1,
         },
+        level: 0,
+        needs: [],
       };
     }
   }
-  return {};
+  const needs = needsOf(source);
+  return { level: needs.length === 0 ? 1 : 2, needs };
 }
 
 /** The conversion story's steps and the real converter's answer for them (converted.json). */
@@ -392,10 +414,14 @@ interface StoredMode {
   script?: ModeScriptRequest;
 }
 
-/** A scripted body as an editor of its mode reads it, at level 1 (ADR-0044, E6). */
+/**
+ * A scripted body as an editor of its mode reads it (ADR-0044, E6), at the level the server would
+ * stamp: 2 when it declares signs or its text needs it (Plan.md P16.15).
+ */
 function shownScript(body: ModeScriptRequest): ModeScript {
+  const signs = body.signs ?? [];
   return {
-    api: 1,
+    api: signs.length > 0 || needsOf(body.source).length > 0 ? 2 : 1,
     source: body.source,
     leash: body.leash,
     tool_guard: body.tool_guard,
@@ -405,6 +431,7 @@ function shownScript(body: ModeScriptRequest): ModeScript {
     messages: body.messages.map((message) => ({ ...message, arguments_hidden: false })),
     patterns: body.patterns,
     any_time_chat: body.patterns.some((pattern) => pattern.when === "any_time"),
+    signs,
   };
 }
 
@@ -2603,6 +2630,16 @@ export class FakeBackend {
           return account === undefined || level === null
             ? api(404, "not_found")
             : value(this.#chatPage(session.user, account, level, args.before, args.limit));
+        });
+      case "bot_screen":
+        return this.#signedIn((session) => {
+          const account = this.#accounts.find((one) => one.bot.id === String(args.id));
+          if (account === undefined || this.#level(session.user, account) === null) {
+            return api(404, "not_found");
+          }
+          const { status } = account.bot;
+          const online = status.kind === "reported" && status.state === "online";
+          return value(online ? AUCTION_HOUSE : { kind: "offline" });
         });
       case "send_chat":
         return this.#signedIn((session) =>

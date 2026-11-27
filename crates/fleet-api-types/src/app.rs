@@ -344,6 +344,39 @@ pub struct ScriptCheck {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub problem: Option<FieldError>,
+    /// The script API level the server would stamp the text with: the
+    /// lowest that runs it, 1 or 2; 0 with a problem (Plan.md P16.15).
+    pub level: u8,
+    /// Why it needs level 2, each once: none at level 1. Declared signs,
+    /// which aren't in the text, need level 2 too; the editor adds them.
+    pub needs: Vec<ScriptNeed>,
+}
+
+/// Why a script needs script API level 2: what of level 2's it uses
+/// (Plan.md P16.15; ADR-0052, G1). The editor says it in words beside the
+/// level, so an author knows the mode needs agents that run it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ScriptNeed {
+    /// `inventory` or `menu`, or a screen's hook.
+    Menus,
+    /// `sign` or `on_sign_open`.
+    Signs,
+    /// `clock`.
+    Clock,
+    /// `bot.name`.
+    BotName,
+}
+
+impl From<fleet_script::LevelReason> for ScriptNeed {
+    fn from(reason: fleet_script::LevelReason) -> Self {
+        match reason {
+            fleet_script::LevelReason::Menus => Self::Menus,
+            fleet_script::LevelReason::Signs => Self::Signs,
+            fleet_script::LevelReason::Clock => Self::Clock,
+            fleet_script::LevelReason::BotName => Self::BotName,
+        }
+    }
 }
 
 /// The `convert_to_script` command's input: a step mode's steps as the
@@ -685,16 +718,29 @@ mod tests {
     }
 
     #[test]
-    fn a_script_checks_answer_holds_its_problem_or_leaves_it_out() {
-        let clean = ScriptCheck { problem: None };
+    fn a_script_checks_answer_holds_its_problem_or_leaves_it_out_and_its_level_with_why() {
+        let clean = ScriptCheck {
+            problem: None,
+            level: 2,
+            needs: vec![ScriptNeed::Menus, ScriptNeed::BotName],
+        };
         let problem = ScriptCheck {
             problem: Some(FieldError::new("script.source", "nope").at_place(Some(2), Some(3))),
+            level: 0,
+            needs: Vec::new(),
         };
 
-        assert_eq!(serde_json::to_value(&clean).unwrap(), json!({}));
+        assert_eq!(
+            serde_json::to_value(&clean).unwrap(),
+            json!({ "level": 2, "needs": ["menus", "bot_name"] })
+        );
         assert_eq!(
             serde_json::to_value(&problem).unwrap(),
-            json!({ "problem": { "path": "script.source", "message": "nope", "line": 2, "column": 3 } })
+            json!({
+                "problem": { "path": "script.source", "message": "nope", "line": 2, "column": 3 },
+                "level": 0,
+                "needs": []
+            })
         );
         assert_eq!(
             serde_json::from_value::<ScriptCheck>(serde_json::to_value(&problem).unwrap()).unwrap(),

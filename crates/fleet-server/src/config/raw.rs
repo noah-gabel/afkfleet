@@ -259,6 +259,8 @@ pub(crate) struct RawRateLimits {
     pub(crate) grants_by_name_per_user_per_hour: u32,
     #[garde(range(min = RateLimitConfig::GRANT_CANDIDATES_PER_USER_PER_HOUR.min, max = RateLimitConfig::GRANT_CANDIDATES_PER_USER_PER_HOUR.max))]
     pub(crate) grant_candidates_per_user_per_hour: u32,
+    #[garde(range(min = RateLimitConfig::SCREEN_READS_PER_USER_PER_MIN.min, max = RateLimitConfig::SCREEN_READS_PER_USER_PER_MIN.max))]
+    pub(crate) screen_reads_per_user_per_min: u32,
     #[garde(range(min = RateLimitConfig::ENROLL_PER_IP_PER_MIN.min, max = RateLimitConfig::ENROLL_PER_IP_PER_MIN.max))]
     pub(crate) enroll_per_ip_per_min: u32,
     #[garde(range(min = RateLimitConfig::CONNECT_PER_CERT_PER_MIN.min, max = RateLimitConfig::CONNECT_PER_CERT_PER_MIN.max))]
@@ -291,6 +293,7 @@ impl Default for RawRateLimits {
             link_flows_per_user_per_day: 10,
             grants_by_name_per_user_per_hour: 10,
             grant_candidates_per_user_per_hour: 60,
+            screen_reads_per_user_per_min: 12,
             enroll_per_ip_per_min: 5,
             connect_per_cert_per_min: 10,
             bot_actions_per_bot_per_min: 5,
@@ -700,6 +703,7 @@ mod secret_names {
             "rate_limits.link_flows_per_user_per_day",
             "rate_limits.grants_by_name_per_user_per_hour",
             "rate_limits.grant_candidates_per_user_per_hour",
+            "rate_limits.screen_reads_per_user_per_min",
             "rate_limits.enroll_per_ip_per_min",
             "rate_limits.connect_per_cert_per_min",
             "rate_limits.bot_actions_per_bot_per_min",

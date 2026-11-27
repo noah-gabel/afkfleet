@@ -42,6 +42,7 @@ use crate::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use crate::me::{MeResponse, PasswordChangeRequest};
 use crate::mfa::{MfaConfirmRequest, MfaConfirmResponse, MfaEnrollResponse, MfaResetResponse};
 use crate::modes::{CreateModeRequest, ModePage, ModeResponse, UpdateModeRequest};
+use crate::screen::BotScreenResponse;
 use crate::server_settings::{
     CreateServerSettingsRequest, PreviewChatFormatsRequest, PreviewChatFormatsResponse,
     ServerSettingsPage, ServerSettingsResponse, UpdateServerSettingsRequest,
@@ -101,6 +102,7 @@ pub fn components() -> BTreeMap<String, RefOr<Schema>> {
     add::<ChatSendResponse>(&mut schemas);
     add::<ChatFailure>(&mut schemas);
     add::<ChatPage>(&mut schemas);
+    add::<BotScreenResponse>(&mut schemas);
     add::<ModePage>(&mut schemas);
     add::<ModeResponse>(&mut schemas);
     add::<CreateModeRequest>(&mut schemas);

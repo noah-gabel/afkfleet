@@ -61,10 +61,11 @@
 //! chat the ingest drops, totals with no agent's label (ADR-0022, S11).
 
 use core::fmt;
+use core::num::NonZeroU64;
 use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use chrono::{DateTime, Utc};
@@ -77,9 +78,9 @@ use fleet_core::script::ScriptApiLevel;
 use fleet_core::system::Clock;
 use fleet_core::value::{AgentCapacity, AgentName};
 use fleet_proto::control::{
-    AgentMessage, BotEventKind, LifecycleCommand, MAX_SERVER_MESSAGE_BYTES, SendChat,
-    ServerMessage, SessionDenied, SessionGrant, SessionRequest, SessionRequestId,
-    server_message_len,
+    AgentMessage, BotEventKind, LifecycleCommand, MAX_SERVER_MESSAGE_BYTES, ScreenOutcome,
+    ScreenRequest, ScreenRequestId, SendChat, ServerMessage, SessionDenied, SessionGrant,
+    SessionRequest, SessionRequestId, server_message_len,
 };
 use fleet_proto::generated as wire;
 use tokio::sync::{mpsc, oneshot};
@@ -95,8 +96,8 @@ use crate::ports::agent_connections::{
 use crate::ports::ingest::{NotTaken, StickyMarks, StickyWrite};
 pub use crate::ports::live_agents::LatestReport;
 use crate::ports::live_agents::{
-    AnswerRefused, CommandRefused, HeldBot, LiveAgents, LiveStream, PermissionEnd, SessionAnswer,
-    SessionOutcome,
+    AnswerRefused, CommandRefused, HeldBot, LiveAgents, LiveStream, PermissionEnd, ScreenRefused,
+    ScreenWait, SessionAnswer, SessionOutcome,
 };
 use crate::ports::reconcile::{Change, NoReconcile, Reconcile};
 
@@ -105,6 +106,10 @@ pub const SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 
 /// How often one agent's identity conflict is recorded at most (S26).
 pub const CONFLICT_INTERVAL: Duration = Duration::from_hours(1);
+
+/// How many screen requests wait on one stream at most (Plan.md P16.20): a
+/// person asks for each, and the rate limit bounds how fast.
+pub const MAX_SCREEN_READS: usize = 8;
 
 /// The registry; clones share it. See the [module docs](self).
 #[derive(Clone)]
@@ -122,6 +127,8 @@ impl fmt::Debug for AgentRegistry {
 struct Shared {
     clock: Arc<dyn Clock>,
     limit: usize,
+    /// The last screen request's number; the first is 1.
+    screen_requests: AtomicU64,
     /// Hinted after the lock is released.
     reconcile: Arc<dyn Reconcile>,
     state: Mutex<State>,
@@ -188,6 +195,17 @@ struct Live {
     /// Whether its welcome was reconciled yet.
     welcome: Welcome,
     holds: HashMap<BotId, HoldEntry>,
+    /// The screen requests sent on it that wait for their answer, by
+    /// number: at most [`MAX_SCREEN_READS`] (Plan.md P16.20).
+    screens: HashMap<ScreenRequestId, PendingScreen>,
+}
+
+/// A screen request that waits for its answer.
+struct PendingScreen {
+    /// The bot it asked about.
+    bot: BotId,
+    /// Where its answer goes; closed when its user stopped waiting.
+    answer: oneshot::Sender<ScreenOutcome>,
 }
 
 /// Whether a stream's welcome was reconciled.
@@ -537,6 +555,7 @@ impl AgentRegistry {
             shared: Arc::new(Shared {
                 clock,
                 limit,
+                screen_requests: AtomicU64::new(0),
                 reconcile,
                 state: Mutex::new(State::default()),
             }),
@@ -659,6 +678,7 @@ impl AgentRegistry {
                     script_api: activation.script_api,
                     welcome: Welcome::Listed(listed),
                     holds: HashMap::new(),
+                    screens: HashMap::new(),
                 });
                 Ok(notice)
             }
@@ -1227,7 +1247,8 @@ fn needs(message: &ServerMessage) -> Option<ScriptApiLevel> {
         | ServerMessage::SessionGrant(_)
         | ServerMessage::SessionDenied(_)
         | ServerMessage::Reject(_)
-        | ServerMessage::Lifecycle(_) => None,
+        | ServerMessage::Lifecycle(_)
+        | ServerMessage::ReadScreen(_) => None,
     }
 }
 
@@ -1354,6 +1375,75 @@ impl LiveAgents for AgentRegistry {
                 message: message.clone(),
             }),
         )
+    }
+
+    fn read_screen(
+        &self,
+        agent: AgentId,
+        generation: u64,
+        bot: BotId,
+    ) -> Result<ScreenWait, ScreenRefused> {
+        let unsendable = |error| match error {
+            SendError::NotConnected => ScreenRefused::NotConnected,
+            SendError::QueueFull => ScreenRefused::QueueFull,
+            SendError::TooLarge | SendError::Unwritable | SendError::AgentTooOld => {
+                ScreenRefused::Unsendable
+            }
+        };
+        // A number of its own, never handed out before on any stream; a
+        // server sends far fewer than 2^64.
+        let number = self
+            .shared
+            .screen_requests
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        let id = ScreenRequestId::new(NonZeroU64::new(number).ok_or(ScreenRefused::Unsendable)?);
+        let message = self
+            .wire(ServerMessage::ReadScreen(ScreenRequest { id, bot_id: bot }))
+            .map_err(unsendable)?;
+        // One critical section, as a command's (S48): the stream found
+        // holding the bot, still live, not ended and holding it, gets it.
+        let mut state = self.state();
+        let Some(slot) = state
+            .slots
+            .get_mut(&agent)
+            .filter(|slot| slot.generation == generation)
+        else {
+            return Err(ScreenRefused::NotConnected);
+        };
+        let Phase::Live(live) = &mut slot.phase else {
+            return Err(ScreenRefused::NotConnected);
+        };
+        if live.halt.is_halted() {
+            return Err(ScreenRefused::NotConnected);
+        }
+        if !live
+            .holds
+            .get(&bot)
+            .is_some_and(|entry| entry.hold == Hold::Assigned)
+        {
+            return Err(ScreenRefused::NotHeld);
+        }
+        // An agent before level 2 would read it as a message it doesn't
+        // know and end its stream.
+        if !ScriptApiLevel::V2.runs_on(live.script_api) {
+            return Err(ScreenRefused::AgentTooOld);
+        }
+        // A request whose user stopped waiting frees its place.
+        live.screens
+            .retain(|_, pending| !pending.answer.is_closed());
+        if live.screens.len() >= MAX_SCREEN_READS {
+            return Err(ScreenRefused::Busy);
+        }
+        let (answer, wait) = oneshot::channel();
+        live.screens.insert(id, PendingScreen { bot, answer });
+        if let Err(error) = queue(slot, message) {
+            if let Phase::Live(live) = &mut slot.phase {
+                live.screens.remove(&id);
+            }
+            return Err(unsendable(error));
+        }
+        Ok(wait)
     }
 
     fn answer_session(
@@ -1492,6 +1582,8 @@ fn end_slot(slot: &mut Slot, reason: StreamEnd) {
         }
         Phase::Live(live) => {
             live.halt.halt();
+            // Its screen requests' users learn at once that it ended.
+            live.screens.clear();
             if let Some(ender) = live.ender.take() {
                 // A session that's ending dropped its receiver: nothing to tell.
                 let _ = ender.send(reason);
@@ -1527,6 +1619,19 @@ fn judge(
     } = stream;
     match message {
         AgentMessage::Hello(_) | AgentMessage::Heartbeat => Verdict::Pass,
+        // Its waiter gets it, if it's the answer to a request this stream
+        // was sent about this bot; nothing else goes anywhere.
+        AgentMessage::Screen(answer) => {
+            let asked = live
+                .screens
+                .get(&answer.id)
+                .is_some_and(|pending| pending.bot == answer.bot_id);
+            if asked && let Some(pending) = live.screens.remove(&answer.id) {
+                // A user who stopped waiting loses nothing.
+                let _ = pending.answer.send(answer.outcome.clone());
+            }
+            Verdict::Pass
+        }
         // Only a reconciled stream that isn't ended, for a bot it holds
         // assigned: never one held releasing or listed in a hello not yet
         // reconciled (S57).
@@ -1617,7 +1722,6 @@ fn judge(
 
 #[cfg(test)]
 mod tests {
-    use core::num::NonZeroU64;
     use std::sync::Mutex as StdMutex;
 
     use async_trait::async_trait;
@@ -1625,7 +1729,9 @@ mod tests {
     use fleet_core::id::RequestId;
     use fleet_core::mc::SessionCredentials;
     use fleet_core::value::{AgentCapacity, AgentVersion};
-    use fleet_proto::control::{Assignment, BotEvent, BotEventKind, SessionRequestId, Welcome};
+    use fleet_proto::control::{
+        Assignment, BotEvent, BotEventKind, ScreenAnswer, ScreenUnseen, SessionRequestId, Welcome,
+    };
     use fleet_testkit::system::ManualClock;
 
     use super::*;
@@ -3794,5 +3900,161 @@ mod tests {
 
         assert_eq!(first.len(), 1);
         assert_eq!(again, first);
+    }
+
+    // --- What a bot sees (Plan.md P16.20) ---
+
+    /// A reconciled stream of agent 1 at script API level `script_api`,
+    /// holding bot 1 assigned; the reconcile is taken off its queue.
+    fn holding_at(
+        registry: &AgentRegistry,
+        script_api: u32,
+    ) -> (
+        Lease,
+        mpsc::Receiver<wire::ServerMessage>,
+        oneshot::Receiver<StreamEnd>,
+    ) {
+        let lease = registry.claim(&admitted(1)).unwrap();
+        let (queue, mut queued) = mpsc::channel(8);
+        let ended = registry
+            .activate(
+                &lease,
+                Activation {
+                    script_api,
+                    ..activation(queue, Vec::new())
+                },
+            )
+            .unwrap();
+        assert_eq!(queued.try_recv().unwrap(), welcome());
+        settle(registry, &lease, &[(1, Hold::Assigned)]);
+        assert!(queued.try_recv().is_ok(), "the reconcile");
+        (lease, queued, ended)
+    }
+
+    /// The screen request `queued` holds next.
+    fn screen_request(queued: &mut mpsc::Receiver<wire::ServerMessage>) -> ScreenRequest {
+        match ServerMessage::try_from(queued.try_recv().unwrap()).unwrap() {
+            ServerMessage::ReadScreen(request) => request,
+            other => panic!("not a screen request: {other:?}"),
+        }
+    }
+
+    fn answer(request: ScreenRequest, why: ScreenUnseen) -> AgentMessage {
+        AgentMessage::Screen(ScreenAnswer {
+            id: request.id,
+            bot_id: request.bot_id,
+            outcome: ScreenOutcome::Unseen(why),
+        })
+    }
+
+    #[test]
+    fn a_screen_request_goes_to_the_stream_holding_the_bot_and_only_its_answer_comes_back() {
+        let (registry, _) = registry();
+        let (lease, mut queued, _ended) = holding_at(&registry, 2);
+
+        let mut wait = registry
+            .read_screen(agent(1), lease.generation, bot(1))
+            .unwrap();
+        let request = screen_request(&mut queued);
+        let wrong_bot = AgentMessage::Screen(ScreenAnswer {
+            bot_id: bot(2),
+            ..match answer(request, ScreenUnseen::Busy) {
+                AgentMessage::Screen(answer) => answer,
+                _ => unreachable!(),
+            }
+        });
+        let (for_another_bot, _) = registry.admit(&lease, &wrong_bot);
+        let unanswered = wait.try_recv();
+
+        assert_eq!(request.bot_id, bot(1));
+        assert_eq!(for_another_bot, Verdict::Pass);
+        assert!(unanswered.is_err(), "another bot's answer answers nothing");
+        let mut second = registry
+            .read_screen(agent(1), lease.generation, bot(1))
+            .unwrap();
+        let next = screen_request(&mut queued);
+        assert_ne!(next.id, request.id, "every request has its own number");
+        let (verdict, _) = registry.admit(&lease, &answer(next, ScreenUnseen::NotOnline));
+        assert_eq!(verdict, Verdict::Pass);
+        assert_eq!(
+            second.try_recv(),
+            Ok(ScreenOutcome::Unseen(ScreenUnseen::NotOnline))
+        );
+    }
+
+    #[test]
+    fn an_agent_below_level_2_is_never_sent_a_screen_request() {
+        let (registry, _) = registry();
+        let (lease, mut queued, _ended) = holding_at(&registry, 1);
+
+        let refused = registry
+            .read_screen(agent(1), lease.generation, bot(1))
+            .map(|_| ());
+
+        assert_eq!(refused, Err(ScreenRefused::AgentTooOld));
+        assert!(queued.try_recv().is_err(), "nothing was queued");
+    }
+
+    #[test]
+    fn a_screen_request_goes_only_to_the_generation_holding_its_bot() {
+        let (registry, _) = registry();
+        let (lease, mut queued, _ended) = holding_at(&registry, 2);
+
+        let unheld = registry
+            .read_screen(agent(1), lease.generation, bot(2))
+            .map(|_| ());
+        let stale = registry
+            .read_screen(agent(1), lease.generation + 1, bot(1))
+            .map(|_| ());
+        let elsewhere = registry
+            .read_screen(agent(2), lease.generation, bot(1))
+            .map(|_| ());
+
+        assert_eq!(unheld, Err(ScreenRefused::NotHeld));
+        assert_eq!(stale, Err(ScreenRefused::NotConnected));
+        assert_eq!(elsewhere, Err(ScreenRefused::NotConnected));
+        assert!(queued.try_recv().is_err(), "nothing was queued");
+    }
+
+    #[test]
+    fn past_the_streams_waiting_requests_one_is_busy_and_a_given_up_one_frees_its_place() {
+        let (registry, _) = registry();
+        let (lease, mut queued, _ended) = holding_at(&registry, 2);
+        let mut waits: Vec<_> = (0..MAX_SCREEN_READS)
+            .map(|_| {
+                registry
+                    .read_screen(agent(1), lease.generation, bot(1))
+                    .unwrap()
+            })
+            .collect();
+        while queued.try_recv().is_ok() {}
+
+        let busy = registry
+            .read_screen(agent(1), lease.generation, bot(1))
+            .map(|_| ());
+        // Its user stopped waiting: its place is free again.
+        drop(waits.pop());
+        let taken = registry
+            .read_screen(agent(1), lease.generation, bot(1))
+            .map(|_| ());
+
+        assert_eq!(busy, Err(ScreenRefused::Busy));
+        assert_eq!(taken, Ok(()));
+    }
+
+    #[test]
+    fn a_streams_end_drops_its_screen_requests_unanswered() {
+        let (registry, _) = registry();
+        let (lease, mut queued, _ended) = holding_at(&registry, 2);
+        let mut wait = registry
+            .read_screen(agent(1), lease.generation, bot(1))
+            .unwrap();
+        let request = screen_request(&mut queued);
+
+        assert!(registry.end(agent(1), StreamEnd::StreamError));
+        let at_the_end = wait.try_recv();
+        let _ = registry.admit(&lease, &answer(request, ScreenUnseen::Busy));
+
+        assert_eq!(at_the_end, Err(oneshot::error::TryRecvError::Closed));
     }
 }

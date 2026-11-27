@@ -33,6 +33,7 @@ use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, Invit
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaConfirmResponse, MfaEnrollResponse};
 use fleet_api_types::modes::{CreateModeRequest, ModePage, ModeResponse, UpdateModeRequest};
+use fleet_api_types::screen::BotScreenResponse;
 use fleet_api_types::server_settings::{
     CreateServerSettingsRequest, PreviewChatFormatsRequest, PreviewChatFormatsResponse,
     ServerSettingsPage, ServerSettingsPageQuery, ServerSettingsResponse,
@@ -752,6 +753,21 @@ impl<S: SessionStore> Client<S> {
     /// session; and the transport's errors.
     pub async fn chat(&self, id: BotId, query: &ChatPageQuery) -> Result<ChatPage, ClientError> {
         self.core.chat(id, query).await
+    }
+
+    /// `GET /bots/{id}/screen`: what the bot sees, asked of its agent: the
+    /// screen it has open or its own inventory, each slot as a script names
+    /// it; or why that can't be said (`offline`, `agent_too_old`,
+    /// `no_answer`). Plan.md P16.20.
+    ///
+    /// # Errors
+    /// The server's 404 (no such bot, or one the caller may not see), 429
+    /// (the caller's own limit, with its wait) or 503 (`busy`: the bot's
+    /// agent is looking already) as [`ClientError::Api`];
+    /// [`ClientError::NoSession`] without a session; and the transport's
+    /// errors.
+    pub async fn bot_screen(&self, id: BotId) -> Result<BotScreenResponse, ClientError> {
+        self.core.bot_screen(id).await
     }
 
     /// `POST /bots/{id}/chat`: an online bot sends a line, plain chat or a

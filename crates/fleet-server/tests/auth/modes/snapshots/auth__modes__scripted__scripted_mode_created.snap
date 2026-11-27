@@ -57,6 +57,7 @@ expression: "redacted(&seen.body, &[(id.clone(), \"the mode\")])"
         "when": "any_time"
       }
     ],
+    "signs": [],
     "source": "fn on_join(first) {\n    chat.send(\"home\");\n}\n",
     "tool_guard": 2
   },

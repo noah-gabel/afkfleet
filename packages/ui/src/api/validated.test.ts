@@ -555,6 +555,13 @@ describe("validated", () => {
             captures: [{ name: "amount", type: "amount", min: 0, max: 1e9, decimal_mark: "." }],
           },
         ],
+        signs: [
+          {
+            key: "price",
+            lines: ["{price}"],
+            values: [{ name: "price", type: "integer", min: 1, max: 1_000_000 }],
+          },
+        ],
       } as const;
       const scripted = { name: "Balance", visibility: "private", steps: [], script } as const;
 
@@ -583,6 +590,11 @@ describe("validated", () => {
         ).toEqual([["script.patterns[0].when", expect.any(String)]]);
         expect(await refusals({ ...scripted, script: { ...script, api: 1 } })).toEqual([
           ["script", expect.any(String)],
+        ]);
+        // An older app's body, without `signs`: this app never sends one (Plan.md P16.15).
+        const { signs: _left, ...older } = script;
+        expect(await refusals({ ...scripted, script: older })).toEqual([
+          ["script.signs", expect.any(String)],
         ]);
       });
     });

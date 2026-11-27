@@ -57,6 +57,7 @@
     "allow-reset-bot",
     "allow-resume-bot",
     "allow-bot-chat",
+    "allow-bot-screen",
     "allow-send-chat",
     "allow-send-command",
     "allow-server-settings",

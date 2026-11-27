@@ -90,6 +90,13 @@ describe("a scripted mode's form", () => {
           ],
         },
       ],
+      signs: [
+        {
+          key: "price",
+          lines: ["{price}", "", "afk", " "],
+          values: [{ name: "price", type: "integer", min: "1", max: "100", places: "", words: "" }],
+        },
+      ],
     };
 
     const { script } = scriptRequestOf(values);
@@ -120,6 +127,14 @@ describe("a scripted mode's form", () => {
           ],
         },
       ],
+      // The empty lines at its end left out; one in the middle kept.
+      signs: [
+        {
+          key: "price",
+          lines: ["{price}", "", "afk"],
+          values: [{ name: "price", type: "integer", min: 1, max: 100 }],
+        },
+      ],
     });
   });
 
@@ -140,6 +155,7 @@ describe("a scripted mode's form", () => {
         block_guard: script.block_guard,
         messages: script.messages.map(({ key, text, values }) => ({ key, text, values })),
         patterns: script.patterns,
+        signs: script.signs,
       });
     }
   });
@@ -194,6 +210,7 @@ describe("a scripted mode's form", () => {
 
   it("says what a script may send and expect, for the editor's marks", () => {
     expect(declaredOf(scriptValuesOf(BALANCE))).toEqual({
+      signs: [],
       messages: ["balance", "pay"],
       replies: ["balance"],
     });

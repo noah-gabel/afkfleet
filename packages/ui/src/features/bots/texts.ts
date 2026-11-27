@@ -15,6 +15,7 @@ import type { BotStatus } from "../../generated/BotStatus";
 import type { ConnectFailure } from "../../generated/ConnectFailure";
 import type { LastDisconnect } from "../../generated/LastDisconnect";
 import type { ModeResponse } from "../../generated/ModeResponse";
+import type { ScriptLogKind } from "../../generated/ScriptLogKind";
 import type { SessionServerFailure } from "../../generated/SessionServerFailure";
 import type { UnplacedReason } from "../../generated/UnplacedReason";
 import { formatDuration } from "../../lib/duration";
@@ -499,6 +500,9 @@ function nameOf(notice: Notice): string {
 /** Under a bot whose every live agent is too old for its scripted mode (ADR-0036, D13). */
 export const AGENT_TOO_OLD =
   "Its mode is a script, and every agent online runs a version too old for it. Update an agent.";
+/** The same for a mode at script API level 2, which only this release's agents run (P16.15). */
+export const AGENT_TOO_OLD_LEVEL_2 =
+  "Its mode uses script API level 2 (screens, signs, the clock or the bot's name), and every agent online runs a version from before it. Update an agent to this release.";
 /** The script's card. */
 export const SCRIPT_HEADING = "Script";
 /** Before its script said anything: nothing of it is stored, only the live events carry it. */
@@ -531,7 +535,7 @@ export const SHOW_IN_SCRIPT = "Show in the script";
 /** Its log. */
 export const SCRIPT_LOG_HEADING = "Log";
 export const SCRIPT_LOG_EMPTY = "Nothing logged since the app connected.";
-/** What a log line is about. */
+/** What a log line is about; a click's says its fate itself (P16.16). */
 export const SCRIPT_LOG_KIND_TEXT = {
   line: "Log",
   sent: "Sent",
@@ -542,4 +546,80 @@ export const SCRIPT_LOG_KIND_TEXT = {
   matched: "Read",
   refused: "Refused",
   stop_failed: "on_stop failed",
+  click: "Click",
+} as const satisfies Record<ScriptLogKind, string>;
+
+// --- What a bot sees (Plan.md P16.20; ADR-0036, M14) ------------------------------------------
+
+/** The card that shows what a bot sees. */
+export const SIGHT_HEADING = "What it sees";
+/** Under its heading: when its agent is asked, and whose texts it shows. */
+export const SIGHT_NOTE =
+  "Its agent is asked when you press Look: the screen the bot has open, or its own inventory. Every name and line is the Minecraft server's, shown as plain text.";
+/** The button before the first look, and after it. */
+export const SIGHT_LOOK = "Look";
+export const SIGHT_LOOK_AGAIN = "Look again";
+/** While its agent is asked. */
+export const SIGHT_ASKING = "Asking its agent…";
+/** Why it can't be said what the bot sees. */
+export const SIGHT_UNSEEN = {
+  offline: "It isn't in a world, so there's nothing to see.",
+  agent_too_old:
+    "Its agent runs a version from before this release, which can't show what a bot sees. Update the agent to this release.",
+  no_answer: "Its agent didn't answer within 5 seconds. Try again.",
 } as const;
+/** An answer this version doesn't know. */
+export function sightUnknown(kind: string): string {
+  return `The server answered with something this app doesn't know (${kind}). Update the app.`;
+}
+/** A screen's kind and grid, as a script reads them. */
+export function screenKindLine(kind: string, rows?: number, columns?: number): string {
+  if (rows === undefined || columns === undefined) {
+    return `menu.kind ${kind}`;
+  }
+  return `menu.kind ${kind} · ${rows} ${rows === 1 ? "row" : "rows"} of ${columns}`;
+}
+/** The lists of slots. */
+export const SIGHT_OWN = "Its slots (menu.slots)";
+export const SIGHT_PLAYER = "The bot's slots in it (menu.player)";
+export const SIGHT_INVENTORY = "No screen open: its own inventory (inventory.slots)";
+/** The item on the cursor. */
+export const SIGHT_CURSOR = "On the cursor";
+/** A sign editor that waits for the script's answer. */
+export function sightSign(x: number, y: number, z: number, front: boolean): string {
+  return `A sign editor waits for its answer: the sign at ${x} ${y} ${z}, its ${front ? "front" : "back"} (on_sign_open).`;
+}
+/** A slot, as a script names it; `at` when `menu.at(row, column)` names it too. */
+export function slotPlace(index: number, row?: number, column?: number, at = false): string {
+  if (row === undefined || column === undefined) {
+    return `Slot ${index}`;
+  }
+  const place = `Slot ${index} · row ${row}, column ${column}`;
+  return at ? `${place} · menu.at(${row}, ${column})` : place;
+}
+/** The empty slots, as ranges of numbers. */
+export function emptySlots(ranges: string): string {
+  return `Empty: ${ranges}`;
+}
+/** A list of slots with nothing in them. */
+export const ALL_EMPTY = "All empty.";
+/** An item's identifier and count. */
+export function itemLine(id: string, count: number): string {
+  return `${id} × ${count}`;
+}
+/** A potion's kind. */
+export function potionLine(potion: string): string {
+  return `Potion: ${potion}`;
+}
+/** Enchantments, each with its level. */
+export function enchantmentsLine(
+  stored: boolean,
+  enchantments: readonly { readonly id: string; readonly level: number }[],
+): string {
+  const list = enchantments.map(({ id, level }) => `${id} ${level}`).join(", ");
+  return `${stored ? "Stored enchantments" : "Enchantments"}: ${list}`;
+}
+/** The uses an item that wears has left. */
+export function usesLeft(uses: number): string {
+  return uses === 1 ? "1 use left" : `${uses} uses left`;
+}

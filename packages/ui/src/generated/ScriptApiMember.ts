@@ -25,4 +25,13 @@ summary: string,
  * The object of this API a property is, when it's one: `keys.forward`
  * is an `input`.
  */
-object?: string, };
+object?: string, 
+/**
+ * The map of this API that a method answers, when it answers one:
+ * `menu.slot(n)` answers a `slot`.
+ */
+answers?: string, 
+/**
+ * The script API level it came with: 1 or 2.
+ */
+level: number, };

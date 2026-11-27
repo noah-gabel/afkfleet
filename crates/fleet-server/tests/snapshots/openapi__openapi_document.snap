@@ -528,6 +528,228 @@ expression: document
         ],
         "type": "object"
       },
+      "BotScreenEnchantment": {
+        "description": "An enchantment and its level.",
+        "properties": {
+          "id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "level": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "level"
+        ],
+        "type": "object"
+      },
+      "BotScreenItem": {
+        "description": "An item, as a script reads it.",
+        "properties": {
+          "count": {
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "durability": {
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "enchantments": {
+            "description": "Its enchantments.",
+            "items": {
+              "$ref": "#/components/schemas/BotScreenEnchantment"
+            },
+            "type": "array"
+          },
+          "id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "lore": {
+            "items": {
+              "maxLength": 128,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "potion": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "stored_enchantments": {
+            "description": "An enchanted book's stored enchantments.",
+            "items": {
+              "$ref": "#/components/schemas/BotScreenEnchantment"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "count",
+          "name",
+          "lore",
+          "enchantments",
+          "stored_enchantments"
+        ],
+        "type": "object"
+      },
+      "BotScreenKind": {
+        "description": "What the answer says of the bot.",
+        "enum": [
+          "screen",
+          "inventory",
+          "offline",
+          "agent_too_old",
+          "no_answer"
+        ],
+        "type": "string"
+      },
+      "BotScreenResponse": {
+        "description": "`GET /bots/{id}/screen`: what the bot sees, or why it can't be said.",
+        "properties": {
+          "inventory": {
+            "description": "`inventory`: its own slots, numbered as `inventory.slots` numbers\nthem: its armour 5 to 8, its 36 slots 9 to 44, its offhand 45.",
+            "items": {
+              "$ref": "#/components/schemas/BotScreenSlot"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/BotScreenKind",
+            "description": "What it says of the bot."
+          },
+          "screen": {
+            "$ref": "#/components/schemas/BotScreenView",
+            "description": "`screen`: the screen it has open."
+          },
+          "sign": {
+            "$ref": "#/components/schemas/BotScreenSign",
+            "description": "`screen`, `inventory`: the sign editor that waits for its answer."
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "BotScreenSign": {
+        "description": "A sign editor that waits for its answer.",
+        "properties": {
+          "front": {
+            "description": "Whether it writes the sign's front; its back otherwise.",
+            "type": "boolean"
+          },
+          "x": {
+            "maximum": 2147483647,
+            "minimum": -2147483648,
+            "type": "integer"
+          },
+          "y": {
+            "maximum": 2147483647,
+            "minimum": -2147483648,
+            "type": "integer"
+          },
+          "z": {
+            "maximum": 2147483647,
+            "minimum": -2147483648,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "z",
+          "front"
+        ],
+        "type": "object"
+      },
+      "BotScreenSlot": {
+        "description": "A slot, as a script names it.",
+        "properties": {
+          "column": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "index": {
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "item": {
+            "$ref": "#/components/schemas/BotScreenItem",
+            "description": "What it holds; nothing when it's empty."
+          },
+          "row": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "index"
+        ],
+        "type": "object"
+      },
+      "BotScreenView": {
+        "description": "A screen a bot has open.",
+        "properties": {
+          "columns": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cursor": {
+            "$ref": "#/components/schemas/BotScreenItem",
+            "description": "The item on the cursor."
+          },
+          "kind": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "player": {
+            "description": "The bot's 36 slots in it, as `menu.player` numbers them: four rows\nof nine, the hotbar last.",
+            "items": {
+              "$ref": "#/components/schemas/BotScreenSlot"
+            },
+            "type": "array"
+          },
+          "rows": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "slots": {
+            "description": "Its own slots, in order, as `menu.slots` numbers them.",
+            "items": {
+              "$ref": "#/components/schemas/BotScreenSlot"
+            },
+            "type": "array"
+          },
+          "title": {
+            "maxLength": 128,
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "title",
+          "slots",
+          "player"
+        ],
+        "type": "object"
+      },
       "BotStateKind": {
         "description": "A bot's lifecycle state (Plan.md Appendix E).\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
         "enum": [
@@ -2288,6 +2510,13 @@ expression: document
             },
             "type": "array"
           },
+          "signs": {
+            "description": "The signs the script may write (API level 2).",
+            "items": {
+              "$ref": "#/components/schemas/ModeSign"
+            },
+            "type": "array"
+          },
           "source": {
             "maxLength": 16384,
             "type": "string"
@@ -2306,7 +2535,8 @@ expression: document
           "block_guard",
           "messages",
           "patterns",
-          "any_time_chat"
+          "any_time_chat",
+          "signs"
         ],
         "type": "object"
       },
@@ -2340,6 +2570,13 @@ expression: document
             },
             "type": "array"
           },
+          "signs": {
+            "description": "The signs the script may write, at most 16: API level 2 (ADR-0036,\nM16). This app always sends it, `[]` for none. An app of the last\nrelease leaves it out, and an edit without it of a mode that\ndeclares signs is refused: that app doesn't show them, and would\nlose them (Plan.md P16.15).",
+            "items": {
+              "$ref": "#/components/schemas/ModeSignRequest"
+            },
+            "type": "array"
+          },
           "source": {
             "maxLength": 16384,
             "type": "string"
@@ -2357,6 +2594,65 @@ expression: document
           "block_guard",
           "messages",
           "patterns"
+        ],
+        "type": "object"
+      },
+      "ModeSign": {
+        "description": "A declared sign as its viewer sees it: a sign's line is never a command,\nso every viewer sees it whole.",
+        "properties": {
+          "key": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "maxLength": 1024,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "values": {
+            "description": "Its values.",
+            "items": {
+              "$ref": "#/components/schemas/ModeValue"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "lines",
+          "values"
+        ],
+        "type": "object"
+      },
+      "ModeSignRequest": {
+        "additionalProperties": false,
+        "description": "A sign a scripted mode declares, in a request (ADR-0036, M16).",
+        "properties": {
+          "key": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "maxLength": 1024,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "values": {
+            "description": "The values the lines hold, at most 8 for the whole sign.",
+            "items": {
+              "$ref": "#/components/schemas/ModeValueRequest"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "lines",
+          "values"
         ],
         "type": "object"
       },
@@ -2668,7 +2964,8 @@ expression: document
           "window_dropped",
           "matched",
           "refused",
-          "stop_failed"
+          "stop_failed",
+          "click"
         ],
         "type": "string"
       },
@@ -7070,6 +7367,113 @@ expression: document
           }
         ],
         "summary": "`POST /api/v1/bots/{id}/resume`: a paused bot connects again.",
+        "tags": [
+          "bots"
+        ]
+      }
+    },
+    "/api/v1/bots/{id}/screen": {
+      "get": {
+        "operationId": "get_bot_screen",
+        "parameters": [
+          {
+            "description": "The bot's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotScreenResponse"
+                }
+              }
+            },
+            "description": "What the bot sees, as its agent read it: `screen` with the screen it has open, or `inventory` with its own slots when none is; each slot with its number and, in a grid, its row and column, as a script names them. Or why that can't be said: `offline` (it isn't in a world on a live agent), `agent_too_old` (its agent runs a version from before script API level 2, which isn't asked: it needs the next release), `no_answer` (its agent didn't answer within 5 s). Every text is the Minecraft server's, as plain text."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such bot, or one the caller may not see."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many looks: the caller's own `screen_reads_per_user_per_min`.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`busy`: the bot's agent is looking at this bot already, or as many looks wait on its stream as it takes.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`GET /api/v1/bots/{id}/screen`: what the bot sees, asked of its agent.",
         "tags": [
           "bots"
         ]
