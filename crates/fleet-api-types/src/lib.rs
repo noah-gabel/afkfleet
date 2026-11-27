@@ -83,6 +83,7 @@ pub mod modes;
 pub mod open;
 pub mod openapi;
 pub mod page;
+pub mod screen;
 pub mod script;
 pub mod script_api;
 pub mod secret;

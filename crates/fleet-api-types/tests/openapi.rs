@@ -68,6 +68,11 @@ use fleet_api_types::modes::{
     ModeScheduleRequest, ModeStep, ModeStepRequest, ModeVisibility, UpdateModeRequest,
     number_schema,
 };
+use fleet_api_types::screen::{
+    BotScreenEnchantment, BotScreenItem, BotScreenKind, BotScreenResponse, BotScreenSign,
+    BotScreenSlot, BotScreenView, ITEM_NAME_MAX_CHARS, SCREEN_ID_MAX_CHARS, SCREEN_KIND_MAX_CHARS,
+    SCREEN_TITLE_MAX_CHARS,
+};
 use fleet_api_types::script::{
     ModeCapture, ModeCaptureKind, ModeCaptureRequest, ModeDecimalMark, ModeMessage,
     ModeMessageRequest, ModePattern, ModePatternRequest, ModeScript, ModeScriptRequest, ModeSign,
@@ -196,8 +201,22 @@ fn declarations() -> BTreeMap<String, String> {
     .chain(event_declarations(&config))
     .chain(admin_declarations(&config))
     .chain(server_settings_declarations(&config))
+    .chain(screen_declarations(&config))
     .map(|(name, declaration)| (name.to_owned(), declaration))
     .collect()
+}
+
+/// ts-rs's declaration of every type of what a bot sees (Plan.md P16.20).
+fn screen_declarations(config: &Config) -> [(&'static str, String); 7] {
+    [
+        ("BotScreenEnchantment", BotScreenEnchantment::decl(config)),
+        ("BotScreenItem", BotScreenItem::decl(config)),
+        ("BotScreenKind", BotScreenKind::decl(config)),
+        ("BotScreenResponse", BotScreenResponse::decl(config)),
+        ("BotScreenSign", BotScreenSign::decl(config)),
+        ("BotScreenSlot", BotScreenSlot::decl(config)),
+        ("BotScreenView", BotScreenView::decl(config)),
+    ]
 }
 
 /// ts-rs's declaration of every agents, audit log and grants review type,
@@ -660,6 +679,12 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::capture_name("ModeCapture", "name", SCRIPT_KEY_MAX_CHARS)]
 #[case::script_problem_message("ScriptProblem", "message", SCRIPT_REPORT_MAX_CHARS)]
 #[case::script_log_text("ScriptLogLine", "text", SCRIPT_REPORT_MAX_CHARS)]
+#[case::screen_kind("BotScreenView", "kind", SCREEN_KIND_MAX_CHARS)]
+#[case::screen_title("BotScreenView", "title", SCREEN_TITLE_MAX_CHARS)]
+#[case::item_id("BotScreenItem", "id", SCREEN_ID_MAX_CHARS)]
+#[case::item_name("BotScreenItem", "name", ITEM_NAME_MAX_CHARS)]
+#[case::item_potion("BotScreenItem", "potion", SCREEN_ID_MAX_CHARS)]
+#[case::enchantment_id("BotScreenEnchantment", "id", SCREEN_ID_MAX_CHARS)]
 fn a_text_field_is_capped_at_its_constant(
     #[case] component: &str,
     #[case] field: &str,
@@ -674,7 +699,7 @@ fn a_text_field_is_capped_at_its_constant(
 }
 
 /// Every text field whose cap the cases above check.
-const CHECKED_TEXTS: [(&str, &str); 146] = [
+const CHECKED_TEXTS: [(&str, &str); 152] = [
     ("ModeScriptRequest", "source"),
     ("ModeMessageRequest", "key"),
     ("ModeMessageRequest", "text"),
@@ -693,6 +718,12 @@ const CHECKED_TEXTS: [(&str, &str); 146] = [
     ("ModeCapture", "name"),
     ("ScriptProblem", "message"),
     ("ScriptLogLine", "text"),
+    ("BotScreenView", "kind"),
+    ("BotScreenView", "title"),
+    ("BotScreenItem", "id"),
+    ("BotScreenItem", "name"),
+    ("BotScreenItem", "potion"),
+    ("BotScreenEnchantment", "id"),
     ("ErrorBody", "message"),
     ("ErrorBody", "request_id"),
     ("FieldError", "path"),
@@ -1161,6 +1192,7 @@ fn every_new_optional_field_is_left_out_never_null(#[case] component: &str, #[ca
 #[case::script_problem_kind("ScriptProblem", "kind", "ScriptProblemKind")]
 #[case::script_problem_hook("ScriptProblem", "hook", "ScriptHookName")]
 #[case::script_log_kind("ScriptLogLine", "kind", "ScriptLogKind")]
+#[case::screen_kind("BotScreenResponse", "kind", "BotScreenKind")]
 fn the_new_open_fields_list_exactly_their_known_values(
     #[case] component: &str,
     #[case] field: &str,
@@ -1210,6 +1242,7 @@ fn the_new_open_fields_list_exactly_their_known_values(
         "ScriptProblemKind" => names(ScriptProblemKind::ALL),
         "ScriptHookName" => names(ScriptHookName::ALL),
         "ScriptLogKind" => names(ScriptLogKind::ALL),
+        "BotScreenKind" => names(BotScreenKind::ALL),
         _ => InviteState::ALL
             .iter()
             .map(|state| state.as_str())

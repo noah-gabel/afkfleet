@@ -1,0 +1,268 @@
+---
+source: crates/fleet-server/tests/auth/bots/screen.rs
+expression: seen.body
+---
+{
+  "kind": "screen",
+  "screen": {
+    "columns": 9,
+    "kind": "generic_9x1",
+    "player": [
+      {
+        "column": 0,
+        "index": 9,
+        "row": 0
+      },
+      {
+        "column": 1,
+        "index": 10,
+        "row": 0
+      },
+      {
+        "column": 2,
+        "index": 11,
+        "row": 0
+      },
+      {
+        "column": 3,
+        "index": 12,
+        "row": 0
+      },
+      {
+        "column": 4,
+        "index": 13,
+        "row": 0
+      },
+      {
+        "column": 5,
+        "index": 14,
+        "row": 0
+      },
+      {
+        "column": 6,
+        "index": 15,
+        "row": 0
+      },
+      {
+        "column": 7,
+        "index": 16,
+        "row": 0
+      },
+      {
+        "column": 8,
+        "index": 17,
+        "row": 0
+      },
+      {
+        "column": 0,
+        "index": 18,
+        "row": 1
+      },
+      {
+        "column": 1,
+        "index": 19,
+        "row": 1
+      },
+      {
+        "column": 2,
+        "index": 20,
+        "row": 1
+      },
+      {
+        "column": 3,
+        "index": 21,
+        "row": 1
+      },
+      {
+        "column": 4,
+        "index": 22,
+        "row": 1
+      },
+      {
+        "column": 5,
+        "index": 23,
+        "row": 1
+      },
+      {
+        "column": 6,
+        "index": 24,
+        "row": 1
+      },
+      {
+        "column": 7,
+        "index": 25,
+        "row": 1
+      },
+      {
+        "column": 8,
+        "index": 26,
+        "row": 1
+      },
+      {
+        "column": 0,
+        "index": 27,
+        "row": 2
+      },
+      {
+        "column": 1,
+        "index": 28,
+        "row": 2
+      },
+      {
+        "column": 2,
+        "index": 29,
+        "row": 2
+      },
+      {
+        "column": 3,
+        "index": 30,
+        "row": 2
+      },
+      {
+        "column": 4,
+        "index": 31,
+        "row": 2
+      },
+      {
+        "column": 5,
+        "index": 32,
+        "row": 2
+      },
+      {
+        "column": 6,
+        "index": 33,
+        "row": 2
+      },
+      {
+        "column": 7,
+        "index": 34,
+        "row": 2
+      },
+      {
+        "column": 8,
+        "index": 35,
+        "row": 2
+      },
+      {
+        "column": 0,
+        "index": 36,
+        "item": {
+          "count": 1,
+          "durability": 1500,
+          "enchantments": [
+            {
+              "id": "minecraft:sharpness",
+              "level": 5
+            }
+          ],
+          "id": "minecraft:diamond_sword",
+          "lore": [],
+          "name": "",
+          "stored_enchantments": []
+        },
+        "row": 3
+      },
+      {
+        "column": 1,
+        "index": 37,
+        "row": 3
+      },
+      {
+        "column": 2,
+        "index": 38,
+        "row": 3
+      },
+      {
+        "column": 3,
+        "index": 39,
+        "row": 3
+      },
+      {
+        "column": 4,
+        "index": 40,
+        "row": 3
+      },
+      {
+        "column": 5,
+        "index": 41,
+        "row": 3
+      },
+      {
+        "column": 6,
+        "index": 42,
+        "row": 3
+      },
+      {
+        "column": 7,
+        "index": 43,
+        "row": 3
+      },
+      {
+        "column": 8,
+        "index": 44,
+        "row": 3
+      }
+    ],
+    "rows": 1,
+    "slots": [
+      {
+        "column": 0,
+        "index": 0,
+        "row": 0
+      },
+      {
+        "column": 1,
+        "index": 1,
+        "row": 0
+      },
+      {
+        "column": 2,
+        "index": 2,
+        "row": 0
+      },
+      {
+        "column": 3,
+        "index": 3,
+        "row": 0
+      },
+      {
+        "column": 4,
+        "index": 4,
+        "item": {
+          "count": 2,
+          "enchantments": [],
+          "id": "minecraft:potion",
+          "lore": [
+            "Price: 1,250",
+            "Seller: AfkBot2"
+          ],
+          "name": "Potion of the Turtle Master",
+          "potion": "minecraft:turtle_master",
+          "stored_enchantments": []
+        },
+        "row": 0
+      },
+      {
+        "column": 5,
+        "index": 5,
+        "row": 0
+      },
+      {
+        "column": 6,
+        "index": 6,
+        "row": 0
+      },
+      {
+        "column": 7,
+        "index": 7,
+        "row": 0
+      },
+      {
+        "column": 8,
+        "index": 8,
+        "row": 0
+      }
+    ],
+    "title": "Auction House"
+  }
+}

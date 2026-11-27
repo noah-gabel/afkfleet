@@ -98,6 +98,10 @@ pub struct RateLimitConfig {
     /// Reads of the suggestions behind "Share with", per user
     /// (`grant_candidates_per_user_per_hour`; ADR-0020, S127).
     pub grant_candidates: Rate,
+    /// Looks at what a bot sees, per user
+    /// (`screen_reads_per_user_per_min`; Plan.md P16.20): each one asks the
+    /// bot's agent, so this bounds what one viewer asks of the agents.
+    pub screen_reads: Rate,
     /// `Enroll` calls on the gRPC port, per client IP
     /// (`enroll_per_ip_per_min`; ADR-0019, S14): spent before the request
     /// is read.
@@ -187,6 +191,8 @@ impl RateLimitConfig {
     pub const GRANTS_BY_NAME_PER_USER_PER_HOUR: Bounds = Bounds { min: 1, max: 100 };
     /// `grant_candidates_per_user_per_hour`: 1 to 600. Default 60.
     pub const GRANT_CANDIDATES_PER_USER_PER_HOUR: Bounds = Bounds { min: 1, max: 600 };
+    /// `screen_reads_per_user_per_min`: 1 to 60. Default 12.
+    pub const SCREEN_READS_PER_USER_PER_MIN: Bounds = Bounds { min: 1, max: 60 };
     /// `enroll_per_ip_per_min`: 1 to 60. Default 5.
     pub const ENROLL_PER_IP_PER_MIN: Bounds = Bounds { min: 1, max: 60 };
     /// `connect_per_cert_per_min`: 1 to 60. Default 10.
@@ -225,6 +231,7 @@ impl Default for RateLimitConfig {
             link_flows: LinkFlowLimits::default(),
             grants_by_name: Rate::per_hour(nonzero(10)),
             grant_candidates: Rate::per_hour(nonzero(60)),
+            screen_reads: Rate::per_minute(nonzero(12)),
             enroll: Rate::per_minute(nonzero(5)),
             connect: Rate::per_minute(nonzero(10)),
             bot_actions: Rate::per_minute(nonzero(5)),
@@ -283,6 +290,7 @@ mod tests {
         assert_eq!(defaults.link_flows.per_user_per_day.get(), 10);
         assert_eq!(defaults.grants_by_name, Rate::per_hour(nonzero(10)));
         assert_eq!(defaults.grant_candidates, Rate::per_hour(nonzero(60)));
+        assert_eq!(defaults.screen_reads, Rate::per_minute(nonzero(12)));
         assert_eq!(defaults.enroll, Rate::per_minute(nonzero(5)));
         assert_eq!(defaults.connect, Rate::per_minute(nonzero(10)));
         assert_eq!(defaults.bot_actions, Rate::per_minute(nonzero(5)));

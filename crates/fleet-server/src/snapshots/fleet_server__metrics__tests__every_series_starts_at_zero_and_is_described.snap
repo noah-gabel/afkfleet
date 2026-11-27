@@ -82,6 +82,7 @@ afkfleet_rate_limit_refusals_total{limit="per_ip"} 0
 afkfleet_rate_limit_refusals_total{limit="per_user"} 0
 afkfleet_rate_limit_refusals_total{limit="refresh"} 0
 afkfleet_rate_limit_refusals_total{limit="register"} 0
+afkfleet_rate_limit_refusals_total{limit="screen_reads"} 0
 afkfleet_rate_limit_refusals_total{limit="ws_connections"} 0
 
 # HELP afkfleet_refresh_token_reuses_total Refresh tokens presented again after their rotation: each revoked its session. Any is a possible token theft.

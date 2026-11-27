@@ -634,6 +634,7 @@ fn fleet_rows() -> Vec<Row> {
         POST "/api/v1/bots/{id}/chat" "plain chat, a bot that isn't online" => F::BotWith(r#"{ "message": "hello" }"#);
         POST "/api/v1/bots/{id}/chat" "an allowlisted command, a bot that isn't online" => F::BotWith(r#"{ "message": "/spawn" }"#);
         POST "/api/v1/bots/{id}/command" "a command off the allowlist, a bot that isn't online" => F::BotWith(r#"{ "message": "/home base" }"#);
+        GET "/api/v1/bots/{id}/screen" "a bot that isn't online" => F::Bot;
         POST "/api/v1/events/ticket" "" => Plain;
         GET "/api/v1/events" "an upgrade with the session's ticket" => Socket;
     ]

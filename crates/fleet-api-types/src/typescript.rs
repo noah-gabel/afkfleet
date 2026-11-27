@@ -54,6 +54,7 @@ use crate::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use crate::me::{MeResponse, PasswordChangeRequest};
 use crate::mfa::{MfaConfirmRequest, MfaConfirmResponse, MfaEnrollResponse, MfaResetResponse};
 use crate::modes::{CreateModeRequest, ModePage, ModeResponse, UpdateModeRequest};
+use crate::screen::BotScreenResponse;
 use crate::script_api::ScriptApi;
 use crate::server_settings::{
     CreateServerSettingsRequest, PreviewChatFormatsRequest, PreviewChatFormatsResponse,
@@ -236,6 +237,7 @@ fn write_api(config: &Config) -> Result<(), TypeScriptError> {
     ChatCommandRequest::export_all(config).map_err(TypeScriptError::Export)?;
     ChatSendResponse::export_all(config).map_err(TypeScriptError::Export)?;
     ChatPage::export_all(config).map_err(TypeScriptError::Export)?;
+    BotScreenResponse::export_all(config).map_err(TypeScriptError::Export)?;
     ModePage::export_all(config).map_err(TypeScriptError::Export)?;
     ModeResponse::export_all(config).map_err(TypeScriptError::Export)?;
     CreateModeRequest::export_all(config).map_err(TypeScriptError::Export)?;

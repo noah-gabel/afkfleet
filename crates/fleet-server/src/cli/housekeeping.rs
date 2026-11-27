@@ -146,6 +146,7 @@ impl Housekeeping {
                 per_user = limits.per_user,
                 grants_by_name = limits.grants_by_name,
                 grant_candidates = limits.grant_candidates,
+                screen_reads = limits.screen_reads,
                 enroll = limits.enroll,
                 connect = limits.connect,
                 bot_actions = limits.bot_actions,

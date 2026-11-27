@@ -420,6 +420,7 @@ async fn the_document_lists_exactly_the_api_routes(
             ("/api/v1/bots/{id}/chat", "get"),
             ("/api/v1/bots/{id}/chat", "post"),
             ("/api/v1/bots/{id}/command", "post"),
+            ("/api/v1/bots/{id}/screen", "get"),
             ("/api/v1/modes", "get"),
             ("/api/v1/modes", "post"),
             ("/api/v1/modes/with-commands", "post"),

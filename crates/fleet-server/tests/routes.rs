@@ -614,6 +614,7 @@ async fn the_authed_routes_are_registered_with_their_class(
             ),
             entry(Method::GET, "/api/v1/bots/{id}/chat", RateClass::Standard),
             entry(Method::POST, "/api/v1/bots/{id}/chat", RateClass::Standard),
+            entry(Method::GET, "/api/v1/bots/{id}/screen", RateClass::Standard),
             entry(Method::GET, "/api/v1/modes", RateClass::Standard),
             entry(Method::POST, "/api/v1/modes", RateClass::Standard),
             entry(Method::PUT, "/api/v1/modes/{id}", RateClass::Standard),

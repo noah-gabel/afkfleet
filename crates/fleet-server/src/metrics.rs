@@ -127,6 +127,8 @@ pub enum Limit {
     GrantsByName,
     /// The per-user limit of reads of "Share with"'s suggestions.
     GrantCandidates,
+    /// The per-user limit of looks at what a bot sees.
+    ScreenReads,
     /// The per-IP limit of `Enroll` calls.
     Enroll,
     /// The per-certificate limit of `Connect` calls.
@@ -145,7 +147,7 @@ pub enum Limit {
 
 impl Limit {
     /// Every limit.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::PerIp,
         Self::Login,
         Self::Refresh,
@@ -153,6 +155,7 @@ impl Limit {
         Self::PerUser,
         Self::GrantsByName,
         Self::GrantCandidates,
+        Self::ScreenReads,
         Self::Enroll,
         Self::Connect,
         Self::BotActions,
@@ -173,6 +176,7 @@ impl Limit {
             Self::PerUser => "per_user",
             Self::GrantsByName => "grants_by_name",
             Self::GrantCandidates => "grant_candidates",
+            Self::ScreenReads => "screen_reads",
             Self::Enroll => "enroll",
             Self::Connect => "connect",
             Self::BotActions => "bot_actions",
