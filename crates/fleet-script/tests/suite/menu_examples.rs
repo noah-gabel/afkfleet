@@ -365,6 +365,28 @@ fn the_farm_that_sells_sells_its_potions_drops_its_junk_and_nothing_else_then_fa
     assert_eq!(farm_again.actions, farm);
 }
 
+/// The farm's first sell comes 30 to 60 s after a join, then every 5
+/// minutes from the last: a farm kicked more often than every 5 minutes
+/// still sells (found live, Plan.md P16.17). Here the sell menu never
+/// opens, so each sell is only its command.
+#[test]
+fn the_farms_first_sell_comes_soon_after_a_join_then_every_5_minutes() {
+    let mut world = World::new();
+    let mut instance = instance_of("farm_that_sells");
+    world.run(&mut instance, &HookEvent::Join { first: true });
+
+    world.pass(&mut instance, Duration::from_millis(29_999));
+    let before_30_s = world.sent.len();
+    world.pass(&mut instance, Duration::from_millis(30_001));
+    let by_60_s = world.sent.len();
+    world.pass(&mut instance, Duration::from_secs(240));
+    let within_5_minutes = world.sent.len();
+    world.pass(&mut instance, Duration::from_secs(60));
+
+    assert_eq!((before_30_s, by_60_s, within_5_minutes), (0, 1, 1));
+    assert_eq!(world.sent, ["/sell", "/sell"]);
+}
+
 #[test]
 fn the_farm_that_sells_closes_a_screen_it_didnt_open() {
     let mut gate = ClickGate::new();

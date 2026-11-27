@@ -951,18 +951,20 @@ The mode declares `sell_menu`: `/sell`. The junk it drops is one item ID the scr
 
 ```rhai
 // A farm that sells: it farms by holding the right button with its farm's
-// item in hotbar slot 1. Every 5 minutes it opens the sell menu, sells its
-// Turtle Master potions and drops its one kind of junk, never anything else,
-// so it never drops a tool. It waits 300 to 900 ms before every click, then
-// selects the farm's item again and farms on: a right button held with a
-// potion in hand would drink it.
+// item in hotbar slot 1. 30 to 60 seconds after it joins, then every 5
+// minutes, it opens the sell menu, sells its Turtle Master potions and drops
+// its one kind of junk, never anything else, so it never drops a tool. It
+// waits 300 to 900 ms before every click, then selects the farm's item again
+// and farms on: a right button held with a potion in hand would drink it.
 fn junk() {
     "minecraft:rotten_flesh"
 }
 
 fn on_join(first) {
     farm();
-    timer.every(300000, "sell");
+    // Soon after every join: a farm that's kicked more often than every 5
+    // minutes still sells.
+    timer.after(random.between(30000, 60000), "sell");
 }
 
 fn farm() {
@@ -972,6 +974,7 @@ fn farm() {
 
 fn on_timer(name) {
     if name == "sell" {
+        timer.after(300000, "sell");
         if !menu.open {
             mouse.right.release();
             chat.send("sell_menu");
