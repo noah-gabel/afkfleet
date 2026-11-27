@@ -1045,7 +1045,7 @@ test("modes: the list, the editor, a conflict, and a locked one", async ({ page,
   await bothThemes(page, "a locked mode, its command cut");
 });
 
-test("scripts: the editor with its marks, a conversion, a mode's declarations and a bot's script", async ({
+test("scripts: the editor with its marks, a conversion, a mode's declarations, a bot's script and what it sees", async ({
   page,
   context,
 }) => {
@@ -1070,6 +1070,26 @@ test("scripts: the editor with its marks, a conversion, a mode's declarations an
         captures: [{ name: "m", type: "integer", min: 0, max: 60 }],
       },
     ],
+  });
+  backend.addScriptedMode(OWNER, "Seller", {
+    source: [
+      "fn on_menu_open() {",
+      '    if menu.title == "Confirm" {',
+      "        menu.click(menu.at(0, 4));",
+      "    }",
+      "}",
+      "",
+      "fn on_sign_open() {",
+      '    sign.write("confirm");',
+      "}",
+      "",
+    ].join("\n"),
+    leash: 8,
+    tool_guard: 2,
+    block_guard: [],
+    messages: [],
+    patterns: [],
+    signs: [{ key: "confirm", lines: ["confirm", "", "afk"], values: [] }],
   });
   backend.setBot("AfkBot1", {
     modeId: declared,
@@ -1130,6 +1150,13 @@ test("scripts: the editor with its marks, a conversion, a mode's declarations an
     height: 3400,
   });
 
+  // A mode at script API level 2 (P16.15): a declared sign, and the level with why.
+  await nav(page, "Modes");
+  await main.getByRole("link", { name: "Open Seller" }).click();
+  await expect(main.getByTestId("script-level")).toContainText("Script API level 2");
+  await expect(main.getByRole("group", { name: "Sign 1" })).toBeVisible();
+  await bothThemes(page, "a scripted mode at level 2, its sign and why", { height: 2600 });
+
   await nav(page, "Home");
   await page.getByRole("link", { name: "Open AfkBot1" }).click();
   const id = backend.bot("AfkBot1").id;
@@ -1138,6 +1165,10 @@ test("scripts: the editor with its marks, a conversion, a mode's declarations an
     { kind: "window_opened", text: "balance, for 5000 ms" },
     { kind: "matched", text: "balance: amount 1520.5" },
     { kind: "line", text: "paying 520.5" },
+    {
+      kind: "click",
+      text: "a click on slot 13 may have worked: the script checks the next screen (unclear)",
+    },
   ] as const) {
     await push(page, { update: "event", event: { type: "bot_script_log", bot_id: id, log } });
   }
@@ -1160,6 +1191,12 @@ test("scripts: the editor with its marks, a conversion, a mode's declarations an
   });
   await expect(main.getByRole("link", { name: "Show in the script" })).toBeVisible();
   await bothThemes(page, "a bot, its script stopped");
+
+  // What it sees (P16.20): the fake's auction house, slot by slot.
+  const sight = main.getByRole("region", { name: "What it sees" });
+  await sight.getByRole("button", { name: "Look", exact: true }).click();
+  await expect(sight.getByText("Auction House", { exact: true })).toBeVisible();
+  await bothThemes(page, "a bot, what it sees", { height: 2200 });
 });
 
 test("modes: loading, failed, none, a long list, and sixteen steps in two columns and stacked", async ({

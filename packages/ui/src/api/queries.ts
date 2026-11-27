@@ -24,6 +24,7 @@ import type { AgentPage } from "../generated/AgentPage";
 import type { AuditPage } from "../generated/AuditPage";
 import type { BotPage } from "../generated/BotPage";
 import type { BotResponse } from "../generated/BotResponse";
+import type { BotScreenResponse } from "../generated/BotScreenResponse";
 import type { ChatPage } from "../generated/ChatPage";
 import type { ChatSendResponse } from "../generated/ChatSendResponse";
 import type { GrantPage } from "../generated/GrantPage";
@@ -384,6 +385,11 @@ export function chatOutcomesKey(id: string) {
   return tagged<ChatOutcomes>()(["bots", "chat-outcomes", id] as const);
 }
 
+/** What a bot sees, as its agent last answered (P16.20). */
+export function sightKey(id: string) {
+  return tagged<BotScreenResponse>()(["bots", "screen", id] as const);
+}
+
 /** A bot's script as the live events reported it (P15.26). */
 export function scriptKey(id: string) {
   return tagged<ScriptRecord>()(["bots", "script", id] as const);
@@ -418,6 +424,21 @@ export function botQuery(api: ApiClient, id: string) {
 /** One bot, through the app's client. */
 export function useBot(id: string) {
   return useQuery(botQuery(useApiClient(), id));
+}
+
+/**
+ * What bot `id` sees (P16.20): never read by itself, only when `refetch` asks, since each read
+ * asks the bot's agent and the server allows a viewer a few a minute; dropped once no screen
+ * shows it, as what a bot sees is a moment's.
+ */
+export function useBotSight(id: string) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: sightKey(id),
+    queryFn: () => api.botScreen(id),
+    enabled: false,
+    gcTime: 0,
+  });
 }
 
 /** One target of the audit log: its kind and its ID (ADR-0020, S89). */
