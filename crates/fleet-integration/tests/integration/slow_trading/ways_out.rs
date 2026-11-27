@@ -17,6 +17,7 @@ use fleet_core::id::{BotId, ModeId};
 use fleet_core::script::{LeashRadius, MessageDraft, ScriptDraft, ToolGuard};
 
 use crate::harness::agent::Agent;
+use crate::harness::logs::PATIENCE;
 use crate::harness::paper::{KICKED_MID_CLICK, Paper, Record, of_kind, unasked};
 use crate::harness::world::World;
 use crate::slow_scripts::{entries, request, started};
@@ -32,10 +33,12 @@ const SCREEN_COMMAND: &str = "the script does something in a screen or a sign ed
 const ENDED: &str = "the bot's script ended";
 const STOPPED: &str = "the bot's script stopped; the bot stays online and idle";
 
-/// At its first join it holds sneak and the right button (a shield), then
-/// opens the sell menu, where it clicks slot 0 every second. `SPIN` is
+/// At every join it says so; at its first it holds sneak and the right
+/// button (a shield), then opens the sell menu, where it clicks slot 0 every
+/// second. `SPIN` is
 /// what runs 300 ms after each click.
 const WAYS_OUT: &str = r#"fn on_join(first) {
+    log.info("Joined.");
     if first {
         keys.sneak.hold();
         mouse.right.hold();
@@ -229,40 +232,14 @@ async fn every_way_out(world: Rc<World>, paper: Rc<Paper>) -> (Agent, ()) {
     )
     .await;
 
-    // 3. A disconnect inside a click: the server kicks the bot there; it
-    // joins again, and a rejoin opens nothing.
+    // 3. A disconnect inside a click.
     scripts += 1;
     world.owner.set_mode(bot, plain).await;
     started(&world, scripts).await;
-    clicking(&world, &paper, 3).await;
-    rcon(&paper, &format!("harness kickon {NAME}")).await;
-    until_records(&world, &paper, "the kick inside a click", |records| {
-        !of_kind(records, "kickon", NAME).is_empty()
-    })
-    .await;
-    // `harness state` waits through the rejoin: it answers once the bot is back.
-    let after_a_disconnect = until_state(
-        &world,
-        &paper,
-        NAME,
-        "nothing left after a disconnect",
-        nothing_left,
-    )
-    .await;
+    let after_a_disconnect = a_disconnect(&world, &paper).await;
 
-    // 4. A stop while a click waits: the bot leaves, its screen closed.
-    rcon(&paper, &format!("harness open {NAME} sell")).await;
-    clicking(&world, &paper, 4).await;
-    a_click_pending(&world, &paper).await;
-    world.owner.stop(bot).await;
-    world
-        .logs
-        .until("the script's orderly end at the stop", async || {
-            world.logs.count(ENDED) >= 2
-        })
-        .await;
-    thawed_and_closed(&world, &paper, 4).await;
-    let gone = rcon(&paper, &format!("harness state {NAME}")).await;
+    // 4. A stop while a click waits.
+    let gone = a_stop(&world, &paper, bot).await;
 
     for (way, state) in [
         ("a mode change", &after_a_mode_change),
@@ -281,6 +258,49 @@ async fn every_way_out(world: Rc<World>, paper: Rc<Paper>) -> (Agent, ()) {
         Vec::<String>::new()
     );
     (agent, ())
+}
+
+/// A disconnect inside a click: the server kicks the bot there; it joins
+/// again, and a rejoin opens nothing. Returns what the harness then shows.
+async fn a_disconnect(world: &World, paper: &Paper) -> Record {
+    clicking(world, paper, 3).await;
+    rcon(paper, &format!("harness kickon {NAME}")).await;
+    until_records(world, paper, "the kick inside a click", |records| {
+        !of_kind(records, "kickon", NAME).is_empty()
+    })
+    .await;
+    // The bot's own join, not only the server's: a screen opened while its
+    // client still joins never reaches it.
+    let joined = world
+        .logs
+        .within(PATIENCE, async || entries(world, "Line", "Joined.") >= 4)
+        .await;
+    assert!(joined, "the rejoin's join hook within {PATIENCE:?}");
+    until_state(
+        world,
+        paper,
+        NAME,
+        "nothing left after a disconnect",
+        nothing_left,
+    )
+    .await
+}
+
+/// A stop while a click waits: the bot leaves, its screen closed. Returns
+/// what `harness state` then answers.
+async fn a_stop(world: &World, paper: &Paper, bot: BotId) -> String {
+    rcon(paper, &format!("harness open {NAME} sell")).await;
+    clicking(world, paper, 4).await;
+    a_click_pending(world, paper).await;
+    world.owner.stop(bot).await;
+    world
+        .logs
+        .until("the script's orderly end at the stop", async || {
+            world.logs.count(ENDED) >= 2
+        })
+        .await;
+    thawed_and_closed(world, paper, 4).await;
+    rcon(paper, &format!("harness state {NAME}")).await
 }
 
 /// Sets `mode` on the stopped bot, starts it and waits for its script.
