@@ -26,7 +26,7 @@ Moved from `CLAUDE.md` word for word; it points here. CLAUDE.md keeps the testin
 - **A script's hook is timed by fleet-testkit's `ManualStopwatch`,** handed to the fleet (`FleetParts::stopwatch`): standing still unless the test moves it. The load test alone hands in the OS's clock.
 
 ## The time limit a test
-- **Every nextest profile ends a test after 10 minutes** (`slow-timeout = { period = "60s", terminate-after = 10 }` in `.config/nextest.toml`): it fails as `TIMEOUT` with its name, instead of holding the run until a CI job's own timeout. `scripts/nextest-config.test.mjs` holds the line in all four profiles. The slowest test on CI's runners took 68 s when it was set (ADR-0031, 2026-11-12); a test that comes near the limit is split or made faster, never given a longer one without measuring again.
+- **Every nextest profile ends a test after 10 minutes** (`slow-timeout = { period = "60s", terminate-after = 10 }` in `.config/nextest.toml`): it fails as `TIMEOUT` with its name, instead of holding the run until a CI job's own timeout. `scripts/nextest-config.test.mjs` holds the line in every profile, the long run's (`long`, P16.18) among them: a part of it that comes near the limit is split, never given a longer one. The slowest test on CI's runners took 68 s when it was set (ADR-0031, 2026-11-12); a test that comes near the limit is split or made faster, never given a longer one without measuring again.
 - **It's no test's bound.** A test still bounds every wait of its own; the limit is for code that stops yielding, where no timer inside the test's process can fire.
 
 ## Doubles and fixtures

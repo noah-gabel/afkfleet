@@ -70,3 +70,4 @@ Each architecture decision record (ADR) holds one decision with its context, its
 - [0051. Menus in fleet-mc: each window's state, azalea's gaps put right, the guard at sending, the barrier, and the user's auction flow](adr/0051-menus-in-fleet-mc.md)
 - [0052. Menus in scripts and the runtime, the time of day, and a fate that never misleads](adr/0052-menus-in-scripts-and-the-time-of-day.md)
 - [0053. Level 2 on the wire, in the server and in the app, and what a bot sees](adr/0053-level-2-on-the-wire-in-the-app-and-what-a-bot-sees.md)
+- [0054. The examples live on the harness, the long run, and Phase 16's check](adr/0054-the-examples-live-the-long-run-and-phase-16s-check.md)
