@@ -258,15 +258,32 @@ sh setup.sh update
   3. **The app,** which offers its update by itself at its next start. An app of 0.1.3 shows a scripted mode as a mode without steps: nobody should edit a scripted mode in it, and the server refuses to save one that way, so its script is never lost.
 
   Only then write scripted modes, or convert step modes to scripts.
-- **The release after 0.2.1 removes "Get into the nearest minecart"** (`enter_minecart`, [ADR-0034](adr/0034-a-stopgap-action-into-the-nearest-minecart.md), [ADR-0046](adr/0046-the-stopgaps-way-out-and-phase-15s-check.md), C5). **Before you update to it,** open each step mode that still uses it, on the release you run, and convert it to a script (**Convert to script** in the mode's editor, then Save): the script gets in with `vehicle.mount("minecart")`. A server of that release that finds such a mode stored won't start: its last log line, "the server can't start", names every one, as "`2 stored modes still hold enter_minecart, which this release removed: "Back in" (<id>), …`". Then go back to the release you ran, with its images and files: this release adds no migration, so it reads the database as it is. Convert the modes there, and update again.
+- **0.3.0 removes "Get into the nearest minecart"** (`enter_minecart`, [ADR-0034](adr/0034-a-stopgap-action-into-the-nearest-minecart.md), [ADR-0046](adr/0046-the-stopgaps-way-out-and-phase-15s-check.md), C5). **Before you update, on 0.2.1,** open each step mode that still uses it and convert it to a script (**Convert to script** in the mode's editor, then Save): the script gets in with `vehicle.mount("minecart")`. The step exists from 0.1.3 on and only 0.2.1 converts it, so a host on 0.1.3 with such a mode updates to 0.2.1 first.
+  - **If one is left,** the 0.3.0 server won't start, and `update` stops at "the new server didn't become healthy". The server's last log line, "the server can't start", names every one, as "`2 stored modes still hold enter_minecart, which this release removed: "Back in" (<id>), …`". A restore doesn't help (the backup holds the same modes), and nothing else changed: go back to 0.2.1 as **Going back from 0.3.0 to 0.2.1** below says (your agents still run 0.2.1, so it's the server's host alone), convert the modes there, then remove the two lines from `.env` and update again.
   - Its agents read a step with the action, sent by an older server, as one they can't read and refuse it (`unreadable`, as above): update the server first, as always.
-- **The release after 0.2.1 adds script API level 2** (screens, the inventory, clicks, sign editors, the time of day; [ADR-0053](adr/0053-level-2-on-the-wire-in-the-app-and-what-a-bot-sees.md)). The server stamps each script with the lowest level that runs it, so a script that uses none of that stays at level 1. Update in the usual order:
+- **0.3.0 adds script API level 2** (screens, the inventory, clicks, sign editors, the time of day; [ADR-0053](adr/0053-level-2-on-the-wire-in-the-app-and-what-a-bot-sees.md)). The server stamps each script with the lowest level that runs it, so a script that uses none of that stays at level 1. Update in the usual order:
   1. **The server.** An agent of 0.2.1 beside it keeps running step modes and level-1 scripts. It's never sent a level-2 mode, nor asked what a bot sees: setting a level-2 mode on one of its bots says to update the agent, a bot on a level-2 mode waits for an updated agent and says so, and "What it sees" says its agent needs this release.
   2. **Every agent**, those on other hosts too.
   3. **The app.** An app of 0.2.1 can't save a mode that declares signs, which it doesn't show: the server refuses it with "update the app", so the signs are never lost. It saves everything else as before.
 
   Only then write scripts that use screens, signs or the clock.
-- **Going back** is a restore, never an older `fetch`. A server rolled back past a mode feature reads such modes as corrupt: switch the bots off them, or delete them, before you restore an older backup.
+- **Going back from 0.3.0 to 0.2.1** needs no restore: no release since 0.1.0 has added a migration, so 0.2.1 reads the database as it is, and 0.3.0's compose files are 0.2.1's. `.env` names 0.2.1's images, in the update's reverse order:
+  1. **In the app,** switch the bots off every mode that uses level 2: 0.2.1 reads such a mode as corrupt.
+  2. **Every agent on another host that runs 0.3.0:** the agent's line below into its folder's `.env`, then the commands below.
+  3. **The server's host:** both lines into `.env`, then the same commands.
+
+  The two lines, the images v0.2.1's release page names under "Server images:":
+  ```ini
+  AFKFLEET_SERVER_IMAGE=ghcr.io/noah-gabel/afkfleet-server:0.2.1@sha256:ba9d4f17d228332c6a3d5dcc6065bd019a8f86bfb8282bd170f04927bf23ed05
+  AFKFLEET_AGENT_IMAGE=ghcr.io/noah-gabel/afkfleet-agent:0.2.1@sha256:1978a000e3cc3b3585dec2719ae0f9fdb228a4304c4c121d8e485454295c6ce3
+  ```
+  Then the start and the list. Success: every service healthy, and afkfleet's images listed at `0.2.1`.
+  ```sh
+  docker compose up --detach --wait
+  docker compose ps
+  ```
+  Apps keep their version, since an app never installs an older one: beside 0.2.1 they show an error where they ask for what it lacks, such as a bot's "What it sees". To update again, remove the lines and run `update` as above, on the server's host first.
+- **Going back** in general is never an older `fetch`, which refuses: it's the older release's images named in `.env`, as above. A server rolled back past a mode feature reads such modes as corrupt: switch the bots off them, or delete them, before you go back.
 - **When `fetch` stops halfway** it leaves `.afkfleet-fetch` for a look and says why; `RELEASE` still names the old release. Fix what it named, then remove the folder and fetch again. Success: as above.
   ```sh
   rm -r .afkfleet-fetch

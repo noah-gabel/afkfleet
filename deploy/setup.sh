@@ -1069,7 +1069,7 @@ fetch() {
 	installed=$(release_value version)
 	semver "$installed" || refuse "RELEASE's version can't be read ($installed)"
 	vercmp "$version" "$installed"
-	[ "$CMP" -gt 0 ] || refuse "$version isn't newer than this folder's release $installed: fetch only moves forward (going back is a restore, as the runbook's Restoring a backup says)"
+	[ "$CMP" -gt 0 ] || refuse "$version isn't newer than this folder's release $installed: fetch only moves forward (to go back, follow \"Going back\" in the runbook's Updating)"
 	for tool in curl sha256sum tar cmp sort; do
 		command -v "$tool" >/dev/null 2>&1 || refuse "$tool isn't installed, or isn't on PATH"
 	done

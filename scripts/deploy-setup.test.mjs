@@ -1204,6 +1204,8 @@ describe("setup.sh fetch, against a stub curl", { skip: SH }, () => {
     assert.equal(readFileSync(join(newer.dir, "RELEASE"), "utf8"), offered.release);
     assert.equal(older.code, 1);
     assert.match(older.stderr, /0\.9\.0 isn't newer than this folder's release 0\.10\.0/);
+    // Going back is the older release's images in .env, not a restore (0.3.0's runbook).
+    assert.match(older.stderr, /to go back, follow "Going back" in the runbook's Updating/);
   });
 
   it("refuses a prod/ or host/ here that's a link, even when the archive lists no such folder", () => {
