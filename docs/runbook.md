@@ -567,7 +567,7 @@ The key metrics (all counters end in `_total`; times are Unix seconds, 0 until t
 |---|---|---|
 | **Server** | | |
 | `afkfleet_refresh_token_reuses_total` | | Refresh tokens presented again after their rotation, each revoking its session: any is a possible token theft |
-| `afkfleet_rate_limit_refusals_total` | `limit`: `per_ip`, `per_user`, `login`, `refresh`, `register`, `enroll`, `connect`, `bot_actions`, `chat_per_bot`, `chat_per_user`, `grants_by_name`, `grant_candidates`, `ws_connections`, `fresh_sessions` | Requests a rate limit refused |
+| `afkfleet_rate_limit_refusals_total` | `limit`: `per_ip`, `per_user`, `login`, `refresh`, `register`, `enroll`, `connect`, `bot_actions`, `chat_per_bot`, `chat_per_user`, `grants_by_name`, `grant_candidates`, `screen_reads`, `ws_connections`, `fresh_sessions` | Requests a rate limit refused |
 | `afkfleet_login_lockout_refusals_total` | `reason`: `locked`, `in_flight` | Logins the per-username lockout refused |
 | `afkfleet_agent_connects_refused_total` | `reason`: `revoked`, `expired`, `disabled`, `san_mismatch`, `name_mismatch`, `unknown_certificate`, `no_certificate`, `already_connected` | Agent connections refused, past the audit log's daily cap too |
 | `afkfleet_agent_identity_conflicts_total` | | Two processes found holding one agent's identity, every time |

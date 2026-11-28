@@ -965,6 +965,29 @@ mod tests {
         assert!(distinct(NOT_TAKEN.map(not_taken_label).into()));
     }
 
+    /// The runbook's Metrics table names exactly the rate limits' classes an
+    /// operator can see: 0.3.0's `screen_reads` was missing from it.
+    #[test]
+    fn the_runbooks_metrics_table_names_every_rate_limit_class() {
+        let runbook = include_str!("../../../docs/runbook.md");
+        let row = runbook
+            .lines()
+            .find(|line| line.starts_with("| `afkfleet_rate_limit_refusals_total` |"))
+            .expect("the runbook's row of the rate limits' refusals");
+        let cell = row.split('|').nth(2).expect("the row's labels").trim();
+        let mut listed: Vec<&str> = cell
+            .strip_prefix("`limit`: ")
+            .expect("the cell names the `limit` label")
+            .split(", ")
+            .map(|label| label.trim_matches('`'))
+            .collect();
+        let mut expected: Vec<&str> = Limit::ALL.map(Limit::label).into();
+        listed.sort_unstable();
+        expected.sort_unstable();
+
+        assert_eq!(listed, expected);
+    }
+
     #[test]
     fn metrics_that_are_off_record_nothing_and_never_fail() {
         let off = ServerMetrics::off();
