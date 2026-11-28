@@ -5,7 +5,8 @@
 // - The guards, on every browser spec: an init script records every CSP violation, then
 //   freezes `Object.prototype` as Tauri's `freezePrototype` does. At the end the page must
 //   hold no `<style>` element, no adopted stylesheet and no stylesheet from another origin,
-//   and there must have been no violation, no console error and no uncaught error. No shadow root
+//   and there must have been no violation, no console error and no uncaught error (a resource
+//   that failed to load is reported with its URL, e2e/errors.ts). No shadow root
 //   holds a `<style>` either, and only the script editor's adopts a stylesheet: frontend.md's one
 //   exception, CodeMirror's constructed sheet (ADR-0036, D16; ADR-0045). The page
 //   is served with the release CSP (e2e/csp.ts), so a library that injects a style or
@@ -28,6 +29,7 @@ import {
 
 import { IPC_PATH } from "./app/fetchInvoke";
 import { BASE_URL } from "./base";
+import { consoleError } from "./errors";
 import { FakeBackend } from "./fake/backend";
 import { handlers } from "./fake/handlers";
 import { NOW, SHOTS_PROJECT } from "./shots";
@@ -121,7 +123,7 @@ export const test = base.extend<{ guards: undefined }>({
       const errors: string[] = [];
       page.on("console", (message) => {
         if (message.type() === "error") {
-          errors.push(message.text());
+          errors.push(consoleError(message.text(), message.location().url));
         }
       });
       page.on("pageerror", (error) => errors.push(error.message));
