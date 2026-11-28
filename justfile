@@ -671,6 +671,17 @@ fuzz target="all" seconds="60":
 load:
     cargo nextest run -p fleet-integration -p fleet-mc --profile load --no-capture
 
+# fleet-integration's `long_` tests (Plan.md P16.18, ADR-0054): a buyer script on the real
+# managed agent clicks thousands of times against the Paper harness, in parts of its own, each
+# under the 10-minute limit, beside a second player who buys first, while the listings change,
+# screens open unasked, the server freezes past a fate's 5 s and the bot is kicked. Each part
+# prints its counts as `LONG` lines (clicks, fates, picks, buys, every miss with its reason) and
+# fails on a double buy, a silent miss or a click onto another screen, all counted from the
+# harness's own records. No other profile runs them; the harness's image is built first.
+# The long run against the Paper harness (P16.18): print its counts (needs Docker).
+long-run: paper-image
+    cargo nextest run -p fleet-integration --profile long --no-capture
+
 # fleet-integration's `chaos_` tests (P13.5, ADR-0033): the production compose project from
 # both images, with a Minecraft server and real bots in it, and Docker's own faults: kills
 # and stops of the server, the agent and the Minecraft server, a partition between the agent

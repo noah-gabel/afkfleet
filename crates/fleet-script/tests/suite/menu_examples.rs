@@ -306,6 +306,111 @@ fn the_auction_scan_confirms_nothing_but_the_listing_it_picked() {
     assert_eq!(world.log, ["Not the listing picked; nothing bought."]);
 }
 
+/// `seen` as the plugin redraws it in place, `listings` in its slots: the
+/// same screen in its next state.
+fn redrawn(seen: &Screen, listings: &[(usize, Item)]) -> Screen {
+    let mut items: Vec<(usize, Item)> = listings.to_vec();
+    items.extend((45..54).map(|slot| (slot, named("minecraft:black_stained_glass_pane", " "))));
+    items.push((47, named("minecraft:emerald", "Create")));
+    Screen::new(
+        seen.id(),
+        StateId::new(seen.state().get() + 1),
+        ScreenKind::Generic9x6,
+        "Auction House",
+        laid_out(54, &items),
+        None,
+    )
+}
+
+/// The other player bought the listing the scan picked between its scan
+/// and its click (found live, Plan.md P16.17): the plugin refuses the
+/// click and draws the next listing in its slot. The scan logs the miss,
+/// closes, never clicks the listing now in that slot, and scans again.
+#[test]
+fn the_auction_scan_logs_a_listing_gone_before_its_click_and_never_clicks_another_in_its_place() {
+    let mut gate = ClickGate::new();
+    let mut world = World::new();
+    let mut instance = instance_of("auction_scan");
+    world.run(&mut instance, &HookEvent::Join { first: true });
+    world.pass(&mut instance, Duration::from_secs(30));
+    let house = auction_house(
+        &mut gate,
+        &[
+            (0, listing("minecraft:diamond", 1400, "Seller2")),
+            (1, listing("minecraft:diamond", 1450, "Seller3")),
+        ],
+    );
+    let from = world.performed.len();
+    show(&mut world, &mut instance, house.clone());
+    let picked = clicks(&world, from);
+
+    world.menu.screen = Some(redrawn(
+        &house,
+        &[(0, listing("minecraft:diamond", 1450, "Seller3"))],
+    ));
+    world.run(&mut instance, &HookEvent::MenuUpdate);
+    answer(&mut world, &mut instance);
+    world.pass(&mut instance, Duration::from_secs(3));
+    let after = clicks(&world, from);
+    let closed = closes(&world, from);
+    world.menu.screen = None;
+    world.run(&mut instance, &HookEvent::MenuClose);
+    world.pass(&mut instance, Duration::from_secs(30));
+
+    assert_eq!(picked, [(0, ClickKind::Left)]);
+    assert_eq!(after, picked, "nothing clicked in its place");
+    assert_eq!(closed, 1);
+    assert_eq!(
+        world.log,
+        ["The listing for 1400.0 was gone before the click; nothing bought."]
+    );
+    assert_eq!(world.sent, ["/ah", "/ah"], "it scans again");
+}
+
+/// A confirm screen that comes after the scan gave up on its listing (a
+/// slow server) is closed, never confirmed.
+#[test]
+fn a_confirm_screen_the_scan_no_longer_waits_for_is_closed_unconfirmed() {
+    let mut gate = ClickGate::new();
+    let mut world = World::new();
+    let mut instance = instance_of("auction_scan");
+    world.run(&mut instance, &HookEvent::Join { first: true });
+    show(
+        &mut world,
+        &mut instance,
+        auction_house(
+            &mut gate,
+            &[(0, listing("minecraft:diamond", 900, "Seller1"))],
+        ),
+    );
+    answer(&mut world, &mut instance);
+    world.pass(&mut instance, Duration::from_secs(3));
+    world.menu.screen = None;
+    world.run(&mut instance, &HookEvent::MenuClose);
+    let from = world.performed.len();
+
+    show(
+        &mut world,
+        &mut instance,
+        confirm_screen(
+            &mut gate,
+            "Confirm Purchase",
+            listing("minecraft:diamond", 900, "Seller1"),
+        ),
+    );
+
+    assert_eq!(clicks(&world, from), []);
+    assert_eq!(closes(&world, from), 1);
+    assert_eq!(
+        world.log,
+        [
+            "The listing for 900.0 was gone before the click; nothing bought.",
+            "Not the listing picked; nothing bought."
+        ]
+    );
+    assert_eq!(instance.error(), None, "the script runs on");
+}
+
 // --- The farm that sells ---
 
 #[test]
@@ -363,6 +468,28 @@ fn the_farm_that_sells_sells_its_potions_drops_its_junk_and_nothing_else_then_fa
     );
     assert_eq!(closed, 1);
     assert_eq!(farm_again.actions, farm);
+}
+
+/// The farm's first sell comes 30 to 60 s after a join, then every 5
+/// minutes from the last: a farm kicked more often than every 5 minutes
+/// still sells (found live, Plan.md P16.17). Here the sell menu never
+/// opens, so each sell is only its command.
+#[test]
+fn the_farms_first_sell_comes_soon_after_a_join_then_every_5_minutes() {
+    let mut world = World::new();
+    let mut instance = instance_of("farm_that_sells");
+    world.run(&mut instance, &HookEvent::Join { first: true });
+
+    world.pass(&mut instance, Duration::from_millis(29_999));
+    let before_30_s = world.sent.len();
+    world.pass(&mut instance, Duration::from_millis(30_001));
+    let by_60_s = world.sent.len();
+    world.pass(&mut instance, Duration::from_secs(240));
+    let within_5_minutes = world.sent.len();
+    world.pass(&mut instance, Duration::from_secs(60));
+
+    assert_eq!((before_30_s, by_60_s, within_5_minutes), (0, 1, 1));
+    assert_eq!(world.sent, ["/sell", "/sell"]);
 }
 
 #[test]
@@ -488,6 +615,122 @@ fn a_bait_below_the_floor_never_sets_the_listers_price() {
     assert_eq!(world.log, ["Not listed at 20.0: below the floor."]);
 }
 
+/// The lister closes the auction house itself before it lists, and the
+/// runtime tells it of that close as of any other (found live, Plan.md
+/// P16.17: it took that close for the confirm's and sent `/ah expired`,
+/// whose screen replaced Confirm Listing before it was confirmed). Only
+/// Confirm Listing's own close moves it on to the expired listings.
+#[test]
+fn the_lister_hears_its_own_close_of_the_auction_house_and_still_confirms_its_listing() {
+    let mut gate = ClickGate::new();
+    let mut world = World::new();
+    world.menu.inventory = inventory(&[(38, turtle_master())]);
+    let mut instance = instance_of("auction_lister");
+    world.run(&mut instance, &HookEvent::Join { first: true });
+    world.pass(&mut instance, Duration::from_secs(30));
+    show(
+        &mut world,
+        &mut instance,
+        potions_listed(
+            &mut gate,
+            &[(500, "Seller1"), (450, "Seller2"), (400, "Seller3")],
+        ),
+    );
+    world.menu.screen = None;
+    world.run(&mut instance, &HookEvent::MenuClose);
+    let after_its_own_close = world.sent.clone();
+
+    let from = world.performed.len();
+    show(
+        &mut world,
+        &mut instance,
+        confirm_screen(
+            &mut gate,
+            "Confirm Listing",
+            turtle_master().with_lore(["Price: $450.00"]),
+        ),
+    );
+    let confirmed = clicks(&world, from);
+    world.menu.screen = None;
+    world.run(&mut instance, &HookEvent::MenuClose);
+
+    assert_eq!(after_its_own_close, ["/ah", "/ah sell 450"]);
+    assert_eq!(confirmed, [(11, ClickKind::Left)]);
+    assert_eq!(world.sent, ["/ah", "/ah sell 450", "/ah expired"]);
+}
+
+/// A listing whose screen never came (the server refused `/ah sell`)
+/// doesn't hold the next try back: 10 minutes later it reads the prices
+/// again.
+#[test]
+fn a_listing_whose_screen_never_came_doesnt_hold_the_next_try_back() {
+    let mut gate = ClickGate::new();
+    let mut world = World::new();
+    world.menu.inventory = inventory(&[(38, turtle_master())]);
+    let mut instance = instance_of("auction_lister");
+    world.run(&mut instance, &HookEvent::Join { first: true });
+    world.pass(&mut instance, Duration::from_secs(30));
+    show(
+        &mut world,
+        &mut instance,
+        potions_listed(
+            &mut gate,
+            &[(500, "Seller1"), (450, "Seller2"), (400, "Seller3")],
+        ),
+    );
+    world.menu.screen = None;
+    world.run(&mut instance, &HookEvent::MenuClose);
+
+    // No Confirm Listing ever opens.
+    world.pass(&mut instance, Duration::from_secs(600));
+
+    assert_eq!(world.sent, ["/ah", "/ah sell 450", "/ah"]);
+}
+
+/// A lister's first listing comes 10 to 30 s after a join, then every 10
+/// minutes from the last try: a bot kicked more often than every 10
+/// minutes still lists (found live, Plan.md P16.17). Each try here finds
+/// fewer than three potions listed, so it ends at once.
+#[rstest::rstest]
+#[case::the_lister(
+    "auction_lister",
+    "Fewer than three potions listed by others; nothing listed."
+)]
+#[case::the_anvil_lister(
+    "auction_lister_anvil",
+    "Listing stopped: fewer than three potions listed by others."
+)]
+fn a_listers_first_try_comes_soon_after_a_join_then_every_10_minutes(
+    #[case] name: &str,
+    #[case] nothing: &str,
+) {
+    let mut gate = ClickGate::new();
+    let mut world = World::new();
+    world.menu.inventory = inventory(&[(36, turtle_master())]);
+    let mut instance = instance_of(name);
+    world.run(&mut instance, &HookEvent::Join { first: true });
+
+    world.pass(&mut instance, Duration::from_millis(9_999));
+    let before_10_s = world.sent.len();
+    world.pass(&mut instance, Duration::from_millis(20_001));
+    let by_30_s = world.sent.len();
+    show(
+        &mut world,
+        &mut instance,
+        potions_listed(&mut gate, &[(450, "Seller1")]),
+    );
+    world.menu.screen = None;
+    world.run(&mut instance, &HookEvent::MenuClose);
+    world.pass(&mut instance, Duration::from_secs(570));
+    let within_10_minutes = world.sent.len();
+    world.pass(&mut instance, Duration::from_secs(30));
+
+    assert_eq!((before_10_s, by_30_s), (0, 1));
+    assert_eq!(within_10_minutes, 1);
+    assert_eq!(world.sent, ["/ah", "/ah"]);
+    assert_eq!(world.log, [nothing]);
+}
+
 // --- The auction lister on the anvil's flow ---
 
 /// The user's server's auction house: listings, a trap renamed "Create"
@@ -532,7 +775,7 @@ fn up_to_the_anvil(
     // The potion in the main inventory, window 0's 20.
     world.menu.inventory = inventory(&[(20, turtle_master())]);
     world.run(instance, &HookEvent::Join { first: true });
-    world.pass(instance, Duration::from_secs(600));
+    world.pass(instance, Duration::from_secs(30));
     let from = world.performed.len();
     show(world, instance, house_with_trap(gate));
     answer(world, instance);
@@ -633,15 +876,15 @@ fn the_anvil_lister_closes_an_unexpected_screen_and_its_watchdog_ends_a_stuck_li
     world.menu.inventory = inventory(&[(20, turtle_master())]);
     let mut instance = instance_of("auction_lister_anvil");
     world.run(&mut instance, &HookEvent::Join { first: true });
-    world.pass(&mut instance, Duration::from_secs(600));
+    world.pass(&mut instance, Duration::from_secs(30));
     let from = world.performed.len();
     show(&mut world, &mut instance, sell_menu(&mut gate, &[]));
     let unexpected = closes(&world, from);
 
-    // A new listing, which never gets a screen: the watchdog ends it.
+    // A new listing 10 minutes after the first try, which never gets a
+    // screen: the watchdog ends it a minute later, before the next try.
     world.menu.screen = None;
-    world.pass(&mut instance, Duration::from_secs(600));
-    world.pass(&mut instance, Duration::from_secs(61));
+    world.pass(&mut instance, Duration::from_secs(661));
 
     assert_eq!(unexpected, 1);
     assert_eq!(
@@ -676,7 +919,7 @@ fn operations_on(name: &str, screen: Screen, inventory_items: &[(usize, Item)]) 
     let mut instance = instance_of(name);
     world.run(&mut instance, &HookEvent::Join { first: true });
     // Its own timer first: a listing starts with the auction house.
-    world.pass(&mut instance, Duration::from_secs(600));
+    world.pass(&mut instance, Duration::from_secs(30));
     world.menu.screen = Some(screen);
     world.run(&mut instance, &HookEvent::MenuOpen);
     let wakes = world.pass(&mut instance, Duration::from_secs(1));

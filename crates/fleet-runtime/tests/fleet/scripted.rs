@@ -1985,4 +1985,74 @@ mod menus {
 
         assert_eq!(lines(&mut harness), ["AfkBot1"]);
     }
+
+    // --- A script's end leaves no screen open (Plan.md P16.17, the user's
+    // point 3) ---
+
+    /// A script that clicks in every screen that opens and waits for the
+    /// fate; its timer `spin` never ends.
+    const CLICKS: &str = r#"fn on_menu_open() { menu.click(0); timer.after(300, "spin"); }
+fn on_click(result) {}
+fn on_timer(name) { loop {} }"#;
+
+    /// What the session carried out from the click on, its screen
+    /// commands and its actions.
+    fn from_the_click(controller: &SessionController) -> Vec<Performed> {
+        controller
+            .log()
+            .into_iter()
+            .skip_while(|performed| !matches!(performed, Performed::Menu(MenuCommand::Act(_))))
+            .skip(1)
+            .filter(|performed| matches!(performed, Performed::Menu(_) | Performed::Action(_)))
+            .collect()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_script_that_hits_a_limit_mid_click_closes_its_screen_and_the_bot_stays_online() {
+        let (_harness, controller) = online(level_2(CLICKS)).await;
+        let mut gate = ClickGate::new();
+        let screen = chest(&mut gate);
+        controller.show(showing(&screen));
+        emit(&controller, SessionEvent::MenuOpened(screen.id()));
+        pass(ms(10)).await;
+
+        // No fate comes: the server is slow. The timer's hook hits the
+        // operations' limit while the click waits.
+        pass(ms(400)).await;
+
+        assert_eq!(
+            from_the_click(&controller),
+            [
+                Performed::Menu(MenuCommand::Close(screen.id())),
+                RELEASE_ALL
+            ]
+        );
+        assert_eq!(controller.held(), []);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_mode_change_mid_click_closes_the_screen_before_the_next_mode_begins() {
+        let (harness, controller) = online(level_2(CLICKS)).await;
+        let mut gate = ClickGate::new();
+        let screen = chest(&mut gate);
+        controller.show(showing(&screen));
+        emit(&controller, SessionEvent::MenuOpened(screen.id()));
+        pass(ms(10)).await;
+
+        harness
+            .apply(BotSpec {
+                mode: jumps_every_second(),
+                ..running(BOT, "AfkBot1")
+            })
+            .await;
+        pass(ms(100)).await;
+
+        assert_eq!(
+            from_the_click(&controller),
+            [
+                Performed::Menu(MenuCommand::Close(screen.id())),
+                RELEASE_ALL
+            ]
+        );
+    }
 }

@@ -1,9 +1,19 @@
 package afkfleet.harness;
 
+import java.lang.reflect.Field;
 import java.math.BigDecimal;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Queue;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.papermc.paper.event.packet.UncheckedSignChangeEvent;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -13,6 +23,7 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.command.RemoteConsoleCommandSender;
+import org.bukkit.entity.HumanEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -22,7 +33,11 @@ import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.inventory.PrepareAnvilEvent;
+import org.bukkit.event.player.PlayerDropItemEvent;
+import org.bukkit.event.player.PlayerItemConsumeEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerKickEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.InventoryView;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -35,7 +50,11 @@ import org.bukkit.plugin.java.JavaPlugin;
  * <p>Every line it logs starts with {@code harness-}: {@code harness-click}, {@code harness-drag},
  * {@code harness-open}, {@code harness-close}, {@code harness-kick}, {@code harness-bought},
  * {@code harness-refused}, {@code harness-listed}, {@code harness-expired}, {@code
- * harness-collected}, {@code harness-sold}, {@code harness-sign-open} and {@code harness-sign}.
+ * harness-collected}, {@code harness-sold}, {@code harness-sign-open}, {@code harness-sign},
+ * and for the live tests (Plan.md P16.17, P16.18) {@code harness-consume}, {@code harness-gone},
+ * {@code harness-drop}, {@code harness-snipe}, {@code harness-intrude}, {@code harness-stalled} and {@code
+ * harness-kickon}, {@code harness-ignored} for a click packet no handler got. A click's line says
+ * the window and state the server had, the state its packet carried and the listing it met.
  */
 public final class HarnessPlugin extends JavaPlugin implements Listener {
     private final Market market = new Market();
@@ -49,6 +68,7 @@ public final class HarnessPlugin extends JavaPlugin implements Listener {
             int expired = market.expireDue(Bukkit.getCurrentTick());
             if (expired > 0) {
                 getLogger().info("harness-expired count=" + expired);
+                menus.marketChanged();
             }
         }, 20, 20);
     }
@@ -67,12 +87,158 @@ public final class HarnessPlugin extends JavaPlugin implements Listener {
         getLogger().info(what + " tick=" + Bukkit.getCurrentTick() + " nanos=" + System.nanoTime());
     }
 
-    /** Every click, after every handler, with whether it was cancelled. */
+    /** What each player's click met before any handler ran: the window, its state and the listing. */
+    private final Map<UUID, String> metAtClick = new HashMap<>();
+
+    /**
+     * Each player's click packets as the server read them off the network, before it handled any:
+     * window, the state the packet carried, slot. Written on the network's thread, read on the main
+     * one.
+     */
+    private final Map<UUID, Queue<int[]>> clickPackets = new ConcurrentHashMap<>();
+
+    /**
+     * Before every handler: the window and state the server has for the clicker's open screen,
+     * the state the click's own packet carried ({@code sent=}), and the listing the clicked slot
+     * holds, so the click's line says what the click met and what it was sent onto, not what a
+     * handler made of it (Plan.md P16.18). A packet read before it whose window the server no longer
+     * had open reached no handler: it's logged as {@code harness-ignored}.
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void meetClick(InventoryClickEvent event) {
+        HumanEntity clicker = event.getWhoClicked();
+        int[] now = windowAndStateOf(clicker);
+        String sent = "?";
+        Queue<int[]> packets = clickPackets.get(clicker.getUniqueId());
+        if (packets != null && now != null) {
+            for (int[] packet = packets.poll(); packet != null; packet = packets.poll()) {
+                if (packet[0] == now[0] && packet[2] == event.getRawSlot()) {
+                    sent = Integer.toString(packet[1]);
+                    break;
+                }
+                log("harness-ignored player=" + clicker.getName() + " window=" + packet[0] + " sent="
+                        + packet[1] + " raw=" + packet[2]);
+            }
+        }
+        metAtClick.put(clicker.getUniqueId(),
+                windowAndState(clicker) + " sent=" + sent + " listing=" + menus.listingAt(event));
+    }
+
+    /**
+     * Reads every click packet of a player who joins, off the network before the server handles it
+     * (Plan.md P16.18): the server's handler drops a click for a window it no longer has open and
+     * applies one with an older state anyway, and no event says either. A Netty handler before
+     * Paper's {@code packet_handler}, found through the server's own objects (Paper runs Mojang's
+     * names); if they can't be read, a warning says so, which fails the tests that count on it.
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void watchClicks(PlayerJoinEvent event) {
+        Player player = event.getPlayer();
+        Queue<int[]> packets = new ConcurrentLinkedQueue<>();
+        clickPackets.put(player.getUniqueId(), packets);
+        try {
+            Object handle = player.getClass().getMethod("getHandle").invoke(player);
+            Object listener = field(handle, "connection");
+            Object connection = field(listener, "connection");
+            Channel channel = (Channel) field(connection, "channel");
+            channel.pipeline().addBefore("packet_handler", "afkfleet-harness-clicks", new ClickReader(packets));
+        } catch (ReflectiveOperationException | RuntimeException unwatched) {
+            getLogger().warning("harness-unwatched player=" + player.getName() + " why=" + unwatched);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void forgetClicks(PlayerQuitEvent event) {
+        clickPackets.remove(event.getPlayer().getUniqueId());
+    }
+
+    /** Notes each container click packet's window, state and slot as the network reads it. */
+    private static final class ClickReader extends ChannelInboundHandlerAdapter {
+        private final Queue<int[]> packets;
+
+        ClickReader(Queue<int[]> packets) {
+            this.packets = packets;
+        }
+
+        @Override
+        public void channelRead(ChannelHandlerContext context, Object message) throws Exception {
+            if (message.getClass().getSimpleName().equals("ServerboundContainerClickPacket")) {
+                packets.add(new int[] {accessor(message, "containerId"), accessor(message, "stateId"),
+                    accessor(message, "slotNum")});
+            }
+            super.channelRead(context, message);
+        }
+    }
+
+    /** {@code owner}'s field {@code name}, declared in its class or any above it, whatever its access. */
+    private static Object field(Object owner, String name) throws ReflectiveOperationException {
+        for (Class<?> type = owner.getClass(); type != null; type = type.getSuperclass()) {
+            try {
+                Field field = type.getDeclaredField(name);
+                field.setAccessible(true);
+                return field.get(owner);
+            } catch (NoSuchFieldException above) {
+                // Declared further up.
+            }
+        }
+        throw new NoSuchFieldException(name);
+    }
+
+    /** A record's accessor {@code name} as a whole number, or -1. */
+    private static int accessor(Object packet, String name) {
+        try {
+            return ((Number) packet.getClass().getMethod(name).invoke(packet)).intValue();
+        } catch (ReflectiveOperationException | RuntimeException unread) {
+            return -1;
+        }
+    }
+
+    /** The window and state the server has for {@code player}'s open screen, or null. */
+    static int[] windowAndStateOf(HumanEntity player) {
+        try {
+            Object handle = player.getClass().getMethod("getHandle").invoke(player);
+            Object menu = handle.getClass().getField("containerMenu").get(handle);
+            int window = menu.getClass().getField("containerId").getInt(menu);
+            int state = ((Number) menu.getClass().getMethod("getStateId").invoke(menu)).intValue();
+            return new int[] {window, state};
+        } catch (ReflectiveOperationException | RuntimeException unread) {
+            return null;
+        }
+    }
+
+    /** Every click, after every handler, with whether it was cancelled and what it met. */
     @EventHandler(priority = EventPriority.MONITOR)
     public void logClick(InventoryClickEvent event) {
+        String met = metAtClick.remove(event.getWhoClicked().getUniqueId());
         log("harness-click player=" + event.getWhoClicked().getName() + " screen=" + title(event.getView())
                 + " raw=" + event.getRawSlot() + " slot=" + event.getSlot() + " click=" + event.getClick()
                 + " action=" + event.getAction() + " hotbar=" + event.getHotbarButton()
+                + " cancelled=" + event.isCancelled() + " " + (met == null ? "window=? state=? listing=-" : met));
+    }
+
+    /**
+     * The window and state IDs the server has for {@code player}'s open screen, as {@code window=…
+     * state=…}: read from the server's own player object (Paper runs Mojang's names), since no
+     * event says them. A click carries the state its sender last had; the server applies it
+     * anyway, so this is what the click met.
+     */
+    static String windowAndState(HumanEntity player) {
+        int[] now = windowAndStateOf(player);
+        return now == null ? "window=? state=?" : "window=" + now[0] + " state=" + now[1];
+    }
+
+    /** Every item a player drops, from a screen or the hand (Plan.md P16.17). */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void logDrop(PlayerDropItemEvent event) {
+        ItemStack dropped = event.getItemDrop().getItemStack();
+        log("harness-drop player=" + event.getPlayer().getName() + " item=" + Market.sellKey(dropped)
+                + " count=" + dropped.getAmount() + " cancelled=" + event.isCancelled());
+    }
+
+    /** Every item a player finishes using: a potion drunk, food eaten (Plan.md P16.17). */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void logConsume(PlayerItemConsumeEvent event) {
+        log("harness-consume player=" + event.getPlayer().getName() + " item=" + Market.sellKey(event.getItem())
                 + " cancelled=" + event.isCancelled());
     }
 
@@ -85,7 +251,10 @@ public final class HarnessPlugin extends JavaPlugin implements Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void logOpen(InventoryOpenEvent event) {
         log("harness-open player=" + event.getPlayer().getName() + " screen=" + title(event.getView())
-                + " cancelled=" + event.isCancelled());
+                + " cancelled=" + event.isCancelled() + " listing=" + menus.listingOf(event.getView()));
+        if (!event.isCancelled() && event.getPlayer() instanceof Player player) {
+            menus.opened(player, plain(event.getView().title()), event.getView());
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -105,6 +274,18 @@ public final class HarnessPlugin extends JavaPlugin implements Listener {
     @EventHandler
     public void onClick(InventoryClickEvent event) {
         menus.onClick(event);
+    }
+
+    /**
+     * After the click's own line: a player armed with {@code harness kickon} is kicked inside the
+     * click, so whatever they send behind it is never answered (Plan.md P16.17).
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void kickAtClick(InventoryClickEvent event) {
+        if (event.getWhoClicked() instanceof Player player && menus.kicksAt(player)) {
+            log("harness-kickon player=" + player.getName());
+            player.kick(Component.text("The harness kicked you mid-click."));
+        }
     }
 
     @EventHandler
@@ -141,6 +322,7 @@ public final class HarnessPlugin extends JavaPlugin implements Listener {
         Menus.giveOrDrop(buyer, bought.item().clone());
         log("harness-bought id=" + id + " buyer=" + buyer.getName() + " seller=" + bought.seller()
                 + " price=" + bought.price().toPlainString());
+        menus.marketChanged();
         buyer.sendMessage(Component.text("You bought it for " + Market.money(bought.price()) + ".",
                 NamedTextColor.GREEN));
         Player seller = Bukkit.getPlayerExact(bought.seller());
@@ -216,7 +398,14 @@ public final class HarnessPlugin extends JavaPlugin implements Listener {
      * balance <player>}, {@code list <seller> <price> <item>} (the item in the game's own syntax,
      * components included), {@code listings}, {@code expire <id>}, {@code expiry <seconds>}, {@code
      * buy <online player> <id>}, {@code price <key> <amount>}, {@code open <player> ah|sell|expired},
-     * {@code sign <player>} (a sign editor nobody asked for) and {@code reset}.
+     * {@code sign <player>} (a sign editor nobody asked for) and {@code reset}; and for the live tests
+     * (Plan.md P16.17, P16.18): {@code state <player>}, {@code count <item key> <max>}, {@code live on|off} (open auction houses
+     * redrawn at every change of the market), {@code cap <price>} (the price anvil's highest),
+     * {@code stall on|off} (Confirm Item's confirm does nothing), {@code snipe <buyer> house <item
+     * key> <max>} and {@code snipe <buyer> confirm} (the other player buys first, the tick after
+     * another player opens that screen), {@code intrude <player> <menu> <title...>} (a menu opened
+     * unasked the tick after they open that title) and {@code kickon <player>} (kicked inside
+     * their next click).
      */
     private boolean harness(CommandSender sender, String[] args) {
         if (!(sender instanceof ConsoleCommandSender) && !(sender instanceof RemoteConsoleCommandSender)) {
@@ -231,6 +420,16 @@ public final class HarnessPlugin extends JavaPlugin implements Listener {
                     sender.sendMessage("balance " + args[1] + " " + market.balance(args[1]).toPlainString());
                 }
                 case "balance" -> sender.sendMessage("balance " + args[1] + " " + market.balance(args[1]).toPlainString());
+                case "count" -> {
+                    // How many listings of an item (its key as the sell menu has it) cost at most
+                    // a price: a short answer, where `listings` outgrows one RCON packet.
+                    BigDecimal most = new BigDecimal(args[2]);
+                    long count = market.listings().stream()
+                            .filter(listing -> Market.sellKey(listing.item()).equals(args[1]))
+                            .filter(listing -> listing.price().compareTo(most) <= 0)
+                            .count();
+                    sender.sendMessage("count " + count);
+                }
                 case "list" -> {
                     ItemStack item = Bukkit.getItemFactory().createItemStack(
                             String.join(" ", Arrays.copyOfRange(args, 3, args.length)));
@@ -239,6 +438,7 @@ public final class HarnessPlugin extends JavaPlugin implements Listener {
                     Market.Listing listing = market.list(args[1], item, price, Bukkit.getCurrentTick());
                     log("harness-listed id=" + listing.id() + " seller=" + args[1] + " price="
                             + listing.price().toPlainString());
+                    menus.marketChanged();
                     sender.sendMessage("listed " + listing.id());
                 }
                 case "fill" -> {
@@ -259,6 +459,7 @@ public final class HarnessPlugin extends JavaPlugin implements Listener {
                         market.list("Seller" + (n % 3 + 1), item, BigDecimal.valueOf(1000 + 10L * n),
                                 Bukkit.getCurrentTick());
                     }
+                    menus.marketChanged();
                     sender.sendMessage("filled " + count);
                 }
                 case "listings" -> {
@@ -270,7 +471,11 @@ public final class HarnessPlugin extends JavaPlugin implements Listener {
                     }
                     sender.sendMessage(out.toString());
                 }
-                case "expire" -> sender.sendMessage(market.expire(Integer.parseInt(args[1])) ? "expired" : "no such listing");
+                case "expire" -> {
+                    boolean expired = market.expire(Integer.parseInt(args[1]));
+                    menus.marketChanged();
+                    sender.sendMessage(expired ? "expired" : "no such listing");
+                }
                 case "expiry" -> {
                     market.setExpiryTicks(20L * Long.parseLong(args[1]));
                     sender.sendMessage("expiry " + args[1] + "s");
@@ -293,13 +498,7 @@ public final class HarnessPlugin extends JavaPlugin implements Listener {
                     if (player == null) {
                         sender.sendMessage("not online");
                     } else {
-                        switch (args[2]) {
-                            case "ah" -> menus.openAuction(player, 0);
-                            case "sell" -> menus.openSell(player);
-                            case "expired" -> menus.openExpired(player);
-                            default -> sender.sendMessage("no such menu");
-                        }
-                        sender.sendMessage("opened");
+                        sender.sendMessage(menus.open(player, args[2]) ? "opened" : "no such menu");
                     }
                 }
                 case "sign" -> {
@@ -313,9 +512,43 @@ public final class HarnessPlugin extends JavaPlugin implements Listener {
                 }
                 case "reset" -> {
                     market.reset();
+                    menus.marketChanged();
                     sender.sendMessage("reset");
                 }
-                default -> sender.sendMessage("harness money|balance|list|listings|expire|expiry|buy|price|open|sign|reset");
+                case "state" -> {
+                    Player player = Bukkit.getPlayerExact(args[1]);
+                    sender.sendMessage(player == null ? "not online" : menus.state(player));
+                }
+                case "live" -> {
+                    menus.setLive(args[1].equals("on"));
+                    sender.sendMessage("live " + args[1]);
+                }
+                case "cap" -> {
+                    menus.setPriceCap(Long.parseLong(args[1]));
+                    sender.sendMessage("cap " + args[1]);
+                }
+                case "stall" -> {
+                    menus.setStalled(args[1].equals("on"));
+                    sender.sendMessage("stall " + args[1]);
+                }
+                case "snipe" -> {
+                    Menus.Snipe snipe = args[2].equals("house")
+                            ? new Menus.Snipe(args[1], "house", args[3], new BigDecimal(args[4]))
+                            : new Menus.Snipe(args[1], "confirm", "", BigDecimal.ZERO);
+                    menus.arm(snipe);
+                    sender.sendMessage("snipe armed");
+                }
+                case "intrude" -> {
+                    String after = String.join(" ", Arrays.copyOfRange(args, 3, args.length));
+                    menus.intrude(new Menus.Intrusion(args[1], after, args[2]));
+                    sender.sendMessage("intrusion armed");
+                }
+                case "kickon" -> {
+                    menus.kickAtClick(args[1]);
+                    sender.sendMessage("kick armed");
+                }
+                default -> sender.sendMessage("harness money|balance|count|list|listings|expire|expiry|buy|price|open|sign|reset"
+                        + "|state|live|cap|stall|snipe|intrude|kickon");
             }
         } catch (RuntimeException wrong) {
             sender.sendMessage("error " + wrong.getClass().getSimpleName() + ": " + wrong.getMessage());

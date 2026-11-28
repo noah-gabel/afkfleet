@@ -898,6 +898,144 @@ fn a_fate_that_never_came_before_a_disconnect_lets_the_next_click_go() {
     assert!(!instance.awaits_fate());
 }
 
+// --- A script's end leaves no screen open (Plan.md P16.17, the user's point 3) ---
+
+/// A script that clicks in every screen that opens, and whose timer
+/// `spin` never ends: the operations' limit stops it there.
+const CLICKS_THEN_SPINS: &str = r#"fn on_menu_open() { menu.click(0); timer.after(300, "spin"); }
+fn on_click(result) {}
+fn on_timer(name) { loop {} }"#;
+
+#[test]
+fn a_script_that_hits_a_limit_with_a_click_pending_closes_its_screen_then_lets_go() {
+    let mut gate = ClickGate::new();
+    let mut world = World::new();
+    let screen = auction(&mut gate);
+    world.menu.screen = Some(screen.clone());
+    let mut instance = instance_2(CLICKS_THEN_SPINS);
+    world.run(&mut instance, &HookEvent::MenuOpen);
+    assert!(instance.awaits_fate());
+    world.now = time::add(world.now, Duration::from_millis(300));
+
+    let ran = world.wake(&mut instance);
+
+    assert!(matches!(
+        stopped_for(&ran.outcome),
+        Some(ScriptErrorKind::Limit(_))
+    ));
+    assert_eq!(
+        ran.actions,
+        [
+            Action::Menu(MenuCommand::Close(screen.id())),
+            Action::ReleaseAll
+        ]
+    );
+}
+
+#[test]
+fn a_script_that_fails_with_a_screen_open_closes_it_then_lets_go() {
+    let mut gate = ClickGate::new();
+    let mut world = World::new();
+    let screen = auction(&mut gate);
+    world.menu.screen = Some(screen.clone());
+    let mut instance = instance_2("fn on_menu_update() { let x = state.never_set; }");
+
+    let ran = world.run(&mut instance, &HookEvent::MenuUpdate);
+
+    assert!(stopped_for(&ran.outcome).is_some());
+    assert_eq!(
+        ran.actions,
+        [
+            Action::Menu(MenuCommand::Close(screen.id())),
+            Action::ReleaseAll
+        ]
+    );
+}
+
+#[rstest::rstest]
+#[case::without_on_stop("fn on_menu_open() { menu.click(0); }\nfn on_click(result) {}")]
+#[case::with_on_stop(
+    "fn on_menu_open() { menu.click(0); }\nfn on_click(result) {}\nfn on_stop() { log.info(\"bye\"); }"
+)]
+#[case::with_a_failing_on_stop(
+    "fn on_menu_open() { menu.click(0); }\nfn on_click(result) {}\nfn on_stop() { let x = state.never_set; }"
+)]
+fn a_script_that_ends_mid_click_closes_its_screen_then_lets_go(#[case] source: &str) {
+    let mut gate = ClickGate::new();
+    let mut world = World::new();
+    let screen = auction(&mut gate);
+    world.menu.screen = Some(screen.clone());
+    let mut instance = instance_2(source);
+    world.run(&mut instance, &HookEvent::MenuOpen);
+    assert!(instance.awaits_fate());
+
+    let ran = world.run(&mut instance, &HookEvent::Stop);
+
+    assert_eq!(
+        menu_actions(&ran.actions),
+        [&MenuCommand::Close(screen.id())]
+    );
+    assert_eq!(ran.actions.last(), Some(&Action::ReleaseAll));
+}
+
+#[test]
+fn an_on_stop_that_closes_the_screen_itself_closes_it_once() {
+    let mut gate = ClickGate::new();
+    let mut world = World::new();
+    let screen = auction(&mut gate);
+    world.menu.screen = Some(screen.clone());
+    let mut instance = instance_2("fn on_stop() { menu.close(); }");
+
+    let ran = world.run(&mut instance, &HookEvent::Stop);
+
+    assert_eq!(
+        ran.actions,
+        [
+            Action::Menu(MenuCommand::Close(screen.id())),
+            Action::ReleaseAll
+        ]
+    );
+}
+
+#[test]
+fn the_bots_own_inventory_is_closed_too_at_a_scripts_end() {
+    let mut world = World::new();
+    let inventory = Screen::new(
+        ClickGate::new().opened(WindowId::INVENTORY),
+        StateId::new(0),
+        ScreenKind::Inventory,
+        "",
+        Vec::new(),
+        None,
+    );
+    world.menu.screen = Some(inventory.clone());
+    let mut instance = instance_2("fn on_join(first) {}");
+
+    let ran = world.run(&mut instance, &HookEvent::Stop);
+
+    assert_eq!(
+        ran.actions,
+        [
+            Action::Menu(MenuCommand::Close(inventory.id())),
+            Action::ReleaseAll
+        ]
+    );
+}
+
+#[test]
+fn a_script_that_ends_or_fails_without_a_screen_only_lets_go() {
+    let mut world = World::new();
+    let mut ending = instance_2("fn on_join(first) {}");
+    let mut failing = instance_2("fn on_join(first) { let x = state.never_set; }");
+
+    let ended = world.run(&mut ending, &HookEvent::Stop);
+    let failed = world.run(&mut failing, &HookEvent::Join { first: true });
+
+    assert_eq!(ended.actions, [Action::ReleaseAll]);
+    assert!(stopped_for(&failed.outcome).is_some());
+    assert_eq!(failed.actions, [Action::ReleaseAll]);
+}
+
 // --- Signs ---
 
 fn price_sign() -> SignDraft {

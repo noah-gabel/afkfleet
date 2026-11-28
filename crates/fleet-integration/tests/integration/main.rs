@@ -27,6 +27,14 @@
 //!   (P15.29, P15.36): the reference's examples as written, and the balance
 //!   example beside a second player whose spoofed lines never count; `just
 //!   test-slow` runs it.
+//! - [`slow_trading`]: Phase 16's check on the Paper harness (P16.17): the
+//!   reference's five level-2 examples as written, beside a second player
+//!   who buys first, and a script's every way out in the middle of a click;
+//!   `just test-slow` runs it.
+//! - [`long_run`]: P16.18's long run, a buyer clicking thousands of times
+//!   against the Paper harness in parts, its double buys, silent misses and
+//!   clicks onto another screen counted from the harness's records; only
+//!   `just long-run` runs it.
 //! - [`timing`]: the timing contracts between the agent and the server,
 //!   over their constants.
 //! - [`smoke`]: P12.7's smoke tests (ADR-0022, S19): the production compose
@@ -52,10 +60,12 @@ mod dod_kit;
 mod full_flow;
 mod harness;
 mod load;
+mod long_run;
 mod loopback;
 mod managed_check;
 mod sftp;
 mod slow_on_respawn;
 mod slow_scripts;
+mod slow_trading;
 mod smoke;
 mod timing;

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use chrono::{DateTime, Utc};
-use fleet_core::mc::MenuView;
+use fleet_core::mc::{MenuCommand, MenuView};
 use fleet_core::script::menu::ScreenKind;
 use fleet_core::script::{
     ActionLimiter, Captured, ClickOutcome, Hook, HookEvent, Input, Leash, Refusal, Snapshot,
@@ -491,7 +491,7 @@ impl Instance {
                 actions.extend(asked);
                 Outcome::Ran { operations }
             }
-            Run::Failed(error) => return self.fail(error),
+            Run::Failed(error) => return self.fail(error, moment),
         };
         Ran {
             actions,
@@ -538,7 +538,7 @@ impl Instance {
                     total = operations;
                     actions.extend(asked);
                 }
-                Run::Failed(error) => return self.fail(error),
+                Run::Failed(error) => return self.fail(error, moment),
             }
         }
         Ran {
@@ -703,20 +703,25 @@ impl Instance {
         state::clear(&self.running.state);
     }
 
-    /// Stops the script for `error`.
-    fn fail(&mut self, error: ScriptError) -> Ran {
+    /// Stops the script for `error`: the screen `moment` shows is closed,
+    /// then everything is let go.
+    fn fail(&mut self, error: ScriptError, moment: &Moment<'_>) -> Ran {
         self.release_everything();
         self.status = Status::Stopped(error.clone());
+        let mut actions = Vec::new();
+        close_left_open(moment, &mut actions);
+        actions.push(Action::ReleaseAll);
         Ran {
-            actions: vec![Action::ReleaseAll],
+            actions,
             next_wake: None,
             outcome: Outcome::Stopped(error),
             refused: core::mem::take(&mut self.refused),
         }
     }
 
-    /// Ends the script in an orderly way: `on_stop`, then everything is
-    /// released.
+    /// Ends the script in an orderly way: `on_stop`, then the screen
+    /// `moment` shows is closed if `on_stop` didn't close one, then
+    /// everything is released.
     fn end(&mut self, moment: &Moment<'_>, limiter: &mut ActionLimiter) -> Ran {
         let (mut actions, error) = match self.run(&HookEvent::Stop, moment, limiter, true) {
             Run::NotDefined => (Vec::new(), None),
@@ -727,6 +732,7 @@ impl Instance {
         };
         self.release_everything();
         self.status = Status::Ended;
+        close_left_open(moment, &mut actions);
         actions.push(Action::ReleaseAll);
         Ran {
             actions,
@@ -872,6 +878,24 @@ fn call(
         | HookEvent::MenuUpdate
         | HookEvent::MenuClose
         | HookEvent::SignOpen => engine.call_fn_with_options(options, &mut scope, ast, name, ()),
+    }
+}
+
+/// Closes the screen `moment` shows, unless `actions` close one already: a
+/// script's end, whichever way it comes while the bot stays online (a
+/// limit, an error, a mode changed or edited), leaves no screen open
+/// (Plan.md P16.17, the user's point 3). A close is never refused while a
+/// screen is open, and an action pending on it is `replaced`. The release
+/// stays the last action, after it.
+fn close_left_open(moment: &Moment<'_>, actions: &mut Vec<Action>) {
+    let Some(screen) = moment.menu.screen.as_ref() else {
+        return;
+    };
+    let closes = actions
+        .iter()
+        .any(|action| matches!(action, Action::Menu(MenuCommand::Close(_))));
+    if !closes {
+        actions.push(Action::Menu(MenuCommand::Close(screen.id())));
     }
 }
 

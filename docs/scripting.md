@@ -830,7 +830,9 @@ The mode declares `auction`: `/ah`.
 // judged by what follows it, never by a click's fate: the plugin answers
 // every button "rejected" though it acted, so the diamonds in the inventory
 // say what was bought. Each Confirm Purchase screen is confirmed at most
-// once, and only for the listing picked, so no listing is bought twice.
+// once, and only for the listing picked, so no listing is bought twice. When
+// the listing picked is gone before its click, no Confirm Purchase opens: it
+// logs the miss and closes, and never clicks another listing in its place.
 fn on_join(first) {
     if first {
         state.bought = 0;
@@ -850,6 +852,8 @@ fn on_timer(name) {
         pick();
     } else if name == "confirm" {
         confirm();
+    } else if name == "no_confirm" {
+        no_confirm();
     }
 }
 
@@ -910,7 +914,20 @@ fn pick() {
         return;
     }
     state.wanted = #{ price: price, seller: seller_of(best) };
-    if !menu.click(best).ok {
+    if menu.click(best).ok {
+        // Confirm Purchase opens on the plugin's next tick, or never.
+        timer.after(3000, "no_confirm");
+    } else {
+        state.wanted = ();
+        menu.close();
+    }
+}
+
+// Still on the auction house 3 seconds after the click: the listing picked
+// was gone, and the plugin may have drawn another in its slot.
+fn no_confirm() {
+    if state.wanted != () && !state.confirmed && menu.open && menu.title == "Auction House" {
+        log.info(`The listing for ${state.wanted.price} was gone before the click; nothing bought.`);
         state.wanted = ();
         menu.close();
     }
@@ -918,11 +935,13 @@ fn pick() {
 
 // On Confirm Purchase: confirms only the listing picked, once.
 fn confirm() {
-    if !menu.open || menu.title != "Confirm Purchase" || state.wanted == () || state.confirmed {
+    if !menu.open || menu.title != "Confirm Purchase" || state.confirmed {
         return;
     }
     let button = menu.slot(11);
-    let same = menu.slot(13).id == "minecraft:diamond"
+    // A confirm it no longer waits for is no listing picked.
+    let same = state.wanted != ()
+        && menu.slot(13).id == "minecraft:diamond"
         && menu.lore_number(13, "Price") == state.wanted.price
         && menu.lore_has(13, state.wanted.seller);
     if !same || button.id != "minecraft:lime_stained_glass_pane" || button.name != "Confirm" {
@@ -951,18 +970,20 @@ The mode declares `sell_menu`: `/sell`. The junk it drops is one item ID the scr
 
 ```rhai
 // A farm that sells: it farms by holding the right button with its farm's
-// item in hotbar slot 1. Every 5 minutes it opens the sell menu, sells its
-// Turtle Master potions and drops its one kind of junk, never anything else,
-// so it never drops a tool. It waits 300 to 900 ms before every click, then
-// selects the farm's item again and farms on: a right button held with a
-// potion in hand would drink it.
+// item in hotbar slot 1. 30 to 60 seconds after it joins, then every 5
+// minutes, it opens the sell menu, sells its Turtle Master potions and drops
+// its one kind of junk, never anything else, so it never drops a tool. It
+// waits 300 to 900 ms before every click, then selects the farm's item again
+// and farms on: a right button held with a potion in hand would drink it.
 fn junk() {
     "minecraft:rotten_flesh"
 }
 
 fn on_join(first) {
     farm();
-    timer.every(300000, "sell");
+    // Soon after every join: a farm that's kicked more often than every 5
+    // minutes still sells.
+    timer.after(random.between(30000, 60000), "sell");
 }
 
 fn farm() {
@@ -972,6 +993,7 @@ fn farm() {
 
 fn on_timer(name) {
     if name == "sell" {
+        timer.after(300000, "sell");
         if !menu.open {
             mouse.right.release();
             chat.send("sell_menu");
@@ -1047,11 +1069,12 @@ fn turtle_master(slot) {
 The mode declares `auction`: `/ah`, `sell`: `/ah sell {price}` with `price` a whole number from 100 to 1,000,000, and `expired`: `/ah expired`.
 
 ```rhai
-// An auction lister: every 10 minutes, with a Turtle Master potion in its
-// hotbar, it reads the potions' prices on the auction house's first page,
-// skips its own listings, and lists one potion at the middle of the three
-// cheapest with "/ah sell {price}", confirming it on its screen once. Then it
-// collects its expired listings.
+// An auction lister: 10 to 30 seconds after it joins, then every 10
+// minutes, with a Turtle Master potion in its hotbar, it reads the potions'
+// prices on the auction house's first page, skips its own listings, and
+// lists one potion at the middle of the three cheapest with
+// "/ah sell {price}", confirming it on its screen once. Then it collects its
+// expired listings.
 //
 // The declared price's range starts at 100: that's the floor a bait listing
 // can't push the price below. A price under it is refused (bad_value), and
@@ -1059,12 +1082,18 @@ The mode declares `auction`: `/ah`, `sell`: `/ah sell {price}` with `price` a wh
 fn on_join(first) {
     state.task = "";
     state.done = ();
-    timer.every(600000, "list");
+    state.on = "";
+    // Soon after every join: a bot that's kicked more often than every 10
+    // minutes still lists.
+    timer.after(random.between(10000, 30000), "list");
 }
 
 fn on_timer(name) {
     if name == "list" {
-        if state.task == "" && !menu.open && potion_key() != () {
+        timer.after(600000, "list");
+        // With no screen open, a listing that didn't finish 10 minutes ago
+        // is over.
+        if !menu.open && potion_key() != () {
             state.task = "prices";
             chat.send("auction");
         }
@@ -1074,6 +1103,7 @@ fn on_timer(name) {
 }
 
 fn on_menu_open() {
+    state.on = menu.title;
     later();
 }
 
@@ -1086,11 +1116,12 @@ fn on_menu_update() {
 }
 
 fn on_menu_close() {
-    if state.task == "listing" {
-        // The confirm's screen closed: on to the expired listings.
+    // Only the confirm's own close moves on: the auction house, which it
+    // closes itself before it lists, closes too.
+    if state.task == "listing" && state.on == "Confirm Listing" {
         state.task = "expired";
         chat.send("expired");
-    } else if state.task == "expired" {
+    } else if state.task == "expired" && state.on == "Expired Listings" {
         state.task = "";
     }
 }
@@ -1206,14 +1237,18 @@ For a server whose auction house takes a listing's price in an anvil it opens: t
 // The flow: /ah, Create (the last row's third slot), the potion, Confirm
 // Item, the price in the anvil "Preis eingeben", then Confirm Listing. The
 // declared price's range starts at 100, the floor a bait listing can't push
-// the price below.
+// the price below. It lists 10 to 30 seconds after it joins, then every 10
+// minutes.
 fn on_join(first) {
     state.listing = false;
-    timer.every(600000, "list");
+    // Soon after every join: a bot that's kicked more often than every 10
+    // minutes still lists.
+    timer.after(random.between(10000, 30000), "list");
 }
 
 fn on_timer(name) {
     if name == "list" {
+        timer.after(600000, "list");
         start();
     } else if name == "watchdog" {
         stop("it took longer than a minute");

@@ -163,7 +163,7 @@ impl Minecraft {
 /// `future`'s output if it ends before `bound`. Past the bound, the future
 /// is released without being dropped, so a `Drop` that would wait without a
 /// bound never runs.
-async fn ended_or_released<F: Future>(
+pub(crate) async fn ended_or_released<F: Future>(
     bound: impl Future<Output = ()>,
     future: F,
 ) -> Option<F::Output> {
